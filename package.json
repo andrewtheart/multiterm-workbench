@@ -1,0 +1,16 @@
+{
+  "name": "multiterm-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local xterm.js multi-terminal workbench for PowerShell sessions.",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1"
+  }
+}
