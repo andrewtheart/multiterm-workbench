@@ -8,3 +8,9 @@ npm-debug.log*
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Installer build output
+installer/Output/
+
+# Deployment staging (not tracked)
+deploy/
