@@ -2,9 +2,28 @@
 
 A local xterm.js workbench for running multiple PowerShell sessions from one browser page.
 
+![MultiTerm Workbench running ten PowerShell sessions in a 5-column grid, each executing a different command](docs/screenshot.png)
+
 ## Run
 
-PowerShell-only bridge, no Node install required:
+### Desktop app (Electron)
+
+Runs in its own native window — no browser, no address bar:
+
+```powershell
+npm install
+npm start
+```
+
+`npm start` launches the Electron shell, which starts the local bridge under your
+system Node runtime and loads the UI in a dedicated window.
+
+> Requires Node.js on your PATH (the terminal bridge uses the native `node-pty`
+> module built for your installed Node version).
+
+### PowerShell-only bridge (browser)
+
+No Node install required:
 
 ```powershell
 .\Start-MultiTerm.ps1
@@ -22,11 +41,11 @@ To start the bridge without opening a browser:
 .\Start-MultiTerm.ps1 -NoBrowser
 ```
 
-Node bridge, useful during development:
+Node bridge only (no window), useful during development:
 
 ```powershell
 npm install
-npm start
+npm run server
 ```
 
 Open the URL printed by the bridge, usually:
@@ -34,6 +53,23 @@ Open the URL printed by the bridge, usually:
 ```text
 http://127.0.0.1:3177
 ```
+
+## Windows installer
+
+An [Inno Setup](https://www.innosetup.com/) script packages the self-contained
+PowerShell bridge (no Node.js runtime required) into a Windows installer. It
+installs `Start-MultiTerm.ps1`, the `public/` assets, and Start Menu / optional
+desktop shortcuts that launch the bridge and open it in your browser.
+
+Build the installer (requires Inno Setup 6):
+
+```powershell
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\MultiTerm.iss
+```
+
+The resulting `installer\Output\MultiTerm-Setup-<version>.exe` performs a
+per-user install by default (no UAC prompt); users may elect a machine-wide
+install from the setup dialog.
 
 ## Notes
 
