@@ -100,14 +100,26 @@ server.on("upgrade", (request, socket) => {
   socket.on("error", () => clients.delete(client));
 });
 
-server.listen(port, host, () => {
-  console.log(`MultiTerm bridge running on ${host}:${port}`);
-  console.log("PowerShell sessions are available only to this local machine by default.");
-});
+function start(callback) {
+  server.listen(port, host, () => {
+    console.log(`MultiTerm bridge running on ${host}:${port}`);
+    console.log("PowerShell sessions are available only to this local machine by default.");
+    if (typeof callback === "function") {
+      callback({ host, port });
+    }
+  });
+  return server;
+}
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("exit", () => closeSessions(false));
+
+if (require.main === module) {
+  start();
+}
+
+module.exports = { server, start, host, port };
 
 function getPathname(rawUrl) {
   const pathPart = String(rawUrl || "/").split("?", 1)[0];
@@ -437,6 +449,22 @@ function getShell(value) {
       args: ["-NoLogo", "-NoExit"],
       file: "powershell.exe",
       label: "Windows PowerShell"
+    };
+  }
+
+  if (value === "cmd") {
+    return {
+      args: [],
+      file: "cmd.exe",
+      label: "Command Prompt"
+    };
+  }
+
+  if (value === "wsl") {
+    return {
+      args: [],
+      file: "wsl.exe",
+      label: "WSL"
     };
   }
 

@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="styles.css">
     <script defer src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
     <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <script defer src="app.js"></script>
   </head>
@@ -21,9 +23,6 @@
         <button id="toggleSidecar" class="chrome-toggle" type="button" title="Hide layout controls" aria-label="Hide layout controls" aria-pressed="false">
           <i class="icon-when-visible" data-lucide="panel-left-close"></i>
           <i class="icon-when-hidden" data-lucide="panel-left-open"></i>
-        </button>
-        <button id="closeAllTerminals" class="chrome-toggle chrome-danger" type="button" title="No terminal sessions to close" aria-label="No terminal sessions to close" disabled>
-          <i data-lucide="trash-2"></i>
         </button>
       </nav>
 
@@ -42,6 +41,8 @@
             <select id="shellSelect">
               <option value="pwsh">PowerShell 7</option>
               <option value="powershell">Windows PowerShell</option>
+              <option value="cmd">Command Prompt</option>
+              <option value="wsl">WSL</option>
             </select>
           </label>
 
@@ -55,15 +56,91 @@
             <input id="terminalSearchInput" type="search" spellcheck="false" autocomplete="off" placeholder="Filter terminal text">
           </label>
 
-          <button id="addTerminal" class="primary-action" type="button">
-            <i data-lucide="plus"></i>
-            <span>Terminal</span>
-          </button>
+          <div class="action-cluster">
+            <button id="aboutToggle" class="icon-button" type="button" title="About MultiTerm" aria-label="About MultiTerm">
+              <i data-lucide="info"></i>
+            </button>
+            <button id="helpToggle" class="icon-button" type="button" title="Keyboard shortcuts (Ctrl+/)" aria-label="Keyboard shortcuts">
+              <i data-lucide="keyboard"></i>
+            </button>
+            <button id="broadcastToggle" class="icon-button" type="button" title="Broadcast command (Ctrl+Shift+B)" aria-label="Broadcast command">
+              <i data-lucide="megaphone"></i>
+            </button>
+            <button id="commandPalette" class="icon-button" type="button" title="Command palette (Ctrl+Shift+P)" aria-label="Command palette">
+              <i data-lucide="command"></i>
+            </button>
+            <button id="themeToggle" class="icon-button" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
+              <i data-lucide="moon"></i>
+            </button>
+            <button id="addTerminal" class="primary-action" type="button">
+              <i data-lucide="plus"></i>
+              <span>Terminal</span>
+            </button>
+            <button id="toggleHeaderTop" class="icon-button" type="button" title="Hide header" aria-label="Hide header" aria-pressed="false">
+              <i data-lucide="panel-top-close"></i>
+            </button>
+          </div>
         </div>
       </header>
 
+      <div id="broadcastBar" class="broadcast-bar" hidden>
+        <i data-lucide="megaphone"></i>
+        <input id="broadcastInput" type="text" spellcheck="false" autocomplete="off" placeholder="Type a command to broadcast, then Enter…" aria-label="Broadcast command">
+        <button id="broadcastScope" type="button" class="broadcast-scope" data-scope="all" title="Toggle broadcast scope">All terminals</button>
+        <button id="broadcastSend" class="primary-action" type="button">
+          <i data-lucide="send"></i>
+          <span>Send</span>
+        </button>
+        <button id="broadcastClose" class="icon-button" type="button" title="Close" aria-label="Close broadcast">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+
       <div class="workbench">
         <aside class="control-panel" aria-label="Terminal layout controls">
+          <div class="panel-tools">
+            <button id="toggleSidecarTop" class="icon-button" type="button" title="Hide layout controls" aria-label="Hide layout controls" aria-pressed="false">
+              <i data-lucide="panel-left-close"></i>
+            </button>
+          </div>
+          <section class="control-section">
+            <h2>Appearance</h2>
+            <label class="control-row">
+              <span>App theme</span>
+              <select id="appTheme">
+                <option value="system">Follow system</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span>Font family</span>
+              <select id="fontFamily">
+                <option value="Cascadia Mono">Cascadia Mono</option>
+                <option value="Cascadia Code">Cascadia Code</option>
+                <option value="Consolas">Consolas</option>
+                <option value="JetBrains Mono">JetBrains Mono</option>
+                <option value="Fira Code">Fira Code</option>
+                <option value="Courier New">Courier New</option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span>Cursor</span>
+              <select id="cursorStyle">
+                <option value="bar">Bar</option>
+                <option value="block">Block</option>
+                <option value="underline">Underline</option>
+              </select>
+            </label>
+
+            <label class="toggle-row">
+              <input id="cursorBlink" type="checkbox">
+              <span>Cursor blink</span>
+            </label>
+          </section>
+
           <section class="control-section">
             <h2>Layout</h2>
             <label class="control-row">
@@ -75,6 +152,10 @@
                 <option value="horizontal">Horizontal strip</option>
                 <option value="vertical">Vertical stack</option>
                 <option value="focus">Focus rail</option>
+                <option value="grid">Balanced grid</option>
+                <option value="master-top">Master top</option>
+                <option value="master-right">Master right</option>
+                <option value="bento">Bento grid</option>
                 <option value="manual">Manual canvas</option>
               </select>
             </label>
@@ -145,6 +226,26 @@
             </label>
           </section>
 
+          <section class="control-section">
+            <h2>Session</h2>
+            <label class="toggle-row">
+              <input id="restoreSession" type="checkbox">
+              <span>Restore last session</span>
+            </label>
+            <label class="toggle-row">
+              <input id="bellNotify" type="checkbox">
+              <span>Bell notifications</span>
+            </label>
+            <label class="toggle-row">
+              <input id="copyOnSelect" type="checkbox">
+              <span>Copy on select</span>
+            </label>
+            <label class="control-row">
+              <span>Startup cmd</span>
+              <input id="startupCommand" type="text" spellcheck="false" autocomplete="off" placeholder="Run on new terminal">
+            </label>
+          </section>
+
           <section class="control-section action-grid">
             <button id="fitAll" type="button">
               <i data-lucide="maximize"></i>
@@ -155,6 +256,32 @@
               <span>Reset</span>
             </button>
           </section>
+
+          <section class="control-section">
+            <h2>Workspaces</h2>
+            <label class="control-row">
+              <span>Saved</span>
+              <select id="workspaceSelect"></select>
+            </label>
+            <label class="control-row">
+              <span>Name</span>
+              <input id="workspaceName" type="text" spellcheck="false" autocomplete="off" placeholder="New workspace">
+            </label>
+            <div class="workspace-actions">
+              <button id="workspaceSave" type="button" title="Save current terminals & layout">
+                <i data-lucide="save"></i>
+                <span>Save</span>
+              </button>
+              <button id="workspaceRestore" type="button" title="Restore selected workspace">
+                <i data-lucide="folder-open"></i>
+                <span>Restore</span>
+              </button>
+              <button id="workspaceDelete" type="button" title="Delete selected workspace">
+                <i data-lucide="trash-2"></i>
+                <span>Delete</span>
+              </button>
+            </div>
+          </section>
         </aside>
 
         <main class="stage" aria-label="Terminal workbench">
@@ -162,13 +289,86 @@
           <div id="snapPreview" class="snap-preview" aria-hidden="true"></div>
         </main>
       </div>
+
+      <footer class="status-bar" aria-label="Status bar">
+        <span class="status-item" id="statusSessions">0 sessions</span>
+        <span class="status-item" id="statusShell">
+          <i data-lucide="terminal-square"></i>
+          <span id="statusShellText">PowerShell 7</span>
+        </span>
+        <span class="status-dot" id="statusConn" data-tone="offline">Connecting</span>
+        <span class="status-spacer"></span>
+        <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> new</span>
+        <button id="closeAllTerminals" class="status-btn status-danger" type="button" title="No terminal sessions to close" aria-label="No terminal sessions to close" disabled>
+          <i data-lucide="trash-2"></i>
+          <span>Close all</span>
+        </button>
+      </footer>
     </div>
 
+    <div id="paletteOverlay" class="palette-overlay" hidden>
+      <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+        <input id="paletteInput" class="palette-input" type="text" placeholder="Type a command…" autocomplete="off" spellcheck="false" aria-label="Command">
+        <ul id="paletteList" class="palette-list" role="listbox"></ul>
+      </div>
+    </div>
+
+    <div id="shortcutsOverlay" class="palette-overlay" hidden>
+      <div class="palette shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <div class="shortcuts-head">
+          <span>Keyboard shortcuts</span>
+          <button id="shortcutsClose" class="icon-button" type="button" title="Close" aria-label="Close">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <ul class="shortcuts-list">
+          <li><span>Command palette</span><span class="kbd">Ctrl+Shift+P</span></li>
+          <li><span>Keyboard shortcuts</span><span class="kbd">Ctrl+/</span></li>
+          <li><span>New terminal</span><span class="kbd">Ctrl+Shift+T</span></li>
+          <li><span>Close active terminal</span><span class="kbd">Ctrl+Shift+W</span></li>
+          <li><span>Restart active terminal</span><span class="kbd">Ctrl+Shift+R</span></li>
+          <li><span>Find in terminal</span><span class="kbd">Ctrl+Shift+F</span></li>
+          <li><span>Filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
+          <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
+          <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
+          <li><span>Paste into active</span><span class="kbd">Ctrl+Shift+V</span></li>
+          <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
+          <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+→ / ←</span></li>
+          <li><span>Font zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="toastHost" class="toast-host" aria-live="polite"></div>
+
+    <div id="aboutOverlay" class="palette-overlay" hidden>
+      <div class="palette about" role="dialog" aria-modal="true" aria-label="About MultiTerm">
+        <div class="about-head">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div class="about-title">
+            <h2>MultiTerm Workbench</h2>
+            <p id="aboutVersion">v0.1.0</p>
+          </div>
+          <button id="aboutClose" class="icon-button" type="button" title="Close" aria-label="Close">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <ul class="about-list">
+          <li><span>Author</span><span>Andrew Stein</span></li>
+          <li><span>GitHub</span><a id="aboutRepo" href="https://github.com/andrewtheart/multiterm-workbench" target="_blank" rel="noopener noreferrer">github.com/andrewtheart/multiterm-workbench</a></li>
+          <li><span>Version</span><span id="aboutVersionText">0.1.0</span></li>
+        </ul>
+        <p class="about-foot">A local xterm.js multi-terminal workbench for PowerShell sessions.</p>
+      </div>
+    </div>
+
+    <div id="contextMenu" class="context-menu" role="menu" hidden></div>
     <template id="paneTemplate">
       <article class="terminal-pane">
         <header class="pane-bar">
           <div class="pane-title-wrap">
             <i data-lucide="terminal"></i>
+            <span class="pane-activity" title="New output" aria-hidden="true"></span>
             <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
           </div>
           <span class="pane-status">starting</span>
@@ -178,6 +378,21 @@
             </button>
             <button type="button" data-action="move-right" title="Move right" aria-label="Move right">
               <i data-lucide="arrow-right"></i>
+            </button>
+            <button type="button" data-action="find" title="Find (Ctrl+Shift+F)" aria-label="Find in terminal">
+              <i data-lucide="search"></i>
+            </button>
+            <button type="button" data-action="clear" title="Clear" aria-label="Clear terminal">
+              <i data-lucide="eraser"></i>
+            </button>
+            <button type="button" data-action="copy" title="Copy output" aria-label="Copy output">
+              <i data-lucide="clipboard-copy"></i>
+            </button>
+            <button type="button" data-action="color" title="Cycle label color" aria-label="Cycle label color">
+              <i data-lucide="tag"></i>
+            </button>
+            <button type="button" data-action="restart" title="Restart session" aria-label="Restart session">
+              <i data-lucide="rotate-cw"></i>
             </button>
             <button type="button" data-action="focus" title="Focus" aria-label="Focus">
               <i data-lucide="maximize-2"></i>
@@ -191,6 +406,20 @@
           </div>
         </header>
         <div class="terminal-screen"></div>
+        <div class="pane-find" hidden>
+          <i data-lucide="search"></i>
+          <input class="pane-find-input" type="text" spellcheck="false" autocomplete="off" placeholder="Find" aria-label="Find in terminal">
+          <span class="pane-find-count">0/0</span>
+          <button type="button" class="pane-find-btn" data-find="prev" title="Previous match" aria-label="Previous match">
+            <i data-lucide="chevron-up"></i>
+          </button>
+          <button type="button" class="pane-find-btn" data-find="next" title="Next match" aria-label="Next match">
+            <i data-lucide="chevron-down"></i>
+          </button>
+          <button type="button" class="pane-find-btn" data-find="close" title="Close" aria-label="Close find">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
       </article>
     </template>
   </body>
