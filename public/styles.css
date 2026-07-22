@@ -403,6 +403,17 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   display: none;
 }
 
+/* The "show header" restore button floats at the top-right, where the header
+   it reveals lives — not alongside the bottom-left sidecar toggle. */
+.chrome-controls #toggleHeader {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  bottom: auto;
+  left: auto;
+  z-index: 40;
+}
+
 /* Sticky toggle at the top-right of the layout panel */
 .panel-tools {
   display: flex;
@@ -691,6 +702,63 @@ body.header-hidden .terminal-host[data-layout="focus"] .terminal-pane.is-primary
   flex: 1;
 }
 
+.minimized-dock {
+  align-items: center;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  max-width: 42vw;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.minimized-dock[hidden] {
+  display: none;
+}
+
+.min-chip {
+  align-items: center;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  gap: 6px;
+  max-width: 180px;
+  min-height: 22px;
+  padding: 0 8px;
+}
+
+.min-chip:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.min-chip svg {
+  height: 13px;
+  width: 13px;
+}
+
+.min-chip-dot {
+  background: var(--muted);
+  border-radius: 50%;
+  flex: none;
+  height: 8px;
+  width: 8px;
+}
+
+.min-chip.has-color .min-chip-dot {
+  background: var(--pane-accent);
+}
+
+.min-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-hint {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -733,6 +801,181 @@ body.header-hidden .status-hint kbd,
   font-family: inherit;
   font-size: 11px;
   padding: 1px 5px;
+}
+
+/* ---------------- Log console (tail view) --------------- */
+
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.log-fab {
+  align-items: center;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  bottom: 42px;
+  box-shadow: var(--elev-3);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  height: 34px;
+  justify-content: center;
+  padding: 0 12px;
+  position: fixed;
+  right: 16px;
+  transition: transform var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
+  z-index: 45;
+}
+
+.log-fab:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.log-fab svg {
+  height: 16px;
+  width: 16px;
+}
+
+.log-fab-dot {
+  background: var(--danger);
+  border-radius: 50%;
+  height: 8px;
+  width: 8px;
+}
+
+.log-fab-dot[hidden] {
+  display: none;
+}
+
+.log-panel {
+  background: var(--surface-translucent);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  bottom: 42px;
+  box-shadow: var(--elev-3);
+  display: flex;
+  flex-direction: column;
+  height: min(50vh, 460px);
+  overflow: hidden;
+  position: fixed;
+  right: 16px;
+  width: min(760px, 92vw);
+  z-index: 46;
+}
+
+.log-panel[hidden] {
+  display: none;
+}
+
+.log-panel-head {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 10px 8px 14px;
+}
+
+.log-panel-title {
+  align-items: center;
+  color: var(--text);
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 8px;
+}
+
+.log-panel-title svg {
+  height: 16px;
+  width: 16px;
+}
+
+.log-panel-tools {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.log-panel-tools select {
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text);
+  font-size: 12px;
+  min-height: 26px;
+  padding: 0 6px;
+}
+
+.log-output {
+  flex: 1;
+  font-family: 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-y: auto;
+  padding: 8px 12px 10px;
+  scrollbar-width: thin;
+}
+
+.log-row {
+  align-items: baseline;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto auto auto 1fr;
+  padding: 3px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-row:last-child {
+  border-bottom: 0;
+}
+
+.log-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.log-level {
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  text-transform: uppercase;
+}
+
+.log-source {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+.log-msg {
+  color: var(--text);
+}
+
+.log-row.log-debug .log-level { background: color-mix(in srgb, var(--muted) 25%, transparent); color: var(--muted); }
+.log-row.log-info .log-level { background: color-mix(in srgb, var(--primary) 22%, transparent); color: var(--primary); }
+.log-row.log-warn .log-level { background: color-mix(in srgb, #e0af68 26%, transparent); color: #e0af68; }
+.log-row.log-error .log-level { background: color-mix(in srgb, var(--danger) 26%, transparent); color: var(--danger); }
+.log-row.log-error .log-msg { color: var(--danger); }
+
+.log-empty {
+  color: var(--muted);
+  font-style: italic;
+  padding: 6px 0;
 }
 
 /* ---------------- Command palette --------------- */
@@ -874,6 +1117,37 @@ body.header-hidden .status-hint kbd,
   font-variant-numeric: tabular-nums;
   padding: 3px 8px;
   white-space: nowrap;
+}
+
+/* Help dialog */
+.help-overlay {
+  align-items: center;
+  padding-top: 0;
+}
+
+.help-dialog {
+  display: flex;
+  flex-direction: column;
+  height: min(760px, 88vh);
+  width: min(880px, 94vw);
+}
+
+.help-head {
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 15px;
+  font-weight: 650;
+  justify-content: space-between;
+  padding: 12px 8px 12px 16px;
+}
+
+.help-frame {
+  background: var(--bg);
+  border: 0;
+  flex: 1 1 auto;
+  width: 100%;
 }
 
 /* About dialog */
@@ -1417,6 +1691,10 @@ body.is-pane-dragging {
 }
 
 .terminal-pane.is-search-hidden {
+  display: none;
+}
+
+.terminal-pane.is-minimized {
   display: none;
 }
 

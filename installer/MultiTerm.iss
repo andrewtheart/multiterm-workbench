@@ -28,6 +28,10 @@ UninstallDisplayIcon={app}\MultiTerm.ico
 ; Per-user install by default (no UAC); user may elect a machine-wide install.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
+; Single installer covers x86, x64, and ARM64: the payload is architecture-neutral
+; (a PowerShell script plus web assets, no native binaries). ArchitecturesAllowed is
+; intentionally omitted so setup runs on every architecture; x64compatible matches
+; x64 and ARM64 so those install into 64-bit Program Files.
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=Output
 OutputBaseFilename=MultiTerm-Setup-{#MyAppVersion}
@@ -36,7 +40,9 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 LicenseFile=
-MinVersion=10.0
+; Windows 10 version 1809 (build 17763) is the minimum: MultiTerm's pseudo-terminals
+; rely on the ConPTY APIs (CreatePseudoConsole) that were introduced in that build.
+MinVersion=10.0.17763
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -51,7 +57,7 @@ Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "MultiTerm.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Comment: "Start the MultiTerm Workbench bridge and open it in your browser"
+Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Comment: "Start the MultiTerm Workbench bridge and open it in its own app window"
 Name: "{group}\{#MyAppName} README"; Filename: "{app}\README.md"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Tasks: desktopicon

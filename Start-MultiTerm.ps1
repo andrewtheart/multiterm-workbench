@@ -87,7 +87,23 @@ namespace MultiTerm.PowerShellBridge
         {
             this.listener = new HttpListener();
             this.listener.Prefixes.Add(this.Url);
-            this.listener.Start();
+            try
+            {
+                this.listener.Start();
+            }
+            catch (HttpListenerException)
+            {
+                // Another MultiTerm bridge already owns this address (for example,
+                // a window that is still open). Rather than crashing with a raw
+                // "conflicts with an existing registration" error, just reopen the
+                // app window pointing at the running instance and exit quietly.
+                Console.WriteLine("MultiTerm is already running on " + this.Url + ". Opening the existing instance.");
+                if (this.openBrowser)
+                {
+                    this.OpenBrowser();
+                }
+                return;
+            }
 
             Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs eventArgs)
             {
@@ -205,14 +221,99 @@ namespace MultiTerm.PowerShellBridge
         {
             try
             {
+                string browser = this.FindAppModeBrowser();
+                if (browser != null)
+                {
+                    string dataDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "MultiTerm", "AppShell");
+                    try { Directory.CreateDirectory(dataDir); }
+                    catch { }
+
+                    // Launch a chromeless, standalone "app" window (no tabs or
+                    // address bar) using an isolated profile so it behaves like
+                    // a dedicated desktop app rather than a browser tab.
+                    string args = "--app=" + this.Url
+                        + " --user-data-dir=\"" + dataDir + "\""
+                        + " --window-size=1200,800"
+                        + " --no-first-run --no-default-browser-check";
+
+                    ProcessStartInfo appInfo = new ProcessStartInfo(browser, args);
+                    appInfo.UseShellExecute = false;
+                    Process.Start(appInfo);
+                    return;
+                }
+
+                // No Chromium-based browser found — open the default browser.
                 ProcessStartInfo startInfo = new ProcessStartInfo(this.Url);
                 startInfo.UseShellExecute = true;
                 Process.Start(startInfo);
             }
             catch (Exception error)
             {
-                Console.WriteLine("Could not open browser automatically: " + error.Message);
+                Console.WriteLine("Could not open the app window automatically: " + error.Message);
+                try
+                {
+                    ProcessStartInfo fallback = new ProcessStartInfo(this.Url);
+                    fallback.UseShellExecute = true;
+                    Process.Start(fallback);
+                }
+                catch { }
             }
+        }
+
+        private string FindAppModeBrowser()
+        {
+            string[] candidates = new string[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft\\Edge\\Application\\msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft\\Edge\\Application\\msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google\\Chrome\\Application\\chrome.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google\\Chrome\\Application\\chrome.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Google\\Chrome\\Application\\chrome.exe")
+            };
+
+            foreach (string candidate in candidates)
+            {
+                try
+                {
+                    if (!String.IsNullOrEmpty(candidate) && File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+                }
+                catch { }
+            }
+
+            // Fall back to the browser registered under App Paths (Edge first).
+            string fromRegistry = this.RegistryAppPath("msedge.exe");
+            if (fromRegistry != null)
+            {
+                return fromRegistry;
+            }
+
+            return this.RegistryAppPath("chrome.exe");
+        }
+
+        private string RegistryAppPath(string exeName)
+        {
+            string subKey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\" + exeName;
+            string[] roots = new string[] { "HKEY_CURRENT_USER\\", "HKEY_LOCAL_MACHINE\\" };
+            foreach (string root in roots)
+            {
+                try
+                {
+                    object value = Microsoft.Win32.Registry.GetValue(root + subKey, "", null);
+                    string path = value as string;
+                    if (!String.IsNullOrEmpty(path) && File.Exists(path))
+                    {
+                        return path;
+                    }
+                }
+                catch { }
+            }
+
+            return null;
         }
 
         private void HandleWebSocket(HttpListenerContext context)
@@ -240,6 +341,7 @@ namespace MultiTerm.PowerShellBridge
             BridgeClient client = new BridgeClient(Guid.NewGuid().ToString("N"), webSocketContext.WebSocket);
             this.clients[client.Id] = client;
             client.Send(this.WelcomeJson());
+            this.Log("info", "Client connected: " + client.Id + " (" + (remoteAddress == null ? "local" : remoteAddress.ToString()) + "); " + this.clients.Count + " active");
 
             try
             {
@@ -250,6 +352,7 @@ namespace MultiTerm.PowerShellBridge
                 BridgeClient removed;
                 this.clients.TryRemove(client.Id, out removed);
                 client.Close();
+                this.Log("info", "Client disconnected: " + client.Id + "; " + this.clients.Count + " active");
             }
         }
 
@@ -326,10 +429,12 @@ namespace MultiTerm.PowerShellBridge
             }
             else if (type == "kill")
             {
+                this.Log("info", "Kill requested for session " + Json.Get(message, "id"));
                 this.KillSession(Json.Get(message, "id"));
             }
             else if (type == "killAll")
             {
+                this.Log("info", "Kill-all requested (" + this.sessions.Count + " sessions)");
                 foreach (TerminalSession session in this.sessions.Values)
                 {
                     session.RequestExit();
@@ -373,6 +478,7 @@ namespace MultiTerm.PowerShellBridge
             {
                 TerminalSession removed;
                 this.sessions.TryRemove(id, out removed);
+                this.Log("info", "Session exited: " + id + " (code " + exitCode + ")");
                 this.Broadcast("{\"type\":\"exited\",\"id\":" + Json.Quote(id) + ",\"code\":" + exitCode + "}");
             };
 
@@ -386,10 +492,12 @@ namespace MultiTerm.PowerShellBridge
                     return;
                 }
 
+                this.Log("info", "Session created: " + title + " [" + id + ", " + shell.Label + "]");
                 client.Send("{\"type\":\"created\"," + session.SummaryJson().Substring(1));
             }
             catch (Exception error)
             {
+                this.Log("error", "Session create failed for " + id + ": " + error.Message);
                 client.Send("{\"type\":\"createFailed\",\"id\":" + Json.Quote(id) + ",\"message\":" + Json.Quote(error.Message) + "}");
             }
         }
@@ -432,6 +540,13 @@ namespace MultiTerm.PowerShellBridge
             {
                 client.Send(message);
             }
+        }
+
+        private void Log(string level, string message)
+        {
+            long epochMillis = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] [" + level + "] " + message);
+            this.Broadcast("{\"type\":\"log\",\"source\":\"server\",\"level\":" + Json.Quote(level) + ",\"time\":" + epochMillis + ",\"message\":" + Json.Quote(message) + "}");
         }
 
         private void ServeStaticFile(HttpListenerContext context, string rawPath)
