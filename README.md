@@ -4,6 +4,20 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
 
 ![MultiTerm Workbench running ten PowerShell sessions in a 5-column grid, each executing a different command](docs/screenshot.png)
 
+## Requirements
+
+- **Windows 10 version 1809 (build 17763) or newer**, or Windows 11. This is the
+  minimum required for the pseudo-terminal support (the ConPTY
+  `CreatePseudoConsole` APIs) that MultiTerm uses to run each PowerShell session.
+  The Windows installer enforces this and refuses to install on older builds.
+- **Windows PowerShell 5.1** (built into Windows 10/11) is enough for the
+  self-contained bridge and the installer. **PowerShell 7 (`pwsh.exe`)** is used
+  automatically when it's installed, otherwise sessions fall back to Windows
+  PowerShell.
+- **Node.js** is only needed for the Electron desktop app (`npm start`) and the
+  development Node bridge (`npm run server`) — not for `Start-MultiTerm.ps1` or
+  the installed build.
+
 ## Run
 
 ### Desktop app (Electron)
@@ -71,6 +85,12 @@ The resulting `installer\Output\MultiTerm-Setup-<version>.exe` performs a
 per-user install by default (no UAC prompt); users may elect a machine-wide
 install from the setup dialog.
 
+A single installer covers **x86, x64, and ARM64** — no separate per-architecture
+builds are needed. The payload is architecture-neutral (a PowerShell script plus
+web assets, with no native binaries), the setup runs on every architecture, and
+it installs into 64-bit `Program Files` on x64/ARM64 and 32-bit `Program Files`
+on x86.
+
 ## Notes
 
 - The UI is a single-page app in `public/`.
@@ -84,3 +104,5 @@ install from the setup dialog.
 - The bottom-left trash button closes every terminal pane and tells the bridge to kill all running PowerShell sessions.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
 - Manual canvas panes can be dragged by their header and resized from the lower-right corner.
+- Any pane can be minimized to a chip in the status bar with its header's minimize (−) button; click the chip to restore the pane in place.
+- The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.

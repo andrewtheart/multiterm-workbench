@@ -4,13 +4,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>MultiTerm Workbench</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+    <link rel="stylesheet" href="vendor/xterm.css">
     <link rel="stylesheet" href="styles.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.js"></script>
-    <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script defer src="vendor/xterm.js"></script>
+    <script defer src="vendor/addon-fit.js"></script>
+    <script defer src="vendor/addon-search.js"></script>
+    <script defer src="vendor/addon-web-links.js"></script>
+    <script defer src="vendor/lucide.js"></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -62,6 +62,9 @@
             </button>
             <button id="helpToggle" class="icon-button" type="button" title="Keyboard shortcuts (Ctrl+/)" aria-label="Keyboard shortcuts">
               <i data-lucide="keyboard"></i>
+            </button>
+            <button id="helpDocToggle" class="icon-button" type="button" title="Help" aria-label="Help">
+              <i data-lucide="circle-help"></i>
             </button>
             <button id="broadcastToggle" class="icon-button" type="button" title="Broadcast command (Ctrl+Shift+B)" aria-label="Broadcast command">
               <i data-lucide="megaphone"></i>
@@ -297,14 +300,47 @@
           <span id="statusShellText">PowerShell 7</span>
         </span>
         <span class="status-dot" id="statusConn" data-tone="offline">Connecting</span>
+        <div id="minimizedDock" class="minimized-dock" aria-label="Minimized terminals" hidden></div>
         <span class="status-spacer"></span>
-        <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> new</span>
+        <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>T</kbd> new</span>
         <button id="closeAllTerminals" class="status-btn status-danger" type="button" title="No terminal sessions to close" aria-label="No terminal sessions to close" disabled>
           <i data-lucide="trash-2"></i>
           <span>Close all</span>
         </button>
       </footer>
     </div>
+
+    <button id="logToggle" class="log-fab" type="button" title="Show logs" aria-label="Show logs" aria-expanded="false">
+      <i data-lucide="chevron-up"></i>
+      <span class="log-fab-dot" id="logFabDot" hidden></span>
+    </button>
+
+    <section id="logPanel" class="log-panel" aria-label="Application logs" hidden>
+      <header class="log-panel-head">
+        <span class="log-panel-title"><i data-lucide="scroll-text"></i> Logs</span>
+        <div class="log-panel-tools">
+          <label class="log-level-field">
+            <span class="visually-hidden">Minimum level</span>
+            <select id="logLevelFilter" aria-label="Minimum log level">
+              <option value="debug">Debug+</option>
+              <option value="info" selected>Info+</option>
+              <option value="warn">Warnings+</option>
+              <option value="error">Errors</option>
+            </select>
+          </label>
+          <button id="logCopy" class="icon-button" type="button" title="Copy visible logs" aria-label="Copy logs">
+            <i data-lucide="clipboard-copy"></i>
+          </button>
+          <button id="logClear" class="icon-button" type="button" title="Clear logs" aria-label="Clear logs">
+            <i data-lucide="eraser"></i>
+          </button>
+          <button id="logClose" class="icon-button" type="button" title="Hide logs" aria-label="Hide logs">
+            <i data-lucide="chevron-down"></i>
+          </button>
+        </div>
+      </header>
+      <div id="logOutput" class="log-output" role="log" aria-live="polite" tabindex="0"></div>
+    </section>
 
     <div id="paletteOverlay" class="palette-overlay" hidden>
       <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
@@ -324,7 +360,7 @@
         <ul class="shortcuts-list">
           <li><span>Command palette</span><span class="kbd">Ctrl+Shift+P</span></li>
           <li><span>Keyboard shortcuts</span><span class="kbd">Ctrl+/</span></li>
-          <li><span>New terminal</span><span class="kbd">Ctrl+Shift+T</span></li>
+          <li><span>New terminal</span><span class="kbd">Ctrl+T / Ctrl+Shift+T</span></li>
           <li><span>Close active terminal</span><span class="kbd">Ctrl+Shift+W</span></li>
           <li><span>Restart active terminal</span><span class="kbd">Ctrl+Shift+R</span></li>
           <li><span>Find in terminal</span><span class="kbd">Ctrl+Shift+F</span></li>
@@ -340,6 +376,18 @@
     </div>
 
     <div id="toastHost" class="toast-host" aria-live="polite"></div>
+
+    <div id="helpOverlay" class="palette-overlay help-overlay" hidden>
+      <div class="palette help-dialog" role="dialog" aria-modal="true" aria-label="MultiTerm help">
+        <div class="help-head">
+          <span>Help</span>
+          <button id="helpDocClose" class="icon-button" type="button" title="Close" aria-label="Close">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <iframe id="helpFrame" class="help-frame" title="MultiTerm help" src="about:blank"></iframe>
+      </div>
+    </div>
 
     <div id="aboutOverlay" class="palette-overlay" hidden>
       <div class="palette about" role="dialog" aria-modal="true" aria-label="About MultiTerm">
@@ -393,6 +441,9 @@
             </button>
             <button type="button" data-action="restart" title="Restart session" aria-label="Restart session">
               <i data-lucide="rotate-cw"></i>
+            </button>
+            <button type="button" data-action="minimize" title="Minimize to status bar" aria-label="Minimize terminal">
+              <i data-lucide="minus"></i>
             </button>
             <button type="button" data-action="focus" title="Focus" aria-label="Focus">
               <i data-lucide="maximize-2"></i>

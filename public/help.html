@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MultiTerm Workbench — Help</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+      html,
+      body {
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        height: 100%;
+      }
+
+      .help-doc {
+        box-sizing: border-box;
+        margin: 0 auto;
+        max-width: 820px;
+        padding: 32px 28px 64px;
+      }
+
+      .help-doc h1 {
+        font-size: 24px;
+        font-weight: 700;
+        margin: 0 0 4px;
+      }
+
+      .help-lead {
+        color: var(--muted);
+        margin: 0 0 28px;
+      }
+
+      .help-doc h2 {
+        border-bottom: 1px solid var(--border);
+        font-size: 16px;
+        font-weight: 650;
+        margin: 32px 0 12px;
+        padding-bottom: 8px;
+      }
+
+      .help-doc h3 {
+        font-size: 14px;
+        font-weight: 620;
+        margin: 20px 0 8px;
+      }
+
+      .help-doc p,
+      .help-doc li {
+        color: var(--text);
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .help-doc ul {
+        margin: 8px 0;
+        padding-left: 22px;
+      }
+
+      .help-doc li {
+        margin: 4px 0;
+      }
+
+      .help-doc code {
+        background: var(--surface-high);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: "Cascadia Mono", "Consolas", monospace;
+        font-size: 12.5px;
+        padding: 1px 6px;
+      }
+
+      .help-doc pre {
+        background: var(--surface-raised);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        margin: 10px 0;
+        overflow: auto;
+        padding: 12px 14px;
+      }
+
+      .help-doc pre code {
+        background: none;
+        border: 0;
+        padding: 0;
+      }
+
+      .help-doc a {
+        color: var(--primary);
+        text-decoration: none;
+      }
+
+      .help-doc a:hover {
+        text-decoration: underline;
+      }
+
+      .kbd {
+        background: var(--surface-high);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--muted);
+        display: inline-block;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        padding: 2px 7px;
+        white-space: nowrap;
+      }
+
+      .shortcut-grid {
+        display: grid;
+        gap: 2px;
+        list-style: none;
+        margin: 8px 0;
+        padding: 0;
+      }
+
+      .shortcut-grid li {
+        align-items: center;
+        border-radius: var(--radius-sm);
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        padding: 8px 10px;
+      }
+
+      .shortcut-grid li:nth-child(odd) {
+        background: var(--state-hover, rgba(127, 127, 127, 0.06));
+      }
+
+      .help-note {
+        background: var(--primary-container);
+        border-radius: var(--radius-sm);
+        margin: 16px 0;
+        padding: 12px 14px;
+      }
+
+      .help-note p {
+        margin: 0;
+      }
+    </style>
+    <script>
+      // Match the theme the app is currently using (?theme=dark|light).
+      (function () {
+        const theme = new URLSearchParams(location.search).get("theme");
+        if (theme === "light" || theme === "dark") {
+          document.documentElement.dataset.appTheme = theme;
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <main class="help-doc">
+      <h1>MultiTerm Workbench — Help</h1>
+      <p class="help-lead">A local workbench for running and arranging many PowerShell sessions in one window.</p>
+
+      <h2>Getting started</h2>
+      <ul>
+        <li>Click <strong>Terminal</strong> (top-right) or press <span class="kbd">Ctrl+Shift+T</span> to open a new session.</li>
+        <li>Pick the shell (PowerShell 7, Windows PowerShell, Command Prompt, or WSL) from the <strong>Shell</strong> dropdown before creating a session.</li>
+        <li>Set a starting folder in the <strong>CWD</strong> box to launch new sessions there.</li>
+        <li>Type in any pane just like a normal terminal — <span class="kbd">Ctrl+C</span>, Tab completion, and PSReadLine editing are forwarded through a real pseudo-terminal.</li>
+      </ul>
+
+      <h2>Arranging terminals</h2>
+      <p>Use the <strong>layout controls</strong> panel on the left to change how panes are tiled:</p>
+      <ul>
+        <li><strong>Auto fit</strong> — panes size themselves to fill the workbench.</li>
+        <li><strong>Fixed columns / rows</strong> — lock the grid to a set number of columns or rows.</li>
+        <li><strong>Horizontal strip / Vertical stack</strong> — line panes up in a single row or column.</li>
+        <li><strong>Focus rail</strong> — enlarge the active pane while keeping the rest reachable.</li>
+        <li><strong>Manual canvas</strong> — drag panes by their header and resize from the lower-right corner.</li>
+      </ul>
+      <p>Drag any terminal by its header to the top, bottom, left, or right edge to <strong>snap</strong> it there; the remaining panes reflow to fill the space.</p>
+      <p>Click the <strong>minimize</strong> (&minus;) button in a pane&rsquo;s header to tuck it away to the status bar without closing the session. The pane hides and the others reflow; a chip appears at the bottom — click it to restore the pane right where it was.</p>
+
+      <h2>Working across sessions</h2>
+      <ul>
+        <li><strong>Broadcast</strong> (<span class="kbd">Ctrl+Shift+B</span>) sends one command to every terminal, or to a chosen scope.</li>
+        <li><strong>Sync input</strong> mirrors your typing into all panes at once — toggle it in the layout panel.</li>
+        <li>The top <strong>Search</strong> box filters panes by their on-screen text; non-matching panes stay hidden until they match again or you clear the search.</li>
+        <li>The bottom-left <strong>trash</strong> button closes every pane and asks the bridge to stop all running sessions.</li>
+      </ul>
+
+      <h2>Diagnostics &amp; logs</h2>
+      <p>Click the <strong>chevron</strong> in the bottom-right corner to open the <strong>log console</strong> — a live, tailed view of everything the app and the local bridge are doing (connections, session start/exit, broadcasts, workspace changes, and any errors). Use the <strong>minimum level</strong> selector to filter to warnings or errors, <strong>copy</strong> the visible log to the clipboard, or <strong>clear</strong> it. A dot on the chevron flags a new error while the console is closed.</p>
+
+      <h2>Workspaces &amp; sessions</h2>
+      <ul>
+        <li>Save the current set of panes and layout as a named <strong>workspace</strong>, then restore it later from the layout panel.</li>
+        <li>Enable <strong>Restore last session</strong> to reopen your terminals automatically the next time you launch MultiTerm.</li>
+      </ul>
+
+      <h2>Keyboard shortcuts</h2>
+      <ul class="shortcut-grid">
+        <li><span>Command palette</span><span class="kbd">Ctrl+Shift+P</span></li>
+        <li><span>Keyboard shortcuts</span><span class="kbd">Ctrl+/</span></li>
+        <li><span>New terminal</span><span class="kbd">Ctrl+T / Ctrl+Shift+T</span></li>
+        <li><span>Close active terminal</span><span class="kbd">Ctrl+Shift+W</span></li>
+        <li><span>Restart active terminal</span><span class="kbd">Ctrl+Shift+R</span></li>
+        <li><span>Find in terminal</span><span class="kbd">Ctrl+Shift+F</span></li>
+        <li><span>Filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
+        <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
+        <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
+        <li><span>Paste into active</span><span class="kbd">Ctrl+Shift+V</span></li>
+        <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
+        <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+&rarr; / &larr;</span></li>
+        <li><span>Font zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
+      </ul>
+
+      <h2>Tips &amp; troubleshooting</h2>
+      <div class="help-note">
+        <p>MultiTerm runs a small local bridge that owns the real PowerShell processes. It listens only on <code>127.0.0.1</code>, so sessions are reachable from this machine alone.</p>
+      </div>
+      <ul>
+        <li>To run on a different port, launch the bridge with a <code>PORT</code> value, e.g. <code>PORT=4000</code>.</li>
+        <li>If a pane says the bridge is offline, the local bridge stopped — relaunch MultiTerm from the Start Menu or shortcut.</li>
+        <li>Right-click inside a pane for copy, paste, find, clear, split, and restart actions.</li>
+      </ul>
+
+      <h2>About</h2>
+      <p>MultiTerm Workbench is a local xterm.js multi-terminal workbench for PowerShell sessions. Project page: <a href="https://github.com/andrewtheart/multiterm-workbench" target="_blank" rel="noopener noreferrer">github.com/andrewtheart/multiterm-workbench</a>.</p>
+    </main>
+  </body>
+</html>

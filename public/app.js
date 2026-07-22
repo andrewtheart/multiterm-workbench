@@ -161,10 +161,23 @@ const elements = {
   fontSize: document.querySelector("#fontSize"),
   fontSizeValue: document.querySelector("#fontSizeValue"),
   helpToggle: document.querySelector("#helpToggle"),
+  helpDocToggle: document.querySelector("#helpDocToggle"),
+  helpDocClose: document.querySelector("#helpDocClose"),
+  helpOverlay: document.querySelector("#helpOverlay"),
+  helpFrame: document.querySelector("#helpFrame"),
   host: document.querySelector("#terminalHost"),
   layoutMode: document.querySelector("#layoutMode"),
+  logClear: document.querySelector("#logClear"),
+  logClose: document.querySelector("#logClose"),
+  logCopy: document.querySelector("#logCopy"),
+  logFabDot: document.querySelector("#logFabDot"),
+  logLevelFilter: document.querySelector("#logLevelFilter"),
+  logOutput: document.querySelector("#logOutput"),
+  logPanel: document.querySelector("#logPanel"),
+  logToggle: document.querySelector("#logToggle"),
   minWidth: document.querySelector("#minWidth"),
   minWidthValue: document.querySelector("#minWidthValue"),
+  minimizedDock: document.querySelector("#minimizedDock"),
   paletteInput: document.querySelector("#paletteInput"),
   paletteList: document.querySelector("#paletteList"),
   paletteOverlay: document.querySelector("#paletteOverlay"),
@@ -218,7 +231,73 @@ const state = {
   workspaces: loadWorkspaces()
 };
 
+/* ---------------- Logging & tail console --------------- */
+
+const LOG_LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
+
+const logStore = {
+  entries: [],
+  max: 2000,
+  seq: 0,
+  minLevel: "info",
+  autoscroll: true,
+  unseenError: false
+};
+
+function logEvent(level, source, message, detail) {
+  const entry = {
+    id: ++logStore.seq,
+    time: Date.now(),
+    level: level in LOG_LEVEL_RANK ? level : "info",
+    source: source || "app",
+    message: typeof message === "string" ? message : String(message)
+  };
+  if (detail !== undefined && detail !== null) {
+    entry.detail = detail;
+  }
+
+  logStore.entries.push(entry);
+  if (logStore.entries.length > logStore.max) {
+    logStore.entries.splice(0, logStore.entries.length - logStore.max);
+  }
+
+  mirrorLogToConsole(entry);
+  appendLogRow(entry);
+
+  if (entry.level === "error" && elements.logPanel && elements.logPanel.hidden) {
+    logStore.unseenError = true;
+    if (elements.logFabDot) elements.logFabDot.hidden = false;
+  }
+  return entry;
+}
+
+function mirrorLogToConsole(entry) {
+  const label = `[MT:${entry.source}]`;
+  const args = entry.detail !== undefined ? [label, entry.message, entry.detail] : [label, entry.message];
+  if (entry.level === "error") console.error(...args);
+  else if (entry.level === "warn") console.warn(...args);
+  else if (entry.level === "debug") console.debug(...args);
+  else console.info(...args);
+}
+
+const log = {
+  debug: (source, message, detail) => logEvent("debug", source, message, detail),
+  info: (source, message, detail) => logEvent("info", source, message, detail),
+  warn: (source, message, detail) => logEvent("warn", source, message, detail),
+  error: (source, message, detail) => logEvent("error", source, message, detail)
+};
+
+window.addEventListener("error", (event) => {
+  log.error("app", `Uncaught error: ${event.message}`, { file: event.filename, line: event.lineno, col: event.colno });
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
+  log.error("app", `Unhandled promise rejection: ${reason}`);
+});
+
 window.addEventListener("DOMContentLoaded", () => {
+  log.info("app", `MultiTerm ${APP_VERSION} starting`);
   bindControls();
   applyVersion();
   applySettings();
@@ -228,11 +307,13 @@ window.addEventListener("DOMContentLoaded", () => {
   bindPalette();
   bindContextMenu();
   bindGlobalShortcuts();
+  bindLogConsole();
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
   });
   connectBridge();
   refreshIcons();
+  log.debug("app", "UI initialized", { theme: state.settings.appTheme, layout: state.settings.layout });
 });
 
 window.addEventListener("beforeunload", () => {
@@ -269,6 +350,11 @@ function bindControls() {
   elements.commandPalette.addEventListener("click", openPalette);
   elements.themeToggle.addEventListener("click", toggleAppTheme);
   elements.helpToggle.addEventListener("click", openShortcuts);
+  elements.helpDocToggle.addEventListener("click", openHelp);
+  elements.helpDocClose.addEventListener("click", closeHelp);
+  elements.helpOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.helpOverlay) closeHelp();
+  });
   elements.aboutToggle.addEventListener("click", openAbout);
   elements.aboutClose.addEventListener("click", closeAbout);
   elements.aboutOverlay.addEventListener("pointerdown", (event) => {
@@ -351,15 +437,19 @@ function bindSetting(element, key, eventName, transform) {
 function connectBridge() {
   if (window.location.protocol === "file:") {
     setBridgeStatus("Open via bridge", "offline");
+    log.warn("bridge", "Opened from file:// protocol; bridge unavailable");
     return;
   }
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  state.socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  const url = `${protocol}//${window.location.host}/ws`;
+  log.info("bridge", `Connecting to ${url}`);
+  state.socket = new WebSocket(url);
 
   state.socket.addEventListener("open", () => {
     state.socketReady = true;
     setBridgeStatus("Bridge connected", "online");
+    log.info("bridge", "WebSocket connected");
     updateTerminalActions();
     for (const terminal of state.terminals.values()) {
       if (!terminal.remoteRequested && terminal.status !== "live") {
@@ -369,13 +459,20 @@ function connectBridge() {
   });
 
   state.socket.addEventListener("message", (event) => {
-    const message = JSON.parse(event.data);
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch (err) {
+      log.error("bridge", "Failed to parse bridge message", { error: String(err) });
+      return;
+    }
     handleBridgeMessage(message);
   });
 
   state.socket.addEventListener("close", () => {
     state.socketReady = false;
     setBridgeStatus("Bridge disconnected", "offline");
+    log.warn("bridge", "WebSocket disconnected");
     for (const terminal of state.terminals.values()) {
       setTerminalStatus(terminal, "offline", "dead");
     }
@@ -385,12 +482,19 @@ function connectBridge() {
   state.socket.addEventListener("error", () => {
     state.socketReady = false;
     setBridgeStatus("Bridge error", "offline");
+    log.error("bridge", "WebSocket error");
     updateTerminalActions();
   });
 }
 
 function handleBridgeMessage(message) {
+  if (message.type === "log") {
+    ingestServerLog(message);
+    return;
+  }
+
   if (message.type === "welcome") {
+    log.info("bridge", "Received welcome", { cwd: message.cwd, sessions: Array.isArray(message.sessions) ? message.sessions.length : 0 });
     if (!elements.cwdInput.value) {
       elements.cwdInput.value = message.cwd || "";
     }
@@ -405,7 +509,8 @@ function handleBridgeMessage(message) {
       const snapshot = state.settings.restoreSession ? loadSessionSnapshot() : null;
       if (snapshot && snapshot.length > 0) {
         for (const meta of snapshot) {
-          addTerminal({ title: meta.title, shell: meta.shell, cwd: meta.cwd, color: meta.color });
+          const restored = addTerminal({ title: meta.title, shell: meta.shell, cwd: meta.cwd, color: meta.color });
+          if (meta.minimized && restored) minimizeTerminal(restored.id);
         }
       } else {
         addTerminal();
@@ -423,6 +528,7 @@ function handleBridgeMessage(message) {
     terminal.remoteRequested = true;
     terminal.status = "live";
     setTerminalStatus(terminal, `pid ${message.pid}`, "live");
+    log.info("session", `Session live: ${terminal.titleInput.value}`, { id: message.id, pid: message.pid });
     updateTerminalSearchVisibility(terminal);
     scheduleFit(terminal);
 
@@ -447,6 +553,7 @@ function handleBridgeMessage(message) {
     if (!terminal) return;
     terminal.status = "exited";
     setTerminalStatus(terminal, "exited", "dead");
+    log.info("session", `Session exited: ${terminal.titleInput.value}`, { id: message.id, code: message.code ?? message.signal ?? "closed" });
     writelnTerminal(terminal, "");
     writelnTerminal(terminal, `\x1b[31mSession exited (${message.code ?? message.signal ?? "closed"}).\x1b[0m`);
     toast(`${terminal.titleInput.value} exited`, "info", 2600);
@@ -456,10 +563,12 @@ function handleBridgeMessage(message) {
   if (message.type === "createFailed" || message.type === "error") {
     const terminal = state.terminals.get(message.id);
     if (terminal) {
+      log.error("session", `Session error: ${message.message || "unknown"}`, { id: message.id });
       writelnTerminal(terminal, `\x1b[31m${message.message}\x1b[0m`);
       setTerminalStatus(terminal, "error", "dead");
       toast(message.message || "Session error", "error");
     } else {
+      log.error("bridge", `Bridge error: ${message.message || "unknown"}`);
       setBridgeStatus(message.message || "Bridge error", "offline");
     }
   }
@@ -512,6 +621,7 @@ function addTerminal(options = {}) {
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
     fitAddon,
     id,
+    minimized: false,
     observer: null,
     pane,
     pid: session.pid,
@@ -577,8 +687,10 @@ function addTerminal(options = {}) {
   if (options.reattach) {
     setTerminalStatus(terminal, session.pid ? `pid ${session.pid}` : "live", "live");
     writelnTerminal(terminal, "\x1b[36mReattached to running session.\x1b[0m");
+    log.info("terminal", `Reattached terminal: ${terminal.titleInput.value}`, { id, shell: terminal.shell });
   } else {
     requestSession(terminal);
+    log.info("terminal", `Terminal added: ${terminal.titleInput.value}`, { id, shell: terminal.shell || elements.shellSelect.value });
   }
 
   refreshTerminalSearchText(terminal);
@@ -640,6 +752,8 @@ function bindPaneControls(terminal) {
       openFind(terminal);
     } else if (action === "restart") {
       restartSession(terminal.id);
+    } else if (action === "minimize") {
+      minimizeTerminal(terminal.id);
     } else if (action === "duplicate") {
       addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` });
     } else if (action === "move-left") {
@@ -783,11 +897,13 @@ function requestSession(terminal) {
     terminal.remoteRequested = false;
     setTerminalStatus(terminal, "waiting", "dead");
     writelnTerminal(terminal, "\x1b[33mWaiting for local bridge.\x1b[0m");
+    log.warn("session", `Bridge not ready; deferring session for ${terminal.titleInput.value}`, { id: terminal.id });
     return;
   }
 
   terminal.remoteRequested = true;
   setTerminalStatus(terminal, "starting", "dead");
+  log.debug("session", `Requesting session: ${terminal.titleInput.value}`, { id: terminal.id, shell: terminal.shell || elements.shellSelect.value });
   sendBridge({
     type: "create",
     cols: terminal.term.cols,
@@ -805,10 +921,12 @@ function removeTerminal(id) {
 
   if (!sendBridge({ type: "kill", id }) && terminal.remoteRequested) {
     setBridgeStatus("Bridge unavailable; session still running", "offline");
+    log.warn("terminal", `Cannot close ${terminal.titleInput.value}; bridge unavailable`, { id });
     updateTerminalActions();
     return;
   }
 
+  log.info("terminal", `Terminal closed: ${terminal.titleInput.value}`, { id });
   disposeTerminal(terminal);
 
   if (state.activeId === id) {
@@ -827,10 +945,12 @@ function closeAllTerminals() {
 
   if (!sendBridge({ type: "killAll" })) {
     setBridgeStatus("Bridge unavailable; sessions still running", "offline");
+    log.warn("terminal", "Cannot close all; bridge unavailable");
     updateTerminalActions();
     return;
   }
 
+  log.info("terminal", `Closing all terminals (${state.terminals.size})`);
   for (const terminal of [...state.terminals.values()]) {
     disposeTerminal(terminal);
   }
@@ -852,6 +972,95 @@ function disposeTerminal(terminal) {
   terminal.pane.remove();
   state.terminals.delete(id);
   delete state.manualLayouts[id];
+  updateMinimizedDock();
+}
+
+function minimizeTerminal(id) {
+  const terminal = state.terminals.get(id);
+  if (!terminal || terminal.minimized) return;
+
+  terminal.minimized = true;
+  terminal.pane.classList.add("is-minimized");
+  log.info("terminal", `Terminal minimized: ${terminal.titleInput.value}`, { id });
+  if (state.snap?.id === id) {
+    clearSnapLayout(false);
+  }
+
+  if (state.activeId === id) {
+    state.activeId = null;
+    const next = firstVisibleTerminalId();
+    if (next) setActiveTerminal(next);
+  }
+
+  updateMinimizedDock();
+  updateTerminalActions();
+  saveSessionSnapshot();
+}
+
+function restoreTerminal(id) {
+  const terminal = state.terminals.get(id);
+  if (!terminal || !terminal.minimized) return;
+
+  terminal.minimized = false;
+  terminal.pane.classList.remove("is-minimized");
+  log.info("terminal", `Terminal restored: ${terminal.titleInput.value}`, { id });
+  updateMinimizedDock();
+  updateTerminalActions();
+  setActiveTerminal(id);
+  applyManualLayout(terminal, ensureManualLayout(id));
+  revealTerminal(terminal);
+  scheduleFit(terminal);
+  saveSessionSnapshot();
+}
+
+function restoreAllTerminals() {
+  for (const terminal of [...state.terminals.values()]) {
+    if (terminal.minimized) restoreTerminal(terminal.id);
+  }
+}
+
+function firstVisibleTerminalId() {
+  for (const terminal of state.terminals.values()) {
+    if (!terminal.minimized) return terminal.id;
+  }
+  return null;
+}
+
+function countVisibleTerminals() {
+  let visible = 0;
+  for (const terminal of state.terminals.values()) {
+    if (!terminal.minimized) visible += 1;
+  }
+  return visible;
+}
+
+function updateMinimizedDock() {
+  const dock = elements.minimizedDock;
+  if (!dock) return;
+
+  dock.textContent = "";
+  const minimized = [...state.terminals.values()].filter((terminal) => terminal.minimized);
+  dock.hidden = minimized.length === 0;
+
+  for (const terminal of minimized) {
+    const title = terminal.titleInput.value || "PowerShell";
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "min-chip";
+    chip.dataset.id = terminal.id;
+    chip.title = `Restore ${title}`;
+    chip.setAttribute("aria-label", `Restore ${title}`);
+    if (terminal.color) {
+      chip.classList.add("has-color");
+      chip.style.setProperty("--pane-accent", terminal.color);
+    }
+    chip.innerHTML = '<span class="min-chip-dot" aria-hidden="true"></span><span class="min-chip-label"></span><i data-lucide="chevron-up"></i>';
+    chip.querySelector(".min-chip-label").textContent = title;
+    chip.addEventListener("click", () => restoreTerminal(terminal.id));
+    dock.append(chip);
+  }
+
+  refreshIcons();
 }
 
 function moveTerminal(id, direction) {
@@ -994,12 +1203,12 @@ function updateTerminalActions() {
 }
 
 function updateLayoutMetrics() {
-  const count = Math.max(1, state.terminals.size);
+  const count = Math.max(1, countVisibleTerminals());
   const cols = Math.ceil(Math.sqrt(count));
   const rows = Math.ceil(count / cols);
   elements.host.style.setProperty("--grid-cols", cols);
   elements.host.style.setProperty("--grid-rows", rows);
-  elements.host.style.setProperty("--rest-count", Math.max(1, state.terminals.size - 1));
+  elements.host.style.setProperty("--rest-count", Math.max(1, count - 1));
 }
 
 function applySettings() {
@@ -1064,6 +1273,7 @@ function toggleAppTheme() {
   elements.appTheme.value = state.settings.appTheme;
   applySettings();
   saveSettings();
+  log.info("ui", `App theme set to ${state.settings.appTheme}`);
   toast(`${state.settings.appTheme === "dark" ? "Dark" : "Light"} theme`, "info", 1600);
 }
 
@@ -1301,6 +1511,162 @@ function toast(message, tone = "success", timeout = 3200) {
   });
 }
 
+/* ---------------- Log console (tail view) --------------- */
+
+function bindLogConsole() {
+  if (!elements.logToggle) return;
+  elements.logToggle.addEventListener("click", toggleLogPanel);
+  elements.logClose.addEventListener("click", () => setLogPanel(false));
+  elements.logClear.addEventListener("click", clearLogs);
+  elements.logCopy.addEventListener("click", copyLogs);
+  elements.logLevelFilter.value = logStore.minLevel;
+  elements.logLevelFilter.addEventListener("change", () => {
+    logStore.minLevel = elements.logLevelFilter.value;
+    log.debug("ui", `Log filter set to ${logStore.minLevel}+`);
+    renderAllLogs();
+  });
+  elements.logOutput.addEventListener("scroll", () => {
+    const out = elements.logOutput;
+    logStore.autoscroll = out.scrollTop + out.clientHeight >= out.scrollHeight - 24;
+  });
+}
+
+function toggleLogPanel() {
+  setLogPanel(elements.logPanel.hidden);
+}
+
+function setLogPanel(open) {
+  if (!elements.logPanel) return;
+  elements.logPanel.hidden = !open;
+  elements.logToggle.hidden = open;
+  elements.logToggle.setAttribute("aria-expanded", String(open));
+  if (open) {
+    logStore.unseenError = false;
+    if (elements.logFabDot) elements.logFabDot.hidden = true;
+    logStore.autoscroll = true;
+    renderAllLogs();
+    scrollLogToEnd();
+    log.debug("ui", "Log console opened");
+  }
+}
+
+function passesLogFilter(entry) {
+  return LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logStore.minLevel];
+}
+
+function formatLogTime(time) {
+  const date = new Date(time);
+  const pad = (value, length = 2) => String(value).padStart(length, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+}
+
+function safeLogDetail(detail) {
+  if (typeof detail === "string") return detail;
+  try {
+    return JSON.stringify(detail);
+  } catch {
+    return String(detail);
+  }
+}
+
+function buildLogRow(entry) {
+  const row = document.createElement("div");
+  row.className = `log-row log-${entry.level}`;
+  row.dataset.id = entry.id;
+
+  const time = document.createElement("span");
+  time.className = "log-time";
+  time.textContent = formatLogTime(entry.time);
+
+  const level = document.createElement("span");
+  level.className = "log-level";
+  level.textContent = entry.level;
+
+  const source = document.createElement("span");
+  source.className = "log-source";
+  source.textContent = entry.source;
+
+  const message = document.createElement("span");
+  message.className = "log-msg";
+  message.textContent = entry.detail !== undefined
+    ? `${entry.message}  ${safeLogDetail(entry.detail)}`
+    : entry.message;
+
+  row.append(time, level, source, message);
+  return row;
+}
+
+function appendLogRow(entry) {
+  const out = elements.logOutput;
+  if (!out || !elements.logPanel || elements.logPanel.hidden) return;
+  if (!passesLogFilter(entry)) return;
+
+  const empty = out.querySelector(".log-empty");
+  if (empty) empty.remove();
+
+  out.append(buildLogRow(entry));
+  while (out.childElementCount > logStore.max) {
+    out.firstElementChild.remove();
+  }
+  if (logStore.autoscroll) scrollLogToEnd();
+}
+
+function renderAllLogs() {
+  const out = elements.logOutput;
+  if (!out) return;
+
+  out.textContent = "";
+  const visible = logStore.entries.filter(passesLogFilter);
+  if (visible.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "log-empty";
+    empty.textContent = "No log entries at this level yet.";
+    out.append(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const entry of visible) {
+    fragment.append(buildLogRow(entry));
+  }
+  out.append(fragment);
+  if (logStore.autoscroll) scrollLogToEnd();
+}
+
+function scrollLogToEnd() {
+  const out = elements.logOutput;
+  if (out) out.scrollTop = out.scrollHeight;
+}
+
+function clearLogs() {
+  logStore.entries = [];
+  renderAllLogs();
+  log.info("ui", "Log console cleared");
+}
+
+function copyLogs() {
+  const text = logStore.entries
+    .filter(passesLogFilter)
+    .map((entry) => {
+      const detail = entry.detail !== undefined ? `  ${safeLogDetail(entry.detail)}` : "";
+      return `${formatLogTime(entry.time)} [${entry.level}] [${entry.source}] ${entry.message}${detail}`;
+    })
+    .join("\n");
+
+  if (!text) {
+    toast("No logs to copy", "info", 1600);
+    return;
+  }
+  navigator.clipboard.writeText(text).then(
+    () => toast("Logs copied", "success", 1600),
+    () => toast("Copy failed", "error", 1800)
+  );
+}
+
+function ingestServerLog(message) {
+  logEvent(message.level, message.source || "server", message.message || "", null);
+}
+
 /* ---------------- Per-pane actions --------------- */
 
 function clearTerminal(id) {
@@ -1392,12 +1758,14 @@ function resetFontZoom() {
 
 function getCommands() {
   const commands = [
-    { label: "New terminal", hint: "Ctrl+Shift+T", run: () => addTerminal({ reveal: true, runStartup: true }) },
+    { label: "New terminal", hint: "Ctrl+T", run: () => addTerminal({ reveal: true, runStartup: true }) },
     { label: "New PowerShell 7 terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "pwsh", title: "PowerShell 7" }) },
     { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell", title: "Windows PowerShell" }) },
     { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd", title: "Command Prompt" }) },
     { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl", title: "WSL" }) },
     { label: "Close active terminal", hint: "Ctrl+Shift+W", run: () => state.activeId && removeTerminal(state.activeId) },
+    { label: "Minimize active terminal", run: () => state.activeId && minimizeTerminal(state.activeId) },
+    { label: "Restore all minimized terminals", run: restoreAllTerminals },
     { label: "Close all terminals", run: closeAllTerminals },
     { label: "Restart active terminal", hint: "Ctrl+Shift+R", run: restartActiveSession },
     { label: "Find in active terminal", hint: "Ctrl+Shift+F", run: openFindActive },
@@ -1416,6 +1784,7 @@ function getCommands() {
     { label: "Toggle header", run: () => toggleChrome("headerHidden") },
     { label: "Toggle layout panel", run: () => toggleChrome("sidecarHidden") },
     { label: "Keyboard shortcuts", hint: "Ctrl+/", run: openShortcuts },
+    { label: "Help", run: openHelp },
     { label: "About MultiTerm", run: openAbout },
     {
       label: `Toggle sync input (${state.settings.syncInput ? "on" : "off"})`,
@@ -1595,6 +1964,14 @@ function bindGlobalShortcuts() {
       return;
     }
 
+    if (!elements.helpOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeHelp();
+      }
+      return;
+    }
+
     if (palette.open) return;
 
     if (event.key === "Escape" && closeAnyFind()) {
@@ -1602,7 +1979,8 @@ function bindGlobalShortcuts() {
       return;
     }
 
-    if (event.ctrlKey && event.shiftKey && key === "t") {
+    if (event.ctrlKey && !event.altKey && !event.metaKey && key === "t") {
+      // Ctrl+T is the primary new-terminal chord; Ctrl+Shift+T also works.
       event.preventDefault();
       addTerminal({ reveal: true, runStartup: true });
     } else if (event.ctrlKey && event.shiftKey && key === "w") {
@@ -1665,6 +2043,7 @@ function restartSession(id) {
   };
   const anchor = terminal.pane.nextElementSibling;
 
+  log.info("session", `Restarting session: ${meta.title}`, { id });
   removeTerminal(id);
   const next = addTerminal({ reveal: true, title: meta.title, shell: meta.shell, cwd: meta.cwd });
   if (next && anchor && anchor.parentElement === elements.host) {
@@ -1821,6 +2200,7 @@ function sendBroadcast() {
     if (sendBridge({ type: "input", id, data: `${command}\r` })) sent += 1;
   }
 
+  log.info("broadcast", `Broadcast to ${sent} ${sent === 1 ? "terminal" : "terminals"}`, { scope: state.broadcastScope });
   toast(`Sent to ${sent} ${sent === 1 ? "terminal" : "terminals"}`, "success", 1600);
   elements.broadcastInput.select();
 }
@@ -1902,6 +2282,7 @@ function saveWorkspace(rawName) {
   saveWorkspaces();
   refreshWorkspaceSelect(name);
   elements.workspaceName.value = "";
+  log.info("workspace", `Saved workspace “${name}”`, { terminals: state.terminals.size });
   toast(`Saved workspace “${name}”`, "success");
 }
 
@@ -1931,6 +2312,7 @@ function restoreWorkspace(name) {
   }
 
   updateTerminalActions();
+  log.info("workspace", `Restored workspace “${name}”`, { terminals: list.length });
   toast(`Restored “${name}”`, "success");
 }
 
@@ -1942,6 +2324,7 @@ function deleteWorkspace(name) {
   delete state.workspaces[name];
   saveWorkspaces();
   refreshWorkspaceSelect();
+  log.info("workspace", `Deleted workspace “${name}”`);
   toast(`Deleted “${name}”`, "info");
 }
 
@@ -2014,7 +2397,8 @@ function saveSessionSnapshot() {
     title: terminal.titleInput.value,
     shell: terminal.shell,
     cwd: terminal.cwd,
-    color: terminal.color
+    color: terminal.color,
+    minimized: terminal.minimized
   }));
   localStorage.setItem("multiterm.lastSession", JSON.stringify(snapshot));
 }
@@ -2041,6 +2425,29 @@ function closeShortcuts() {
   elements.shortcutsOverlay.classList.remove("is-open");
   window.setTimeout(() => {
     elements.shortcutsOverlay.hidden = true;
+  }, 150);
+}
+
+/* ---------------- Help --------------- */
+
+function openHelp() {
+  closePalette();
+  const resolved = document.documentElement.dataset.appTheme === "light" ? "light" : "dark";
+  const wanted = `help.html?theme=${resolved}`;
+  // Load (or reload with the current theme) only when needed.
+  if (elements.helpFrame.dataset.src !== wanted) {
+    elements.helpFrame.dataset.src = wanted;
+    elements.helpFrame.src = wanted;
+  }
+  elements.helpOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.helpOverlay.classList.add("is-open"));
+  refreshIcons();
+}
+
+function closeHelp() {
+  elements.helpOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.helpOverlay.hidden = true;
   }, 150);
 }
 
