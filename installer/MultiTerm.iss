@@ -4,10 +4,14 @@
 ; Output: installer\Output\MultiTerm-Setup-<version>.exe
 
 #define MyAppName "MultiTerm Workbench"
-#define MyAppVersion "0.1.10"
+#define MyAppVersion "0.1.11"
 #define MyAppPublisher "MultiTerm Workbench"
 #define MyAppURL "https://github.com/andrewtheart/multiterm-workbench"
 #define MyScriptFile "Start-MultiTerm.ps1"
+; AppUserModelID: must match the value stamped on the browser "--app" window by
+; Start-MultiTerm.ps1 so the taskbar shows the MultiTerm icon (not the browser's)
+; and the window pins as a standalone app.
+#define MyAppAUMID "MultiTerm.Workbench"
 ; Repository root, relative to this .iss file (which lives in installer\).
 #define RepoRoot ".."
 
@@ -57,10 +61,10 @@ Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "MultiTerm.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Comment: "Start the MultiTerm Workbench bridge and open it in its own app window"
+Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Comment: "Start the MultiTerm Workbench bridge and open it in its own app window"
 Name: "{group}\{#MyAppName} README"; Filename: "{app}\README.md"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Tasks: desktopicon
 
 [Run]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent

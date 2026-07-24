@@ -54,6 +54,10 @@ namespace MultiTerm.PowerShellBridge
         private readonly bool allowRemote;
         private readonly bool openBrowser;
         private readonly string publicDir;
+        // Stable AppUserModelID so the browser "--app" window is grouped and
+        // pinned as MultiTerm (with the MultiTerm icon) instead of the host
+        // browser (e.g. Microsoft Edge). Must match the installer shortcut.
+        private const string AppUserModelId = "MultiTerm.Workbench";
         private readonly ConcurrentDictionary<string, BridgeClient> clients = new ConcurrentDictionary<string, BridgeClient>();
         private readonly ConcurrentDictionary<string, TerminalSession> sessions = new ConcurrentDictionary<string, TerminalSession>();
         private readonly Dictionary<string, string> mimeTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -242,7 +246,14 @@ namespace MultiTerm.PowerShellBridge
 
                     ProcessStartInfo appInfo = new ProcessStartInfo(browser, args);
                     appInfo.UseShellExecute = false;
-                    Process.Start(appInfo);
+                    Process started = Process.Start(appInfo);
+
+                    // Windows groups a Chromium "--app" window under the host
+                    // browser's identity, so the taskbar shows (for example) the
+                    // Microsoft Edge icon rather than the site favicon. Re-brand
+                    // the window with MultiTerm's own AppUserModelID + icon so the
+                    // taskbar shows MultiTerm and it can be pinned as its own app.
+                    this.BrandAppWindow(started);
                     return;
                 }
 
@@ -316,6 +327,434 @@ namespace MultiTerm.PowerShellBridge
             }
 
             return null;
+        }
+
+        private string ResolveAppIconPath()
+        {
+            try
+            {
+                string[] candidates = new string[]
+                {
+                    // Installed layout: {app}\MultiTerm.ico (public\ lives beside it).
+                    Path.GetFullPath(Path.Combine(this.publicDir, "..", "MultiTerm.ico")),
+                    // Bundled favicon (identical icon) - present in every layout.
+                    Path.Combine(this.publicDir, "favicon.ico"),
+                    // Dev/source layout: installer\MultiTerm.ico.
+                    Path.GetFullPath(Path.Combine(this.publicDir, "..", "installer", "MultiTerm.ico"))
+                };
+
+                foreach (string candidate in candidates)
+                {
+                    try
+                    {
+                        if (!String.IsNullOrEmpty(candidate) && File.Exists(candidate))
+                        {
+                            return candidate;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
+        private void BrandAppWindow(Process started)
+        {
+            try
+            {
+                if (started == null)
+                {
+                    return;
+                }
+
+                string iconPath = this.ResolveAppIconPath();
+                string aumid = AppUserModelId;
+
+                // Branding must wait for the browser window to appear, so run it
+                // off the startup path on a background thread. Failures are
+                // non-fatal - the app still works, just with the browser's icon.
+                Thread worker = new Thread(new ThreadStart(delegate()
+                {
+                    try { WindowBrander.Apply(started, "MultiTerm Workbench", aumid, iconPath); }
+                    catch { }
+                }));
+                worker.IsBackground = true;
+                worker.Start();
+            }
+            catch { }
+        }
+
+        // Gives a Chromium "--app" window its own taskbar identity by stamping
+        // the top-level window with MultiTerm's AppUserModelID + icon. Combined
+        // with the matching installer shortcut, Windows then shows the MultiTerm
+        // icon on the taskbar and allows pinning it as a standalone app.
+        private static class WindowBrander
+        {
+            private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+            private const uint WM_SETICON = 0x0080;
+            private const int ICON_SMALL = 0;
+            private const int ICON_BIG = 1;
+            private const uint IMAGE_ICON = 1;
+            private const uint LR_LOADFROMFILE = 0x00000010;
+            private const uint LR_DEFAULTSIZE = 0x00000040;
+            private const uint GW_OWNER = 4;
+            private const uint TH32CS_SNAPPROCESS = 0x00000002;
+            private const ushort VT_LPWSTR = 31;
+
+            // PKEY_AppUserModel_* live under this format id. pid 5 = ID,
+            // pid 3 = RelaunchIconResource.
+            private static readonly Guid APPMODEL_FMTID = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+            private static readonly Guid IID_IPropertyStore = new Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99");
+
+            public static void Apply(Process started, string titleFragment, string aumid, string iconPath)
+            {
+                try
+                {
+                    IntPtr hIconBig = IntPtr.Zero;
+                    IntPtr hIconSmall = IntPtr.Zero;
+                    if (!String.IsNullOrEmpty(iconPath) && File.Exists(iconPath))
+                    {
+                        try { hIconBig = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE); }
+                        catch { }
+                        try { hIconSmall = LoadImage(IntPtr.Zero, iconPath, IMAGE_ICON, 16, 16, LR_LOADFROMFILE); }
+                        catch { }
+                    }
+
+                    IntPtr hwnd = IntPtr.Zero;
+                    // Poll ~20s for the app window (page + title must load first).
+                    for (int i = 0; i < 40 && hwnd == IntPtr.Zero; i++)
+                    {
+                        hwnd = FindAppWindow(started, titleFragment);
+                        if (hwnd == IntPtr.Zero)
+                        {
+                            Thread.Sleep(500);
+                        }
+                    }
+
+                    if (hwnd == IntPtr.Zero)
+                    {
+                        return;
+                    }
+
+                    // Edge/Chrome stamp their own AppUserModelID + icon on the
+                    // window at creation (and do not re-enforce it afterwards), so
+                    // apply a few times to comfortably land after the browser has
+                    // settled. Re-find the window each pass in case it was recreated.
+                    for (int pass = 0; pass < 6; pass++)
+                    {
+                        try { ApplyOnce(hwnd, aumid, iconPath, hIconBig, hIconSmall); }
+                        catch { }
+                        Thread.Sleep(800);
+                        IntPtr again = FindAppWindow(started, titleFragment);
+                        if (again != IntPtr.Zero)
+                        {
+                            hwnd = again;
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            private static void ApplyOnce(IntPtr hwnd, string aumid, string iconPath, IntPtr hIconBig, IntPtr hIconSmall)
+            {
+                if (hIconBig != IntPtr.Zero)
+                {
+                    SendMessage(hwnd, WM_SETICON, new IntPtr(ICON_BIG), hIconBig);
+                }
+                if (hIconSmall != IntPtr.Zero)
+                {
+                    SendMessage(hwnd, WM_SETICON, new IntPtr(ICON_SMALL), hIconSmall);
+                }
+
+                IPropertyStore store = null;
+                Guid iid = IID_IPropertyStore;
+                int hr = SHGetPropertyStoreForWindow(hwnd, ref iid, out store);
+                if (hr < 0 || store == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    SetStringProperty(store, new PROPERTYKEY(APPMODEL_FMTID, 5u), aumid);
+                    if (!String.IsNullOrEmpty(iconPath))
+                    {
+                        SetStringProperty(store, new PROPERTYKEY(APPMODEL_FMTID, 3u), iconPath + ",0");
+                    }
+                    store.Commit();
+                }
+                finally
+                {
+                    try { Marshal.ReleaseComObject(store); }
+                    catch { }
+                }
+            }
+
+            private static void SetStringProperty(IPropertyStore store, PROPERTYKEY key, string value)
+            {
+                // NOTE: InitPropVariantFromString is an inline helper in the
+                // Windows SDK headers, not a real propsys.dll export, so it must
+                // not be P/Invoked. Build the VT_LPWSTR PROPVARIANT by hand;
+                // PropVariantClear frees the allocated string.
+                PROPVARIANT pv = new PROPVARIANT();
+                pv.varType = VT_LPWSTR;
+                pv.value1 = Marshal.StringToCoTaskMemUni(value);
+                if (pv.value1 == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                try { store.SetValue(ref key, ref pv); }
+                finally { try { PropVariantClear(ref pv); } catch { } }
+            }
+
+            private static IntPtr FindAppWindow(Process started, string titleFragment)
+            {
+                HashSet<int> pids = null;
+                try
+                {
+                    if (started != null && !started.HasExited)
+                    {
+                        pids = GetProcessTree(started.Id);
+                    }
+                }
+                catch { pids = null; }
+
+                WindowFinder finder = new WindowFinder(pids, titleFragment);
+                EnumWindowsProc callback = new EnumWindowsProc(finder.OnWindow);
+                try { EnumWindows(callback, IntPtr.Zero); }
+                catch { }
+                GC.KeepAlive(callback);
+                return finder.Resolve();
+            }
+
+            private sealed class WindowFinder
+            {
+                private readonly HashSet<int> pids;
+                private readonly string titleFragment;
+                private readonly List<IntPtr> pidAndTitle = new List<IntPtr>();
+                private readonly List<IntPtr> titleOnly = new List<IntPtr>();
+
+                public WindowFinder(HashSet<int> pids, string titleFragment)
+                {
+                    this.pids = pids;
+                    this.titleFragment = titleFragment;
+                }
+
+                public bool OnWindow(IntPtr hwnd, IntPtr lParam)
+                {
+                    try
+                    {
+                        if (!IsWindowVisible(hwnd))
+                        {
+                            return true;
+                        }
+                        if (GetWindow(hwnd, GW_OWNER) != IntPtr.Zero)
+                        {
+                            return true; // top-level windows only
+                        }
+
+                        StringBuilder cls = new StringBuilder(256);
+                        GetClassName(hwnd, cls, cls.Capacity);
+                        if (cls.ToString().IndexOf("Chrome_WidgetWin", StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            return true;
+                        }
+
+                        StringBuilder title = new StringBuilder(512);
+                        GetWindowText(hwnd, title, title.Capacity);
+                        string text = title.ToString();
+                        if (String.IsNullOrEmpty(text) || text.IndexOf(this.titleFragment, StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            return true;
+                        }
+
+                        this.titleOnly.Add(hwnd);
+                        if (this.pids != null)
+                        {
+                            uint pid;
+                            GetWindowThreadProcessId(hwnd, out pid);
+                            if (this.pids.Contains((int)pid))
+                            {
+                                this.pidAndTitle.Add(hwnd);
+                            }
+                        }
+                    }
+                    catch { }
+
+                    return true;
+                }
+
+                public IntPtr Resolve()
+                {
+                    // Prefer a window in our own browser process tree (isolated
+                    // profile) with a matching title. Otherwise only accept a
+                    // title match when it is unambiguous, so we never re-brand an
+                    // unrelated browser window.
+                    if (this.pidAndTitle.Count > 0)
+                    {
+                        return this.pidAndTitle[0];
+                    }
+                    if (this.titleOnly.Count == 1)
+                    {
+                        return this.titleOnly[0];
+                    }
+                    return IntPtr.Zero;
+                }
+            }
+
+            private static HashSet<int> GetProcessTree(int rootPid)
+            {
+                HashSet<int> result = new HashSet<int>();
+                result.Add(rootPid);
+
+                Dictionary<int, List<int>> children = new Dictionary<int, List<int>>();
+                IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+                if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+                {
+                    return result;
+                }
+
+                try
+                {
+                    PROCESSENTRY32 entry = new PROCESSENTRY32();
+                    entry.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+                    if (Process32First(snapshot, ref entry))
+                    {
+                        do
+                        {
+                            int pid = (int)entry.th32ProcessID;
+                            int parent = (int)entry.th32ParentProcessID;
+                            List<int> list;
+                            if (!children.TryGetValue(parent, out list))
+                            {
+                                list = new List<int>();
+                                children[parent] = list;
+                            }
+                            list.Add(pid);
+                        }
+                        while (Process32Next(snapshot, ref entry));
+                    }
+                }
+                finally
+                {
+                    CloseHandle(snapshot);
+                }
+
+                Queue<int> queue = new Queue<int>();
+                queue.Enqueue(rootPid);
+                while (queue.Count > 0)
+                {
+                    int current = queue.Dequeue();
+                    List<int> kids;
+                    if (children.TryGetValue(current, out kids))
+                    {
+                        foreach (int kid in kids)
+                        {
+                            if (result.Add(kid))
+                            {
+                                queue.Enqueue(kid);
+                            }
+                        }
+                    }
+                }
+
+                return result;
+            }
+
+            [StructLayout(LayoutKind.Sequential, Pack = 4)]
+            private struct PROPERTYKEY
+            {
+                public Guid fmtid;
+                public uint pid;
+                public PROPERTYKEY(Guid fmtid, uint pid)
+                {
+                    this.fmtid = fmtid;
+                    this.pid = pid;
+                }
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            private struct PROPVARIANT
+            {
+                public ushort varType;
+                public ushort reserved1;
+                public ushort reserved2;
+                public ushort reserved3;
+                public IntPtr value1;
+                public IntPtr value2;
+            }
+
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+            private struct PROCESSENTRY32
+            {
+                public uint dwSize;
+                public uint cntUsage;
+                public uint th32ProcessID;
+                public IntPtr th32DefaultHeapID;
+                public uint th32ModuleID;
+                public uint cntThreads;
+                public uint th32ParentProcessID;
+                public int pcPriClassBase;
+                public uint dwFlags;
+                [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+                public string szExeFile;
+            }
+
+            [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99")]
+            private interface IPropertyStore
+            {
+                [PreserveSig] int GetCount(out uint cProps);
+                [PreserveSig] int GetAt(uint iProp, out PROPERTYKEY pkey);
+                [PreserveSig] int GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
+                [PreserveSig] int SetValue(ref PROPERTYKEY key, ref PROPVARIANT pv);
+                [PreserveSig] int Commit();
+            }
+
+            [DllImport("user32.dll")]
+            private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+            [DllImport("user32.dll")]
+            private static extern bool IsWindowVisible(IntPtr hWnd);
+
+            [DllImport("user32.dll", SetLastError = true)]
+            private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+            [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+            [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+            [DllImport("user32.dll", SetLastError = true)]
+            private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+            [DllImport("user32.dll", CharSet = CharSet.Auto)]
+            private static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+            [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+            private static extern IntPtr LoadImage(IntPtr hinst, string lpszName, uint uType, int cxDesired, int cyDesired, uint fuLoad);
+
+            [DllImport("shell32.dll", SetLastError = true)]
+            private static extern int SHGetPropertyStoreForWindow(IntPtr hwnd, ref Guid iid, out IPropertyStore propertyStore);
+
+            [DllImport("ole32.dll", PreserveSig = true)]
+            private static extern int PropVariantClear(ref PROPVARIANT pvar);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+            [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+            private static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+            [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+            private static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+            [DllImport("kernel32.dll", SetLastError = true)]
+            private static extern bool CloseHandle(IntPtr hObject);
         }
 
         private void HandleWebSocket(HttpListenerContext context)
