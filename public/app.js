@@ -254,9 +254,12 @@ const palette = { open: false, index: 0, items: [] };
 
 const state = {
   activeId: null,
+  bridgeClosingDown: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
   nextIndex: 1,
+  reconnectAttempts: 0,
+  reconnectTimer: null,
   settings: loadSettings(),
   snap: null,
   socket: null,
@@ -354,6 +357,9 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  state.bridgeClosingDown = true;
+  window.clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = null;
   saveSettings();
   saveManualLayouts();
   saveSessionSnapshot();
@@ -518,15 +524,21 @@ function connectBridge() {
     return;
   }
 
+  window.clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = null;
+
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${protocol}//${window.location.host}/ws`;
-  log.info("bridge", `Connecting to ${url}`);
+  const reconnecting = state.reconnectAttempts > 0;
+  log.info("bridge", `${reconnecting ? "Reconnecting" : "Connecting"} to ${url}`);
   state.socket = new WebSocket(url);
 
   state.socket.addEventListener("open", () => {
+    const wasReconnecting = state.reconnectAttempts > 0;
     state.socketReady = true;
+    state.reconnectAttempts = 0;
     setBridgeStatus("Bridge connected", "online");
-    log.info("bridge", "WebSocket connected");
+    log.info("bridge", wasReconnecting ? "WebSocket reconnected" : "WebSocket connected");
     updateTerminalActions();
     for (const terminal of state.terminals.values()) {
       if (!terminal.remoteRequested && terminal.status !== "live") {
@@ -548,20 +560,37 @@ function connectBridge() {
 
   state.socket.addEventListener("close", () => {
     state.socketReady = false;
-    setBridgeStatus("Bridge disconnected", "offline");
-    log.warn("bridge", "WebSocket disconnected");
     for (const terminal of state.terminals.values()) {
       setTerminalStatus(terminal, "offline", "dead");
     }
     updateTerminalActions();
+    scheduleReconnect();
   });
 
   state.socket.addEventListener("error", () => {
     state.socketReady = false;
-    setBridgeStatus("Bridge error", "offline");
     log.error("bridge", "WebSocket error");
     updateTerminalActions();
+    // The browser fires "close" after "error"; reconnection is scheduled there.
   });
+}
+
+// Reconnect with capped exponential backoff so a dropped bridge recovers on its
+// own instead of leaving the UI stuck offline until a manual page reload.
+function scheduleReconnect() {
+  if (state.bridgeClosingDown) return;
+  if (state.reconnectTimer) return;
+
+  const attempt = state.reconnectAttempts + 1;
+  state.reconnectAttempts = attempt;
+  const delay = Math.min(500 * 2 ** (attempt - 1), 3000);
+  const seconds = Math.round(delay / 100) / 10;
+  setBridgeStatus(`Bridge disconnected; reconnecting in ${seconds}s\u2026`, "offline");
+  log.warn("bridge", `WebSocket disconnected; reconnect attempt ${attempt} in ${delay}ms`);
+  state.reconnectTimer = window.setTimeout(() => {
+    state.reconnectTimer = null;
+    connectBridge();
+  }, delay);
 }
 
 function handleBridgeMessage(message) {
@@ -577,9 +606,21 @@ function handleBridgeMessage(message) {
     }
 
     if (Array.isArray(message.sessions) && message.sessions.length > 0) {
+      const known = new Set();
       for (const session of message.sessions) {
-        if (!state.terminals.has(session.id)) {
+        known.add(session.id);
+        const existing = state.terminals.get(session.id);
+        if (existing) {
+          reattachExistingSession(existing, session);
+        } else {
           addTerminal({ reattach: true, session });
+        }
+      }
+      // Any terminal we still hold that the bridge no longer lists must have
+      // exited while we were disconnected.
+      for (const terminal of state.terminals.values()) {
+        if (terminal.remoteRequested && !known.has(terminal.id)) {
+          markSessionLostWhileOffline(terminal);
         }
       }
     } else if (state.terminals.size === 0) {
@@ -591,6 +632,11 @@ function handleBridgeMessage(message) {
         }
       } else {
         addTerminal();
+      }
+    } else {
+      // Reconnected but the bridge has no sessions: everything we held is gone.
+      for (const terminal of state.terminals.values()) {
+        if (terminal.remoteRequested) markSessionLostWhileOffline(terminal);
       }
     }
 
@@ -692,6 +738,33 @@ function handleBridgeMessage(message) {
       setBridgeStatus(message.message || "Bridge error", "offline");
     }
   }
+}
+
+// After an auto-reconnect the bridge re-announces sessions it kept alive. Mark
+// a terminal we already hold as live again so it resumes streaming output and
+// its status reflects reality instead of the stale "offline" from the drop.
+function reattachExistingSession(terminal, session) {
+  terminal.remoteRequested = true;
+  terminal.status = "live";
+  if (session.cwd) terminal.cwd = session.cwd;
+  if (session.pid != null) terminal.pid = session.pid;
+  setTerminalStatus(terminal, session.pid != null ? `pid ${session.pid}` : "live", "live");
+  updateTerminalSearchVisibility(terminal);
+  scheduleFit(terminal);
+  log.info("session", `Session reattached: ${terminal.titleInput.value}`, { id: terminal.id, pid: session.pid });
+}
+
+// A terminal that was live before the drop but is absent from the bridge's
+// session list after reconnect exited while we were offline.
+function markSessionLostWhileOffline(terminal) {
+  if (terminal.status === "exited") return;
+  terminal.status = "exited";
+  terminal.logging = false;
+  setTerminalStatus(terminal, "exited", "dead");
+  setAwaitingInput(terminal, false);
+  writelnTerminal(terminal, "");
+  writelnTerminal(terminal, "\x1b[31mSession ended while the bridge was disconnected.\x1b[0m");
+  log.info("session", `Session lost while offline: ${terminal.titleInput.value}`, { id: terminal.id });
 }
 
 function addTerminal(options = {}) {

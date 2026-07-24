@@ -18,6 +18,12 @@ const PORT = Number(process.env.PORT || 3177);
 
 let mainWindow = null;
 let serverProcess = null;
+// Timestamps of recent unexpected bridge restarts, used as a crash-loop guard so
+// a bridge that dies immediately over and over surfaces an error instead of
+// respawning forever.
+let serverRestarts = [];
+const RESTART_WINDOW_MS = 10000;
+const MAX_RESTARTS = 5;
 
 // The bridge uses node-pty (a native module built for the system Node ABI),
 // so it runs under the system `node` executable rather than inside Electron's
@@ -42,9 +48,24 @@ function startServer() {
   });
   serverProcess.on("exit", (code) => {
     serverProcess = null;
-    if (code && code !== 0 && !app.isQuiting) {
-      dialog.showErrorBox("MultiTerm", `The terminal bridge exited unexpectedly (code ${code}).`);
+    // A clean exit (0) or a kill we requested (null on signal) needs no action.
+    if (app.isQuiting || code === 0 || code === null) return;
+
+    // The bridge died unexpectedly. node-pty's native ConPTY path can abort the
+    // whole process during heavy churn, which no in-process handler can catch.
+    // Restart it so the renderer's auto-reconnect can recover the workspace,
+    // unless we're clearly in a crash loop.
+    const now = Date.now();
+    serverRestarts = serverRestarts.filter((t) => now - t < RESTART_WINDOW_MS);
+    if (serverRestarts.length >= MAX_RESTARTS) {
+      dialog.showErrorBox(
+        "MultiTerm",
+        `The terminal bridge keeps exiting unexpectedly (code ${code}). Giving up after ${serverRestarts.length} restart attempts.`
+      );
+      return;
     }
+    serverRestarts.push(now);
+    startServer();
   });
 }
 
@@ -198,6 +219,7 @@ module.exports = {
   __reset() {
     mainWindow = null;
     serverProcess = null;
+    serverRestarts = [];
   }
 };
 

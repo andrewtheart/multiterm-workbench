@@ -118,7 +118,21 @@ server.on("upgrade", (request, socket) => {
     scheduleMemStats(500);
   }
 
-  socket.on("data", (chunk) => readFrames(client, chunk));
+  socket.on("data", (chunk) => {
+    try {
+      readFrames(client, chunk);
+    } catch (error) {
+      // A single malformed frame or a throwing message handler must never take
+      // down the whole bridge — that would drop every other terminal session.
+      // Isolate the failure to this client and keep the bridge serving others.
+      console.error("[bridge] Error handling client data:", error && error.stack ? error.stack : error);
+      try {
+        client.send({ type: "error", message: "Internal bridge error while handling a message." });
+      } catch {
+        /* socket may already be gone; nothing else to do */
+      }
+    }
+  });
   socket.on("close", () => clients.delete(client));
   socket.on("error", () => clients.delete(client));
 });
@@ -142,6 +156,18 @@ function start(callback, overridePort, overrideHost) {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("exit", handleProcessExit);
+
+// A terminal multiplexer must survive isolated failures. node-pty's Windows
+// ConPTY path (e.g. the console-list helper's "AttachConsole failed") and native
+// kill/spawn calls can occasionally throw or reject; without these nets Node's
+// defaults would terminate the entire bridge and drop every live session. Log
+// loudly and keep serving the remaining terminals instead of crashing.
+process.on("uncaughtException", (error) => {
+  console.error("[bridge] Uncaught exception (continuing):", error && error.stack ? error.stack : error);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[bridge] Unhandled rejection (continuing):", reason && reason.stack ? reason.stack : reason);
+});
 
 function handleProcessExit() {
   closeSessions(false);

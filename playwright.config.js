@@ -13,7 +13,7 @@ module.exports = defineConfig({
     trace: "off"
   },
   webServer: {
-    command: "node server.js",
+    command: "node tests/support/bridge-supervisor.js",
     port: 3199,
     env: { PORT: "3199", HOST: "127.0.0.1" },
     reuseExistingServer: false,

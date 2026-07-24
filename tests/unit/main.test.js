@@ -101,12 +101,28 @@ describe("startServer", () => {
     expect(electron.dialog.showErrorBox).not.toHaveBeenCalled();
   });
 
-  it("reports an unexpected bridge exit", () => {
+  it("restarts the bridge after an unexpected exit", () => {
     main.startServer();
-    const child = main.getServerProcess();
-    child.emit("exit", 1);
-    expect(electron.dialog.showErrorBox).toHaveBeenCalledWith("MultiTerm", expect.stringContaining("code 1"));
-    expect(main.getServerProcess()).toBeNull();
+    const first = main.getServerProcess();
+    first.emit("exit", 1);
+    expect(electron.dialog.showErrorBox).not.toHaveBeenCalled();
+    expect(childProcess.spawn).toHaveBeenCalledTimes(2);
+    const restarted = main.getServerProcess();
+    expect(restarted).not.toBeNull();
+    expect(restarted).not.toBe(first);
+  });
+
+  it("gives up and reports after repeated crash-looping exits", () => {
+    main.startServer();
+    // Each unexpected exit restarts the bridge until the crash-loop guard trips.
+    for (let i = 0; i < 6; i += 1) {
+      const child = main.getServerProcess();
+      child.emit("exit", 1);
+    }
+    expect(electron.dialog.showErrorBox).toHaveBeenCalledWith(
+      "MultiTerm",
+      expect.stringContaining("keeps exiting unexpectedly")
+    );
   });
 
   it("does not report a clean exit", () => {
