@@ -163,8 +163,16 @@ function handleProcessExit() {
   closeSessions(false);
 }
 
-/* v8 ignore next 7 -- only executes when server.js is the process entry point */
+/* v8 ignore next 13 -- only executes when server.js is the process entry point */
 if (require.main === module) {
+  // Resilience: a throwing pty/socket callback must not take down the whole
+  // bridge (and with it every other live terminal). Log and keep serving.
+  process.on("uncaughtException", (error) => {
+    console.error("[bridge] uncaught exception:", error && error.stack ? error.stack : error);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[bridge] unhandled rejection:", reason);
+  });
   if (relayMode) {
     startRelayClient();
   } else {
