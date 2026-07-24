@@ -2075,8 +2075,10 @@ body.is-pane-dragging {
   border: 0;
   border-radius: var(--radius-xs);
   color: var(--text);
+  flex: 1 1 auto;
   font-weight: 550;
   min-height: 28px;
+  min-width: 0;
   overflow: hidden;
   padding: 0 6px;
   text-overflow: ellipsis;
