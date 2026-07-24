@@ -40,7 +40,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.9";
+const APP_VERSION = "0.1.10";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
@@ -614,6 +614,15 @@ function handleBridgeMessage(message) {
       const command = state.settings.startupCommand.trim();
       window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${command}\r` }), 250);
     }
+
+    // A command queued at creation time (e.g. a broadcast with no terminals
+    // open) runs once the shell is live, after any startup command.
+    if (terminal.pendingCommand) {
+      const pending = terminal.pendingCommand;
+      const withEnter = terminal.pendingCommandEnter;
+      terminal.pendingCommand = null;
+      window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${pending}${withEnter ? "\r" : ""}` }), 500);
+    }
     return;
   }
 
@@ -738,6 +747,8 @@ function addTerminal(options = {}) {
     minimized: false,
     observer: null,
     pane,
+    pendingCommand: typeof options.pendingCommand === "string" ? options.pendingCommand : null,
+    pendingCommandEnter: options.pendingCommandEnter !== false,
     pid: session.pid,
     remoteRequested: Boolean(options.reattach),
     runStartup: Boolean(options.runStartup),
@@ -2504,6 +2515,20 @@ function broadcastTargetIds() {
 function sendBroadcast() {
   const command = elements.broadcastInput.value;
   if (!command) return;
+
+  // No terminals at all: open one and run the command there once it is live.
+  if (state.terminals.size === 0) {
+    addTerminal({
+      reveal: true,
+      runStartup: true,
+      pendingCommand: command,
+      pendingCommandEnter: state.settings.broadcastSendEnter
+    });
+    log.info("broadcast", "Broadcast with no terminals open; started a new terminal", { command });
+    toast("No terminals open \u2014 started one and ran the command", "success", 2200);
+    elements.broadcastInput.select();
+    return;
+  }
 
   const ids = broadcastTargetIds();
 
