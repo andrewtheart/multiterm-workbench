@@ -28,6 +28,19 @@ let memSettleTimer = null;
 let memStatsInFlight = false;
 let lastMemStats = null;
 
+// --- Elevated (administrator) terminals: relay + auth state ---
+// UI_TOKEN gates elevated operations to the authenticated renderer; RELAY_TOKEN
+// authenticates the elevated helper process. Both come from the Electron main
+// process (main.js). NOTE: Windows provides no isolation between processes of
+// the SAME user, so a determined same-user attacker could recover these tokens;
+// mitigations are that spawning the helper always requires a fresh UAC prompt
+// and the elevated helper only ever connects OUT (it never opens a listener).
+const UI_TOKEN = process.env.UI_TOKEN || "";
+const RELAY_TOKEN = process.env.RELAY_TOKEN || "";
+const relayMode = process.env.RELAY_MODE === "1";
+let elevatedProvider = null;
+const elevatedSessions = new Set();
+
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -97,6 +110,8 @@ server.on("upgrade", (request, socket) => {
   const client = {
     buffer: Buffer.alloc(0),
     socket,
+    trusted: false,
+    isProvider: false,
     send(message) {
       if (!socket.destroyed) {
         socket.write(encodeFrame(JSON.stringify(message)));
@@ -110,6 +125,7 @@ server.on("upgrade", (request, socket) => {
     cwd: process.cwd(),
     sessions: [...sessions.values()].map(toSessionSummary)
   });
+  client.send({ type: "adminBridge", available: Boolean(elevatedProvider) });
 
   if (memStatsEnabled) {
     if (lastMemStats) {
@@ -119,8 +135,8 @@ server.on("upgrade", (request, socket) => {
   }
 
   socket.on("data", (chunk) => readFrames(client, chunk));
-  socket.on("close", () => clients.delete(client));
-  socket.on("error", () => clients.delete(client));
+  socket.on("close", () => cleanupClient(client));
+  socket.on("error", () => cleanupClient(client));
 });
 
 function start(callback, overridePort, overrideHost) {
@@ -147,9 +163,13 @@ function handleProcessExit() {
   closeSessions(false);
 }
 
-/* v8 ignore next 3 -- only executes when server.js is the process entry point */
+/* v8 ignore next 7 -- only executes when server.js is the process entry point */
 if (require.main === module) {
-  start();
+  if (relayMode) {
+    startRelayClient();
+  } else {
+    start();
+  }
 }
 
 function __setPty(mock) {
@@ -203,7 +223,13 @@ module.exports = {
   pushMemStats,
   scheduleMemStats,
   startMemStats,
-  stopMemStats
+  stopMemStats,
+  routeElevatedCreate,
+  cleanupClient,
+  startRelayClient,
+  handleRelayMessage,
+  relayCreateSession,
+  killAllRelaySessions
 };
 
 function getPathname(rawUrl) {
@@ -346,17 +372,71 @@ function handleClientMessage(client, rawMessage) {
   }
 
   switch (message.type) {
+    case "auth":
+      if (UI_TOKEN && message.token === UI_TOKEN) {
+        client.trusted = true;
+        client.send({ type: "authOk" });
+      } else {
+        client.send({ type: "authFailed" });
+      }
+      break;
     case "create":
-      createSession(client, message);
+      if (message.elevated) {
+        routeElevatedCreate(client, message);
+      } else {
+        createSession(client, message);
+      }
       break;
     case "input":
-      writeSession(message.id, message.data);
+      if (elevatedSessions.has(message.id)) {
+        if (client.trusted && elevatedProvider) elevatedProvider.send({ type: "relayInput", id: message.id, data: message.data });
+      } else {
+        writeSession(message.id, message.data);
+      }
       break;
     case "resize":
-      rememberSize(message.id, message.cols, message.rows);
+      if (elevatedSessions.has(message.id)) {
+        if (client.trusted && elevatedProvider) elevatedProvider.send({ type: "relayResize", id: message.id, cols: message.cols, rows: message.rows });
+      } else {
+        rememberSize(message.id, message.cols, message.rows);
+      }
       break;
     case "kill":
-      killSession(message.id);
+      if (elevatedSessions.has(message.id)) {
+        if (elevatedProvider) elevatedProvider.send({ type: "relayKill", id: message.id });
+      } else {
+        killSession(message.id);
+      }
+      break;
+    case "relayHello":
+      if (RELAY_TOKEN && message.token === RELAY_TOKEN) {
+        elevatedProvider = client;
+        client.isProvider = true;
+        client.send({ type: "relayHelloOk" });
+        broadcast({ type: "adminBridge", available: true });
+      } else {
+        client.socket.destroy();
+      }
+      break;
+    case "relayCreated":
+      if (client === elevatedProvider) {
+        broadcast({ type: "created", id: message.id, pid: message.pid, cwd: message.cwd, shell: message.shell, title: message.title, cols: message.cols, rows: message.rows, elevated: true });
+      }
+      break;
+    case "relayOutput":
+      if (client === elevatedProvider) broadcast({ type: "output", id: message.id, stream: "pty", data: message.data });
+      break;
+    case "relayCreateFailed":
+      if (client === elevatedProvider) {
+        elevatedSessions.delete(message.id);
+        broadcast({ type: "createFailed", id: message.id, message: message.message });
+      }
+      break;
+    case "relayExited":
+      if (client === elevatedProvider) {
+        elevatedSessions.delete(message.id);
+        broadcast({ type: "exited", id: message.id, code: message.code, signal: message.signal });
+      }
       break;
     case "killAll":
       killAllSessions();
@@ -688,6 +768,127 @@ function startMemStats() {
 function stopMemStats() {
   if (memStatsInterval) { clearInterval(memStatsInterval); memStatsInterval = null; }
   if (memSettleTimer) { clearTimeout(memSettleTimer); memSettleTimer = null; }
+}
+
+/* ---------------- Elevated relay: main-bridge side ---------------- */
+
+function routeElevatedCreate(client, message) {
+  const id = sanitizeId(message.id);
+  if (!client.trusted) {
+    client.send({ type: "createFailed", id, message: "Not authorized to open an administrator terminal." });
+    return;
+  }
+  if (!elevatedProvider) {
+    client.send({ type: "createFailed", id, message: "Administrator terminal bridge is not running (elevation was cancelled or failed)." });
+    return;
+  }
+  elevatedSessions.add(id);
+  elevatedProvider.send({ type: "relayCreate", id, shell: message.shell, cwd: message.cwd, cols: message.cols, rows: message.rows, title: message.title });
+}
+
+function cleanupClient(client) {
+  clients.delete(client);
+  if (client === elevatedProvider) {
+    elevatedProvider = null;
+    for (const id of [...elevatedSessions]) {
+      elevatedSessions.delete(id);
+      broadcast({ type: "exited", id, code: null, signal: "admin-bridge-closed" });
+    }
+    broadcast({ type: "adminBridge", available: false });
+  }
+}
+
+/* ---------------- Elevated relay: helper (elevated child) side ---------------- */
+// Runs when server.js is started with RELAY_MODE=1 inside the elevated helper.
+// Hosts admin ptys and relays their I/O over one OUTBOUND WS connection to the
+// main bridge; it never opens a listening socket.
+
+const relaySessions = new Map();
+
+function startRelayClient() {
+  const url = process.env.RELAY_URL || `ws://127.0.0.1:${port}/ws`;
+  const tokenFile = process.env.RELAY_TOKEN_FILE || "";
+  let token = "";
+  try { token = fs.readFileSync(tokenFile, "utf8").trim(); } catch { /* ignore */ }
+
+  const relayWs = new WebSocket(url);
+  relayWs.addEventListener("open", () => {
+    relayWs.send(JSON.stringify({ type: "relayHello", token }));
+    // The one-time token file is no longer needed once presented.
+    try { if (tokenFile) fs.unlinkSync(tokenFile); } catch { /* ignore */ }
+  });
+  relayWs.addEventListener("message", (event) => handleRelayMessage(relayWs, String(event.data)));
+  relayWs.addEventListener("close", () => { killAllRelaySessions(); process.exit(0); });
+  relayWs.addEventListener("error", () => {});
+  return relayWs;
+}
+
+function handleRelayMessage(relayWs, raw) {
+  let message;
+  try { message = JSON.parse(raw); } catch { return; }
+  switch (message.type) {
+    case "relayCreate":
+      relayCreateSession(relayWs, message);
+      break;
+    case "relayInput": {
+      const terminal = relaySessions.get(message.id);
+      if (terminal && typeof message.data === "string") terminal.write(message.data);
+      break;
+    }
+    case "relayResize": {
+      const terminal = relaySessions.get(message.id);
+      if (terminal) { try { terminal.resize(Number(message.cols) || 120, Number(message.rows) || 30); } catch { /* closed */ } }
+      break;
+    }
+    case "relayKill": {
+      const terminal = relaySessions.get(message.id);
+      if (terminal) { try { terminal.kill(); } catch { /* closed */ } }
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function relayCreateSession(relayWs, message) {
+  const id = sanitizeId(message.id);
+  const shell = getShell(message.shell);
+  const cwd = getWorkingDirectory(message.cwd);
+  const cols = Number(message.cols) || 120;
+  const rows = Number(message.rows) || 30;
+  let terminal;
+  try {
+    terminal = pty.spawn(shell.file, shell.args, {
+      cols,
+      cwd,
+      env: {
+        ...process.env,
+        COLORTERM: process.env.COLORTERM || "truecolor",
+        TERM: process.env.TERM || "xterm-256color"
+      },
+      name: "xterm-256color",
+      rows,
+      useConpty: true
+    });
+  } catch (error) {
+    relayWs.send(JSON.stringify({ type: "relayCreateFailed", id, message: error.message }));
+    return;
+  }
+  relaySessions.set(id, terminal);
+  terminal.onData((data) => relayWs.send(JSON.stringify({ type: "relayOutput", id, data })));
+  terminal.onExit(({ exitCode, signal }) => {
+    relaySessions.delete(id);
+    relayWs.send(JSON.stringify({ type: "relayExited", id, code: exitCode, signal }));
+  });
+  const title = typeof message.title === "string" && message.title.trim() ? message.title.trim() : shell.label;
+  relayWs.send(JSON.stringify({ type: "relayCreated", id, pid: terminal.pid, cwd, shell: shell.label, title, cols, rows }));
+}
+
+function killAllRelaySessions() {
+  for (const terminal of relaySessions.values()) {
+    try { terminal.kill(); } catch { /* ignore */ }
+  }
+  relaySessions.clear();
 }
 
 function broadcast(message) {

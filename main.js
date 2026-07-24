@@ -1,6 +1,9 @@
 let { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
 const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
@@ -16,6 +19,13 @@ function formatError(err) {
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
 
+// Per-launch secrets: UI_TOKEN authenticates the renderer to the bridge for
+// elevated operations; RELAY_TOKEN authenticates the elevated helper process.
+const UI_TOKEN = crypto.randomBytes(24).toString("hex");
+const RELAY_TOKEN = crypto.randomBytes(24).toString("hex");
+let appIsElevated = process.env.MULTITERM_ELEVATED === "1";
+let elevationChecked = false;
+
 let mainWindow = null;
 let serverProcess = null;
 
@@ -26,7 +36,7 @@ function startServer() {
   const nodeExe = process.platform === "win32" ? "node.exe" : "node";
   serverProcess = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
     cwd: __dirname,
-    env: { ...process.env, HOST, PORT: String(PORT), MEMSTATS: "1" },
+    env: { ...process.env, HOST, PORT: String(PORT), MEMSTATS: "1", UI_TOKEN, RELAY_TOKEN },
     stdio: ["ignore", "pipe", "pipe"]
   });
 
@@ -128,6 +138,7 @@ async function onReady() {
   createWindow();
 
   registerScriptPicker();
+  registerAdminIpc();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -156,6 +167,89 @@ function registerScriptPicker() {
     }
     return result.filePaths[0];
   });
+}
+
+// Elevation (administrator) IPC: whole-window elevation (restart as admin) and
+// the on-demand elevated helper for per-pane admin terminals.
+function registerAdminIpc() {
+  if (!ipcMain || typeof ipcMain.handle !== "function") return;
+  for (const channel of ["multiterm:is-elevated", "multiterm:get-ui-token", "multiterm:relaunch-as-admin", "multiterm:spawn-admin-bridge"]) {
+    try { ipcMain.removeHandler(channel); } catch { /* no existing handler */ }
+  }
+  ipcMain.handle("multiterm:is-elevated", async () => { await ensureElevationChecked(); return appIsElevated; });
+  ipcMain.handle("multiterm:get-ui-token", () => UI_TOKEN);
+  ipcMain.handle("multiterm:relaunch-as-admin", () => {
+    const ok = relaunchAsAdmin();
+    if (ok) {
+      app.isQuiting = true;
+      setTimeout(() => app.quit(), 600);
+    }
+    return ok;
+  });
+  ipcMain.handle("multiterm:spawn-admin-bridge", () => spawnAdminBridge());
+}
+
+// Detect whether this process is already elevated. `net session` succeeds only
+// for administrators; run once and cache. Skipped off Windows and in tests
+// (only invoked from the is-elevated IPC, which tests never call).
+function ensureElevationChecked() {
+  return new Promise((resolve) => {
+    if (elevationChecked || process.platform !== "win32") { elevationChecked = true; resolve(); return; }
+    elevationChecked = true;
+    try {
+      childProcess.exec("net session", { windowsHide: true, timeout: 4000 }, (error) => {
+        if (!error) appIsElevated = true;
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
+// Approach A: relaunch the whole app elevated (one UAC prompt); every terminal
+// in the new window is then an administrator terminal.
+function relaunchAsAdmin() {
+  if (process.platform !== "win32") return false;
+  try {
+    const exe = process.execPath;
+    const args = process.argv.slice(1);
+    const argList = args.length ? args.map((a) => `'${String(a).replace(/'/g, "''")}'`).join(",") : "";
+    const startArgs = argList ? `-ArgumentList ${argList} ` : "";
+    const psCommand = `$env:PORT='${PORT}'; $env:MULTITERM_ELEVATED='1'; Start-Process -FilePath '${exe.replace(/'/g, "''")}' ${startArgs}-WorkingDirectory '${__dirname.replace(/'/g, "''")}' -Verb RunAs`;
+    childProcess.spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Approach B: spawn an elevated helper (UAC prompt) that hosts admin ptys and
+// relays their I/O back to the bridge. The helper only connects OUT (never
+// listens) and authenticates with a one-time token written to a user-ACL'd file.
+function spawnAdminBridge() {
+  if (process.platform !== "win32") return { ok: false, reason: "Elevated terminals are only supported on Windows." };
+  try {
+    const tokenFile = path.join(os.tmpdir(), `multiterm-relay-${crypto.randomBytes(10).toString("hex")}.token`);
+    fs.writeFileSync(tokenFile, RELAY_TOKEN, { encoding: "utf8", mode: 0o600 });
+    // Best-effort: restrict the token file to the current user only.
+    try {
+      childProcess.execSync(`icacls "${tokenFile}" /inheritance:r /grant:r "%USERNAME%":F`, { windowsHide: true, stdio: "ignore" });
+    } catch { /* ACL hardening is best-effort */ }
+
+    const serverPath = path.join(__dirname, "server.js");
+    const relayUrl = `ws://${HOST}:${PORT}/ws`;
+    const psCommand = [
+      "$env:RELAY_MODE='1';",
+      `$env:RELAY_URL='${relayUrl}';`,
+      `$env:RELAY_TOKEN_FILE='${tokenFile.replace(/'/g, "''")}';`,
+      `Start-Process -FilePath 'node.exe' -ArgumentList '${serverPath.replace(/'/g, "''")}' -WorkingDirectory '${__dirname.replace(/'/g, "''")}' -Verb RunAs -WindowStyle Hidden`
+    ].join(" ");
+    childProcess.spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
 }
 
 function bootstrap() {

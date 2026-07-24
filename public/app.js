@@ -40,7 +40,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.11";
+const APP_VERSION = "0.1.12";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
@@ -229,6 +229,7 @@ const elements = {
   shortcutsOverlay: document.querySelector("#shortcutsOverlay"),
   startupCommand: document.querySelector("#startupCommand"),
   statusConn: document.querySelector("#statusConn"),
+  statusAdmin: document.querySelector("#statusAdmin"),
   statusMem: document.querySelector("#statusMem"),
   statusMemText: document.querySelector("#statusMemText"),
   statusSessions: document.querySelector("#statusSessions"),
@@ -254,6 +255,8 @@ const palette = { open: false, index: 0, items: [] };
 
 const state = {
   activeId: null,
+  adminBridgeAvailable: false,
+  appElevated: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
   nextIndex: 1,
@@ -350,6 +353,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   connectBridge();
   refreshIcons();
+  refreshElevationStatus();
   log.debug("app", "UI initialized", { theme: state.settings.appTheme, layout: state.settings.layout });
 });
 
@@ -527,6 +531,7 @@ function connectBridge() {
     state.socketReady = true;
     setBridgeStatus("Bridge connected", "online");
     log.info("bridge", "WebSocket connected");
+    authenticateBridge();
     updateTerminalActions();
     for (const terminal of state.terminals.values()) {
       if (!terminal.remoteRequested && terminal.status !== "live") {
@@ -604,6 +609,10 @@ function handleBridgeMessage(message) {
     terminal.pid = message.pid;
     terminal.remoteRequested = true;
     terminal.status = "live";
+    if (message.elevated) {
+      terminal.elevated = true;
+      terminal.pane.classList.add("is-admin");
+    }
     setTerminalStatus(terminal, `pid ${message.pid}`, "live");
     log.info("session", `Session live: ${terminal.titleInput.value}`, { id: message.id, pid: message.pid });
     updateTerminalSearchVisibility(terminal);
@@ -663,6 +672,15 @@ function handleBridgeMessage(message) {
 
   if (message.type === "memstats") {
     updateMemStatus(message);
+    return;
+  }
+
+  if (message.type === "adminBridge") {
+    state.adminBridgeAvailable = Boolean(message.available);
+    return;
+  }
+
+  if (message.type === "authOk" || message.type === "authFailed") {
     return;
   }
 
@@ -742,6 +760,7 @@ function addTerminal(options = {}) {
     awaitingInput: false,
     fitAddon,
     id,
+    elevated: Boolean(options.elevated),
     logging: false,
     logPath: null,
     minimized: false,
@@ -772,6 +791,7 @@ function addTerminal(options = {}) {
   bindPaneDrag(terminal);
   bindPaneFind(terminal);
   applyPaneColor(terminal);
+  if (terminal.elevated) pane.classList.add("is-admin");
   applyManualLayout(terminal, ensureManualLayout(id));
   setActiveTerminal(id);
   refreshIcons();
@@ -1020,6 +1040,90 @@ function clearSnapLayout(shouldFit) {
   }
 }
 
+/* ---------------- Administrator elevation --------------- */
+
+function authenticateBridge() {
+  if (!window.multiterm || typeof window.multiterm.getUiToken !== "function") return;
+  window.multiterm.getUiToken()
+    .then((token) => { if (token) sendBridge({ type: "auth", token }); })
+    .catch(() => {});
+}
+
+async function refreshElevationStatus() {
+  if (!window.multiterm || typeof window.multiterm.isElevated !== "function") return;
+  try {
+    state.appElevated = await window.multiterm.isElevated();
+  } catch {
+    state.appElevated = false;
+  }
+  applyElevationBadge();
+}
+
+function applyElevationBadge() {
+  document.body.classList.toggle("app-elevated", Boolean(state.appElevated));
+  if (elements.statusAdmin) elements.statusAdmin.hidden = !state.appElevated;
+}
+
+async function restartAsAdmin() {
+  if (state.appElevated) { toast("Already running as administrator", "info", 1800); return; }
+  if (!window.multiterm || typeof window.multiterm.restartAsAdmin !== "function") {
+    toast("Administrator relaunch is only available in the desktop app", "error", 3000);
+    return;
+  }
+  toast("Relaunching as administrator \u2014 approve the UAC prompt\u2026", "info", 3000);
+  try {
+    const ok = await window.multiterm.restartAsAdmin();
+    if (!ok) toast("Could not relaunch as administrator", "error");
+  } catch {
+    toast("Could not relaunch as administrator", "error");
+  }
+}
+
+function waitForAdminBridge(timeoutMs) {
+  return new Promise((resolve) => {
+    if (state.adminBridgeAvailable) { resolve(true); return; }
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      if (state.adminBridgeAvailable) { resolve(true); return; }
+      if (Date.now() > deadline) { resolve(false); return; }
+      window.setTimeout(check, 300);
+    };
+    check();
+  });
+}
+
+async function newAdminTerminal() {
+  // If the whole window is already elevated, every terminal is already admin.
+  if (state.appElevated) {
+    addTerminal({ reveal: true, runStartup: true, title: "Administrator" });
+    return;
+  }
+  if (!window.multiterm || typeof window.multiterm.spawnAdminBridge !== "function") {
+    toast("Administrator terminals are only available in the desktop app", "error", 3200);
+    return;
+  }
+  if (!state.adminBridgeAvailable) {
+    toast("Requesting administrator access \u2014 approve the UAC prompt\u2026", "info", 4000);
+    let res;
+    try {
+      res = await window.multiterm.spawnAdminBridge();
+    } catch {
+      toast("Could not start the administrator bridge", "error");
+      return;
+    }
+    if (!res || !res.ok) {
+      toast(`Could not start the administrator bridge: ${res && res.reason ? res.reason : "unknown"}`, "error", 4000);
+      return;
+    }
+    const connected = await waitForAdminBridge(25000);
+    if (!connected) {
+      toast("Administrator bridge did not connect (UAC cancelled?)", "error", 4000);
+      return;
+    }
+  }
+  addTerminal({ reveal: true, runStartup: true, elevated: true, title: "Administrator" });
+}
+
 function requestSession(terminal) {
   if (!state.socketReady) {
     terminal.remoteRequested = false;
@@ -1039,7 +1143,8 @@ function requestSession(terminal) {
     id: terminal.id,
     rows: terminal.term.rows,
     shell: terminal.shell || elements.shellSelect.value,
-    title: terminal.titleInput.value
+    title: terminal.titleInput.value,
+    elevated: Boolean(terminal.elevated)
   });
 }
 
@@ -2058,6 +2163,8 @@ function getCommands() {
     { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell", title: "Windows PowerShell" }) },
     { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd", title: "Command Prompt" }) },
     { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl", title: "WSL" }) },
+    { label: "New Administrator terminal", run: newAdminTerminal },
+    { label: "Restart as Administrator", run: restartAsAdmin },
     { label: "Close active terminal", hint: "Ctrl+Shift+W", run: () => state.activeId && removeTerminal(state.activeId) },
     { label: "Minimize active terminal", run: () => state.activeId && minimizeTerminal(state.activeId) },
     { label: "Restore all minimized terminals", run: restoreAllTerminals },
@@ -3183,6 +3290,7 @@ function buildContextMenu(terminal) {
     { separator: true },
     { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
+    { label: "New Administrator terminal", icon: "shield", run: newAdminTerminal },
     { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScript(terminal.id) },
     { label: terminal.logging ? "Stop logging" : "Log to file\u2026", icon: terminal.logging ? "circle-stop" : "file-text", run: () => toggleLogging(terminal) },
     ...(terminal.logPath ? [{ label: "Reveal log", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }] : []),
