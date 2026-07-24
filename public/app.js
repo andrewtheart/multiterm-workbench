@@ -40,7 +40,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.7";
+const APP_VERSION = "0.1.8";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
@@ -2032,6 +2032,7 @@ function getCommands() {
     { label: "Broadcast command…", hint: "Ctrl+Shift+B", run: () => toggleBroadcast(true) },
     { label: "Paste into active terminal", hint: "Ctrl+Shift+V", run: pasteIntoActive },
     { label: "Maximize / restore active pane", hint: "Ctrl+Shift+X", run: () => toggleZoomPane(state.activeId) },
+    { label: "Browse & run script in active terminal\u2026", run: () => browseAndRunScript(state.activeId) },
     { label: "Open active terminal folder", run: () => state.activeId && revealTerminalCwd(state.terminals.get(state.activeId)) },
     { label: "New terminal in active folder", run: () => { const active = state.activeId && state.terminals.get(state.activeId); if (active) addTerminal({ reveal: true, runStartup: true, cwd: active.cwd, title: active.titleInput.value }); } },
     { label: "Toggle logging for active terminal", run: () => state.activeId && toggleLogging(state.terminals.get(state.activeId)) },
@@ -2660,6 +2661,57 @@ function toggleLogging(terminal) {
   }
 }
 
+/* ---------------- Run a script --------------- */
+
+// Opens the native file picker (exposed by preload as window.multiterm) and
+// runs the chosen .ps1/.bat/.cmd in the target terminal.
+async function browseAndRunScript(id) {
+  const targetId = id || state.activeId;
+  if (!targetId || !state.terminals.has(targetId)) {
+    toast("No active terminal", "info", 1600);
+    return;
+  }
+  if (!window.multiterm || typeof window.multiterm.pickScript !== "function") {
+    toast("Script browsing is only available in the desktop app", "error", 3000);
+    return;
+  }
+
+  let scriptPath;
+  try {
+    scriptPath = await window.multiterm.pickScript();
+  } catch {
+    toast("Could not open the file picker", "error");
+    return;
+  }
+  if (!scriptPath) return; // cancelled
+
+  const command = buildScriptCommand(state.terminals.get(targetId), scriptPath);
+  if (!sendBridge({ type: "input", id: targetId, data: `${command}\r` })) {
+    toast("Bridge unavailable", "error");
+    return;
+  }
+  setActiveTerminal(targetId);
+  toast(`Running ${scriptPath.split(/[\\/]/).pop()}`, "success", 2400);
+}
+
+function buildScriptCommand(terminal, scriptPath) {
+  const ext = (scriptPath.split(".").pop() || "").toLowerCase();
+  const shell = (terminal && terminal.shell ? terminal.shell : "").toLowerCase();
+  const isCmd = shell.includes("command prompt") || shell.includes("cmd");
+
+  if (isCmd) {
+    // In cmd.exe, run batch files directly and .ps1 via powershell.
+    return ext === "ps1"
+      ? `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`
+      : `call "${scriptPath}"`;
+  }
+
+  // PowerShell family: the call operator runs .ps1, .bat and .cmd. Single-quote
+  // the path (no expansion) and escape embedded single quotes.
+  const escaped = scriptPath.replace(/'/g, "''");
+  return `& '${escaped}'`;
+}
+
 /* ---------------- Paste --------------- */
 
 async function pasteIntoTerminal(id) {
@@ -3077,6 +3129,7 @@ function buildContextMenu(terminal) {
     { separator: true },
     { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
+    { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScript(terminal.id) },
     { label: terminal.logging ? "Stop logging" : "Log to file\u2026", icon: terminal.logging ? "circle-stop" : "file-text", run: () => toggleLogging(terminal) },
     ...(terminal.logPath ? [{ label: "Reveal log", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }] : []),
     ...(snippetItems.length ? [{ separator: true }, ...snippetItems] : []),

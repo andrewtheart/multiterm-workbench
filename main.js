@@ -1,4 +1,4 @@
-let { app, BrowserWindow, Menu, shell, dialog } = require("electron");
+let { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
 const childProcess = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
@@ -6,7 +6,7 @@ const path = require("node:path");
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
 // `require("electron")` resolves to a path string, so these are set by tests.
 function __setElectron(mock) {
-  ({ app, BrowserWindow, Menu, shell, dialog } = mock);
+  ({ app, BrowserWindow, Menu, shell, dialog, ipcMain } = mock);
 }
 
 function formatError(err) {
@@ -92,7 +92,8 @@ function createWindow() {
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      preload: path.join(__dirname, "preload.js")
     }
   });
 
@@ -126,10 +127,34 @@ async function onReady() {
   }
   createWindow();
 
+  registerScriptPicker();
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
+  });
+}
+
+// Native "browse for a script" dialog for the renderer's run-script feature.
+function registerScriptPicker() {
+  if (!ipcMain || typeof ipcMain.handle !== "function") return;
+  try { ipcMain.removeHandler("multiterm:pick-script"); } catch { /* no existing handler */ }
+  ipcMain.handle("multiterm:pick-script", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Select a script to run",
+      properties: ["openFile"],
+      filters: [
+        { name: "Scripts", extensions: ["ps1", "bat", "cmd"] },
+        { name: "PowerShell", extensions: ["ps1"] },
+        { name: "Batch", extensions: ["bat", "cmd"] },
+        { name: "All files", extensions: ["*"] }
+      ]
+    });
+    if (!result || result.canceled || !Array.isArray(result.filePaths) || result.filePaths.length === 0) {
+      return null;
+    }
+    return result.filePaths[0];
   });
 }
 
