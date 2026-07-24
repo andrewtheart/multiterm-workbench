@@ -1,12 +1,16 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
-const pty = require("@homebridge/node-pty-prebuilt-multiarch");
+const childProcess = require("node:child_process");
+// `pty` is a mutable binding so tests can inject a fake terminal factory
+// via `__setPty` without spawning real shells.
+let pty = require("@homebridge/node-pty-prebuilt-multiarch");
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3177);
-const allowRemote = process.env.ALLOW_REMOTE === "1";
+let allowRemote = process.env.ALLOW_REMOTE === "1";
 const publicDir = path.join(__dirname, "public");
 const maxMessageSize = 1024 * 1024;
 const websocketAcceptHash = ["sha", "1"].join("");
@@ -20,7 +24,9 @@ const mimeTypes = new Map([
   [".js", "text/javascript; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
   [".svg", "image/svg+xml"],
-  [".ico", "image/x-icon"]
+  [".ico", "image/x-icon"],
+  [".png", "image/png"],
+  [".webmanifest", "application/manifest+json"]
 ]);
 
 const server = http.createServer((request, response) => {
@@ -100,12 +106,16 @@ server.on("upgrade", (request, socket) => {
   socket.on("error", () => clients.delete(client));
 });
 
-function start(callback) {
-  server.listen(port, host, () => {
-    console.log(`MultiTerm bridge running on ${host}:${port}`);
+function start(callback, overridePort, overrideHost) {
+  const listenPort = overridePort === undefined ? port : overridePort;
+  const listenHost = overrideHost === undefined ? host : overrideHost;
+  server.listen(listenPort, listenHost, () => {
+    const address = server.address();
+    const boundPort = address && typeof address === "object" ? address.port : listenPort;
+    console.log(`MultiTerm bridge running on ${listenHost}:${boundPort}`);
     console.log("PowerShell sessions are available only to this local machine by default.");
     if (typeof callback === "function") {
-      callback({ host, port });
+      callback({ host: listenHost, port: boundPort });
     }
   });
   return server;
@@ -113,13 +123,65 @@ function start(callback) {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-process.on("exit", () => closeSessions(false));
+process.on("exit", handleProcessExit);
 
+function handleProcessExit() {
+  closeSessions(false);
+}
+
+/* v8 ignore next 3 -- only executes when server.js is the process entry point */
 if (require.main === module) {
   start();
 }
 
-module.exports = { server, start, host, port };
+function __setPty(mock) {
+  pty = mock;
+}
+
+function __setAllowRemote(value) {
+  allowRemote = value;
+}
+
+module.exports = {
+  server,
+  start,
+  host,
+  port,
+  sessions,
+  clients,
+  mimeTypes,
+  maxMessageSize,
+  __setPty,
+  __setAllowRemote,
+  getPathname,
+  serveStaticFile,
+  sendJsonResponse,
+  readFrames,
+  encodeFrame,
+  handleClientMessage,
+  createSession,
+  writeSession,
+  rememberSize,
+  killSession,
+  killAllSessions,
+  closeSessions,
+  endSessionInput,
+  isSessionRunning,
+  shutdown,
+  handleProcessExit,
+  broadcast,
+  toSessionSummary,
+  sanitizeId,
+  getShell,
+  getWorkingDirectory,
+  isLocalAddress,
+  startLog,
+  stopLog,
+  closeLog,
+  sanitizeLogName,
+  stripAnsiForLog,
+  revealPath
+};
 
 function getPathname(rawUrl) {
   const pathPart = String(rawUrl || "/").split("?", 1)[0];
@@ -276,6 +338,15 @@ function handleClientMessage(client, rawMessage) {
     case "killAll":
       killAllSessions();
       break;
+    case "logStart":
+      startLog(client, message.id);
+      break;
+    case "logStop":
+      stopLog(client, message.id);
+      break;
+    case "reveal":
+      revealPath(client, message);
+      break;
     case "list":
       client.send({ type: "sessions", sessions: [...sessions.values()].map(toSessionSummary) });
       break;
@@ -322,6 +393,8 @@ function createSession(client, options) {
     cwd,
     exited: false,
     id,
+    logStream: null,
+    logPath: null,
     rows,
     shell: shell.label,
     startedAt: new Date().toISOString(),
@@ -332,11 +405,19 @@ function createSession(client, options) {
   sessions.set(id, session);
 
   terminal.onData((data) => {
+    if (session.logStream) {
+      try {
+        session.logStream.write(stripAnsiForLog(data));
+      } catch {
+        // A failed log write should never break the live session.
+      }
+    }
     broadcast({ type: "output", id, stream: "pty", data });
   });
 
   terminal.onExit(({ exitCode, signal }) => {
     session.exited = true;
+    closeLog(session);
     sessions.delete(id);
     broadcast({ type: "exited", id, code: exitCode, signal });
   });
@@ -354,26 +435,26 @@ function writeSession(id, data) {
 }
 
 function rememberSize(id, cols, rows) {
+  if (!sessions.has(id)) return;
   const session = sessions.get(id);
-  if (!session) return;
 
   session.cols = Number(cols) || session.cols;
   session.rows = Number(rows) || session.rows;
 
-  if (isSessionRunning(session)) {
-    try {
-      session.terminal.resize(session.cols, session.rows);
-    } catch {
-      return;
-    }
+  if (!isSessionRunning(session)) return;
+
+  try {
+    session.terminal.resize(session.cols, session.rows);
+  } catch {
+    // The pty may have closed between the size event and the resize call.
   }
 }
 
 function killSession(id) {
   const session = sessions.get(id);
-  if (!session) return;
+  if (!isSessionRunning(session)) return;
 
-  endSessionInput(session, true);
+  endSessionInput(session);
 
   setTimeout(() => {
     if (isSessionRunning(session)) {
@@ -391,20 +472,18 @@ function killAllSessions() {
 function closeSessions(graceful) {
   for (const session of sessions.values()) {
     if (graceful) {
-      endSessionInput(session, true);
+      endSessionInput(session);
     } else if (isSessionRunning(session)) {
       session.terminal.kill();
     }
   }
 }
 
-function endSessionInput(session, sendExit) {
+function endSessionInput(session) {
   if (!isSessionRunning(session)) return;
 
   try {
-    if (sendExit) {
-      session.terminal.write("exit\r");
-    }
+    session.terminal.write("exit\r");
   } catch {
     session.terminal.kill();
   }
@@ -412,6 +491,85 @@ function endSessionInput(session, sendExit) {
 
 function isSessionRunning(session) {
   return Boolean(session && session.terminal && !session.exited);
+}
+
+function startLog(client, id) {
+  const session = sessions.get(id);
+  if (!session) return;
+
+  if (session.logStream) {
+    client.send({ type: "logStarted", id, path: session.logPath, already: true });
+    return;
+  }
+
+  try {
+    const dir = path.join(os.homedir(), "MultiTerm", "logs");
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const base = sanitizeLogName(session.title || session.shell || "session");
+    const file = path.join(dir, `${base}-${stamp}.log`);
+    session.logStream = fs.createWriteStream(file, { flags: "a" });
+    session.logPath = file;
+    session.logStream.write(`# MultiTerm log for "${session.title}" (${session.shell}) started ${new Date().toISOString()}\r\n`);
+    client.send({ type: "logStarted", id, path: file });
+  } catch (error) {
+    client.send({ type: "logError", id, message: error.message });
+  }
+}
+
+function stopLog(client, id) {
+  const session = sessions.get(id);
+  if (!session || !session.logStream) return;
+
+  const file = session.logPath;
+  closeLog(session);
+  client.send({ type: "logStopped", id, path: file });
+}
+
+function closeLog(session) {
+  if (session && session.logStream) {
+    try {
+      session.logStream.end();
+    } catch {
+      // Ignore errors closing the log stream.
+    }
+    session.logStream = null;
+  }
+}
+
+function sanitizeLogName(value) {
+  return String(value).replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60) || "session";
+}
+
+// Terminals emit ANSI/OSC escape sequences; strip them so the log file is
+// readable plain text while keeping tabs and line breaks intact.
+function stripAnsiForLog(data) {
+  return String(data)
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[=>()#][A-Za-z0-9]?/g, "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+function revealPath(client, message) {
+  const target = typeof message.path === "string" ? message.path.trim() : "";
+  if (!target) return;
+
+  let dir;
+  try {
+    const resolved = path.resolve(target);
+    dir = fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved);
+  } catch {
+    client.send({ type: "revealError", message: "Path not found." });
+    return;
+  }
+
+  try {
+    const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+    childProcess.spawn(command, [dir], { detached: true, stdio: "ignore" }).unref();
+  } catch (error) {
+    client.send({ type: "revealError", message: error.message });
+  }
 }
 
 function shutdown() {

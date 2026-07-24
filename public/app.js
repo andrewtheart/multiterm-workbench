@@ -1,6 +1,7 @@
 const defaultSettings = {
-  appTheme: "system",
+  appTheme: "dark",
   bellNotify: false,
+  broadcastSendEnter: true,
   columns: 2,
   compactChrome: false,
   copyOnSelect: false,
@@ -11,12 +12,26 @@ const defaultSettings = {
   fontSize: 14,
   gap: 10,
   headerHidden: false,
+  highlightInputPrompts: true,
   layout: "auto",
   minWidth: 420,
+  notifyActivity: false,
+  notifySilence: false,
   paneHeight: 320,
   restoreSession: false,
+  rightClickAction: "menu",
+  rightClickAck: "",
   rows: 2,
+  scrollOnOutput: false,
+  scrollback: 20000,
+  scrollbackInfinite: false,
   sidecarHidden: false,
+  silenceSeconds: 10,
+  snippets: [
+    { name: "Clear screen", command: "Clear-Host" },
+    { name: "Git status", command: "git status" },
+    { name: "Top processes", command: "Get-Process | Sort-Object CPU -Descending | Select-Object -First 15" }
+  ],
   startupCommand: "",
   syncInput: false,
   theme: "ember"
@@ -25,7 +40,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.1";
+const APP_VERSION = "0.1.7";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
@@ -139,6 +154,7 @@ const elements = {
   bridgeStatus: document.querySelector("#bridgeStatus"),
   broadcastBar: document.querySelector("#broadcastBar"),
   broadcastClose: document.querySelector("#broadcastClose"),
+  broadcastEnter: document.querySelector("#broadcastEnter"),
   broadcastInput: document.querySelector("#broadcastInput"),
   broadcastScope: document.querySelector("#broadcastScope"),
   broadcastSend: document.querySelector("#broadcastSend"),
@@ -161,10 +177,13 @@ const elements = {
   fontSize: document.querySelector("#fontSize"),
   fontSizeValue: document.querySelector("#fontSizeValue"),
   helpToggle: document.querySelector("#helpToggle"),
+  highlightInputPrompts: document.querySelector("#highlightInputPrompts"),
   host: document.querySelector("#terminalHost"),
   layoutMode: document.querySelector("#layoutMode"),
   minWidth: document.querySelector("#minWidth"),
   minWidthValue: document.querySelector("#minWidthValue"),
+  notifyActivity: document.querySelector("#notifyActivity"),
+  notifySilence: document.querySelector("#notifySilence"),
   paletteInput: document.querySelector("#paletteInput"),
   paletteList: document.querySelector("#paletteList"),
   paletteOverlay: document.querySelector("#paletteOverlay"),
@@ -175,8 +194,22 @@ const elements = {
   paneTemplate: document.querySelector("#paneTemplate"),
   resetLayout: document.querySelector("#resetLayout"),
   restoreSession: document.querySelector("#restoreSession"),
+  rightClickAction: document.querySelector("#rightClickAction"),
+  rightClickWarnOverlay: document.querySelector("#rightClickWarnOverlay"),
+  rightClickWarnText: document.querySelector("#rightClickWarnText"),
+  rightClickWarnRemember: document.querySelector("#rightClickWarnRemember"),
+  rightClickWarnCancel: document.querySelector("#rightClickWarnCancel"),
+  rightClickWarnProceed: document.querySelector("#rightClickWarnProceed"),
   rowCount: document.querySelector("#rowCount"),
   rowCountValue: document.querySelector("#rowCountValue"),
+  scrollOnOutput: document.querySelector("#scrollOnOutput"),
+  scrollbackInfinite: document.querySelector("#scrollbackInfinite"),
+  scrollbackLines: document.querySelector("#scrollbackLines"),
+  silenceSeconds: document.querySelector("#silenceSeconds"),
+  snippetAdd: document.querySelector("#snippetAdd"),
+  snippetCommand: document.querySelector("#snippetCommand"),
+  snippetList: document.querySelector("#snippetList"),
+  snippetName: document.querySelector("#snippetName"),
   shellSelect: document.querySelector("#shellSelect"),
   snapPreview: document.querySelector("#snapPreview"),
   shortcutsClose: document.querySelector("#shortcutsClose"),
@@ -215,7 +248,8 @@ const state = {
   socketReady: false,
   terminalSearch: "",
   terminals: new Map(),
-  workspaces: loadWorkspaces()
+  workspaces: loadWorkspaces(),
+  zoomedId: null
 };
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -227,6 +261,7 @@ window.addEventListener("DOMContentLoaded", () => {
   attachRipples();
   bindPalette();
   bindContextMenu();
+  bindRightClickWarning();
   bindGlobalShortcuts();
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
@@ -260,6 +295,14 @@ function bindControls() {
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
+  elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
+  elements.rightClickAction.value = state.settings.rightClickAction;
+  elements.scrollbackLines.value = state.settings.scrollback;
+  elements.scrollbackInfinite.checked = state.settings.scrollbackInfinite;
+  elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
+  elements.notifyActivity.checked = state.settings.notifyActivity;
+  elements.notifySilence.checked = state.settings.notifySilence;
+  elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
 
   elements.addTerminal.addEventListener("click", () => addTerminal({ reveal: true, runStartup: true }));
@@ -282,6 +325,12 @@ function bindControls() {
   elements.broadcastClose.addEventListener("click", () => toggleBroadcast(false));
   elements.broadcastSend.addEventListener("click", sendBroadcast);
   elements.broadcastScope.addEventListener("click", toggleBroadcastScope);
+  elements.broadcastEnter.addEventListener("click", () => {
+    state.settings.broadcastSendEnter = !state.settings.broadcastSendEnter;
+    updateBroadcastEnterToggle();
+    saveSettings();
+  });
+  updateBroadcastEnterToggle();
   elements.broadcastInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -321,7 +370,33 @@ function bindControls() {
   bindSetting(elements.syncInput, "syncInput", "change", (_, element) => element.checked);
   bindSetting(elements.restoreSession, "restoreSession", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
+  bindSetting(elements.highlightInputPrompts, "highlightInputPrompts", "change", (_, element) => element.checked);
+  bindSetting(elements.rightClickAction, "rightClickAction", "change", (value) => value);
+  bindSetting(elements.scrollbackLines, "scrollback", "change", Number);
+  bindSetting(elements.scrollbackInfinite, "scrollbackInfinite", "change", (_, element) => element.checked);
+  bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
+  bindSetting(elements.notifyActivity, "notifyActivity", "change", (_, element) => element.checked);
+  bindSetting(elements.notifySilence, "notifySilence", "change", (_, element) => element.checked);
+  bindSetting(elements.silenceSeconds, "silenceSeconds", "change", Number);
   bindSetting(elements.startupCommand, "startupCommand", "change", (value) => value);
+
+  for (const notifyToggle of [elements.notifyActivity, elements.notifySilence]) {
+    notifyToggle.addEventListener("change", () => {
+      if (notifyToggle.checked && "Notification" in window && Notification.permission === "default") {
+        Notification.requestPermission();
+      }
+    });
+  }
+
+  elements.snippetAdd.addEventListener("click", () => addSnippet(elements.snippetName.value, elements.snippetCommand.value));
+  elements.snippetCommand.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addSnippet(elements.snippetName.value, elements.snippetCommand.value);
+    }
+  });
+  renderSnippets();
+
   elements.bellNotify.addEventListener("change", () => {
     state.settings.bellNotify = elements.bellNotify.checked;
     saveSettings();
@@ -442,11 +517,40 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "logStarted") {
+    const terminal = state.terminals.get(message.id);
+    if (terminal) {
+      terminal.logging = true;
+      terminal.logPath = message.path;
+    }
+    toast(`Logging to ${message.path}`, "success", 3600);
+    return;
+  }
+
+  if (message.type === "logStopped") {
+    const terminal = state.terminals.get(message.id);
+    if (terminal) terminal.logging = false;
+    toast("Logging stopped", "info", 2000);
+    return;
+  }
+
+  if (message.type === "logError") {
+    toast(message.message || "Logging failed", "error");
+    return;
+  }
+
+  if (message.type === "revealError") {
+    toast(message.message || "Could not open folder", "error");
+    return;
+  }
+
   if (message.type === "exited") {
     const terminal = state.terminals.get(message.id);
     if (!terminal) return;
     terminal.status = "exited";
+    terminal.logging = false;
     setTerminalStatus(terminal, "exited", "dead");
+    setAwaitingInput(terminal, false);
     writelnTerminal(terminal, "");
     writelnTerminal(terminal, `\x1b[31mSession exited (${message.code ?? message.signal ?? "closed"}).\x1b[0m`);
     toast(`${terminal.titleInput.value} exited`, "info", 2600);
@@ -484,7 +588,7 @@ function addTerminal(options = {}) {
     cursorStyle: state.settings.cursorStyle,
     fontFamily: fontStacks[state.settings.fontFamily] || fontStacks["Cascadia Mono"],
     fontSize: state.settings.fontSize,
-    scrollback: 20000,
+    scrollback: effectiveScrollback(),
     tabStopWidth: 4,
     theme: themes[state.settings.theme]
   });
@@ -510,8 +614,11 @@ function addTerminal(options = {}) {
     color: options.color || session.color || null,
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
+    awaitingInput: false,
     fitAddon,
     id,
+    logging: false,
+    logPath: null,
     observer: null,
     pane,
     pid: session.pid,
@@ -541,10 +648,13 @@ function addTerminal(options = {}) {
   setActiveTerminal(id);
   refreshIcons();
   bindTerminalKeyHandling(terminal);
+  registerCwdTracking(terminal);
 
   term.onData((data) => {
     const targets = state.settings.syncInput ? [...state.terminals.keys()] : [id];
     for (const targetId of targets) {
+      const target = state.terminals.get(targetId);
+      if (target) setAwaitingInput(target, false);
       sendBridge({ type: "input", id: targetId, data });
     }
   });
@@ -817,6 +927,7 @@ function removeTerminal(id) {
     if (next) setActiveTerminal(next);
   }
 
+  applyZoom();
   saveManualLayouts();
   updateTerminalActions();
   saveSessionSnapshot();
@@ -846,7 +957,12 @@ function disposeTerminal(terminal) {
   if (state.snap?.id === id) {
     state.snap = null;
   }
+  if (state.zoomedId === id) {
+    state.zoomedId = null;
+  }
   window.clearTimeout(terminal.activityTimer);
+  window.clearTimeout(terminal.silenceTimer);
+  window.clearTimeout(terminal.promptTimer);
   terminal.observer.disconnect();
   terminal.term.dispose();
   terminal.pane.remove();
@@ -897,6 +1013,141 @@ function writeTerminal(terminal, data) {
   appendTerminalSearchText(terminal, data);
   updateTerminalSearchVisibility(terminal);
   markActivity(terminal);
+  handleOutputNotifications(terminal);
+  scheduleInputPromptCheck(terminal);
+  if (state.settings.scrollOnOutput) terminal.term.scrollToBottom();
+}
+
+// Desktop / toast notifications for background activity and idle (silence),
+// inspired by Terminator's ActivityWatch and InactivityWatch plugins.
+function handleOutputNotifications(terminal) {
+  const now = performance.now();
+  terminal.lastOutputAt = now;
+  const isBackground = terminal.id !== state.activeId;
+  const inStartupGrace = now - terminal.createdAt < 1500;
+
+  if (state.settings.notifyActivity && isBackground && !inStartupGrace) {
+    if (!terminal.lastActivityNotify || now - terminal.lastActivityNotify > 8000) {
+      terminal.lastActivityNotify = now;
+      notifyDesktop(`Activity in ${terminal.titleInput.value || "terminal"}`);
+    }
+  }
+
+  if (state.settings.notifySilence && !inStartupGrace) {
+    terminal.hadOutput = true;
+    window.clearTimeout(terminal.silenceTimer);
+    const seconds = Math.max(2, Number(state.settings.silenceSeconds) || 10);
+    terminal.silenceTimer = window.setTimeout(() => {
+      if (!terminal.hadOutput) return;
+      terminal.hadOutput = false;
+      if (terminal.id !== state.activeId || document.hidden) {
+        notifyDesktop(`${terminal.titleInput.value || "Terminal"} is idle`);
+      }
+    }, seconds * 1000);
+  }
+}
+
+function notifyDesktop(body) {
+  toast(body, "info", 2600);
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "granted") {
+    try {
+      new Notification("MultiTerm", { body });
+    } catch {
+      /* ignore */
+    }
+  } else if (Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+}
+
+function effectiveScrollback() {
+  if (state.settings.scrollbackInfinite) return 1000000;
+  const lines = Number(state.settings.scrollback);
+  return Number.isFinite(lines) && lines > 0 ? Math.min(Math.round(lines), 1000000) : 20000;
+}
+
+/* ---------------- Awaiting-input detection --------------- */
+
+const INPUT_PROMPT_PATTERNS = [
+  /\[y\/n\]/i,
+  /\(y\/n\)/i,
+  /\[yes\/no\]/i,
+  /\(yes\/no\)/i,
+  /\by[\/|]n\b/i,
+  /press (any key|enter|return|\[enter\]|any button)/i,
+  /\bare you sure\b/i,
+  /\b(overwrite|continue|proceed|replace|remove|delete|abort)\b[^?]*\?/i,
+  /\b(select|choose|choice|selection|option)\b/i,
+  /enter (your |the )?(choice|selection|option|name|value|number|password)/i,
+  /default is\s*["']?[^"']*["']?\s*[:)]/i,
+  /\[[A-Za-z0-9]\][^[]*\[[A-Za-z0-9]\]/,
+  /-- more --/i,
+  /\(end\)/i,
+  /password[^:]*:\s*$/i,
+  /\?\s*$/,
+  /:\s*$/
+];
+
+// Heuristic: after output settles, inspect the line the cursor is parked on.
+// A program blocked on input leaves its prompt there; an idle shell leaves its
+// own prompt (excluded by isShellPrompt). If the line reads like a question or
+// choice, flag the pane so it stands out.
+function scheduleInputPromptCheck(terminal) {
+  window.clearTimeout(terminal.promptTimer);
+  if (!state.settings.highlightInputPrompts) {
+    setAwaitingInput(terminal, false);
+    return;
+  }
+  terminal.promptTimer = window.setTimeout(() => evaluateInputPrompt(terminal), 500);
+}
+
+function evaluateInputPrompt(terminal) {
+  if (!state.settings.highlightInputPrompts || terminal.status === "exited") {
+    setAwaitingInput(terminal, false);
+    return;
+  }
+  const buffer = terminal.term.buffer.active;
+  if (!buffer || buffer.type === "alternate") {
+    setAwaitingInput(terminal, false);
+    return;
+  }
+  const cursorRow = buffer.baseY + buffer.cursorY;
+  let line = readBufferLine(buffer, cursorRow);
+  for (let row = cursorRow - 1; !line && row >= Math.max(0, cursorRow - 2); row -= 1) {
+    line = readBufferLine(buffer, row);
+  }
+  setAwaitingInput(terminal, looksLikeInputPrompt(line));
+}
+
+function readBufferLine(buffer, row) {
+  const line = buffer.getLine(row);
+  return line ? line.translateToString(true).replace(/\s+$/, "") : "";
+}
+
+function looksLikeInputPrompt(line) {
+  const text = String(line || "").replace(/\s+$/, "");
+  if (!text || isShellPrompt(text)) return false;
+  return INPUT_PROMPT_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function isShellPrompt(line) {
+  const text = String(line || "").replace(/\s+$/, "");
+  if (!text) return true;
+  if (/^PS[ >].*>$/i.test(text)) return true;
+  if (/^[A-Za-z]:\\.*>$/.test(text)) return true;
+  if (/[>$#]$/.test(text)) return true;
+  return false;
+}
+
+function setAwaitingInput(terminal, awaiting) {
+  const next = Boolean(awaiting);
+  if (terminal.awaitingInput === next) return;
+  terminal.awaitingInput = next;
+  terminal.pane.classList.toggle("is-awaiting-input", next);
+  if (next && terminal.id !== state.activeId) {
+    toast(`\u2328 ${terminal.titleInput.value || "Terminal"} needs input`, "info", 3000);
+  }
 }
 
 function markActivity(terminal, force) {
@@ -1034,8 +1285,12 @@ function applySettings() {
     terminal.term.options.cursorStyle = state.settings.cursorStyle;
     terminal.term.options.cursorBlink = state.settings.cursorBlink;
     terminal.term.options.theme = themes[state.settings.theme];
+    terminal.term.options.scrollback = effectiveScrollback();
     applyManualLayout(terminal, ensureManualLayout(terminal.id));
     scheduleFit(terminal);
+  }
+  if (!state.settings.highlightInputPrompts) {
+    for (const terminal of state.terminals.values()) setAwaitingInput(terminal, false);
   }
   updateLayoutMetrics();
   updateStatusBar();
@@ -1408,6 +1663,11 @@ function getCommands() {
     { label: "Reset layout", run: resetLayout },
     { label: "Broadcast command…", hint: "Ctrl+Shift+B", run: () => toggleBroadcast(true) },
     { label: "Paste into active terminal", hint: "Ctrl+Shift+V", run: pasteIntoActive },
+    { label: "Maximize / restore active pane", hint: "Ctrl+Shift+X", run: () => toggleZoomPane(state.activeId) },
+    { label: "Open active terminal folder", run: () => state.activeId && revealTerminalCwd(state.terminals.get(state.activeId)) },
+    { label: "New terminal in active folder", run: () => { const active = state.activeId && state.terminals.get(state.activeId); if (active) addTerminal({ reveal: true, runStartup: true, cwd: active.cwd, title: active.titleInput.value }); } },
+    { label: "Toggle logging for active terminal", run: () => state.activeId && toggleLogging(state.terminals.get(state.activeId)) },
+    { label: "Cycle broadcast scope", run: () => { toggleBroadcastScope(); toast(`Broadcast: ${broadcastScopeLabel()}`, "info", 1600); } },
     { label: "Next terminal", run: () => cycleTerminal(1) },
     { label: "Previous terminal", run: () => cycleTerminal(-1) },
     { label: "Increase font size", hint: "Ctrl++", run: () => fontZoom(1) },
@@ -1442,6 +1702,10 @@ function getCommands() {
   ];
   for (const [label, value] of layouts) {
     commands.push({ label: `Layout: ${label}`, run: () => setLayoutMode(value) });
+  }
+
+  for (const snippet of state.settings.snippets || []) {
+    commands.push({ label: `Snippet: ${snippet.name || snippet.command}`, run: () => runSnippet(state.activeId, snippet) });
   }
 
   for (const terminal of state.terminals.values()) {
@@ -1627,6 +1891,9 @@ function bindGlobalShortcuts() {
     } else if (event.ctrlKey && event.shiftKey && key === "l") {
       event.preventDefault();
       clearActiveTerminal();
+    } else if (event.ctrlKey && event.shiftKey && key === "x") {
+      event.preventDefault();
+      toggleZoomPane(state.activeId);
     } else if (event.ctrlKey && event.shiftKey && key === "c") {
       const active = state.activeId ? state.terminals.get(state.activeId) : null;
       if (active && !active.term.getSelection()) {
@@ -1798,18 +2065,38 @@ function toggleBroadcast(force) {
 }
 
 function toggleBroadcastScope() {
-  state.broadcastScope = state.broadcastScope === "all" ? "active" : "all";
+  const next = { all: "active", active: "group", group: "all" };
+  state.broadcastScope = next[state.broadcastScope] || "all";
   elements.broadcastScope.dataset.scope = state.broadcastScope;
-  elements.broadcastScope.textContent = state.broadcastScope === "all" ? "All terminals" : "Active only";
+  elements.broadcastScope.textContent = broadcastScopeLabel();
+}
+
+function broadcastScopeLabel() {
+  if (state.broadcastScope === "active") return "Active only";
+  if (state.broadcastScope === "group") return "Color group";
+  return "All terminals";
+}
+
+// "group" targets every pane sharing the active pane's label colour, giving
+// Terminator-style terminal groups without a separate grouping UI.
+function broadcastTargetIds() {
+  if (state.broadcastScope === "active") {
+    return state.activeId ? [state.activeId] : [];
+  }
+  if (state.broadcastScope === "group") {
+    const active = state.activeId ? state.terminals.get(state.activeId) : null;
+    if (!active) return [];
+    const color = active.color || null;
+    return [...state.terminals.values()].filter((terminal) => (terminal.color || null) === color).map((terminal) => terminal.id);
+  }
+  return [...state.terminals.keys()];
 }
 
 function sendBroadcast() {
   const command = elements.broadcastInput.value;
   if (!command) return;
 
-  const ids = state.broadcastScope === "all"
-    ? [...state.terminals.keys()]
-    : state.activeId ? [state.activeId] : [];
+  const ids = broadcastTargetIds();
 
   if (ids.length === 0) {
     toast("No target terminal", "info", 1800);
@@ -1817,12 +2104,180 @@ function sendBroadcast() {
   }
 
   let sent = 0;
+  const suffix = state.settings.broadcastSendEnter ? "\r" : "";
   for (const id of ids) {
-    if (sendBridge({ type: "input", id, data: `${command}\r` })) sent += 1;
+    if (sendBridge({ type: "input", id, data: `${command}${suffix}` })) sent += 1;
   }
 
   toast(`Sent to ${sent} ${sent === 1 ? "terminal" : "terminals"}`, "success", 1600);
   elements.broadcastInput.select();
+}
+
+// When off, the command text is staged in each terminal without a trailing
+// Enter, so the user can review/edit before running it themselves.
+function updateBroadcastEnterToggle() {
+  const on = Boolean(state.settings.broadcastSendEnter);
+  elements.broadcastEnter.dataset.on = on ? "true" : "false";
+  elements.broadcastEnter.setAttribute("aria-pressed", on ? "true" : "false");
+  elements.broadcastEnter.textContent = on ? "Enter: on" : "Enter: off";
+  elements.broadcastEnter.title = on
+    ? "Enter is sent after each command (runs it). Click to send without Enter."
+    : "Command is sent without Enter (not run). Click to send Enter after it.";
+}
+
+/* ---------------- Maximize / zoom pane --------------- */
+
+// Transient full-stage zoom of one pane (Terminator's toggle_zoom), layered on
+// top of whatever layout is active. Toggling off restores the normal layout.
+function toggleZoomPane(id) {
+  const targetId = id || state.activeId;
+  if (!targetId || !state.terminals.has(targetId)) return;
+  state.zoomedId = state.zoomedId === targetId ? null : targetId;
+  applyZoom();
+}
+
+function applyZoom() {
+  const zoomed = state.zoomedId && state.terminals.has(state.zoomedId) ? state.zoomedId : null;
+  state.zoomedId = zoomed;
+  elements.host.classList.toggle("has-zoom", Boolean(zoomed));
+  for (const terminal of state.terminals.values()) {
+    terminal.pane.classList.toggle("is-zoomed", terminal.id === zoomed);
+  }
+  if (zoomed) setActiveTerminal(zoomed);
+  for (const terminal of state.terminals.values()) {
+    scheduleFit(terminal);
+  }
+}
+
+/* ---------------- Working directory --------------- */
+
+// Track each pane's directory from OSC 7 (file://) and OSC 9;9 (ConEmu/Windows
+// Terminal) sequences when the shell emits them; otherwise the initial cwd
+// stands in. Powers "Open folder" and "New terminal here".
+function registerCwdTracking(terminal) {
+  const parser = terminal.term.parser;
+  if (!parser || typeof parser.registerOscHandler !== "function") return;
+
+  parser.registerOscHandler(7, (data) => {
+    const match = String(data || "").match(/^file:\/\/[^/]*(\/.*)$/);
+    if (match) {
+      let dir = decodeURIComponent(match[1]);
+      if (/^\/[A-Za-z]:/.test(dir)) dir = dir.slice(1);
+      updateTerminalCwd(terminal, dir);
+    }
+    return false;
+  });
+
+  parser.registerOscHandler(9, (data) => {
+    const raw = String(data || "");
+    if (raw.startsWith("9;")) {
+      updateTerminalCwd(terminal, raw.slice(2).replace(/^"|"$/g, ""));
+    }
+    return false;
+  });
+}
+
+function updateTerminalCwd(terminal, dir) {
+  const clean = String(dir || "").trim().replace(/\//g, "\\");
+  if (!clean) return;
+  terminal.cwd = clean;
+  refreshTerminalSearchText(terminal);
+  if (terminal.id === state.activeId) updateStatusBar();
+}
+
+function revealTerminalCwd(terminal) {
+  if (!terminal) return;
+  if (!terminal.cwd) {
+    toast("Working directory unknown", "info", 1800);
+    return;
+  }
+  if (!sendBridge({ type: "reveal", path: terminal.cwd })) {
+    toast("Bridge unavailable", "error");
+  }
+}
+
+/* ---------------- Command snippets --------------- */
+
+function runSnippet(id, snippet) {
+  const targetId = id || state.activeId;
+  if (!targetId || !state.terminals.has(targetId)) {
+    toast("No active terminal", "info", 1600);
+    return;
+  }
+  if (!snippet || !snippet.command) return;
+  sendBridge({ type: "input", id: targetId, data: `${snippet.command}\r` });
+}
+
+function addSnippet(name, command) {
+  const trimmedCommand = String(command || "").trim();
+  if (!trimmedCommand) {
+    toast("Enter a command", "info", 1600);
+    return;
+  }
+  const trimmedName = String(name || "").trim() || trimmedCommand;
+  state.settings.snippets = [...(state.settings.snippets || []), { name: trimmedName, command: trimmedCommand }];
+  saveSettings();
+  elements.snippetName.value = "";
+  elements.snippetCommand.value = "";
+  renderSnippets();
+}
+
+function removeSnippet(index) {
+  const list = [...(state.settings.snippets || [])];
+  list.splice(index, 1);
+  state.settings.snippets = list;
+  saveSettings();
+  renderSnippets();
+}
+
+function renderSnippets() {
+  const host = elements.snippetList;
+  if (!host) return;
+  host.innerHTML = "";
+  const list = state.settings.snippets || [];
+
+  if (list.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "snippet-empty";
+    empty.textContent = "No snippets yet.";
+    host.append(empty);
+    return;
+  }
+
+  list.forEach((snippet, index) => {
+    const row = document.createElement("div");
+    row.className = "snippet-row";
+
+    const run = document.createElement("button");
+    run.type = "button";
+    run.className = "snippet-run";
+    run.title = `Run: ${snippet.command}`;
+    run.textContent = snippet.name || snippet.command;
+    run.addEventListener("click", () => runSnippet(state.activeId, snippet));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "snippet-del";
+    remove.title = "Delete snippet";
+    remove.setAttribute("aria-label", "Delete snippet");
+    remove.innerHTML = '<i data-lucide="trash-2"></i>';
+    remove.addEventListener("click", () => removeSnippet(index));
+
+    row.append(run, remove);
+    host.append(row);
+  });
+  refreshIcons();
+}
+
+/* ---------------- Session logging --------------- */
+
+function toggleLogging(terminal) {
+  if (!terminal) return;
+  if (terminal.logging) {
+    sendBridge({ type: "logStop", id: terminal.id });
+  } else if (!sendBridge({ type: "logStart", id: terminal.id })) {
+    toast("Bridge unavailable", "error");
+  }
 }
 
 /* ---------------- Paste --------------- */
@@ -1839,6 +2294,89 @@ async function pasteIntoTerminal(id) {
 
 function pasteIntoActive() {
   if (state.activeId) pasteIntoTerminal(state.activeId);
+}
+
+/* ---------------- Right-click paste --------------- */
+
+const RIGHT_CLICK_LEVELS = { "": 0, menu: 0, paste: 1, pasteRun: 2 };
+
+function rightClickAckLevel(value) {
+  return RIGHT_CLICK_LEVELS[value] || 0;
+}
+
+// Right-click paste is either "paste" (drop clipboard text in) or "pasteRun"
+// (drop it in and press Enter). The first time each escalation happens we warn,
+// because pasting — especially auto-running — clipboard contents can run
+// arbitrary commands. The acknowledgement persists in settings.
+function handleRightClickPaste(terminal, action) {
+  const needsWarning = rightClickAckLevel(state.settings.rightClickAck) < rightClickAckLevel(action);
+  if (needsWarning) {
+    showRightClickWarning(action, terminal.id);
+  } else {
+    performRightClickPaste(terminal.id, action === "pasteRun");
+  }
+}
+
+async function performRightClickPaste(id, execute) {
+  if (!id || !state.terminals.has(id)) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text) return;
+    sendBridge({ type: "input", id, data: execute ? `${text}\r` : text });
+  } catch {
+    toast("Clipboard unavailable", "error");
+  }
+}
+
+const rightClickWarn = { action: null, terminalId: null };
+
+function showRightClickWarning(action, terminalId) {
+  rightClickWarn.action = action;
+  rightClickWarn.terminalId = terminalId;
+  elements.rightClickWarnText.textContent = action === "pasteRun"
+    ? "Right-clicking a terminal will paste your clipboard contents and run them immediately, as if you pressed Enter. Only continue if you trust what's on your clipboard, since this can execute arbitrary commands."
+    : "Right-clicking a terminal will paste your clipboard contents into it. Make sure you trust what's on your clipboard before continuing.";
+  elements.rightClickWarnProceed.textContent = action === "pasteRun" ? "Paste & run" : "Paste";
+  elements.rightClickWarnRemember.checked = false;
+  elements.rightClickWarnOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.rightClickWarnOverlay.classList.add("is-open");
+    elements.rightClickWarnProceed.focus();
+  });
+  refreshIcons();
+}
+
+function closeRightClickWarning() {
+  elements.rightClickWarnOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.rightClickWarnOverlay.hidden = true;
+  }, 150);
+  rightClickWarn.action = null;
+  rightClickWarn.terminalId = null;
+}
+
+function confirmRightClickWarning() {
+  const { action, terminalId } = rightClickWarn;
+  if (elements.rightClickWarnRemember.checked && action) {
+    state.settings.rightClickAck = action;
+    saveSettings();
+  }
+  closeRightClickWarning();
+  if (terminalId) performRightClickPaste(terminalId, action === "pasteRun");
+}
+
+function bindRightClickWarning() {
+  elements.rightClickWarnCancel.addEventListener("click", closeRightClickWarning);
+  elements.rightClickWarnProceed.addEventListener("click", confirmRightClickWarning);
+  elements.rightClickWarnOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.rightClickWarnOverlay) closeRightClickWarning();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.rightClickWarnOverlay.hidden) {
+      event.preventDefault();
+      closeRightClickWarning();
+    }
+  });
 }
 
 /* ---------------- Workspaces --------------- */
@@ -1964,7 +2502,17 @@ function syncControlsFromSettings() {
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
+  elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
+  elements.rightClickAction.value = state.settings.rightClickAction;
+  elements.scrollbackLines.value = state.settings.scrollback;
+  elements.scrollbackInfinite.checked = state.settings.scrollbackInfinite;
+  elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
+  elements.notifyActivity.checked = state.settings.notifyActivity;
+  elements.notifySilence.checked = state.settings.notifySilence;
+  elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
+  renderSnippets();
+  updateBroadcastEnterToggle();
   refreshComboboxes();
 }
 
@@ -2079,7 +2627,13 @@ function bindContextMenu() {
 
     event.preventDefault();
     setActiveTerminal(terminal.id);
-    showContextMenu(event.clientX, event.clientY, terminal);
+
+    const action = state.settings.rightClickAction;
+    if (action === "paste" || action === "pasteRun") {
+      handleRightClickPaste(terminal, action);
+    } else {
+      showContextMenu(event.clientX, event.clientY, terminal);
+    }
   });
 
   document.addEventListener("pointerdown", (event) => {
@@ -2097,6 +2651,13 @@ function bindContextMenu() {
 
 function buildContextMenu(terminal) {
   const hasSelection = Boolean(terminal.term.getSelection());
+  const isZoomed = state.zoomedId === terminal.id;
+  const snippetItems = (state.settings.snippets || []).slice(0, 8).map((snippet) => ({
+    label: snippet.name || snippet.command,
+    icon: "terminal",
+    run: () => runSnippet(terminal.id, snippet)
+  }));
+
   const items = [
     { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id) },
     { label: "Copy all output", icon: "copy", run: () => { terminal.term.clearSelection(); copyTerminalOutput(terminal.id); } },
@@ -2105,6 +2666,13 @@ function buildContextMenu(terminal) {
     { separator: true },
     { label: "Find\u2026", hint: "Ctrl+Shift+F", icon: "search", run: () => openFind(terminal) },
     { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", run: () => clearTerminal(terminal.id) },
+    { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", run: () => toggleZoomPane(terminal.id) },
+    { separator: true },
+    { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
+    { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
+    { label: terminal.logging ? "Stop logging" : "Log to file\u2026", icon: terminal.logging ? "circle-stop" : "file-text", run: () => toggleLogging(terminal) },
+    ...(terminal.logPath ? [{ label: "Reveal log", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }] : []),
+    ...(snippetItems.length ? [{ separator: true }, ...snippetItems] : []),
     { separator: true },
     { label: "Split (duplicate)", icon: "copy-plus", run: () => addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` }) },
     { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", run: () => restartSession(terminal.id) },
@@ -2186,6 +2754,7 @@ function enhanceComboboxes() {
     elements.fontFamily,
     elements.cursorStyle,
     elements.terminalTheme,
+    elements.rightClickAction,
     elements.workspaceSelect
   ];
   for (const select of targets) {

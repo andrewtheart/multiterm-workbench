@@ -14,3 +14,10 @@ installer/Output/
 
 # Deployment staging (not tracked)
 deploy/
+
+# Test & coverage artifacts
+coverage/
+test-results/
+playwright-report/
+.playwright/
+blob-report/

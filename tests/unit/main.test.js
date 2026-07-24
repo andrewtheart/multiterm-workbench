@@ -1,0 +1,300 @@
+const { EventEmitter } = require("node:events");
+const http = require("node:http");
+const childProcess = require("node:child_process");
+const main = require("../../main.js");
+
+let electron;
+
+function makeElectron() {
+  const app = {
+    requestSingleInstanceLock: vi.fn(() => true),
+    quit: vi.fn(),
+    on: vi.fn(),
+    whenReady: vi.fn(() => Promise.resolve()),
+    isQuiting: false
+  };
+  const BrowserWindow = vi.fn();
+  BrowserWindow.getAllWindows = vi.fn(() => []);
+  return {
+    app,
+    BrowserWindow,
+    Menu: { setApplicationMenu: vi.fn() },
+    shell: { openExternal: vi.fn() },
+    dialog: { showErrorBox: vi.fn() }
+  };
+}
+
+function makeChild() {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.killed = false;
+  child.kill = vi.fn(function kill() { this.killed = true; });
+  return child;
+}
+
+function makeWindow() {
+  return {
+    webContents: { setWindowOpenHandler: vi.fn() },
+    loadURL: vi.fn(),
+    on: vi.fn(),
+    isMinimized: vi.fn(() => false),
+    restore: vi.fn(),
+    focus: vi.fn()
+  };
+}
+
+function handlerFor(event) {
+  const call = electron.app.on.mock.calls.find(([name]) => name === event);
+  return call && call[1];
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  electron = makeElectron();
+  main.__setElectron(electron);
+  electron.BrowserWindow.mockImplementation(function BrowserWindowMock() { return makeWindow(); });
+  vi.spyOn(childProcess, "spawn").mockImplementation(() => makeChild());
+  main.__reset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("startServer", () => {
+  it("spawns the bridge under node.exe on Windows and wires stdio", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      main.startServer();
+      expect(childProcess.spawn).toHaveBeenCalledWith("node.exe", expect.arrayContaining([expect.stringContaining("server.js")]), expect.objectContaining({ env: expect.objectContaining({ PORT: expect.any(String) }) }));
+      const child = main.getServerProcess();
+      child.stdout.emit("data", Buffer.from("hello"));
+      child.stderr.emit("data", Buffer.from("warn"));
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("uses node on non-Windows platforms", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      main.startServer();
+      expect(childProcess.spawn).toHaveBeenCalledWith("node", expect.any(Array), expect.any(Object));
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("shows an error box when the bridge fails to start and the app is not quitting", () => {
+    main.startServer();
+    main.getServerProcess().emit("error", new Error("spawn failed"));
+    expect(electron.dialog.showErrorBox).toHaveBeenCalledWith("MultiTerm", expect.stringContaining("spawn failed"));
+  });
+
+  it("stays silent on spawn error while quitting", () => {
+    electron.app.isQuiting = true;
+    main.startServer();
+    main.getServerProcess().emit("error", new Error("ignored"));
+    expect(electron.dialog.showErrorBox).not.toHaveBeenCalled();
+  });
+
+  it("reports an unexpected bridge exit", () => {
+    main.startServer();
+    const child = main.getServerProcess();
+    child.emit("exit", 1);
+    expect(electron.dialog.showErrorBox).toHaveBeenCalledWith("MultiTerm", expect.stringContaining("code 1"));
+    expect(main.getServerProcess()).toBeNull();
+  });
+
+  it("does not report a clean exit", () => {
+    main.startServer();
+    main.getServerProcess().emit("exit", 0);
+    expect(electron.dialog.showErrorBox).not.toHaveBeenCalled();
+  });
+
+  it("does not report an exit while quitting", () => {
+    main.startServer();
+    electron.app.isQuiting = true;
+    main.getServerProcess().emit("exit", 1);
+    expect(electron.dialog.showErrorBox).not.toHaveBeenCalled();
+  });
+});
+
+describe("stopServer", () => {
+  it("kills a running child and clears the reference", () => {
+    main.startServer();
+    const child = main.getServerProcess();
+    main.stopServer();
+    expect(child.kill).toHaveBeenCalled();
+    expect(main.getServerProcess()).toBeNull();
+  });
+
+  it("is a no-op when there is no child", () => {
+    expect(() => main.stopServer()).not.toThrow();
+  });
+
+  it("is a no-op when the child is already killed", () => {
+    main.startServer();
+    const child = main.getServerProcess();
+    child.killed = true;
+    main.stopServer();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitForServer", () => {
+  it("resolves when the health endpoint responds", async () => {
+    vi.spyOn(http, "get").mockImplementation((opts, cb) => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      cb({ resume: vi.fn() });
+      return req;
+    });
+    await expect(main.waitForServer()).resolves.toBeUndefined();
+  });
+
+  it("rejects after the deadline passes on repeated errors", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(1000).mockReturnValue(999999);
+    vi.spyOn(http, "get").mockImplementation(() => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      process.nextTick(() => req.emit("error", new Error("ECONNREFUSED")));
+      return req;
+    });
+    await expect(main.waitForServer()).rejects.toThrow("did not become ready");
+  });
+
+  it("retries on timeout then resolves", async () => {
+    vi.useFakeTimers();
+    let attempt = 0;
+    vi.spyOn(http, "get").mockImplementation((opts, cb) => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      attempt += 1;
+      if (attempt === 1) {
+        process.nextTick(() => req.emit("timeout"));
+      } else {
+        cb({ resume: vi.fn() });
+      }
+      return req;
+    });
+    const promise = main.waitForServer();
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(promise).resolves.toBeUndefined();
+    vi.useRealTimers();
+  });
+});
+
+describe("createWindow", () => {
+  it("creates the window, routes external links, and clears on close", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    expect(win.loadURL).toHaveBeenCalledWith(expect.stringContaining("http://127.0.0.1"));
+
+    const openHandler = win.webContents.setWindowOpenHandler.mock.calls[0][0];
+    expect(openHandler({ url: "http://127.0.0.1:3177/x" })).toEqual({ action: "allow" });
+    expect(openHandler({ url: "http://localhost:3177/x" })).toEqual({ action: "allow" });
+    expect(openHandler({ url: "https://example.com" })).toEqual({ action: "deny" });
+    expect(electron.shell.openExternal).toHaveBeenCalledWith("https://example.com");
+
+    const closedHandler = win.on.mock.calls.find(([e]) => e === "closed")[1];
+    closedHandler();
+    expect(main.getMainWindow()).toBeNull();
+  });
+});
+
+describe("onReady", () => {
+  it("boots the server and window on success", async () => {
+    vi.spyOn(http, "get").mockImplementation((opts, cb) => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      cb({ resume: vi.fn() });
+      return req;
+    });
+    await main.onReady();
+    expect(electron.Menu.setApplicationMenu).toHaveBeenCalledWith(null);
+    expect(childProcess.spawn).toHaveBeenCalled();
+    expect(main.getMainWindow()).not.toBeNull();
+
+    const activate = handlerFor("activate");
+    electron.BrowserWindow.getAllWindows.mockReturnValue([]);
+    activate();
+    electron.BrowserWindow.getAllWindows.mockReturnValue([{}]);
+    activate();
+    expect(electron.BrowserWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows an error and quits when the bridge never becomes ready", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(1000).mockReturnValue(999999);
+    vi.spyOn(http, "get").mockImplementation(() => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      process.nextTick(() => req.emit("error", new Error("no bridge")));
+      return req;
+    });
+    await main.onReady();
+    expect(electron.dialog.showErrorBox).toHaveBeenCalled();
+    expect(electron.app.quit).toHaveBeenCalled();
+    expect(main.getMainWindow()).toBeNull();
+  });
+});
+
+describe("formatError", () => {
+  it("uses the error message when present", () => {
+    expect(main.formatError(new Error("boom"))).toBe("boom");
+  });
+
+  it("falls back to the value when there is no message", () => {
+    expect(main.formatError("plain string failure")).toBe("plain string failure");
+  });
+});
+
+describe("bootstrap", () => {
+  it("quits immediately when the single-instance lock is not acquired", () => {
+    electron.app.requestSingleInstanceLock.mockReturnValue(false);
+    main.bootstrap();
+    expect(electron.app.quit).toHaveBeenCalled();
+    expect(electron.app.on).not.toHaveBeenCalled();
+  });
+
+  it("registers lifecycle handlers when the lock is acquired", () => {
+    main.bootstrap();
+    expect(electron.app.whenReady).toHaveBeenCalled();
+
+    const beforeQuit = handlerFor("before-quit");
+    beforeQuit();
+    expect(electron.app.isQuiting).toBe(true);
+
+    const allClosed = handlerFor("window-all-closed");
+    allClosed();
+    expect(electron.app.quit).toHaveBeenCalled();
+  });
+
+  it("focuses the existing window on a second instance", () => {
+    main.bootstrap();
+    const secondInstance = handlerFor("second-instance");
+
+    // No window yet: handler must be a no-op.
+    expect(() => secondInstance()).not.toThrow();
+
+    // With a minimized window: restore + focus.
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.isMinimized.mockReturnValue(true);
+    secondInstance();
+    expect(win.restore).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+
+    // With a non-minimized window: focus only.
+    win.isMinimized.mockReturnValue(false);
+    win.restore.mockClear();
+    secondInstance();
+    expect(win.restore).not.toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+  });
+});

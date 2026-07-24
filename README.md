@@ -61,6 +61,19 @@ PowerShell bridge (no Node.js runtime required) into a Windows installer. It
 installs `Start-MultiTerm.ps1`, the `public/` assets, and Start Menu / optional
 desktop shortcuts that launch the bridge and open it in your browser.
 
+### Download
+
+Grab the latest per-user installer from the
+[releases page](https://github.com/andrewtheart/multiterm-workbench/releases/latest),
+or directly:
+
+- [MultiTerm-Setup-0.1.1.exe](https://github.com/andrewtheart/multiterm-workbench/releases/download/v0.1.1/MultiTerm-Setup-0.1.1.exe)
+
+It performs a per-user install by default (no UAC prompt); you may elect a
+machine-wide install from the setup dialog.
+
+### Build it yourself
+
 Build the installer (requires Inno Setup 6):
 
 ```powershell

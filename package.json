@@ -1,13 +1,17 @@
 {
   "name": "multiterm-workbench",
-  "version": "0.1.1",
+  "version": "0.1.7",
   "private": true,
   "description": "Local xterm.js multi-terminal workbench for PowerShell sessions.",
   "type": "commonjs",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "server": "node server.js"
+    "server": "node server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test"
   },
   "engines": {
     "node": ">=18"
@@ -16,6 +20,13 @@
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "@playwright/test": "^1.61.1",
+    "@vitest/coverage-istanbul": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.10",
+    "electron": "^33.0.0",
+    "jsdom": "^29.1.1",
+    "monocart-coverage-reports": "^2.12.12",
+    "v8-to-istanbul": "^9.3.0",
+    "vitest": "^4.1.10"
   }
 }

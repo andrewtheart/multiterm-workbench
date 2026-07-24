@@ -63,7 +63,9 @@ namespace MultiTerm.PowerShellBridge
             { ".js", "text/javascript; charset=utf-8" },
             { ".json", "application/json; charset=utf-8" },
             { ".svg", "image/svg+xml" },
-            { ".ico", "image/x-icon" }
+            { ".ico", "image/x-icon" },
+            { ".png", "image/png" },
+            { ".webmanifest", "application/manifest+json" }
         };
 
         private HttpListener listener;
@@ -205,7 +207,34 @@ namespace MultiTerm.PowerShellBridge
         {
             try
             {
-                ProcessStartInfo startInfo = new ProcessStartInfo(this.Url);
+                string appUrl = this.Url;
+                string[] candidates = new string[]
+                {
+                    Environment.ExpandEnvironmentVariables(@"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+                    Environment.ExpandEnvironmentVariables(@"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+                    Environment.ExpandEnvironmentVariables(@"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                    Environment.ExpandEnvironmentVariables(@"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                    Environment.ExpandEnvironmentVariables(@"%LocalAppData%\Google\Chrome\Application\chrome.exe")
+                };
+
+                string browser = null;
+                for (int i = 0; i < candidates.Length; i++)
+                {
+                    if (File.Exists(candidates[i])) { browser = candidates[i]; break; }
+                }
+
+                // App mode gives a standalone window that uses the site favicon for
+                // the title bar and taskbar, instead of a shared browser tab.
+                if (browser != null)
+                {
+                    ProcessStartInfo appInfo = new ProcessStartInfo(browser);
+                    appInfo.Arguments = "--app=" + appUrl + " --window-size=1280,860";
+                    appInfo.UseShellExecute = false;
+                    Process.Start(appInfo);
+                    return;
+                }
+
+                ProcessStartInfo startInfo = new ProcessStartInfo(appUrl);
                 startInfo.UseShellExecute = true;
                 Process.Start(startInfo);
             }

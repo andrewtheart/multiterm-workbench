@@ -1,7 +1,17 @@
-const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
-const { spawn } = require("node:child_process");
+let { app, BrowserWindow, Menu, shell, dialog } = require("electron");
+const childProcess = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
+
+// Allows tests to inject fake Electron bindings; outside the Electron runtime
+// `require("electron")` resolves to a path string, so these are set by tests.
+function __setElectron(mock) {
+  ({ app, BrowserWindow, Menu, shell, dialog } = mock);
+}
+
+function formatError(err) {
+  return String(err.message || err);
+}
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
@@ -14,7 +24,7 @@ let serverProcess = null;
 // runtime, whose Node ABI differs from the installed prebuilt binary.
 function startServer() {
   const nodeExe = process.platform === "win32" ? "node.exe" : "node";
-  serverProcess = spawn(nodeExe, [path.join(__dirname, "server.js")], {
+  serverProcess = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
     cwd: __dirname,
     env: { ...process.env, HOST, PORT: String(PORT) },
     stdio: ["ignore", "pipe", "pipe"]
@@ -78,6 +88,7 @@ function createWindow() {
     minHeight: 480,
     backgroundColor: "#1e1e1e",
     title: "MultiTerm Workbench",
+    icon: path.join(__dirname, "public", "favicon.ico"),
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -102,10 +113,33 @@ function createWindow() {
 }
 
 // Single-instance: focus the existing window instead of launching a second app.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
+async function onReady() {
+  // No default application menu — keeps it feeling like a native tool, not a browser.
+  Menu.setApplicationMenu(null);
+  startServer();
+  try {
+    await waitForServer();
+  } catch (err) {
+    dialog.showErrorBox("MultiTerm", formatError(err));
+    app.quit();
+    return;
+  }
+  createWindow();
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+}
+
+function bootstrap() {
+  const gotLock = app.requestSingleInstanceLock();
+  if (!gotLock) {
+    app.quit();
+    return;
+  }
+
   app.on("second-instance", () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -113,25 +147,7 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(async () => {
-    // No default application menu — keeps it feeling like a native tool, not a browser.
-    Menu.setApplicationMenu(null);
-    startServer();
-    try {
-      await waitForServer();
-    } catch (err) {
-      dialog.showErrorBox("MultiTerm", String(err.message || err));
-      app.quit();
-      return;
-    }
-    createWindow();
-
-    app.on("activate", () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
-      }
-    });
-  });
+  app.whenReady().then(onReady);
 
   app.on("before-quit", () => {
     app.isQuiting = true;
@@ -141,4 +157,26 @@ if (!gotLock) {
   app.on("window-all-closed", () => {
     app.quit();
   });
+}
+
+module.exports = {
+  startServer,
+  stopServer,
+  waitForServer,
+  createWindow,
+  onReady,
+  bootstrap,
+  __setElectron,
+  formatError,
+  getMainWindow: () => mainWindow,
+  getServerProcess: () => serverProcess,
+  __reset() {
+    mainWindow = null;
+    serverProcess = null;
+  }
+};
+
+/* v8 ignore next 3 -- only executes when Electron loads main.js as the entry point */
+if (process.versions.electron && process.type === "browser") {
+  bootstrap();
 }

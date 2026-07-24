@@ -4,6 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>MultiTerm Workbench</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="manifest" href="manifest.webmanifest">
+    <meta name="theme-color" content="#0c0d0b">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
     <link rel="stylesheet" href="styles.css">
     <script defer src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
@@ -87,6 +92,7 @@
         <i data-lucide="megaphone"></i>
         <input id="broadcastInput" type="text" spellcheck="false" autocomplete="off" placeholder="Type a command to broadcast, then Enter…" aria-label="Broadcast command">
         <button id="broadcastScope" type="button" class="broadcast-scope" data-scope="all" title="Toggle broadcast scope">All terminals</button>
+        <button id="broadcastEnter" type="button" class="broadcast-scope broadcast-enter" data-on="true" title="Send Enter (run command) after broadcasting" aria-pressed="true">Enter: on</button>
         <button id="broadcastSend" class="primary-action" type="button">
           <i data-lucide="send"></i>
           <span>Send</span>
@@ -224,6 +230,30 @@
               <input id="syncInput" type="checkbox">
               <span>Sync input</span>
             </label>
+
+            <label class="control-row">
+              <span>Right-click</span>
+              <select id="rightClickAction">
+                <option value="menu">Context menu</option>
+                <option value="paste">Paste</option>
+                <option value="pasteRun">Paste &amp; run</option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span>Scrollback</span>
+              <input id="scrollbackLines" type="number" min="200" max="200000" step="100" inputmode="numeric">
+            </label>
+
+            <label class="toggle-row">
+              <input id="scrollbackInfinite" type="checkbox">
+              <span>Unlimited scrollback</span>
+            </label>
+
+            <label class="toggle-row">
+              <input id="scrollOnOutput" type="checkbox">
+              <span>Scroll on output</span>
+            </label>
           </section>
 
           <section class="control-section">
@@ -240,10 +270,40 @@
               <input id="copyOnSelect" type="checkbox">
               <span>Copy on select</span>
             </label>
+            <label class="toggle-row">
+              <input id="highlightInputPrompts" type="checkbox">
+              <span>Highlight input prompts</span>
+            </label>
+            <label class="toggle-row">
+              <input id="notifyActivity" type="checkbox">
+              <span>Activity notifications</span>
+            </label>
+            <label class="toggle-row">
+              <input id="notifySilence" type="checkbox">
+              <span>Idle (silence) alerts</span>
+            </label>
+            <label class="control-row">
+              <span>Idle after (s)</span>
+              <input id="silenceSeconds" type="number" min="2" max="600" step="1" inputmode="numeric">
+            </label>
             <label class="control-row">
               <span>Startup cmd</span>
               <input id="startupCommand" type="text" spellcheck="false" autocomplete="off" placeholder="Run on new terminal">
             </label>
+          </section>
+
+          <section class="control-section">
+            <h2>Snippets</h2>
+            <div id="snippetList" class="snippet-list"></div>
+            <div class="snippet-add">
+              <input id="snippetName" type="text" spellcheck="false" autocomplete="off" placeholder="Name (optional)">
+              <input id="snippetCommand" type="text" spellcheck="false" autocomplete="off" placeholder="Command to run">
+              <button id="snippetAdd" type="button" title="Add snippet">
+                <i data-lucide="plus"></i>
+                <span>Add snippet</span>
+              </button>
+            </div>
+            <p class="snippet-hint">Snippets run in the active terminal (right-click or command palette too).</p>
           </section>
 
           <section class="control-section action-grid">
@@ -330,6 +390,7 @@
           <li><span>Find in terminal</span><span class="kbd">Ctrl+Shift+F</span></li>
           <li><span>Filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
           <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
+          <li><span>Maximize / restore pane</span><span class="kbd">Ctrl+Shift+X</span></li>
           <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
           <li><span>Paste into active</span><span class="kbd">Ctrl+Shift+V</span></li>
           <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
@@ -362,6 +423,24 @@
       </div>
     </div>
 
+    <div id="rightClickWarnOverlay" class="palette-overlay" hidden>
+      <div class="palette confirm" role="alertdialog" aria-modal="true" aria-labelledby="rightClickWarnTitle" aria-describedby="rightClickWarnText">
+        <div class="confirm-head">
+          <i data-lucide="clipboard-paste"></i>
+          <h2 id="rightClickWarnTitle">Right-click paste</h2>
+        </div>
+        <p id="rightClickWarnText" class="confirm-body"></p>
+        <label class="confirm-remember toggle-row">
+          <input id="rightClickWarnRemember" type="checkbox">
+          <span>Don't show this again (remember my choice)</span>
+        </label>
+        <div class="confirm-actions">
+          <button id="rightClickWarnCancel" type="button" class="confirm-cancel">Cancel</button>
+          <button id="rightClickWarnProceed" type="button" class="confirm-proceed">Paste</button>
+        </div>
+      </div>
+    </div>
+
     <div id="contextMenu" class="context-menu" role="menu" hidden></div>
     <template id="paneTemplate">
       <article class="terminal-pane">
@@ -369,6 +448,10 @@
           <div class="pane-title-wrap">
             <i data-lucide="terminal"></i>
             <span class="pane-activity" title="New output" aria-hidden="true"></span>
+            <span class="pane-await" title="This terminal is waiting for input">
+              <i data-lucide="keyboard"></i>
+              <span>input</span>
+            </span>
             <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
           </div>
           <span class="pane-status">starting</span>
