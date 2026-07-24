@@ -680,7 +680,7 @@ function handleBridgeMessage(message) {
   if (message.type === "output") {
     const terminal = state.terminals.get(message.id);
     if (terminal) {
-      writeTerminal(terminal, message.data);
+      enqueueTerminalOutput(terminal, message.data);
     }
     return;
   }
@@ -813,6 +813,7 @@ function addTerminal(options = {}) {
   pane.dataset.id = id;
   elements.host.append(pane);
   term.open(screen);
+  const webglAddon = loadWebglRenderer(term);
 
   const terminal = {
     color: options.color || session.color || null,
@@ -828,11 +829,17 @@ function addTerminal(options = {}) {
     pane,
     pendingCommand: typeof options.pendingCommand === "string" ? options.pendingCommand : null,
     pendingCommandEnter: options.pendingCommandEnter !== false,
+    pendingOutput: [],
+    outputFlushHandle: 0,
+    fitScheduled: false,
+    lastSentCols: 0,
+    lastSentRows: 0,
     pid: session.pid,
     remoteRequested: Boolean(options.reattach),
     runStartup: Boolean(options.runStartup),
     searchAddon,
     searchText: "",
+    webglAddon,
     screen,
     shell: options.shell || session.shell || elements.shellSelect.value,
     status: options.reattach ? "live" : "starting",
@@ -867,7 +874,7 @@ function addTerminal(options = {}) {
   });
 
   term.onResize(({ cols, rows }) => {
-    sendBridge({ type: "resize", id, cols, rows });
+    sendResize(terminal, cols, rows);
   });
 
   term.onBell(() => handleBell(terminal));
@@ -1180,8 +1187,27 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
+  if (terminal.outputFlushHandle) {
+    window.cancelAnimationFrame(terminal.outputFlushHandle);
+    terminal.outputFlushHandle = 0;
+  }
+  terminal.pendingOutput = [];
   terminal.observer.disconnect();
-  terminal.term.dispose();
+  // The WebGL addon can throw during Terminal.dispose() teardown (it dereferences
+  // render state that xterm may already have torn down). Dispose it explicitly
+  // first, and guard term.dispose() too, so a renderer teardown error can never
+  // abort a close-all loop and strand sessions.
+  try {
+    terminal.webglAddon?.dispose();
+  } catch {
+    /* GL context already gone */
+  }
+  terminal.webglAddon = null;
+  try {
+    terminal.term.dispose();
+  } catch {
+    /* renderer teardown raced disposal; the pane is removed below regardless */
+  }
   terminal.pane.remove();
   state.terminals.delete(id);
   delete state.manualLayouts[id];
@@ -1314,6 +1340,57 @@ function setTerminalStatus(terminal, text, tone) {
   updateTerminalSearchVisibility(terminal);
 }
 
+// Load the WebGL (GPU) renderer when available. It replaces xterm's default DOM
+// renderer with a canvas/WebGL one, which is dramatically faster under heavy
+// output. Every failure mode degrades gracefully back to the DOM renderer:
+//   - addon script missing (offline/headless): window.WebglAddon is undefined.
+//   - GPU unavailable / blocklisted: construction or loadAddon throws (caught).
+//   - GPU context lost at runtime (driver reset, tab backgrounded): onContextLoss
+//     disposes the addon and xterm transparently falls back.
+function loadWebglRenderer(term) {
+  const WebglCtor = window.WebglAddon?.WebglAddon;
+  if (!WebglCtor) return null;
+  try {
+    const webgl = new WebglCtor();
+    webgl.onContextLoss(() => {
+      try {
+        webgl.dispose();
+      } catch {
+        /* already gone */
+      }
+    });
+    term.loadAddon(webgl);
+    return webgl;
+  } catch {
+    return null;
+  }
+}
+
+// Live shell output can arrive as hundreds of tiny WebSocket messages per second.
+// Instead of paying the full write pipeline (xterm write + search bookkeeping +
+// activity/notification/prompt scheduling + scroll) per message, we queue the raw
+// chunks and drain them once per animation frame. That collapses N messages/frame
+// into a single term.write and a single side-effect pass, keeping the UI responsive.
+function enqueueTerminalOutput(terminal, data) {
+  terminal.pendingOutput.push(data);
+  if (terminal.outputFlushHandle) return;
+  terminal.outputFlushHandle = window.requestAnimationFrame(() => flushTerminalOutput(terminal));
+}
+
+function flushTerminalOutput(terminal) {
+  if (terminal.outputFlushHandle) {
+    window.cancelAnimationFrame(terminal.outputFlushHandle);
+    terminal.outputFlushHandle = 0;
+  }
+  const chunks = terminal.pendingOutput;
+  if (!chunks.length) return;
+  terminal.pendingOutput = [];
+  const data = chunks.length === 1 ? chunks[0] : chunks.join("");
+  writeTerminal(terminal, data);
+}
+
+// Immediate, unbatched write. Coalesced live output funnels through here once per
+// frame via flushTerminalOutput; status/banner lines (writelnTerminal) call it too.
 function writeTerminal(terminal, data) {
   terminal.term.write(data);
   appendTerminalSearchText(terminal, data);
@@ -1449,14 +1526,27 @@ function markActivity(terminal, force) {
 }
 
 function writelnTerminal(terminal, data) {
+  // Status/banner lines must appear in order relative to buffered live output,
+  // so drain any queued chunks before writing this line.
+  flushTerminalOutput(terminal);
   terminal.term.writeln(data);
   appendTerminalSearchText(terminal, `${data}\n`);
   updateTerminalSearchVisibility(terminal);
 }
 
+// The per-pane text filter searches this rolling transcript. It is capped so it
+// never grows without bound, but re-slicing a ~200 KB string on every append is
+// wasteful under heavy output, so we only trim once it drifts past the cap by a
+// margin (amortising the copy across many appends).
+const SEARCH_TEXT_CAP = 200000;
+const SEARCH_TEXT_TRIM_MARGIN = 40000;
+
 function appendTerminalSearchText(terminal, text) {
-  const nextText = `${terminal.searchText || ""}\n${normalizeSearchText(stripTerminalControlCodes(text))}`;
-  terminal.searchText = nextText.slice(-200000);
+  let nextText = `${terminal.searchText || ""}\n${normalizeSearchText(stripTerminalControlCodes(text))}`;
+  if (nextText.length > SEARCH_TEXT_CAP + SEARCH_TEXT_TRIM_MARGIN) {
+    nextText = nextText.slice(-SEARCH_TEXT_CAP);
+  }
+  terminal.searchText = nextText;
 }
 
 function refreshTerminalSearchText(terminal) {
@@ -1466,7 +1556,7 @@ function refreshTerminalSearchText(terminal) {
     terminal.shell,
     terminal.statusElement.textContent
   ].filter(Boolean).join("\n");
-  terminal.searchText = `${normalizeSearchText(metadata)}\n${terminal.searchText || ""}`.slice(-200000);
+  terminal.searchText = `${normalizeSearchText(metadata)}\n${terminal.searchText || ""}`.slice(-SEARCH_TEXT_CAP);
 }
 
 function applyTerminalSearch() {
@@ -1487,6 +1577,9 @@ function updateTerminalSearchVisibility(terminal) {
   const query = state.terminalSearch;
   const shouldHide = Boolean(query) && !terminal.searchText.includes(query);
   const wasHidden = terminal.pane.classList.contains("is-search-hidden");
+  // Runs once per output frame; skip DOM work when nothing changed (the common
+  // case: no active filter, pane already visible).
+  if (shouldHide === wasHidden) return;
   terminal.pane.classList.toggle("is-search-hidden", shouldHide);
 
   if (wasHidden && !shouldHide) {
@@ -1641,14 +1734,32 @@ function fitAllTerminals() {
 }
 
 function scheduleFit(terminal) {
+  // The ResizeObserver watches both the pane and its screen, so a single layout
+  // change can fire this repeatedly. Collapse all of it into one fit per frame.
+  if (terminal.fitScheduled) return;
+  terminal.fitScheduled = true;
   window.requestAnimationFrame(() => {
+    terminal.fitScheduled = false;
     try {
       terminal.fitAddon.fit();
     } catch {
       return;
     }
-    sendBridge({ type: "resize", id: terminal.id, cols: terminal.term.cols, rows: terminal.term.rows });
+    sendResize(terminal, terminal.term.cols, terminal.term.rows);
   });
+}
+
+// Single funnel for pty resize messages. fitAddon.fit() triggers term.onResize,
+// which also routes here, so both paths share one dedupe guard: identical
+// dimensions never hit the bridge twice. The cache only advances on a successful
+// send, so a resize attempted while the bridge is offline is retried (not
+// suppressed) once scheduleFit runs again after reconnect.
+function sendResize(terminal, cols, rows) {
+  if (terminal.lastSentCols === cols && terminal.lastSentRows === rows) return;
+  if (sendBridge({ type: "resize", id: terminal.id, cols, rows })) {
+    terminal.lastSentCols = cols;
+    terminal.lastSentRows = rows;
+  }
 }
 
 function resetLayout() {
