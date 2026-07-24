@@ -2070,6 +2070,53 @@ body.is-pane-dragging {
   width: 28px;
 }
 
+.find-all-bar {
+  align-items: center;
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  background: var(--surface-translucent);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--elev-3);
+  display: flex;
+  gap: 6px;
+  left: 50%;
+  padding: 6px 10px;
+  position: absolute;
+  top: 12px;
+  transform: translateX(-50%);
+  z-index: 40;
+}
+
+.find-all-bar[hidden] {
+  display: none;
+}
+
+.find-all-bar svg {
+  color: var(--muted);
+  height: 15px;
+  width: 15px;
+}
+
+.find-all-input {
+  width: 220px;
+}
+
+.find-all-count {
+  min-width: 96px;
+  white-space: nowrap;
+}
+
+.terminal-pane.has-find-match::after {
+  border: 2px solid color-mix(in srgb, #ffd75f 65%, transparent);
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 12;
+}
+
 .pane-title {
   background: transparent;
   border: 0;

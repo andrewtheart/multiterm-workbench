@@ -42,6 +42,7 @@ const STATIC_LABELS = [
   "Close all terminals",
   "Restart active terminal",
   "Find in active terminal",
+  "Find in all terminals",
   "Clear active terminal",
   "Copy active output",
   "Cycle active terminal color",
@@ -269,6 +270,20 @@ test.describe("Command palette — every option works", () => {
     // Find in active terminal.
     await runCmd("Find in active terminal");
     await expect(page.locator(".terminal-pane.is-active .pane-find")).toBeVisible();
+
+    // Typing highlights real matches (SearchAddon decorations require the
+    // proposed-API terminal option — this asserts that highlight path works).
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const t = state.terminals.get(state.activeId);
+          t.term.write("\r\nZEBRA one ZEBRA two ZEBRA\r\n", () => resolve());
+        })
+    );
+    const findInput = page.locator(".terminal-pane.is-active .pane-find-input");
+    await findInput.fill("ZEBRA");
+    await expect(page.locator(".terminal-pane.is-active .pane-find-count")).toHaveText(/^[1-9]\d*\/[1-9]\d*$/);
+
     await page.evaluate(() => closeAnyFind());
     await expect(page.locator(".terminal-pane.is-active .pane-find")).toBeHidden();
 
@@ -298,6 +313,67 @@ test.describe("Command palette — every option works", () => {
     await runCmd("Restore all minimized terminals");
     await expect(page.locator("#minimizedDock")).toBeHidden();
     await expect(page.locator(".terminal-pane.is-minimized")).toHaveCount(0);
+  });
+
+  test("find in all terminals: keybindings, cross-pane highlights, navigation", async () => {
+    await resetTo(3);
+
+    // Ctrl+F opens the per-pane find bar on the active terminal (was Ctrl+Shift+F).
+    await page.keyboard.press("Control+f");
+    await expect(page.locator(".terminal-pane.is-active .pane-find")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".terminal-pane.is-active .pane-find")).toBeHidden();
+
+    // Ctrl+Shift+F opens the global find-in-all bar.
+    await page.keyboard.press("Control+Shift+f");
+    await expect(page.locator("#findAllBar")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#findAllBar")).toBeHidden();
+
+    // Seed a unique, searchable token into every terminal's buffer (direct
+    // xterm writes — no shell involvement — so the match set is deterministic).
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const terms = [...state.terminals.values()];
+          let pending = terms.length;
+          if (!pending) return resolve();
+          terms.forEach((t, i) =>
+            t.term.write(`\r\nZEBRA marker ${i} ZEBRA\r\n`, () => {
+              pending -= 1;
+              if (pending === 0) resolve();
+            })
+          );
+        })
+    );
+
+    // Open via the command palette and search.
+    await runCmd("Find in all terminals");
+    await expect(page.locator("#findAllBar")).toBeVisible();
+    await page.locator("#findAllInput").fill("ZEBRA");
+
+    // Every pane matched, so every pane is flagged and the count spans panes.
+    await expect
+      .poll(() => page.evaluate(() => state.findAll.order.length))
+      .toBe(3);
+    await expect(page.locator(".terminal-pane.has-find-match")).toHaveCount(3);
+    await expect(page.locator("#findAllCount")).toContainText("panes");
+
+    // Next steps across matches/panes; the global position becomes 1/N.
+    await page.locator("#findAllInput").press("Enter");
+    await expect(page.locator("#findAllCount")).toContainText(/^1\//);
+    const firstNavId = await page.evaluate(() => state.findAll.order[state.findAll.ti]);
+    expect(await activeId()).toBe(firstNavId);
+
+    // Wrap-around: Shift+Enter from the first match lands on the last match.
+    await page.locator("#findAllInput").press("Shift+Enter");
+    await expect(page.locator("#findAllCount")).not.toContainText(/^1\//);
+
+    // Escape closes and clears every pane's highlight flag.
+    await page.locator("#findAllInput").press("Escape");
+    await expect(page.locator("#findAllBar")).toBeHidden();
+    await expect(page.locator(".terminal-pane.has-find-match")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => state.findAll.active)).toBe(false);
   });
 
   test("active-terminal side-effect commands run without error", async () => {

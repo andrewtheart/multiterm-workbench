@@ -152,6 +152,9 @@ const elements = {
   aboutVersionText: document.querySelector("#aboutVersionText"),
   bellNotify: document.querySelector("#bellNotify"),
   bridgeStatus: document.querySelector("#bridgeStatus"),
+  findAllBar: document.querySelector("#findAllBar"),
+  findAllInput: document.querySelector("#findAllInput"),
+  findAllCount: document.querySelector("#findAllCount"),
   broadcastBar: document.querySelector("#broadcastBar"),
   broadcastClose: document.querySelector("#broadcastClose"),
   broadcastEnter: document.querySelector("#broadcastEnter"),
@@ -255,6 +258,7 @@ const palette = { open: false, index: 0, items: [] };
 const state = {
   activeId: null,
   bridgeClosingDown: false,
+  findAll: { active: false, order: [], ti: 0, li: -1 },
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
   nextIndex: 1,
@@ -347,6 +351,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindContextMenu();
   bindRightClickWarning();
   bindGlobalShortcuts();
+  bindFindAll();
   bindLogConsole();
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
@@ -780,6 +785,7 @@ function addTerminal(options = {}) {
   const titleInput = pane.querySelector(".pane-title");
   const status = pane.querySelector(".pane-status");
   const term = new Terminal({
+    allowProposedApi: true,
     allowTransparency: false,
     convertEol: false,
     cursorBlink: state.settings.cursorBlink,
@@ -1369,30 +1375,17 @@ function effectiveScrollback() {
 
 /* ---------------- Awaiting-input detection --------------- */
 
-const INPUT_PROMPT_PATTERNS = [
-  /\[y\/n\]/i,
-  /\(y\/n\)/i,
-  /\[yes\/no\]/i,
-  /\(yes\/no\)/i,
-  /\by[\/|]n\b/i,
-  /press (any key|enter|return|\[enter\]|any button)/i,
-  /\bare you sure\b/i,
-  /\b(overwrite|continue|proceed|replace|remove|delete|abort)\b[^?]*\?/i,
-  /\b(select|choose|choice|selection|option)\b/i,
-  /enter (your |the )?(choice|selection|option|name|value|number|password)/i,
-  /default is\s*["']?[^"']*["']?\s*[:)]/i,
-  /\[[A-Za-z0-9]\][^[]*\[[A-Za-z0-9]\]/,
-  /-- more --/i,
-  /\(end\)/i,
-  /password[^:]*:\s*$/i,
-  /\?\s*$/,
-  /:\s*$/
-];
+// The pattern-matching heuristics live in a shared, DOM-free module
+// (input-detection.js) so they can be unit-tested in isolation. The renderer's
+// job here is only to decide *which* line to inspect and pass the caret context.
+const promptDetector = (typeof window !== "undefined" && window.InputPromptDetector) || {
+  looksLikeInputPrompt: () => false
+};
 
 // Heuristic: after output settles, inspect the line the cursor is parked on.
 // A program blocked on input leaves its prompt there; an idle shell leaves its
-// own prompt (excluded by isShellPrompt). If the line reads like a question or
-// choice, flag the pane so it stands out.
+// own prompt (excluded by the detector's shell-prompt veto). If the line reads
+// like a question or choice, flag the pane so it stands out.
 function scheduleInputPromptCheck(terminal) {
   window.clearTimeout(terminal.promptTimer);
   if (!state.settings.highlightInputPrompts) {
@@ -1413,31 +1406,24 @@ function evaluateInputPrompt(terminal) {
     return;
   }
   const cursorRow = buffer.baseY + buffer.cursorY;
-  let line = readBufferLine(buffer, cursorRow);
-  for (let row = cursorRow - 1; !line && row >= Math.max(0, cursorRow - 2); row -= 1) {
-    line = readBufferLine(buffer, row);
+  let row = cursorRow;
+  let line = readBufferLine(buffer, row);
+  // A prompt sometimes leaves the caret on a fresh empty line just below the
+  // question (e.g. after a trailing newline). Walk back a couple of rows to the
+  // nearest non-empty line so we inspect the actual prompt text.
+  for (let probe = cursorRow - 1; !line && probe >= Math.max(0, cursorRow - 2); probe -= 1) {
+    row = probe;
+    line = readBufferLine(buffer, probe);
   }
-  setAwaitingInput(terminal, looksLikeInputPrompt(line));
+  // The caret sits at the end of the prompt when a program is genuinely blocked
+  // waiting for the user; if it's mid-line the program is likely still drawing.
+  const cursorAtLineEnd = row !== cursorRow || buffer.cursorX >= line.length;
+  setAwaitingInput(terminal, promptDetector.looksLikeInputPrompt(line, { cursorAtLineEnd }));
 }
 
 function readBufferLine(buffer, row) {
   const line = buffer.getLine(row);
   return line ? line.translateToString(true).replace(/\s+$/, "") : "";
-}
-
-function looksLikeInputPrompt(line) {
-  const text = String(line || "").replace(/\s+$/, "");
-  if (!text || isShellPrompt(text)) return false;
-  return INPUT_PROMPT_PATTERNS.some((pattern) => pattern.test(text));
-}
-
-function isShellPrompt(line) {
-  const text = String(line || "").replace(/\s+$/, "");
-  if (!text) return true;
-  if (/^PS[ >].*>$/i.test(text)) return true;
-  if (/^[A-Za-z]:\\.*>$/.test(text)) return true;
-  if (/[>$#]$/.test(text)) return true;
-  return false;
 }
 
 function setAwaitingInput(terminal, awaiting) {
@@ -2136,7 +2122,8 @@ function getCommands() {
     { label: "Restore all minimized terminals", run: restoreAllTerminals },
     { label: "Close all terminals", run: closeAllTerminals },
     { label: "Restart active terminal", hint: "Ctrl+Shift+R", run: restartActiveSession },
-    { label: "Find in active terminal", hint: "Ctrl+Shift+F", run: openFindActive },
+    { label: "Find in active terminal", hint: "Ctrl+F", run: openFindActive },
+    { label: "Find in all terminals", hint: "Ctrl+Shift+F", run: openFindAll },
     { label: "Clear active terminal", hint: "Ctrl+Shift+L", run: clearActiveTerminal },
     { label: "Copy active output", hint: "Ctrl+Shift+C", run: copyActiveTerminal },
     { label: "Cycle active terminal color", run: () => state.activeId && cyclePaneColor(state.terminals.get(state.activeId)) },
@@ -2352,9 +2339,16 @@ function bindGlobalShortcuts() {
 
     if (palette.open) return;
 
-    if (event.key === "Escape" && closeAnyFind()) {
-      event.preventDefault();
-      return;
+    if (event.key === "Escape") {
+      if (state.findAll.active) {
+        event.preventDefault();
+        closeFindAll();
+        return;
+      }
+      if (closeAnyFind()) {
+        event.preventDefault();
+        return;
+      }
     }
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && key === "t") {
@@ -2364,9 +2358,10 @@ function bindGlobalShortcuts() {
     } else if (event.ctrlKey && event.shiftKey && key === "w") {
       event.preventDefault();
       if (state.activeId) removeTerminal(state.activeId);
-    } else if (event.ctrlKey && event.shiftKey && key === "f") {
+    } else if (event.ctrlKey && key === "f" && !event.altKey && !event.metaKey) {
       event.preventDefault();
-      openFindActive();
+      if (event.shiftKey) openFindAll();
+      else openFindActive();
     } else if (event.ctrlKey && event.shiftKey && key === "e") {
       event.preventDefault();
       elements.terminalSearchInput.focus();
@@ -2461,11 +2456,17 @@ function bindPaneFind(terminal) {
   terminal.findCount = count;
 
   terminal.searchAddon.onDidChangeResults((results) => {
+    terminal.lastFindCount = results ? results.resultCount : 0;
+    terminal.lastFindIndex = results ? results.resultIndex : -1;
     if (!results || results.resultCount === 0) {
       count.textContent = "0/0";
     } else {
       const current = results.resultIndex >= 0 ? results.resultIndex + 1 : 0;
       count.textContent = `${current}/${results.resultCount}`;
+    }
+    if (state.findAll.active) {
+      terminal.pane.classList.toggle("has-find-match", (terminal.lastFindCount || 0) > 0);
+      refreshFindAllCount();
     }
   });
 
@@ -2500,6 +2501,7 @@ function bindPaneFind(terminal) {
 
 function openFind(terminal) {
   if (!terminal?.searchAddon || !terminal.findBar) return;
+  if (state.findAll.active) closeFindAll();
   setActiveTerminal(terminal.id);
   terminal.findBar.hidden = false;
   const selection = terminal.term.getSelection();
@@ -2541,6 +2543,200 @@ function findNav(terminal, direction) {
   } else {
     terminal.searchAddon.findNext(terminal.findInput.value, findDecorations);
   }
+}
+
+/* ---------------- Find across all terminals --------------- */
+
+function orderedTerminals() {
+  const result = [];
+  for (const pane of elements.host.querySelectorAll(".terminal-pane")) {
+    const terminal = state.terminals.get(pane.dataset.id);
+    if (terminal && terminal.searchAddon) result.push(terminal);
+  }
+  return result;
+}
+
+function bindFindAll() {
+  const bar = elements.findAllBar;
+  if (!bar) return;
+
+  elements.findAllInput.addEventListener("input", () => {
+    runFindAll(elements.findAllInput.value);
+  });
+
+  elements.findAllInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      findAllNav(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeFindAll();
+    }
+  });
+
+  bar.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    const kind = button.dataset.findall;
+    if (kind === "next") findAllNav(1);
+    else if (kind === "prev") findAllNav(-1);
+    else if (kind === "close") closeFindAll();
+  });
+}
+
+function openFindAll() {
+  if (!elements.findAllBar) return;
+  // The per-pane find bar and find-all share each terminal's single search
+  // addon, so make them mutually exclusive.
+  closeAnyFind();
+  state.findAll.active = true;
+  elements.findAllBar.hidden = false;
+
+  const active = state.activeId ? state.terminals.get(state.activeId) : null;
+  const selection = active?.term.getSelection();
+  if (selection && !selection.includes("\n")) {
+    elements.findAllInput.value = selection;
+  }
+  elements.findAllInput.focus();
+  elements.findAllInput.select();
+  runFindAll(elements.findAllInput.value);
+}
+
+function closeFindAll() {
+  if (!state.findAll.active && elements.findAllBar?.hidden !== false) return;
+  state.findAll.active = false;
+  if (elements.findAllBar) elements.findAllBar.hidden = true;
+  for (const terminal of state.terminals.values()) {
+    terminal.searchAddon?.clearDecorations();
+    terminal.pane.classList.remove("has-find-match");
+  }
+  state.findAll.order = [];
+  state.findAll.ti = 0;
+  state.findAll.li = -1;
+  const active = state.activeId ? state.terminals.get(state.activeId) : null;
+  active?.term.focus();
+}
+
+function runFindAll(rawQuery) {
+  const query = rawQuery || "";
+  if (!query) {
+    for (const terminal of state.terminals.values()) {
+      terminal.searchAddon?.clearDecorations();
+      terminal.lastFindCount = 0;
+      terminal.lastFindIndex = -1;
+      terminal.pane.classList.remove("has-find-match");
+    }
+    state.findAll.order = [];
+    state.findAll.ti = 0;
+    state.findAll.li = -1;
+    refreshFindAllCount();
+    return;
+  }
+
+  const order = [];
+  for (const terminal of orderedTerminals()) {
+    // Highlight every match in this pane without scrolling, then drop the
+    // active-match emphasis so nothing looks "current" until the user navigates.
+    terminal.searchAddon.findNext(query, { ...findDecorations, incremental: true, noScroll: true });
+    terminal.searchAddon.clearActiveDecoration();
+    const has = (terminal.lastFindCount || 0) > 0;
+    terminal.pane.classList.toggle("has-find-match", has);
+    if (has) order.push(terminal.id);
+  }
+  state.findAll.order = order;
+  state.findAll.ti = 0;
+  state.findAll.li = -1;
+  refreshFindAllCount();
+}
+
+function findAllNav(direction) {
+  const order = state.findAll.order;
+  if (!order.length) return;
+  const query = elements.findAllInput.value;
+  if (!query) return;
+
+  let ti = state.findAll.ti >= order.length ? 0 : state.findAll.ti;
+  let li = state.findAll.li;
+  let switched = false;
+
+  if (li < 0) {
+    // First navigation: jump to the first (or last) match overall.
+    switched = true;
+    if (direction > 0) {
+      ti = 0;
+      li = 0;
+    } else {
+      ti = order.length - 1;
+      li = Math.max(0, (state.terminals.get(order[ti])?.lastFindCount || 1) - 1);
+    }
+  } else {
+    const curTerm = state.terminals.get(order[ti]);
+    const curCount = curTerm ? (curTerm.lastFindCount || 0) : 0;
+    if (direction > 0) {
+      li += 1;
+      if (li >= curCount) {
+        switched = true;
+        curTerm?.searchAddon?.clearActiveDecoration();
+        ti = (ti + 1) % order.length;
+        li = 0;
+      }
+    } else {
+      li -= 1;
+      if (li < 0) {
+        switched = true;
+        curTerm?.searchAddon?.clearActiveDecoration();
+        ti = (ti - 1 + order.length) % order.length;
+        li = Math.max(0, (state.terminals.get(order[ti])?.lastFindCount || 1) - 1);
+      }
+    }
+  }
+
+  state.findAll.ti = ti;
+  state.findAll.li = li;
+
+  const terminal = state.terminals.get(order[ti]);
+  if (!terminal?.searchAddon) return;
+  setActiveTerminal(terminal.id);
+  terminal.pane.scrollIntoView({ block: "nearest", inline: "nearest" });
+  // When entering a pane fresh, reset the selection so findNext/findPrevious
+  // land deterministically on that pane's first/last match.
+  if (switched) terminal.term.clearSelection();
+  if (direction > 0) {
+    terminal.searchAddon.findNext(query, findDecorations);
+  } else {
+    terminal.searchAddon.findPrevious(query, findDecorations);
+  }
+  refreshFindAllCount();
+}
+
+function refreshFindAllCount() {
+  if (!elements.findAllCount) return;
+  const order = state.findAll.order;
+  const panes = order.length;
+  let total = 0;
+  for (const id of order) total += state.terminals.get(id)?.lastFindCount || 0;
+
+  if (!elements.findAllInput.value) {
+    elements.findAllCount.textContent = "0/0";
+    return;
+  }
+  if (total === 0) {
+    elements.findAllCount.textContent = "No matches";
+    return;
+  }
+
+  let pos = 0;
+  if (state.findAll.li >= 0 && state.findAll.ti < panes) {
+    for (let i = 0; i < state.findAll.ti; i++) {
+      pos += state.terminals.get(order[i])?.lastFindCount || 0;
+    }
+    pos += state.findAll.li + 1;
+  }
+
+  const paneLabel = `${panes} pane${panes === 1 ? "" : "s"}`;
+  elements.findAllCount.textContent = pos > 0
+    ? `${pos}/${total} · ${paneLabel}`
+    : `${total} · ${paneLabel}`;
 }
 
 /* ---------------- Broadcast command bar --------------- */
@@ -3250,7 +3446,8 @@ function buildContextMenu(terminal) {
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", run: () => pasteIntoTerminal(terminal.id) },
     { label: "Select all", icon: "text-select", run: () => terminal.term.selectAll() },
     { separator: true },
-    { label: "Find\u2026", hint: "Ctrl+Shift+F", icon: "search", run: () => openFind(terminal) },
+    { label: "Find\u2026", hint: "Ctrl+F", icon: "search", run: () => openFind(terminal) },
+    { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", run: openFindAll },
     { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", run: () => clearTerminal(terminal.id) },
     { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", run: () => toggleZoomPane(terminal.id) },
     { separator: true },

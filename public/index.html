@@ -16,6 +16,7 @@
     <script defer src="vendor/addon-search.js"></script>
     <script defer src="vendor/addon-web-links.js"></script>
     <script defer src="vendor/lucide.js"></script>
+    <script defer src="input-detection.js"></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -348,6 +349,20 @@
         </aside>
 
         <main class="stage" aria-label="Terminal workbench">
+          <div id="findAllBar" class="find-all-bar" hidden role="search" aria-label="Find in all terminals">
+            <i data-lucide="search"></i>
+            <input id="findAllInput" class="pane-find-input find-all-input" type="text" spellcheck="false" autocomplete="off" placeholder="Find in all terminals" aria-label="Find in all terminals">
+            <span id="findAllCount" class="pane-find-count find-all-count">0/0</span>
+            <button type="button" class="pane-find-btn" data-findall="prev" title="Previous match (Shift+Enter)" aria-label="Previous match">
+              <i data-lucide="chevron-up"></i>
+            </button>
+            <button type="button" class="pane-find-btn" data-findall="next" title="Next match (Enter)" aria-label="Next match">
+              <i data-lucide="chevron-down"></i>
+            </button>
+            <button type="button" class="pane-find-btn" data-findall="close" title="Close (Esc)" aria-label="Close find">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
           <div id="terminalHost" class="terminal-host" data-layout="auto"></div>
           <div id="snapPreview" class="snap-preview" aria-hidden="true"></div>
         </main>
@@ -427,7 +442,8 @@
           <li><span>New terminal</span><span class="kbd">Ctrl+T / Ctrl+Shift+T</span></li>
           <li><span>Close active terminal</span><span class="kbd">Ctrl+Shift+W</span></li>
           <li><span>Restart active terminal</span><span class="kbd">Ctrl+Shift+R</span></li>
-          <li><span>Find in terminal</span><span class="kbd">Ctrl+Shift+F</span></li>
+          <li><span>Find in terminal</span><span class="kbd">Ctrl+F</span></li>
+          <li><span>Find in all terminals</span><span class="kbd">Ctrl+Shift+F</span></li>
           <li><span>Filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
           <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
           <li><span>Maximize / restore pane</span><span class="kbd">Ctrl+Shift+X</span></li>
@@ -514,7 +530,7 @@
             <button type="button" data-action="move-right" title="Move right" aria-label="Move right">
               <i data-lucide="arrow-right"></i>
             </button>
-            <button type="button" data-action="find" title="Find (Ctrl+Shift+F)" aria-label="Find in terminal">
+            <button type="button" data-action="find" title="Find (Ctrl+F)" aria-label="Find in terminal">
               <i data-lucide="search"></i>
             </button>
             <button type="button" data-action="clear" title="Clear" aria-label="Clear terminal">
