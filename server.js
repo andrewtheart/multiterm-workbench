@@ -18,6 +18,16 @@ const websocketAcceptHash = ["sha", "1"].join("");
 const sessions = new Map();
 const clients = new Set();
 
+// Memory stats are computed entirely in this bridge process (never the
+// renderer) so the UI thread is never blocked. Gated behind an env flag set by
+// the Electron main process and Windows-only, so tests and other platforms are
+// completely inert.
+const memStatsEnabled = process.env.MEMSTATS === "1" && process.platform === "win32";
+let memStatsInterval = null;
+let memSettleTimer = null;
+let memStatsInFlight = false;
+let lastMemStats = null;
+
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -101,6 +111,13 @@ server.on("upgrade", (request, socket) => {
     sessions: [...sessions.values()].map(toSessionSummary)
   });
 
+  if (memStatsEnabled) {
+    if (lastMemStats) {
+      client.send({ type: "memstats", app: lastMemStats.appBytes, systemUsed: lastMemStats.systemUsed, systemTotal: lastMemStats.systemTotal });
+    }
+    scheduleMemStats(500);
+  }
+
   socket.on("data", (chunk) => readFrames(client, chunk));
   socket.on("close", () => clients.delete(client));
   socket.on("error", () => clients.delete(client));
@@ -118,6 +135,7 @@ function start(callback, overridePort, overrideHost) {
       callback({ host: listenHost, port: boundPort });
     }
   });
+  startMemStats();
   return server;
 }
 
@@ -180,7 +198,12 @@ module.exports = {
   closeLog,
   sanitizeLogName,
   stripAnsiForLog,
-  revealPath
+  revealPath,
+  computeMemStats,
+  pushMemStats,
+  scheduleMemStats,
+  startMemStats,
+  stopMemStats
 };
 
 function getPathname(rawUrl) {
@@ -420,9 +443,11 @@ function createSession(client, options) {
     closeLog(session);
     sessions.delete(id);
     broadcast({ type: "exited", id, code: exitCode, signal });
+    scheduleMemStats(1500);
   });
 
   client.send({ type: "created", ...toSessionSummary(session) });
+  scheduleMemStats(2000);
 }
 
 function writeSession(id, data) {
@@ -573,9 +598,96 @@ function revealPath(client, message) {
 }
 
 function shutdown() {
+  stopMemStats();
   closeSessions(true);
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();
+}
+
+function computeMemStats(callback) {
+  const script = "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize | ConvertTo-Json -Compress";
+  childProcess.execFile(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: 8000 },
+    (error, stdout) => {
+      if (error) { callback(null); return; }
+      let procs;
+      try { procs = JSON.parse(stdout); } catch { callback(null); return; }
+      if (!Array.isArray(procs)) procs = procs ? [procs] : [];
+
+      const wsById = new Map();
+      const childrenByParent = new Map();
+      for (const proc of procs) {
+        const pid = Number(proc.ProcessId);
+        const ppid = Number(proc.ParentProcessId);
+        wsById.set(pid, Number(proc.WorkingSetSize) || 0);
+        if (!childrenByParent.has(ppid)) childrenByParent.set(ppid, []);
+        childrenByParent.get(ppid).push(pid);
+      }
+
+      // Sum the process tree rooted at the Electron main process (our parent),
+      // which covers the Electron windows, this bridge and its pty children;
+      // add each live terminal PID explicitly in case ConPTY reparents it.
+      const roots = new Set();
+      if (process.ppid) roots.add(process.ppid);
+      roots.add(process.pid);
+      for (const session of sessions.values()) {
+        const pid = session.terminal && session.terminal.pid;
+        if (pid) roots.add(Number(pid));
+      }
+
+      const seen = new Set();
+      const stack = [...roots];
+      let appBytes = 0;
+      while (stack.length) {
+        const pid = stack.pop();
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        if (wsById.has(pid)) appBytes += wsById.get(pid);
+        const kids = childrenByParent.get(pid);
+        if (kids) {
+          for (const kid of kids) if (!seen.has(kid)) stack.push(kid);
+        }
+      }
+
+      const systemTotal = os.totalmem();
+      const systemUsed = Math.max(0, systemTotal - os.freemem());
+      callback({ appBytes, systemUsed, systemTotal });
+    }
+  );
+}
+
+function pushMemStats() {
+  if (!memStatsEnabled || memStatsInFlight || clients.size === 0) return;
+  memStatsInFlight = true;
+  computeMemStats((stats) => {
+    memStatsInFlight = false;
+    if (!stats) return;
+    lastMemStats = stats;
+    broadcast({ type: "memstats", app: stats.appBytes, systemUsed: stats.systemUsed, systemTotal: stats.systemTotal });
+  });
+}
+
+// Debounced update: terminal open/close events coalesce into a single refresh
+// once the new PIDs have had time to settle.
+function scheduleMemStats(delay) {
+  if (!memStatsEnabled) return;
+  clearTimeout(memSettleTimer);
+  memSettleTimer = setTimeout(pushMemStats, Math.max(0, Number(delay) || 0));
+  if (memSettleTimer.unref) memSettleTimer.unref();
+}
+
+function startMemStats() {
+  if (!memStatsEnabled || memStatsInterval) return;
+  scheduleMemStats(1500);
+  memStatsInterval = setInterval(pushMemStats, 10000);
+  if (memStatsInterval.unref) memStatsInterval.unref();
+}
+
+function stopMemStats() {
+  if (memStatsInterval) { clearInterval(memStatsInterval); memStatsInterval = null; }
+  if (memSettleTimer) { clearTimeout(memSettleTimer); memSettleTimer = null; }
 }
 
 function broadcast(message) {

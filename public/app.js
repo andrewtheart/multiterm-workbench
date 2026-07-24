@@ -40,7 +40,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.8";
+const APP_VERSION = "0.1.9";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
@@ -229,6 +229,8 @@ const elements = {
   shortcutsOverlay: document.querySelector("#shortcutsOverlay"),
   startupCommand: document.querySelector("#startupCommand"),
   statusConn: document.querySelector("#statusConn"),
+  statusMem: document.querySelector("#statusMem"),
+  statusMemText: document.querySelector("#statusMemText"),
   statusSessions: document.querySelector("#statusSessions"),
   statusShellText: document.querySelector("#statusShellText"),
   syncInput: document.querySelector("#syncInput"),
@@ -647,6 +649,11 @@ function handleBridgeMessage(message) {
 
   if (message.type === "revealError") {
     toast(message.message || "Could not open folder", "error");
+    return;
+  }
+
+  if (message.type === "memstats") {
+    updateMemStatus(message);
     return;
   }
 
@@ -1660,6 +1667,28 @@ function revealTerminal(terminal) {
 function setBridgeStatus(text, tone) {
   elements.bridgeStatus.textContent = text;
   elements.bridgeStatus.dataset.tone = tone;
+}
+
+// Rendering is trivial (text only); all process-memory work happens in the
+// bridge process, so this never touches the UI thread's perf budget.
+function updateMemStatus(stats) {
+  if (!elements.statusMemText) return;
+  const appBytes = Number(stats.app) || 0;
+  const usedBytes = Number(stats.systemUsed) || 0;
+  const totalBytes = Number(stats.systemTotal) || 0;
+  const pct = usedBytes > 0 ? (appBytes / usedBytes) * 100 : 0;
+  elements.statusMemText.textContent = `${formatBytes(appBytes)} / ${formatBytes(usedBytes)} (${pct.toFixed(1)}%)`;
+  if (elements.statusMem) {
+    elements.statusMem.title = `MultiTerm + terminals: ${formatBytes(appBytes)} \u2014 system memory in use: ${formatBytes(usedBytes)} of ${formatBytes(totalBytes)}`;
+  }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${Math.round(value / 1024 ** 2)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
 }
 
 function loadSettings() {

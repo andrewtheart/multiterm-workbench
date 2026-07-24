@@ -26,7 +26,7 @@ function startServer() {
   const nodeExe = process.platform === "win32" ? "node.exe" : "node";
   serverProcess = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
     cwd: __dirname,
-    env: { ...process.env, HOST, PORT: String(PORT) },
+    env: { ...process.env, HOST, PORT: String(PORT), MEMSTATS: "1" },
     stdio: ["ignore", "pipe", "pipe"]
   });
 
