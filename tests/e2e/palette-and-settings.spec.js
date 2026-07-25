@@ -977,3 +977,115 @@ test.describe("Settings panel — every control has its expected effect", () => 
       expect(pageErrors, "no uncaught page errors from any settings control").toEqual([]);
     });
 });
+
+// The X-close -> "dock to system tray" confirmation modal. Playwright drives the
+// renderer against the bridge with NO Electron host, so window.multiterm is
+// undefined here. We stub it to capture the decision the renderer would send to
+// the main process, then exercise the same entry point (requestAppClose) the IPC
+// "close-request" listener calls, asserting the modal, the persisted setting, and
+// the emitted decision for each path.
+test.describe("Close-to-tray confirmation modal", () => {
+  let context;
+  let page;
+  const pageErrors = [];
+
+  const overlayHidden = () =>
+    page.evaluate(() => elements.closeConfirmOverlay.hidden);
+  const lastDecision = () => page.evaluate(() => window.__closeDecision);
+  const closeAction = () => page.evaluate(() => state.settings.closeAction);
+
+  // Install the capture stub and reset per-test state (setting + last decision).
+  async function reset(action = "ask", remember = false) {
+    await page.evaluate(
+      ({ action }) => {
+        window.__closeDecision = undefined;
+        window.multiterm = { respondClose: (a) => { window.__closeDecision = a; } };
+        state.settings.closeAction = action;
+        saveSettings();
+        // Ensure a clean, hidden overlay before each scenario.
+        elements.closeConfirmOverlay.classList.remove("is-open");
+        elements.closeConfirmOverlay.hidden = true;
+        elements.closeConfirmRemember.checked = false;
+      },
+      { action }
+    );
+  }
+
+  test.beforeAll(async ({ browser }) => {
+    context = await browser.newContext({ baseURL: "http://127.0.0.1:3199" });
+    page = await context.newPage();
+    page.on("pageerror", (err) => pageErrors.push(String(err.message || err)));
+    await page.goto("/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+  });
+
+  test.afterAll(async () => {
+    await context.close();
+  });
+
+  test("first close (ask) shows the modal without deciding yet", async () => {
+    await reset("ask");
+    await page.evaluate(() => requestAppClose());
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    expect(await overlayHidden()).toBe(false);
+    // Nothing decided until the user picks a button.
+    expect(await lastDecision()).toBeUndefined();
+    // Informative copy + both actions are present.
+    await expect(page.locator("#closeConfirmText")).toContainText("system tray");
+    await expect(page.locator("#closeConfirmTray")).toBeVisible();
+    await expect(page.locator("#closeConfirmQuit")).toBeVisible();
+    // Tidy up.
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#closeConfirmOverlay")).toBeHidden();
+  });
+
+  test("Escape/backdrop cancels: decision is 'cancel' and nothing is remembered", async () => {
+    await reset("ask");
+    await page.evaluate(() => requestAppClose());
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#closeConfirmOverlay")).toBeHidden();
+    expect(await lastDecision()).toBe("cancel");
+    expect(await closeAction()).toBe("ask");
+  });
+
+  test("Minimize to tray without remembering keeps asking next time", async () => {
+    await reset("ask");
+    await page.evaluate(() => requestAppClose());
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    await page.locator("#closeConfirmTray").click();
+    await expect(page.locator("#closeConfirmOverlay")).toBeHidden();
+    expect(await lastDecision()).toBe("tray");
+    expect(await closeAction()).toBe("ask");
+  });
+
+  test("Quit with 'remember' persists closeAction=quit", async () => {
+    await reset("ask");
+    await page.evaluate(() => requestAppClose());
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    await page.locator("#closeConfirmRemember").check();
+    await page.locator("#closeConfirmQuit").click();
+    await expect(page.locator("#closeConfirmOverlay")).toBeHidden();
+    expect(await lastDecision()).toBe("quit");
+    expect(await closeAction()).toBe("quit");
+  });
+
+  test("a remembered choice skips the modal and decides immediately", async () => {
+    await reset("tray");
+    await page.evaluate(() => requestAppClose());
+    // No modal — the decision goes straight through.
+    expect(await overlayHidden()).toBe(true);
+    expect(await lastDecision()).toBe("tray");
+
+    await reset("quit");
+    await page.evaluate(() => requestAppClose());
+    expect(await overlayHidden()).toBe(true);
+    expect(await lastDecision()).toBe("quit");
+  });
+
+  test("completeness: no uncaught page errors across the close-modal suite", async () => {
+    // Reset the setting so this suite leaves nothing sticky for later runs.
+    await page.evaluate(() => { state.settings.closeAction = "ask"; saveSettings(); });
+    expect(pageErrors, "no uncaught page errors from the close-to-tray modal").toEqual([]);
+  });
+});

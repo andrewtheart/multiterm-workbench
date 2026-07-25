@@ -2,6 +2,7 @@ const defaultSettings = {
   appTheme: "dark",
   bellNotify: false,
   broadcastSendEnter: true,
+  closeAction: "ask",
   columns: 2,
   compactChrome: false,
   copyOnSelect: false,
@@ -203,6 +204,10 @@ const elements = {
   paletteInput: document.querySelector("#paletteInput"),
   paletteList: document.querySelector("#paletteList"),
   paletteOverlay: document.querySelector("#paletteOverlay"),
+  closeConfirmOverlay: document.querySelector("#closeConfirmOverlay"),
+  closeConfirmRemember: document.querySelector("#closeConfirmRemember"),
+  closeConfirmTray: document.querySelector("#closeConfirmTray"),
+  closeConfirmQuit: document.querySelector("#closeConfirmQuit"),
   paneGap: document.querySelector("#paneGap"),
   paneGapValue: document.querySelector("#paneGapValue"),
   paneHeight: document.querySelector("#paneHeight"),
@@ -350,6 +355,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindPalette();
   bindContextMenu();
   bindRightClickWarning();
+  bindCloseConfirm();
   bindGlobalShortcuts();
   bindFindAll();
   bindLogConsole();
@@ -3266,6 +3272,81 @@ function bindRightClickWarning() {
       closeRightClickWarning();
     }
   });
+}
+
+/* ---------------- Close-to-tray confirmation --------------- */
+
+// Entry point invoked when the user tries to close the window (relayed from the
+// Electron main process). Honors a remembered choice, otherwise asks first.
+function requestAppClose() {
+  const action = state.settings.closeAction;
+  if (action === "tray" || action === "quit") {
+    finishAppClose(action);
+    return;
+  }
+  openCloseConfirm();
+}
+
+function openCloseConfirm() {
+  if (!elements.closeConfirmOverlay) return;
+  elements.closeConfirmRemember.checked = false;
+  elements.closeConfirmOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.closeConfirmOverlay.classList.add("is-open");
+    elements.closeConfirmTray.focus();
+  });
+  refreshIcons();
+}
+
+function closeCloseConfirm() {
+  if (!elements.closeConfirmOverlay) return;
+  elements.closeConfirmOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.closeConfirmOverlay.hidden = true;
+  }, 150);
+}
+
+// Picks tray/quit from the modal, optionally remembering it for next time.
+function chooseCloseAction(action) {
+  if (elements.closeConfirmRemember && elements.closeConfirmRemember.checked
+      && (action === "tray" || action === "quit")) {
+    state.settings.closeAction = action;
+    saveSettings();
+  }
+  closeCloseConfirm();
+  finishAppClose(action);
+}
+
+// User dismissed the modal (Escape/backdrop): stay open, tell main to abort.
+function cancelAppClose() {
+  closeCloseConfirm();
+  finishAppClose("cancel");
+}
+
+// Relays the decision to the Electron main process. No-op in a plain browser.
+function finishAppClose(action) {
+  try {
+    window.multiterm?.respondClose?.(action);
+  } catch { /* not running under Electron */ }
+}
+
+function bindCloseConfirm() {
+  if (!elements.closeConfirmOverlay) return;
+  elements.closeConfirmTray.addEventListener("click", () => chooseCloseAction("tray"));
+  elements.closeConfirmQuit.addEventListener("click", () => chooseCloseAction("quit"));
+  elements.closeConfirmOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.closeConfirmOverlay) cancelAppClose();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.closeConfirmOverlay.hidden) {
+      event.preventDefault();
+      cancelAppClose();
+    }
+  });
+  // When running under Electron, the main process asks us before closing.
+  try {
+    window.multiterm?.onCloseRequest?.(() => requestAppClose());
+  } catch { /* not running under Electron */ }
 }
 
 /* ---------------- Workspaces --------------- */

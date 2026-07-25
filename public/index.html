@@ -510,6 +510,24 @@
       </div>
     </div>
 
+    <div id="closeConfirmOverlay" class="palette-overlay" hidden>
+      <div class="palette confirm" role="alertdialog" aria-modal="true" aria-labelledby="closeConfirmTitle" aria-describedby="closeConfirmText">
+        <div class="confirm-head">
+          <i data-lucide="minimize-2"></i>
+          <h2 id="closeConfirmTitle">Close MultiTerm</h2>
+        </div>
+        <p id="closeConfirmText" class="confirm-body">MultiTerm will keep running in the system tray when you close this window, so your terminal sessions stay alive. Reopen it any time from the tray icon, or quit completely to end every session.</p>
+        <label class="confirm-remember toggle-row">
+          <input id="closeConfirmRemember" type="checkbox">
+          <span>Remember my choice and don't ask again</span>
+        </label>
+        <div class="confirm-actions">
+          <button id="closeConfirmQuit" type="button" class="confirm-cancel">Quit MultiTerm</button>
+          <button id="closeConfirmTray" type="button" class="confirm-proceed">Minimize to tray</button>
+        </div>
+      </div>
+    </div>
+
     <div id="contextMenu" class="context-menu" role="menu" hidden></div>
     <template id="paneTemplate">
       <article class="terminal-pane">

@@ -1,4 +1,4 @@
-let { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
+let { app, BrowserWindow, Menu, Tray, shell, dialog, ipcMain } = require("electron");
 const childProcess = require("node:child_process");
 const http = require("node:http");
 const path = require("node:path");
@@ -6,7 +6,7 @@ const path = require("node:path");
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
 // `require("electron")` resolves to a path string, so these are set by tests.
 function __setElectron(mock) {
-  ({ app, BrowserWindow, Menu, shell, dialog, ipcMain } = mock);
+  ({ app, BrowserWindow, Menu, Tray, shell, dialog, ipcMain } = mock);
 }
 
 function formatError(err) {
@@ -17,6 +17,7 @@ const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
 
 let mainWindow = null;
+let tray = null;
 let serverProcess = null;
 // Timestamps of recent unexpected bridge restarts, used as a crash-loop guard so
 // a bridge that dies immediately over and over surfaces an error instead of
@@ -129,8 +130,76 @@ function createWindow() {
 
   mainWindow.loadURL(`http://${HOST}:${PORT}/`);
 
+  // Closing the window docks MultiTerm to the system tray instead of quitting,
+  // so terminal sessions survive. The renderer decides (via a modal) whether to
+  // dock or quit; we only quit outright when the user explicitly asked to.
+  mainWindow.on("close", (event) => {
+    if (app.isQuiting) return;
+    event.preventDefault();
+    const wc = mainWindow.webContents;
+    if (wc && !wc.isDestroyed()) {
+      wc.send("multiterm:close-request");
+    } else {
+      // No renderer to ask — fall back to the safe default of docking to tray.
+      // The user can still quit from the tray menu.
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+}
+
+// Brings the (possibly hidden/minimized) window back to the foreground.
+function showMainWindow() {
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+// Explicit, user-initiated quit: bypasses the tray-docking close interception.
+function quitApp() {
+  app.isQuiting = true;
+  app.quit();
+}
+
+// System-tray icon with Show / Quit actions, so a tray-docked app stays reachable.
+function createTray() {
+  if (tray || !Tray) return tray;
+  tray = new Tray(path.join(__dirname, "public", "favicon.ico"));
+  tray.setToolTip("MultiTerm Workbench");
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: "Show MultiTerm", click: () => showMainWindow() },
+    { type: "separator" },
+    { label: "Quit MultiTerm", click: () => quitApp() }
+  ]));
+  tray.on("click", () => showMainWindow());
+  tray.on("double-click", () => showMainWindow());
+  return tray;
+}
+
+// Applies the renderer's close decision: dock to tray, quit, or stay open.
+function handleCloseResponse(action) {
+  if (action === "quit") {
+    quitApp();
+  } else if (action === "tray") {
+    if (mainWindow) mainWindow.hide();
+  }
+  // "cancel" (or anything unrecognized): leave the window open.
+}
+
+function registerCloseHandler() {
+  if (!ipcMain || typeof ipcMain.on !== "function") return;
+  if (typeof ipcMain.removeAllListeners === "function") {
+    ipcMain.removeAllListeners("multiterm:close-response");
+  }
+  ipcMain.on("multiterm:close-response", (_event, action) => {
+    handleCloseResponse(action);
   });
 }
 
@@ -147,8 +216,10 @@ async function onReady() {
     return;
   }
   createWindow();
+  createTray();
 
   registerScriptPicker();
+  registerCloseHandler();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -198,6 +269,10 @@ function bootstrap() {
   app.on("before-quit", () => {
     app.isQuiting = true;
     stopServer();
+    if (tray) {
+      try { tray.destroy(); } catch { /* already gone */ }
+      tray = null;
+    }
   });
 
   app.on("window-all-closed", () => {
@@ -210,14 +285,21 @@ module.exports = {
   stopServer,
   waitForServer,
   createWindow,
+  createTray,
+  showMainWindow,
+  quitApp,
+  handleCloseResponse,
+  registerCloseHandler,
   onReady,
   bootstrap,
   __setElectron,
   formatError,
   getMainWindow: () => mainWindow,
+  getTray: () => tray,
   getServerProcess: () => serverProcess,
   __reset() {
     mainWindow = null;
+    tray = null;
     serverProcess = null;
     serverRestarts = [];
   }

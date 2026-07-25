@@ -15,12 +15,30 @@ function makeElectron() {
   };
   const BrowserWindow = vi.fn();
   BrowserWindow.getAllWindows = vi.fn(() => []);
+  const Tray = vi.fn(function TrayMock() {
+    return {
+      setToolTip: vi.fn(),
+      setContextMenu: vi.fn(),
+      on: vi.fn(),
+      destroy: vi.fn()
+    };
+  });
   return {
     app,
     BrowserWindow,
-    Menu: { setApplicationMenu: vi.fn() },
+    Tray,
+    Menu: {
+      setApplicationMenu: vi.fn(),
+      buildFromTemplate: vi.fn((template) => ({ __template: template }))
+    },
     shell: { openExternal: vi.fn() },
-    dialog: { showErrorBox: vi.fn() }
+    dialog: { showErrorBox: vi.fn() },
+    ipcMain: {
+      handle: vi.fn(),
+      removeHandler: vi.fn(),
+      on: vi.fn(),
+      removeAllListeners: vi.fn()
+    }
   };
 }
 
@@ -35,13 +53,26 @@ function makeChild() {
 
 function makeWindow() {
   return {
-    webContents: { setWindowOpenHandler: vi.fn() },
+    webContents: {
+      setWindowOpenHandler: vi.fn(),
+      send: vi.fn(),
+      isDestroyed: vi.fn(() => false)
+    },
     loadURL: vi.fn(),
     on: vi.fn(),
     isMinimized: vi.fn(() => false),
+    isVisible: vi.fn(() => true),
+    isDestroyed: vi.fn(() => false),
     restore: vi.fn(),
+    show: vi.fn(),
+    hide: vi.fn(),
     focus: vi.fn()
   };
+}
+
+function winHandlerFor(win, event) {
+  const call = win.on.mock.calls.find(([name]) => name === event);
+  return call && call[1];
 }
 
 function handlerFor(event) {
@@ -220,6 +251,115 @@ describe("createWindow", () => {
     const closedHandler = win.on.mock.calls.find(([e]) => e === "closed")[1];
     closedHandler();
     expect(main.getMainWindow()).toBeNull();
+  });
+});
+
+describe("tray + close-to-tray", () => {
+  function bootReady() {
+    vi.spyOn(http, "get").mockImplementation((opts, cb) => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      cb({ resume: vi.fn() });
+      return req;
+    });
+    return main.onReady();
+  }
+
+  it("creates a tray with tooltip, menu, and click-to-restore", async () => {
+    await bootReady();
+    expect(electron.Tray).toHaveBeenCalledWith(expect.stringContaining("favicon.ico"));
+    const tray = main.getTray();
+    expect(tray.setToolTip).toHaveBeenCalledWith("MultiTerm Workbench");
+    expect(electron.Menu.buildFromTemplate).toHaveBeenCalled();
+    expect(tray.setContextMenu).toHaveBeenCalled();
+
+    // The tray's Show item and click both restore the window to the foreground.
+    const template = electron.Menu.buildFromTemplate.mock.calls[0][0];
+    const showItem = template.find((item) => item.label === "Show MultiTerm");
+    const win = main.getMainWindow();
+    win.isMinimized.mockReturnValue(true);
+    showItem.click();
+    expect(win.restore).toHaveBeenCalled();
+    expect(win.show).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+
+    const clickHandler = tray.on.mock.calls.find(([e]) => e === "click")[1];
+    win.show.mockClear();
+    clickHandler();
+    expect(win.show).toHaveBeenCalled();
+  });
+
+  it("quits from the tray menu bypassing the close interception", async () => {
+    await bootReady();
+    const template = electron.Menu.buildFromTemplate.mock.calls[0][0];
+    const quitItem = template.find((item) => item.label === "Quit MultiTerm");
+    quitItem.click();
+    expect(electron.app.isQuiting).toBe(true);
+    expect(electron.app.quit).toHaveBeenCalled();
+  });
+
+  it("intercepts the window close and asks the renderer instead of quitting", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    const closeHandler = winHandlerFor(win, "close");
+    const event = { preventDefault: vi.fn() };
+    closeHandler(event);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(win.webContents.send).toHaveBeenCalledWith("multiterm:close-request");
+  });
+
+  it("allows the close through when the app is already quitting", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    electron.app.isQuiting = true;
+    const closeHandler = winHandlerFor(win, "close");
+    const event = { preventDefault: vi.fn() };
+    closeHandler(event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(win.webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("falls back to hiding when the renderer is gone", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.webContents.isDestroyed.mockReturnValue(true);
+    const closeHandler = winHandlerFor(win, "close");
+    closeHandler({ preventDefault: vi.fn() });
+    expect(win.webContents.send).not.toHaveBeenCalled();
+    expect(win.hide).toHaveBeenCalled();
+  });
+
+  it("registers a close-response listener that hides, quits, or stays", async () => {
+    await bootReady();
+    const onCall = electron.ipcMain.on.mock.calls.find(([e]) => e === "multiterm:close-response");
+    expect(onCall).toBeTruthy();
+    const listener = onCall[1];
+    const win = main.getMainWindow();
+
+    listener({}, "tray");
+    expect(win.hide).toHaveBeenCalled();
+
+    listener({}, "quit");
+    expect(electron.app.isQuiting).toBe(true);
+    expect(electron.app.quit).toHaveBeenCalled();
+
+    win.hide.mockClear();
+    electron.app.quit.mockClear();
+    listener({}, "cancel");
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(electron.app.quit).not.toHaveBeenCalled();
+  });
+
+  it("destroys the tray on before-quit", () => {
+    // Keep whenReady pending so bootstrap only registers handlers (no onReady).
+    electron.app.whenReady.mockReturnValue(new Promise(() => {}));
+    main.createTray();
+    const tray = main.getTray();
+    main.bootstrap();
+    const beforeQuit = handlerFor("before-quit");
+    beforeQuit();
+    expect(tray.destroy).toHaveBeenCalled();
+    expect(main.getTray()).toBeNull();
   });
 });
 
