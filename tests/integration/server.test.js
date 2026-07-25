@@ -174,6 +174,67 @@ describe("shutdown", () => {
   });
 });
 
+describe("connection: memory stats welcome + client data isolation", () => {
+  const childProcess = require("node:child_process");
+
+  afterEach(() => {
+    app.__setMemStatsEnabled(false);
+    app.stopMemStats();
+    app.clients.clear();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function connect(socket) {
+    app.server.emit("upgrade", { url: "/ws", headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==" } }, socket);
+  }
+
+  function writesText(socket) {
+    return socket.write.mock.calls
+      .map(([buf]) => (Buffer.isBuffer(buf) ? buf.toString("latin1") : String(buf)))
+      .join("");
+  }
+
+  it("arms a refresh but sends no snapshot when none is cached yet", () => {
+    vi.useFakeTimers();
+    app.__setMemStatsEnabled(true);
+    const socket = fakeSocket("127.0.0.1");
+    connect(socket);
+    const text = writesText(socket);
+    expect(text).toContain("welcome");
+    expect(text).not.toContain("memstats");
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    app.stopMemStats();
+  });
+
+  it("pushes the cached snapshot to a newly connected client", () => {
+    vi.useFakeTimers();
+    app.__setMemStatsEnabled(true);
+    const primer = { send: vi.fn() };
+    app.clients.add(primer);
+    vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) =>
+      cb(null, JSON.stringify([{ ProcessId: process.pid, ParentProcessId: 0, WorkingSetSize: 4096 }])));
+    app.pushMemStats();
+    app.clients.delete(primer);
+
+    const socket = fakeSocket("127.0.0.1");
+    connect(socket);
+    expect(writesText(socket)).toContain("memstats");
+    app.stopMemStats();
+  });
+
+  it("isolates a client whose data throws while parsing and keeps the bridge alive", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const socket = fakeSocket("127.0.0.1");
+    connect(socket);
+    socket.write.mockClear();
+    // A non-Buffer chunk makes Buffer.concat throw inside readFrames.
+    socket.emit("data", "not-a-buffer");
+    expect(errorSpy).toHaveBeenCalled();
+    expect(writesText(socket)).toContain("Internal bridge error");
+  });
+});
+
 describe("elevated (administrator) terminal", () => {
   const childProcess = require("node:child_process");
   let platformDescriptor;
@@ -242,6 +303,32 @@ describe("elevated (administrator) terminal", () => {
     app.launchElevatedTerminal(client, { shell: "pwsh" });
     expect(spawn).not.toHaveBeenCalled();
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateError" }));
+  });
+
+  it("relays a launcher spawn 'error' event back to the client", () => {
+    const child = {
+      on: vi.fn((event, cb) => {
+        if (event === "error") cb(new Error("launch blocked"));
+      }),
+      unref: vi.fn()
+    };
+    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+
+    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
+
+    expect(client.send).toHaveBeenCalledWith({ type: "elevateError", message: "launch blocked" });
+  });
+
+  it("reports an error when spawning the launcher throws synchronously", () => {
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => {
+      throw new Error("spawn ENOENT");
+    });
+    const client = makeClient();
+
+    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
+
+    expect(client.send).toHaveBeenCalledWith({ type: "elevateError", message: "spawn ENOENT" });
   });
 
   it("routes an 'elevate' client message to the launcher", () => {

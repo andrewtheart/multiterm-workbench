@@ -21,8 +21,11 @@ const clients = new Set();
 // Memory stats are computed entirely in this bridge process (never the
 // renderer) so the UI thread is never blocked. Gated behind an env flag set by
 // the Electron main process and Windows-only, so tests and other platforms are
-// completely inert.
-const memStatsEnabled = process.env.MEMSTATS === "1" && process.platform === "win32";
+// completely inert. Extracted so both operands are directly exercisable.
+function computeMemStatsDefault() {
+  return process.env.MEMSTATS === "1" && process.platform === "win32";
+}
+let memStatsEnabled = computeMemStatsDefault();
 let memStatsInterval = null;
 let memSettleTimer = null;
 let memStatsInFlight = false;
@@ -162,12 +165,16 @@ process.on("exit", handleProcessExit);
 // kill/spawn calls can occasionally throw or reject; without these nets Node's
 // defaults would terminate the entire bridge and drop every live session. Log
 // loudly and keep serving the remaining terminals instead of crashing.
-process.on("uncaughtException", (error) => {
+process.on("uncaughtException", handleUncaughtException);
+process.on("unhandledRejection", handleUnhandledRejection);
+
+function handleUncaughtException(error) {
   console.error("[bridge] Uncaught exception (continuing):", error && error.stack ? error.stack : error);
-});
-process.on("unhandledRejection", (reason) => {
+}
+
+function handleUnhandledRejection(reason) {
   console.error("[bridge] Unhandled rejection (continuing):", reason && reason.stack ? reason.stack : reason);
-});
+}
 
 function handleProcessExit() {
   closeSessions(false);
@@ -186,6 +193,10 @@ function __setAllowRemote(value) {
   allowRemote = value;
 }
 
+function __setMemStatsEnabled(value) {
+  memStatsEnabled = Boolean(value);
+}
+
 module.exports = {
   server,
   start,
@@ -197,6 +208,7 @@ module.exports = {
   maxMessageSize,
   __setPty,
   __setAllowRemote,
+  __setMemStatsEnabled,
   getPathname,
   serveStaticFile,
   sendJsonResponse,
@@ -228,10 +240,13 @@ module.exports = {
   launchElevatedTerminal,
   buildElevatedShellArgs,
   computeMemStats,
+  computeMemStatsDefault,
   pushMemStats,
   scheduleMemStats,
   startMemStats,
-  stopMemStats
+  stopMemStats,
+  handleUncaughtException,
+  handleUnhandledRejection
 };
 
 function getPathname(rawUrl) {
@@ -551,25 +566,25 @@ function isSessionRunning(session) {
 
 function startLog(client, id) {
   const session = sessions.get(id);
-  if (!session) return;
-
-  if (session.logStream) {
+  if (!session) {
+    return;
+  } else if (session.logStream) {
     client.send({ type: "logStarted", id, path: session.logPath, already: true });
     return;
-  }
-
-  try {
-    const dir = path.join(os.homedir(), "MultiTerm", "logs");
-    fs.mkdirSync(dir, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const base = sanitizeLogName(session.title || session.shell || "session");
-    const file = path.join(dir, `${base}-${stamp}.log`);
-    session.logStream = fs.createWriteStream(file, { flags: "a" });
-    session.logPath = file;
-    session.logStream.write(`# MultiTerm log for "${session.title}" (${session.shell}) started ${new Date().toISOString()}\r\n`);
-    client.send({ type: "logStarted", id, path: file });
-  } catch (error) {
-    client.send({ type: "logError", id, message: error.message });
+  } else {
+    try {
+      const dir = path.join(os.homedir(), "MultiTerm", "logs");
+      fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const base = sanitizeLogName(session.title || session.shell || "session");
+      const file = path.join(dir, `${base}-${stamp}.log`);
+      session.logStream = fs.createWriteStream(file, { flags: "a" });
+      session.logPath = file;
+      session.logStream.write(`# MultiTerm log for "${session.title}" (${session.shell}) started ${new Date().toISOString()}\r\n`);
+      client.send({ type: "logStarted", id, path: file });
+    } catch (error) {
+      client.send({ type: "logError", id, message: error.message });
+    }
   }
 }
 
@@ -609,22 +624,24 @@ function stripAnsiForLog(data) {
 
 function revealPath(client, message) {
   const target = typeof message.path === "string" ? message.path.trim() : "";
-  if (!target) return;
-
-  let dir;
-  try {
-    const resolved = path.resolve(target);
-    dir = fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved);
-  } catch {
-    client.send({ type: "revealError", message: "Path not found." });
+  if (!target) {
     return;
-  }
+  } else {
+    let dir;
+    try {
+      const resolved = path.resolve(target);
+      dir = fs.statSync(resolved).isDirectory() ? resolved : path.dirname(resolved);
+    } catch {
+      client.send({ type: "revealError", message: "Path not found." });
+      return;
+    }
 
-  try {
-    const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
-    childProcess.spawn(command, [dir], { detached: true, stdio: "ignore" }).unref();
-  } catch (error) {
-    client.send({ type: "revealError", message: error.message });
+    try {
+      const command = process.platform === "win32" ? "explorer.exe" : process.platform === "darwin" ? "open" : "xdg-open";
+      childProcess.spawn(command, [dir], { detached: true, stdio: "ignore" }).unref();
+    } catch (error) {
+      client.send({ type: "revealError", message: error.message });
+    }
   }
 }
 
@@ -716,49 +733,66 @@ function computeMemStats(callback) {
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
     { windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: 8000 },
     (error, stdout) => {
-      if (error) { callback(null); return; }
-      let procs;
-      try { procs = JSON.parse(stdout); } catch { callback(null); return; }
-      if (!Array.isArray(procs)) procs = procs ? [procs] : [];
-
-      const wsById = new Map();
-      const childrenByParent = new Map();
-      for (const proc of procs) {
-        const pid = Number(proc.ProcessId);
-        const ppid = Number(proc.ParentProcessId);
-        wsById.set(pid, Number(proc.WorkingSetSize) || 0);
-        if (!childrenByParent.has(ppid)) childrenByParent.set(ppid, []);
-        childrenByParent.get(ppid).push(pid);
-      }
-
-      // Sum the process tree rooted at the Electron main process (our parent),
-      // which covers the Electron windows, this bridge and its pty children;
-      // add each live terminal PID explicitly in case ConPTY reparents it.
-      const roots = new Set();
-      if (process.ppid) roots.add(process.ppid);
-      roots.add(process.pid);
-      for (const session of sessions.values()) {
-        const pid = session.terminal && session.terminal.pid;
-        if (pid) roots.add(Number(pid));
-      }
-
-      const seen = new Set();
-      const stack = [...roots];
-      let appBytes = 0;
-      while (stack.length) {
-        const pid = stack.pop();
-        if (seen.has(pid)) continue;
-        seen.add(pid);
-        if (wsById.has(pid)) appBytes += wsById.get(pid);
-        const kids = childrenByParent.get(pid);
-        if (kids) {
-          for (const kid of kids) if (!seen.has(kid)) stack.push(kid);
+      if (error) {
+        callback(null);
+      } else {
+        let procs;
+        try {
+          procs = JSON.parse(stdout);
+        } catch {
+          callback(null);
+          return;
         }
-      }
+        const list = Array.isArray(procs) ? procs : (procs ? [procs] : []);
 
-      const systemTotal = os.totalmem();
-      const systemUsed = Math.max(0, systemTotal - os.freemem());
-      callback({ appBytes, systemUsed, systemTotal });
+        const wsById = new Map();
+        const childrenByParent = new Map();
+        for (const proc of list) {
+          const pid = Number(proc.ProcessId);
+          const ppid = Number(proc.ParentProcessId);
+          wsById.set(pid, Number(proc.WorkingSetSize) || 0);
+          if (!childrenByParent.has(ppid)) childrenByParent.set(ppid, []);
+          childrenByParent.get(ppid).push(pid);
+        }
+
+        // Sum the process tree rooted at the Electron main process (our parent),
+        // which covers the Electron windows, this bridge and its pty children;
+        // add each live terminal PID explicitly in case ConPTY reparents it.
+        const roots = new Set();
+        roots.add(process.pid);
+        const candidateRoots = [process.ppid, ...[...sessions.values()].map((s) => s.terminal && s.terminal.pid)];
+        for (const candidate of candidateRoots) {
+          const n = Number(candidate);
+          if (n) {
+            roots.add(n);
+          } else {
+            // Skip absent/zero pids (no parent, or a session without a live terminal).
+          }
+        }
+
+        const seen = new Set();
+        const stack = [...roots];
+        let appBytes = 0;
+        while (stack.length) {
+          const pid = stack.pop();
+          if (seen.has(pid)) {
+            continue;
+          } else {
+            seen.add(pid);
+            if (wsById.has(pid)) {
+              appBytes += wsById.get(pid);
+            } else {
+              // pid absent from the snapshot; it contributes nothing.
+            }
+            const kids = childrenByParent.get(pid) || [];
+            for (const kid of kids) stack.push(kid);
+          }
+        }
+
+        const systemTotal = os.totalmem();
+        const systemUsed = Math.max(0, systemTotal - os.freemem());
+        callback({ appBytes, systemUsed, systemTotal });
+      }
     }
   );
 }
@@ -768,31 +802,41 @@ function pushMemStats() {
   memStatsInFlight = true;
   computeMemStats((stats) => {
     memStatsInFlight = false;
-    if (!stats) return;
-    lastMemStats = stats;
-    broadcast({ type: "memstats", app: stats.appBytes, systemUsed: stats.systemUsed, systemTotal: stats.systemTotal });
+    if (!stats) {
+      return;
+    } else {
+      lastMemStats = stats;
+      broadcast({ type: "memstats", app: stats.appBytes, systemUsed: stats.systemUsed, systemTotal: stats.systemTotal });
+    }
   });
 }
 
 // Debounced update: terminal open/close events coalesce into a single refresh
 // once the new PIDs have had time to settle.
 function scheduleMemStats(delay) {
-  if (!memStatsEnabled) return;
-  clearTimeout(memSettleTimer);
-  memSettleTimer = setTimeout(pushMemStats, Math.max(0, Number(delay) || 0));
-  if (memSettleTimer.unref) memSettleTimer.unref();
+  if (!memStatsEnabled) {
+    return;
+  } else {
+    clearTimeout(memSettleTimer);
+    memSettleTimer = setTimeout(pushMemStats, Math.max(0, Number(delay) || 0));
+    memSettleTimer.unref();
+  }
 }
 
 function startMemStats() {
   if (!memStatsEnabled || memStatsInterval) return;
   scheduleMemStats(1500);
   memStatsInterval = setInterval(pushMemStats, 10000);
-  if (memStatsInterval.unref) memStatsInterval.unref();
+  memStatsInterval.unref();
 }
 
 function stopMemStats() {
-  if (memStatsInterval) { clearInterval(memStatsInterval); memStatsInterval = null; }
-  if (memSettleTimer) { clearTimeout(memSettleTimer); memSettleTimer = null; }
+  // clearInterval/clearTimeout are safe no-ops for null handles, so the timers
+  // can be cleared unconditionally (branch-free).
+  clearInterval(memStatsInterval);
+  memStatsInterval = null;
+  clearTimeout(memSettleTimer);
+  memSettleTimer = null;
 }
 
 function broadcast(message) {
@@ -818,56 +862,55 @@ function sanitizeId(value) {
   return typeof value === "string" && /^[a-zA-Z0-9_-]{8,80}$/.test(value) ? value : crypto.randomUUID();
 }
 
-function getShell(value) {
-  if (value === "powershell") {
-    return {
-      args: ["-NoLogo", "-NoExit"],
-      file: "powershell.exe",
-      label: "Windows PowerShell"
-    };
-  }
-
-  if (value === "cmd") {
-    return {
-      args: [],
-      file: "cmd.exe",
-      label: "Command Prompt"
-    };
-  }
-
-  if (value === "wsl") {
-    return {
-      args: [],
-      file: "wsl.exe",
-      label: "WSL"
-    };
-  }
-
-  return {
+// Shell definitions keyed by the client-supplied identifier. A lookup keeps the
+// selection branch-free (unknown/empty values fall back to the pwsh default).
+const SHELL_DEFINITIONS = {
+  powershell: {
     args: ["-NoLogo", "-NoExit"],
-    file: "pwsh.exe",
-    label: "PowerShell 7"
-  };
+    file: "powershell.exe",
+    label: "Windows PowerShell"
+  },
+  cmd: {
+    args: [],
+    file: "cmd.exe",
+    label: "Command Prompt"
+  },
+  wsl: {
+    args: [],
+    file: "wsl.exe",
+    label: "WSL"
+  }
+};
+
+const DEFAULT_SHELL = {
+  args: ["-NoLogo", "-NoExit"],
+  file: "pwsh.exe",
+  label: "PowerShell 7"
+};
+
+function getShell(value) {
+  return SHELL_DEFINITIONS[value] || DEFAULT_SHELL;
 }
 
 function getWorkingDirectory(value) {
   if (typeof value !== "string" || !value.trim()) {
     return process.cwd();
-  }
-
-  const resolved = path.resolve(value.trim());
-
-  try {
-    if (fs.statSync(resolved).isDirectory()) {
-      return resolved;
+  } else {
+    const resolved = path.resolve(value.trim());
+    try {
+      if (fs.statSync(resolved).isDirectory()) {
+        return resolved;
+      } else {
+        return process.cwd();
+      }
+    } catch {
+      return process.cwd();
     }
-  } catch {
-    return process.cwd();
   }
-
-  return process.cwd();
 }
 
+const LOOPBACK_ADDRESSES = ["127.0.0.1", "::1", "::ffff:127.0.0.1"];
+
 function isLocalAddress(address) {
-  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+  return LOOPBACK_ADDRESSES.includes(address);
 }

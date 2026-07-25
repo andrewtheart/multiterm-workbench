@@ -74,6 +74,26 @@ describe("createSession", () => {
     expect(client.send).toHaveBeenCalledWith({ type: "createFailed", id: "session03", message: "no shell" });
     expect(server.sessions.has("session03")).toBe(false);
   });
+
+  it("writes sanitized pty output to the log stream when one is attached", () => {
+    const client = fakeClient();
+    server.createSession(client, { id: "session04" });
+    const session = server.sessions.get("session04");
+    const write = vi.fn();
+    session.logStream = { write };
+
+    terminal.fire("data", "\x1b[31mred\x1b[0m");
+    expect(write).toHaveBeenCalledWith("red");
+  });
+
+  it("never lets a failing log write break the live session", () => {
+    const client = fakeClient();
+    server.createSession(client, { id: "session05" });
+    const session = server.sessions.get("session05");
+    session.logStream = { write: () => { throw new Error("disk full"); } };
+
+    expect(() => terminal.fire("data", "output")).not.toThrow();
+  });
 });
 
 describe("writeSession", () => {

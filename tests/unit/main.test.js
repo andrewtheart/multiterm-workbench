@@ -409,6 +409,130 @@ describe("formatError", () => {
   });
 });
 
+describe("showMainWindow / createTray / close handling edge cases", () => {
+  it("creates a window when none exists yet", () => {
+    main.__reset();
+    expect(main.getMainWindow()).toBeNull();
+    main.showMainWindow();
+    expect(electron.BrowserWindow).toHaveBeenCalledTimes(1);
+    expect(main.getMainWindow()).not.toBeNull();
+  });
+
+  it("shows and focuses a non-minimized window without restoring it", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.isMinimized.mockReturnValue(false);
+    win.show.mockClear();
+    win.focus.mockClear();
+    main.showMainWindow();
+    expect(win.restore).not.toHaveBeenCalled();
+    expect(win.show).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+  });
+
+  it("returns the existing tray on a second createTray call", () => {
+    const first = main.createTray();
+    expect(electron.Tray).toHaveBeenCalledTimes(1);
+    const second = main.createTray();
+    expect(electron.Tray).toHaveBeenCalledTimes(1); // early return, no new Tray
+    expect(second).toBe(first);
+  });
+
+  it("does nothing when the platform has no Tray support", () => {
+    main.__setElectron({ ...electron, Tray: undefined });
+    main.__reset();
+    expect(main.createTray()).toBeNull();
+    expect(main.getTray()).toBeNull();
+  });
+
+  it("restores the window from the tray double-click handler", () => {
+    const tray = main.createTray();
+    main.createWindow();
+    const win = main.getMainWindow();
+    const dblClick = tray.on.mock.calls.find(([e]) => e === "double-click")[1];
+    win.show.mockClear();
+    dblClick();
+    expect(win.show).toHaveBeenCalled();
+  });
+
+  it("ignores a tray-dock response when there is no window", () => {
+    main.__reset();
+    expect(() => main.handleCloseResponse("tray")).not.toThrow();
+  });
+
+  it("leaves everything alone for an unrecognized close response", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.hide.mockClear();
+    main.handleCloseResponse("something-else");
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(electron.app.quit).not.toHaveBeenCalled();
+  });
+
+  it("registerCloseHandler is a no-op without an ipcMain.on", () => {
+    main.__setElectron({ ...electron, ipcMain: null });
+    expect(() => main.registerCloseHandler()).not.toThrow();
+  });
+
+  it("registerCloseHandler wires a listener even without removeAllListeners", () => {
+    const on = vi.fn();
+    main.__setElectron({ ...electron, ipcMain: { on } });
+    main.registerCloseHandler();
+    expect(on).toHaveBeenCalledWith("multiterm:close-response", expect.any(Function));
+  });
+});
+
+describe("registerScriptPicker (via onReady)", () => {
+  function bootReady() {
+    vi.spyOn(http, "get").mockImplementation((opts, cb) => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      cb({ resume: vi.fn() });
+      return req;
+    });
+    return main.onReady();
+  }
+
+  function pickHandler() {
+    const call = electron.ipcMain.handle.mock.calls.find(([e]) => e === "multiterm:pick-script");
+    return call && call[1];
+  }
+
+  it("does not register a handler when ipcMain.handle is unavailable", async () => {
+    electron.ipcMain.handle = undefined;
+    await bootReady();
+    // No throw and no handler registration attempted.
+    expect(main.getMainWindow()).not.toBeNull();
+  });
+
+  it("returns the chosen file path when a script is selected", async () => {
+    electron.dialog.showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: ["C:\\scripts\\deploy.ps1"] }));
+    await bootReady();
+    const handler = pickHandler();
+    await expect(handler()).resolves.toBe("C:\\scripts\\deploy.ps1");
+    expect(electron.dialog.showOpenDialog).toHaveBeenCalled();
+  });
+
+  it("returns null for every empty/cancelled dialog outcome", async () => {
+    electron.dialog.showOpenDialog = vi.fn();
+    await bootReady();
+    const handler = pickHandler();
+
+    electron.dialog.showOpenDialog.mockResolvedValueOnce(null);
+    await expect(handler()).resolves.toBeNull();
+
+    electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: true });
+    await expect(handler()).resolves.toBeNull();
+
+    electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: "not-an-array" });
+    await expect(handler()).resolves.toBeNull();
+
+    electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [] });
+    await expect(handler()).resolves.toBeNull();
+  });
+});
+
+
 describe("bootstrap", () => {
   it("quits immediately when the single-instance lock is not acquired", () => {
     electron.app.requestSingleInstanceLock.mockReturnValue(false);
