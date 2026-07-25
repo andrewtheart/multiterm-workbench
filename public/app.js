@@ -359,6 +359,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindCloseConfirm();
   bindGlobalShortcuts();
   bindFindAll();
+  window.addEventListener("resize", noteWindowResizeDrag);
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
   });
@@ -921,7 +922,7 @@ function addTerminal(options = {}) {
   });
 
   term.onResize(({ cols, rows }) => {
-    sendResize(terminal, cols, rows);
+    queueResize(terminal, cols, rows);
   });
 
   term.onBell(() => handleBell(terminal));
@@ -1906,9 +1907,49 @@ function fitAllTerminals() {
   }
 }
 
+// A continuous window drag fires the ResizeObserver — and thus the VISUAL fit
+// below — dozens of times per second. That fit is cheap and keeps the panes
+// tracking the layout smoothly, but forwarding every intermediate size to the
+// shell makes its line editor (PSReadLine) repaint the prompt at dozens of
+// widths per second; those repaints race xterm's own reflow and corrupt the
+// rendered line, stranding the cursor far from the visible prompt. So while a
+// window drag is in flight we hold the PTY resize (WINCH) back and forward a
+// single settled size once the drag stops — the shell then repaints exactly
+// once, at the size the drag landed on.
+//
+// Crucially the deferral is gated on an ACTIVE window-resize drag. Terminal
+// creation and pane/layout changes drive the ResizeObserver too, but WITHOUT a
+// window "resize" event, so those forward immediately (identical to the historic
+// behaviour). A delayed creation/layout resize would let the shell's resize
+// repaint land after other code wrote straight into the buffer and clobber it.
+const RESIZE_DRAG_IDLE_MS = 150;
+let resizeDragActive = false;
+let resizeDragIdleHandle = 0;
+
+// Fired on every window "resize" event: mark a drag in flight and (re)arm the
+// idle timer that ends it. A one-off resize (maximize/snap) trips this once and
+// settles after RESIZE_DRAG_IDLE_MS; a drag keeps it armed until motion stops.
+function noteWindowResizeDrag() {
+  resizeDragActive = true;
+  if (resizeDragIdleHandle) {
+    window.clearTimeout(resizeDragIdleHandle);
+  }
+  resizeDragIdleHandle = window.setTimeout(endWindowResizeDrag, RESIZE_DRAG_IDLE_MS);
+}
+
+// The drag has settled: forward the final size of every terminal so each shell
+// repaints once at the width the drag ended on.
+function endWindowResizeDrag() {
+  resizeDragIdleHandle = 0;
+  resizeDragActive = false;
+  for (const terminal of state.terminals.values()) {
+    sendResize(terminal, terminal.term.cols, terminal.term.rows);
+  }
+}
+
 function scheduleFit(terminal) {
   // The ResizeObserver watches both the pane and its screen, so a single layout
-  // change can fire this repeatedly. Collapse all of it into one fit per frame.
+  // change can fire this twice; coalesce to one visual fit per animation frame.
   if (terminal.fitScheduled) return;
   terminal.fitScheduled = true;
   window.requestAnimationFrame(() => {
@@ -1918,15 +1959,23 @@ function scheduleFit(terminal) {
     } catch {
       return;
     }
-    sendResize(terminal, terminal.term.cols, terminal.term.rows);
+    queueResize(terminal, terminal.term.cols, terminal.term.rows);
   });
 }
 
-// Single funnel for pty resize messages. fitAddon.fit() triggers term.onResize,
-// which also routes here, so both paths share one dedupe guard: identical
-// dimensions never hit the bridge twice. The cache only advances on a successful
-// send, so a resize attempted while the bridge is offline is retried (not
-// suppressed) once scheduleFit runs again after reconnect.
+// Both fitAddon.fit() (above) and term.onResize funnel here. Outside a window
+// drag the size is forwarded immediately; during a drag it is suppressed and
+// endWindowResizeDrag() forwards the settled size once motion stops.
+function queueResize(terminal, cols, rows) {
+  if (resizeDragActive) return;
+  sendResize(terminal, cols, rows);
+}
+
+// Single funnel for pty resize messages. queueResize routes both the fit path
+// and term.onResize into here, sharing one dedupe guard: identical dimensions
+// never hit the bridge twice. The cache only advances on a successful send, so a
+// resize attempted while the bridge is offline is retried (not suppressed) once
+// queueResize runs again after reconnect.
 function sendResize(terminal, cols, rows) {
   if (terminal.lastSentCols === cols && terminal.lastSentRows === rows) return;
   if (sendBridge({ type: "resize", id: terminal.id, cols, rows })) {

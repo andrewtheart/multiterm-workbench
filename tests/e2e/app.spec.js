@@ -270,6 +270,59 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("holds the PTY resize during a window drag and forwards one settled size", async () => {
+    // Regression guard for the cursor-desync bug: forwarding a fresh size to the
+    // shell on every ResizeObserver frame during a continuous WINDOW drag sends a
+    // WINCH storm to the PTY, and PSReadLine's line reflow races xterm's own
+    // reflow — corrupting the rendered line and stranding the cursor far from the
+    // visible prompt. The visual fit still runs every frame (so panes track the
+    // layout smoothly), but while a window drag is in flight the PTY resize is
+    // held back and a SINGLE settled size is forwarded once the drag stops. A
+    // discrete resize with no window drag (terminal creation / layout change)
+    // must still forward immediately.
+    const result = await page.evaluate(async () => {
+      const term = state.terminals.get(state.activeId) || state.terminals.values().next().value;
+      const id = term.id;
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // Intercept the bridge so we can count the resize messages this pane emits.
+      const origSend = window.sendBridge;
+      const sends = [];
+      window.sendBridge = (msg) => {
+        if (msg && msg.type === "resize" && msg.id === id) sends.push({ cols: msg.cols, rows: msg.rows });
+        return origSend(msg);
+      };
+      // Prime the dedupe cache so the settled size is guaranteed to be a change.
+      term.lastSentCols = 0;
+      term.lastSentRows = 0;
+      const rows = term.term.rows;
+      // 8 changing widths, 20ms apart — mimics a drag's frames. Each frame a
+      // window "resize" event marks the drag in flight; the terminal then refits.
+      const widths = [70, 90, 72, 92, 74, 94, 76, 96];
+      for (const w of widths) {
+        window.dispatchEvent(new Event("resize"));
+        term.term.resize(w, rows); // fires onResize -> queueResize (deferred mid-drag)
+        await sleep(20);
+      }
+      const during = sends.length; // the WINCH is held back for the whole drag
+      await sleep(300);            // > RESIZE_DRAG_IDLE_MS: drag settles, size flushed
+      const afterDrag = sends.length;
+      // Outside a drag, a discrete resize forwards at once (creation/layout path).
+      term.term.resize(88, rows);
+      const immediate = sends.length;
+      window.sendBridge = origSend;
+      return { during, afterDrag, immediate, sent: sends, finalWidth: widths[widths.length - 1], rows };
+    });
+    // Mid-drag the shell is never resized; the drag collapses to exactly ONE
+    // settled WINCH carrying the final width — never one-per-frame.
+    expect(result.during).toBe(0);                        // no WINCH while dragging
+    expect(result.afterDrag).toBe(1);                     // one settled send at drag end
+    expect(result.sent[0].cols).toBe(result.finalWidth);  // it carried the final size
+    expect(result.sent[0].rows).toBe(result.rows);
+    // A resize with no active window drag is forwarded immediately.
+    expect(result.immediate).toBe(2);
+    expect(result.sent[1].cols).toBe(88);
+  });
+
   test("closes all terminals", async () => {
     await page.locator("#closeAllTerminals").click();
     await expect(page.locator("#statusSessions")).toHaveText("0 sessions");
