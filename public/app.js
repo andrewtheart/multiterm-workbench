@@ -41,7 +41,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.15";
+const APP_VERSION = "0.1.16";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
