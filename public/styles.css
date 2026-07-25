@@ -19,6 +19,9 @@
   --radius-lg: 18px;
   --radius-full: 999px;
 
+  /* Layout */
+  --sidecar-width: 300px;
+
   /* Elevation (Material tonal shadows) */
   --elev-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
   --elev-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
@@ -403,6 +406,18 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   display: none;
 }
 
+/* The "show layout controls" restore button floats at the bottom-right of the
+   left panel's footprint (the same spot as the in-panel "hide" button), so the
+   toggle appears to stay put as the panel collapses and expands. */
+.chrome-controls #toggleSidecar {
+  position: fixed;
+  bottom: 46px;
+  left: calc(var(--sidecar-width) - 54px);
+  right: auto;
+  top: auto;
+  z-index: 40;
+}
+
 /* The "show header" restore button floats at the top-right, where the header
    it reveals lives — not alongside the bottom-left sidecar toggle. */
 .chrome-controls #toggleHeader {
@@ -414,19 +429,29 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   z-index: 40;
 }
 
-/* Sticky toggle at the top-right of the layout panel */
+/* "Hide layout controls" toggle floats at the bottom-right of the left control
+   panel. It lives inside .control-panel so it disappears automatically when the
+   panel collapses; the fixed positioning keeps it pinned above panel scroll. */
 .panel-tools {
+  bottom: 46px;
   display: flex;
-  height: 0;
   justify-content: flex-end;
+  left: 0;
   pointer-events: none;
-  position: sticky;
-  top: 0;
-  z-index: 6;
+  position: fixed;
+  width: calc(var(--sidecar-width) - 14px);
+  z-index: 40;
 }
 
 .panel-tools button {
   pointer-events: auto;
+}
+
+.panel-tools #toggleSidecarTop {
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  background: var(--surface-translucent);
+  box-shadow: var(--elev-3);
 }
 
 /* ---------------- Top bar --------------- */
@@ -514,7 +539,7 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
 .workbench {
   display: grid;
   grid-row: workbench;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: var(--sidecar-width) minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -596,7 +621,7 @@ body.header-hidden .terminal-host[data-layout="focus"] .terminal-pane.is-primary
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow: auto;
-  padding: 16px 14px;
+  padding: 16px 14px 64px;
 }
 
 .control-section {
