@@ -205,8 +205,6 @@ function registerCloseHandler() {
 
 // Single-instance: focus the existing window instead of launching a second app.
 async function onReady() {
-  // No default application menu — keeps it feeling like a native tool, not a browser.
-  Menu.setApplicationMenu(null);
   startServer();
   try {
     await waitForServer();
@@ -256,6 +254,11 @@ function bootstrap() {
     app.quit();
     return;
   }
+
+  // Perf (Electron guideline #8): disable the default application menu *before*
+  // the app is ready so Electron never builds it. We ship a frameless-feeling,
+  // menu-less tool, so this shaves startup work.
+  Menu.setApplicationMenu(null);
 
   app.on("second-instance", () => {
     if (mainWindow) {

@@ -351,19 +351,25 @@ window.addEventListener("DOMContentLoaded", () => {
   applySettings();
   enhanceComboboxes();
   refreshWorkspaceSelect();
-  attachRipples();
   bindPalette();
   bindContextMenu();
   bindRightClickWarning();
   bindCloseConfirm();
   bindGlobalShortcuts();
   bindFindAll();
-  bindLogConsole();
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
   });
   connectBridge();
   refreshIcons();
+  // Perf (Electron guideline #4): defer low-priority, non-visual startup work to
+  // an idle period so the first terminal connects and becomes interactive sooner.
+  // Ripples are cosmetic; the log/diagnostics panel is opened on demand — neither
+  // is needed for first paint or early input.
+  whenIdle(() => {
+    attachRipples();
+    bindLogConsole();
+  });
   log.debug("app", "UI initialized", { theme: state.settings.appTheme, layout: state.settings.layout });
 });
 
@@ -1961,6 +1967,17 @@ function applySnapLayout() {
 }
 
 /* ---------------- Ripple (Material) --------------- */
+
+// Perf (Electron guideline #4): run low-priority, non-visual work during an idle
+// period so it never competes with first paint, bridge connection, or input.
+// Falls back to a short timeout where requestIdleCallback is unavailable.
+function whenIdle(fn) {
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(() => fn(), { timeout: 1000 });
+  } else {
+    window.setTimeout(fn, 1);
+  }
+}
 
 function attachRipples() {
   document.addEventListener("pointerdown", (event) => {

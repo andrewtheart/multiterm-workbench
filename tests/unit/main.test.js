@@ -372,7 +372,6 @@ describe("onReady", () => {
       return req;
     });
     await main.onReady();
-    expect(electron.Menu.setApplicationMenu).toHaveBeenCalledWith(null);
     expect(childProcess.spawn).toHaveBeenCalled();
     expect(main.getMainWindow()).not.toBeNull();
 
@@ -421,6 +420,8 @@ describe("bootstrap", () => {
   it("registers lifecycle handlers when the lock is acquired", () => {
     main.bootstrap();
     expect(electron.app.whenReady).toHaveBeenCalled();
+    // Perf: the default menu is disabled before ready (guideline #8).
+    expect(electron.Menu.setApplicationMenu).toHaveBeenCalledWith(null);
 
     const beforeQuit = handlerFor("before-quit");
     beforeQuit();
