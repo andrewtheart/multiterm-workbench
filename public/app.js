@@ -943,7 +943,22 @@ function addTerminal(options = {}) {
   });
 
   term.element?.addEventListener("focusin", () => setActiveTerminal(id));
-  pane.addEventListener("pointerdown", () => setActiveTerminal(id));
+  pane.addEventListener("pointerdown", (event) => {
+    // Marking a pane active can reflow the whole layout (e.g. Focus-rail and the
+    // master layouts promote the active pane to the large primary slot). Doing
+    // that on pointerdown while the user is pressing a pane-action control would
+    // move the control out from under the cursor BEFORE the click is delivered:
+    // mousedown lands on the button, the layout shifts it hundreds of pixels, and
+    // mouseup/click then land on whatever chrome is now under the cursor. The
+    // button's own click handler never runs — so the Focus button would grab DOM
+    // focus but never focus the terminal (typing goes nowhere), and Close/Clear/
+    // etc. would silently do nothing. Skip re-activation for control presses; the
+    // action handlers below activate/focus the pane themselves, after their click
+    // has actually been delivered. Clicks on the xterm surface and bare chrome
+    // still activate on pointerdown as before (they don't move the hit target).
+    if (event.target.closest("button, select, input, a, [contenteditable]")) return;
+    setActiveTerminal(id);
+  });
   pane.addEventListener("pointerup", () => syncManualLayout(terminal));
 
   // Keep keyboard focus in sync with the pane the user clicks. The pointerdown

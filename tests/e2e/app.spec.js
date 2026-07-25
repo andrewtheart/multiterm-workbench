@@ -539,6 +539,105 @@ test.describe("MultiTerm Workbench UI", () => {
     });
   });
 
+  test("keeps a rail pane's controls working when activating it reflows the layout", async () => {
+    // Regression guard for the Focus-rail "press a control, the layout reflows the
+    // pane out from under the cursor, and the click misses the button" bug. In
+    // Focus-rail (and the master layouts) marking a pane active promotes it to the
+    // large primary slot. That re-activation ran on POINTERDOWN — before the click
+    // was delivered — so pressing a small rail pane's Focus/Close button moved the
+    // button hundreds of pixels between mousedown and mouseup: mouseup/click landed
+    // on empty chrome, the button's own handler never ran, and the Focus button
+    // (which grabbed DOM focus on mousedown) left keyboard focus stuck on itself so
+    // typing went nowhere, while Close silently did nothing. The fix skips the
+    // pointerdown re-activation for control presses, so the control's click handler
+    // runs after the click has actually been delivered.
+    await page.evaluate(() => {
+      for (const t of [...state.terminals.values()]) disposeTerminal(t);
+      state.terminals.clear();
+      state.activeId = null;
+      state.settings.layout = "auto";
+      elements.layoutMode.value = "auto";
+      applySettings();
+      addTerminal();
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    for (let i = 0; i < 4; i++) await page.locator("#addTerminal").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(5);
+
+    const ids = await page.evaluate(() =>
+      [...document.querySelectorAll(".terminal-pane")].map((p) => p.dataset.id)
+    );
+
+    // Enter Focus-rail with the FIRST pane as the large primary, so the other four
+    // are small rail panes whose controls WILL move when they are activated.
+    await page.evaluate((id) => {
+      setActiveTerminal(id);
+      state.settings.layout = "focus";
+      elements.layoutMode.value = "focus";
+      applySettings();
+      saveSettings();
+    }, ids[0]);
+    await page.waitForTimeout(200); // let the rail layout settle
+    await expect(page.locator(".terminal-pane.is-primary")).toHaveCount(1);
+    const primaryBefore = await page.evaluate(() =>
+      document.querySelector(".terminal-pane.is-primary")?.dataset.id
+    );
+    expect(primaryBefore).toBe(ids[0]);
+
+    const focusTargetId = ids[3]; // a small rail pane (not the primary)
+
+    const readFocus = () => page.evaluate(() => {
+      const a = document.activeElement;
+      const pane = a && a.closest ? a.closest(".terminal-pane") : null;
+      const primary = document.querySelector(".terminal-pane.is-primary");
+      return {
+        activeId: state.activeId,
+        focusPaneId: pane ? pane.dataset.id : null,
+        isTerminalTextarea: !!(a && a.classList && a.classList.contains("xterm-helper-textarea")),
+        primaryId: primary ? primary.dataset.id : null
+      };
+    });
+
+    // Use a rail pane's Focus button with a real trusted click. The reflow happens
+    // during the click; the fix keeps the button under the cursor so its handler
+    // runs. Pre-fix, focus stayed on the button (isTerminalTextarea === false).
+    await page.locator(".terminal-pane").nth(3).locator('[data-action="focus"]').click();
+    await page.waitForTimeout(80);
+
+    const after = await readFocus();
+    expect(after.activeId).toBe(focusTargetId);
+    expect(after.primaryId).toBe(focusTargetId);
+    expect(after.focusPaneId).toBe(focusTargetId);
+    expect(after.isTerminalTextarea).toBe(true);
+
+    // Typing now routes to the focused pane (the actual user-visible symptom):
+    // xterm delivers the keystroke to the terminal whose textarea holds focus.
+    // Pre-fix that textarea was never focused, so this keystroke never arrives.
+    const routedPromise = page.evaluate((id) => new Promise((resolve) => {
+      const term = state.terminals.get(id).term;
+      const sub = term.onData((d) => { sub.dispose(); resolve(d); });
+      setTimeout(() => { try { sub.dispose(); } catch {} resolve(null); }, 2000);
+    }), focusTargetId);
+    await page.keyboard.type("x");
+    const routed = await routedPromise;
+    expect(routed).toBe("x");
+
+    // A DIFFERENT rail pane's Close button must actually close it despite the same
+    // reflow. Pre-fix the pointerdown promotion moved the X and the click missed it,
+    // so nothing closed; post-fix the X's handler runs and the pane is removed.
+    const closeTargetId = ids[4];
+    await page.locator(`.terminal-pane[data-id="${closeTargetId}"] [data-action="close"]`).click();
+    await expect(page.locator(`.terminal-pane[data-id="${closeTargetId}"]`)).toHaveCount(0);
+
+    // Restore a normal layout so later tests start from a clean state.
+    await page.evaluate(() => {
+      state.settings.layout = "auto";
+      elements.layoutMode.value = "auto";
+      applySettings();
+      saveSettings();
+    });
+  });
+
   test("closes all terminals", async () => {
     await page.locator("#closeAllTerminals").click();
     await expect(page.locator("#statusSessions")).toHaveText("0 sessions");
