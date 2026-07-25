@@ -2,7 +2,7 @@
 
 A local xterm.js workbench for running multiple PowerShell sessions from one browser page.
 
-**⬇️ [Download MultiTerm Workbench v0.1.14](https://github.com/andrewtheart/multiterm-workbench/releases/tag/v0.1.14)** — Windows installer, from the [releases page](https://github.com/andrewtheart/multiterm-workbench/releases).
+**⬇️ [Download MultiTerm Workbench v0.1.15](https://github.com/andrewtheart/multiterm-workbench/releases/tag/v0.1.15)** — Windows installer, from the [releases page](https://github.com/andrewtheart/multiterm-workbench/releases).
 
 ![MultiTerm Workbench running ten PowerShell sessions in a 5-column grid, each executing a different command](docs/screenshot.png)
 
@@ -83,7 +83,7 @@ Grab the latest per-user installer from the
 [releases page](https://github.com/andrewtheart/multiterm-workbench/releases/latest),
 or directly:
 
-- [MultiTerm-Setup-0.1.1.exe](https://github.com/andrewtheart/multiterm-workbench/releases/download/v0.1.1/MultiTerm-Setup-0.1.1.exe)
+- [MultiTerm-Setup-0.1.15.exe](https://github.com/andrewtheart/multiterm-workbench/releases/download/v0.1.15/MultiTerm-Setup-0.1.15.exe)
 
 It performs a per-user install by default (no UAC prompt); you may elect a
 machine-wide install from the setup dialog.
