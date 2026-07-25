@@ -1003,6 +1003,39 @@ test.describe("Settings panel — every control has its expected effect", () => 
       await expect(page.locator("body")).not.toHaveClass(/(^|\s)sidecar-hidden(\s|$)/);
     });
 
+    test("layout-panel chevrons anchor bottom-left (collapsed) / bottom-right of panel (expanded)", async () => {
+      const vp = page.viewportSize();
+      const nearBottom = (box) => box.y + box.height >= vp.height - 120;
+
+      // Expanded: the in-panel "hide" chevron sits at the bottom-RIGHT corner of
+      // the left control panel; the floating "show" chevron is hidden.
+      await page.evaluate(() => document.body.classList.remove("sidecar-hidden"));
+      const hideBox = await page.locator("#toggleSidecarTop").boundingBox();
+      expect(hideBox).not.toBeNull();
+      expect(await page.locator("#toggleSidecar").boundingBox()).toBeNull();
+      // Right edge tracks the ~300px panel's right edge (14px inset), and it is
+      // pushed to the panel's right (not hugging the window's left edge).
+      expect(hideBox.x).toBeGreaterThan(100);
+      expect(hideBox.x + hideBox.width).toBeGreaterThan(240);
+      expect(hideBox.x + hideBox.width).toBeLessThan(340);
+      expect(nearBottom(hideBox)).toBe(true);
+
+      // Collapsed: the "show" chevron floats at the bottom-LEFT edge of the
+      // window; the in-panel "hide" chevron is gone with the panel.
+      await domClick("#toggleSidecar");
+      await expect(page.locator("body")).toHaveClass(/(^|\s)sidecar-hidden(\s|$)/);
+      const showBox = await page.locator("#toggleSidecar").boundingBox();
+      expect(showBox).not.toBeNull();
+      expect(await page.locator("#toggleSidecarTop").boundingBox()).toBeNull();
+      expect(showBox.x).toBeLessThan(40); // hugs the left edge
+      expect(nearBottom(showBox)).toBe(true);
+      // It really moved to the opposite corner from the expanded "hide" button.
+      expect(showBox.x).toBeLessThan(hideBox.x);
+
+      await domClick("#toggleSidecar"); // leave expanded/tidy
+      await expect(page.locator("body")).not.toHaveClass(/(^|\s)sidecar-hidden(\s|$)/);
+    });
+
     // ---- Workspaces --------------------------------------------------------
 
     test("Workspace save / restore / delete roundtrip restores the saved layout", async () => {

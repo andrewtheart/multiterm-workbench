@@ -406,13 +406,14 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   display: none;
 }
 
-/* The "show layout controls" restore button floats at the bottom-right of the
-   left panel's footprint (the same spot as the in-panel "hide" button), so the
-   toggle appears to stay put as the panel collapses and expands. */
+/* The "show layout controls" restore button floats at the bottom-left edge of
+   the window while the panel is collapsed. (When the panel is expanded this
+   button is hidden and the in-panel "hide" button takes over at the panel's
+   bottom-right corner.) */
 .chrome-controls #toggleSidecar {
   position: fixed;
   bottom: 46px;
-  left: calc(var(--sidecar-width) - 54px);
+  left: 14px;
   right: auto;
   top: auto;
   z-index: 40;
