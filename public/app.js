@@ -914,25 +914,6 @@ function addTerminal(options = {}) {
 
   term.onData((data) => {
     const targets = state.settings.syncInput ? [...state.terminals.keys()] : [id];
-    // --- TEMP DIAGNOSTIC (focus-routing investigation) — remove after diagnosis ---
-    try {
-      const ae = document.activeElement;
-      const fpane = ae && ae.closest ? ae.closest(".terminal-pane") : null;
-      const ftitle = fpane && fpane.querySelector(".pane-title") ? fpane.querySelector(".pane-title").value : (fpane ? "(pane)" : "(no-pane)");
-      const dlog = (window.__mtInputLog = window.__mtInputLog || []);
-      dlog.push({
-        t: new Date().toISOString().slice(11, 23),
-        firedForId: id,
-        firedForTitle: terminal.titleInput ? terminal.titleInput.value : null,
-        focusTitle: ftitle,
-        focusTag: ae ? ae.tagName + "." + String(ae.className || "").split(" ")[0] : null,
-        activeId: state.activeId,
-        sendingTo: targets.slice(),
-        data: JSON.stringify(String(data)).slice(0, 24),
-      });
-      if (dlog.length > 2000) dlog.shift();
-    } catch (e) {}
-    // --- END TEMP DIAGNOSTIC ---
     for (const targetId of targets) {
       const target = state.terminals.get(targetId);
       if (target) setAwaitingInput(target, false);
@@ -1043,6 +1024,13 @@ function bindPaneControls(terminal) {
       setActiveTerminal(terminal.id);
       applySettings();
       saveSettings();
+      // Switching to Focus-rail layout and marking the pane active does not move
+      // DOM keyboard focus into the terminal — the click leaves focus on the
+      // Focus button (or blurs to <body>), so keystrokes keep flowing to
+      // whichever terminal was focused before. Focus the pane's terminal so
+      // typing lands in the pane the user just chose to focus.
+      revealTerminal(terminal);
+      terminal.term.focus();
     } else if (action === "clear") {
       clearTerminal(terminal.id);
     } else if (action === "copy") {

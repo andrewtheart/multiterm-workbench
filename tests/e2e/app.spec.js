@@ -465,6 +465,80 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(after.isTerminalTextarea).toBe(true);
   });
 
+  test("moves keyboard focus into a pane when its Focus button is used", async () => {
+    // Regression guard for "add 5 terminals, focus the 4th with its Focus button,
+    // then type, and the text lands in a DIFFERENT terminal". The pane toolbar's
+    // Focus button ([data-action="focus"]) switches to the Focus-rail layout and
+    // marks the pane active, but before the fix it did NOT move DOM focus into
+    // that pane's xterm. Keyboard focus stayed on the button (or blurred to
+    // <body>), so keystrokes kept flowing to whichever terminal was focused
+    // before. The fix focuses the pane's terminal after switching layout, so
+    // typing always lands in the pane the user chose to focus.
+    await page.evaluate(() => {
+      for (const t of [...state.terminals.values()]) disposeTerminal(t);
+      state.terminals.clear();
+      state.activeId = null;
+      state.settings.layout = "auto";
+      elements.layoutMode.value = "auto";
+      applySettings();
+      addTerminal();
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    for (let i = 0; i < 4; i++) await page.locator("#addTerminal").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(5);
+    await page.waitForTimeout(150); // let the layout + fit settle
+
+    const ids = await page.evaluate(() =>
+      [...document.querySelectorAll(".terminal-pane")].map((p) => p.dataset.id)
+    );
+    const firstId = ids[0];
+    const fourthId = ids[3];
+
+    const readFocus = () => page.evaluate(() => {
+      const a = document.activeElement;
+      const pane = a && a.closest ? a.closest(".terminal-pane") : null;
+      return {
+        layout: state.settings.layout,
+        activeId: state.activeId,
+        focusPaneId: pane ? pane.dataset.id : null,
+        isTerminalTextarea: !!(a && a.classList && a.classList.contains("xterm-helper-textarea"))
+      };
+    });
+
+    // Establish a "previously focused" pane: focus the FIRST terminal's xterm and
+    // confirm it holds keyboard focus (this is the pane that wrongly received
+    // keystrokes before the fix). Focus it programmatically so the precondition is
+    // not subject to pane overflow/scroll at this viewport.
+    await page.evaluate((id) => state.terminals.get(id).term.focus(), firstId);
+    const before = await readFocus();
+    expect(before.focusPaneId).toBe(firstId);
+    expect(before.isTerminalTextarea).toBe(true);
+
+    // Use the 4th pane's Focus button. The bug is in the button handler (missing
+    // term.focus()), independent of scroll position, so an auto-scrolling
+    // locator click is a faithful and stable trigger here.
+    await page.locator(".terminal-pane").nth(3).locator('[data-action="focus"]').click();
+    await page.waitForTimeout(50);
+
+    // Layout switches to Focus rail AND both activation and keyboard focus move to
+    // the 4th pane: xterm routes keystrokes to the focused terminal, so typing now
+    // lands in the pane whose Focus button was pressed. Pre-fix, focus stayed off
+    // the 4th pane (on the button / <body>), so these fail.
+    const after = await readFocus();
+    expect(after.layout).toBe("focus");
+    expect(after.activeId).toBe(fourthId);
+    expect(after.focusPaneId).toBe(fourthId);
+    expect(after.isTerminalTextarea).toBe(true);
+
+    // Restore a normal layout so later tests start from a clean state.
+    await page.evaluate(() => {
+      state.settings.layout = "auto";
+      elements.layoutMode.value = "auto";
+      applySettings();
+      saveSettings();
+    });
+  });
+
   test("closes all terminals", async () => {
     await page.locator("#closeAllTerminals").click();
     await expect(page.locator("#statusSessions")).toHaveText("0 sessions");
