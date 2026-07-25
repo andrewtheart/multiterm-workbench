@@ -306,7 +306,9 @@ describe("elevated (administrator) terminal", () => {
 
   const configFromSpawn = (spawn) => {
     const env = spawn.mock.calls[spawn.mock.calls.length - 1][2].env;
-    const hostArgs = JSON.parse(env.MT_ELEVATE_ARGS);
+    // MT_ELEVATE_ARGS is now a single, pre-quoted argument line: "<script>" <base64>
+    const match = env.MT_ELEVATE_ARGS.match(/^"([^"]+)"\s+(\S+)$/);
+    const hostArgs = [match[1], match[2]];
     return { hostArgs, env, config: JSON.parse(Buffer.from(hostArgs[1], "base64").toString("utf8")) };
   };
 
@@ -403,11 +405,18 @@ describe("elevated (administrator) terminal", () => {
     const command = spawnArgs[spawnArgs.length - 1];
     expect(command).toContain("Start-Process");
     expect(command).toContain("-Verb RunAs");
+    // Regression guard: the launcher MUST pass a single argument-line string straight to
+    // -ArgumentList. The old array form ($list = ... ConvertFrom-Json; -ArgumentList $list)
+    // throws "Specified method is not supported" under Windows PowerShell 5.1's ShellExecute.
+    expect(command).toContain("-ArgumentList $env:MT_ELEVATE_ARGS");
+    expect(command).not.toContain("ConvertFrom-Json");
     expect(opts.detached).toBe(false);
     expect(opts.windowsHide).toBe(true);
     expect(opts.stdio).toEqual(["ignore", "pipe", "pipe"]);
     expect(opts.env.MT_ELEVATE_FILE).toBe(process.execPath);
     expect(opts.env.MT_ELEVATE_CWD).toBe(process.cwd());
+    // A single quoted script path followed by exactly one whitespace-free base64 arg.
+    expect(opts.env.MT_ELEVATE_ARGS).toMatch(/^"[^"]+elevated-pty-host\.js"\s+\S+$/);
 
     const { hostArgs, config } = configFromSpawn(spawn);
     expect(hostArgs[0].endsWith("elevated-pty-host.js")).toBe(true);

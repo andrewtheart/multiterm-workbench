@@ -791,15 +791,22 @@ function beginElevationAttempt(client, id, message) {
 // helper's node-pty prebuilt binary matches the ABI.
 function launchElevatedHost(attempt, config) {
   const encoded = Buffer.from(JSON.stringify(config)).toString("base64");
-  const hostArgs = [ELEVATED_HOST_SCRIPT, encoded];
+  // Pass a single, pre-quoted argument LINE — never an array. Windows PowerShell 5.1's
+  // Start-Process cannot hand an argument ARRAY to ShellExecute "runas" (.NET Framework's
+  // ProcessStartInfo exposes only a single `Arguments` string), so `-ArgumentList @(a, b)`
+  // fails with "Cannot convert '<a> <b>' to the type 'System.String' ... Specified method is
+  // not supported." A single string binds straight to `.Arguments`; the elevated node then
+  // parses it into argv[1] (the helper script) and argv[2] (the base64 config). The script
+  // path is always quoted (a Windows path never contains a double-quote) and the base64 blob
+  // contains no spaces or shell metacharacters, so this needs no further escaping.
+  const hostArgLine = `"${ELEVATED_HOST_SCRIPT}" ${encoded}`;
 
   const command = [
     "$ErrorActionPreference = 'Stop';",
     "$file = $env:MT_ELEVATE_FILE;",
     "$cwd = $env:MT_ELEVATE_CWD;",
-    "$list = @($env:MT_ELEVATE_ARGS | ConvertFrom-Json);",
     "try {",
-    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $list;",
+    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $env:MT_ELEVATE_ARGS;",
     "  Write-Output 'MT_ELEVATE_OK';",
     "} catch {",
     `  Write-Output ('${ELEVATE_ERROR_PREFIX}' + $_.Exception.Message);`,
@@ -820,7 +827,7 @@ function launchElevatedHost(attempt, config) {
           ...process.env,
           MT_ELEVATE_FILE: process.execPath,
           MT_ELEVATE_CWD: config.cwd,
-          MT_ELEVATE_ARGS: JSON.stringify(hostArgs)
+          MT_ELEVATE_ARGS: hostArgLine
         }
       }
     );
