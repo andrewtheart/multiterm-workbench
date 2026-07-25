@@ -217,6 +217,59 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#workspaceSelect option", { hasText: "My Layout" })).toHaveCount(0);
   });
 
+  test("recovers the WebGL renderer after a GPU context loss", async () => {
+    // Probe a pane's screen for a live WebGL canvas. The link-layer canvas is 2D,
+    // so getContext('webgl') returns null there and is skipped.
+    const probe = () => page.evaluate(() => {
+      const screen = document.querySelector(".terminal-pane .xterm-screen");
+      if (!screen) return { present: false, live: false };
+      for (const c of screen.querySelectorAll("canvas")) {
+        let gl = null;
+        try { gl = c.getContext("webgl2") || c.getContext("webgl"); } catch { gl = null; }
+        if (gl) return { present: true, live: !gl.isContextLost() };
+      }
+      return { present: false, live: false };
+    });
+
+    const start = await probe();
+    // The DOM renderer (no GPU in some headless envs) has no WebGL canvas; the
+    // recovery path only applies when the WebGL renderer is actually active.
+    test.skip(!start.present, "WebGL renderer not active in this environment");
+    expect(start.live).toBe(true);
+
+    const pageErrors = [];
+    const onError = (err) => pageErrors.push(String(err));
+    page.on("pageerror", onError);
+
+    const forceLoss = () => page.evaluate(() => {
+      const screen = document.querySelector(".terminal-pane .xterm-screen");
+      for (const c of screen.querySelectorAll("canvas")) {
+        let gl = null;
+        try { gl = c.getContext("webgl2") || c.getContext("webgl"); } catch { gl = null; }
+        if (gl && !gl.isContextLost()) {
+          const ext = gl.getExtension("WEBGL_lose_context");
+          if (!ext) return false;
+          ext.loseContext();
+          return true;
+        }
+      }
+      return false;
+    });
+
+    // Four rapid loss/recover cycles inside the 8s throttle window exercise BOTH
+    // recovery delays: the fast 300ms path for the first losses and the backed-off
+    // 1500ms path once repeated losses mark the pane as thrashing. Each cycle must
+    // end with a fresh, live (non-lost) WebGL context — proof the pane resumes
+    // drawing instead of freezing blank (the overlap/ghosting bug).
+    for (let i = 0; i < 4; i += 1) {
+      expect(await forceLoss()).toBe(true);
+      await expect.poll(async () => (await probe()).live, { timeout: 6000 }).toBe(true);
+    }
+
+    page.off("pageerror", onError);
+    expect(pageErrors).toEqual([]);
+  });
+
   test("closes all terminals", async () => {
     await page.locator("#closeAllTerminals").click();
     await expect(page.locator("#statusSessions")).toHaveText("0 sessions");

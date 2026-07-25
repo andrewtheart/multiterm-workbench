@@ -855,7 +855,6 @@ function addTerminal(options = {}) {
   }
   elements.host.append(pane);
   term.open(screen);
-  const webglAddon = loadWebglRenderer(term);
 
   const terminal = {
     color: options.color || session.color || null,
@@ -883,7 +882,9 @@ function addTerminal(options = {}) {
     runStartup: Boolean(options.runStartup),
     searchAddon,
     searchText: "",
-    webglAddon,
+    webglAddon: null,
+    webglLossTimes: [],
+    webglRecoveryHandle: 0,
     screen,
     shell: options.shell || session.shell || elements.shellSelect.value,
     status: options.reattach ? "live" : "starting",
@@ -894,6 +895,7 @@ function addTerminal(options = {}) {
 
   terminal.observer = new ResizeObserver(() => scheduleFit(terminal));
   state.terminals.set(id, terminal);
+  attachWebglRenderer(terminal);
   state.nextIndex += 1;
   updateTerminalActions();
   terminal.observer.observe(screen);
@@ -1277,6 +1279,8 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
+  window.clearTimeout(terminal.webglRecoveryHandle);
+  terminal.webglRecoveryHandle = 0;
   if (terminal.outputFlushHandle) {
     window.cancelAnimationFrame(terminal.outputFlushHandle);
     terminal.outputFlushHandle = 0;
@@ -1437,23 +1441,65 @@ function setTerminalStatus(terminal, text, tone) {
 //   - GPU unavailable / blocklisted: construction or loadAddon throws (caught).
 //   - GPU context lost at runtime (driver reset, tab backgrounded): onContextLoss
 //     disposes the addon and xterm transparently falls back.
-function loadWebglRenderer(term) {
+// Attach the WebGL renderer to a terminal and keep it alive across GPU context
+// loss. Browsers and Electron cap the number of simultaneous WebGL contexts
+// (~16 per GPU process); once that budget is exceeded the oldest contexts are
+// force-lost. xterm's WebGL addon does NOT fall back to the DOM renderer on
+// loss — disposing it leaves the pane with no renderer at all, so it freezes on
+// its last frame and fresh output paints over the stale glyphs (the overlapping
+// command/response pairs users report). To stay resilient we recreate a fresh
+// addon after a loss, which re-establishes a working render layer.
+function attachWebglRenderer(terminal) {
   const WebglCtor = window.WebglAddon?.WebglAddon;
   if (!WebglCtor) return null;
+  const { term } = terminal;
+  let webgl;
   try {
-    const webgl = new WebglCtor();
-    webgl.onContextLoss(() => {
-      try {
-        webgl.dispose();
-      } catch {
-        /* already gone */
-      }
-    });
-    term.loadAddon(webgl);
-    return webgl;
+    webgl = new WebglCtor();
   } catch {
     return null;
   }
+  webgl.onContextLoss(() => {
+    try {
+      webgl.dispose();
+    } catch {
+      /* already gone */
+    }
+    if (terminal.webglAddon === webgl) terminal.webglAddon = null;
+    scheduleWebglRecovery(terminal);
+  });
+  try {
+    term.loadAddon(webgl);
+  } catch {
+    return null;
+  }
+  terminal.webglAddon = webgl;
+  return webgl;
+}
+
+// Recreate the WebGL renderer shortly after a context loss so the pane resumes
+// drawing instead of staying blank/frozen. The context that was just lost frees
+// a slot, so re-creation almost always succeeds. If losses keep recurring in a
+// short window the GPU budget is genuinely exhausted, so we back off to a longer
+// delay — but never give up permanently, because there is no working DOM-renderer
+// fallback in this xterm build; a pane must get a live WebGL context back to render.
+function scheduleWebglRecovery(terminal) {
+  if (terminal.webglRecoveryHandle) return;
+  const now = performance.now();
+  terminal.webglLossTimes = (terminal.webglLossTimes || []).filter((t) => now - t < 8000);
+  terminal.webglLossTimes.push(now);
+  const thrashing = terminal.webglLossTimes.length > 3;
+  const delay = thrashing ? 1500 : 300;
+  terminal.webglRecoveryHandle = window.setTimeout(() => {
+    terminal.webglRecoveryHandle = 0;
+    if (terminal.webglAddon || !state.terminals.has(terminal.id)) return;
+    attachWebglRenderer(terminal);
+    try {
+      terminal.term.refresh(0, terminal.term.rows - 1);
+    } catch {
+      /* renderer not ready yet; a later resize/fit will refresh */
+    }
+  }, delay);
 }
 
 // Live shell output can arrive as hundreds of tiny WebSocket messages per second.
