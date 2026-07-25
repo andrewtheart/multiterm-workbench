@@ -40,6 +40,12 @@ const defaultSettings = {
 
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
+// Pane width (px) below which the secondary header actions (move left/right,
+// cycle label color, duplicate) collapse into the per-pane overflow menu. Below
+// roughly this width the full button row starts squeezing the title field, so
+// the actions move into the menu rather than crowding or hiding the title.
+const PANE_OVERFLOW_WIDTH = 600;
+
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.16";
 
@@ -895,7 +901,10 @@ function addTerminal(options = {}) {
     titleInput
   };
 
-  terminal.observer = new ResizeObserver(() => scheduleFit(terminal));
+  terminal.observer = new ResizeObserver(() => {
+    updatePaneDensity(terminal);
+    scheduleFit(terminal);
+  });
   state.terminals.set(id, terminal);
   attachWebglRenderer(terminal);
   state.nextIndex += 1;
@@ -2004,6 +2013,19 @@ function endWindowResizeDrag() {
   for (const terminal of state.terminals.values()) {
     sendResize(terminal, terminal.term.cols, terminal.term.rows);
   }
+}
+
+// Collapses the pane's secondary header actions into the overflow menu once the
+// pane is too narrow to show the full button row without crowding the title.
+// Driven by the pane's own width (via its ResizeObserver) so it responds to added
+// terminals, layout changes and window resizes alike — not just the manual
+// "Compact chrome" setting.
+function updatePaneDensity(terminal) {
+  const width = terminal.pane.clientWidth;
+  // A hidden (minimized) pane reports 0; leave its current state alone until it
+  // is laid out again, so restoring it doesn't flash the wrong control set.
+  if (!width) return;
+  terminal.pane.classList.toggle("is-narrow", width < PANE_OVERFLOW_WIDTH);
 }
 
 function scheduleFit(terminal) {

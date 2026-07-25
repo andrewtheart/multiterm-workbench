@@ -97,15 +97,26 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("body")).not.toHaveClass(/sidecar-hidden/);
   });
 
-  test("moves compact pane actions into an overflow menu", async () => {
+  test("moves pane actions into an overflow menu when panes get narrow", async () => {
+    // The collapse must be driven by pane width, not the manual compact-chrome
+    // setting, so explicitly turn that setting off first.
+    await setCheck("#compactChrome", false);
+    await expect(page.locator("#terminalHost")).not.toHaveClass(/compact/);
+
+    await setNative("#layoutMode", "columns", "change");
+    await setNative("#columnCount", "3", "input");
+
     const firstPane = page.locator(".terminal-pane").first();
     const firstId = await firstPane.getAttribute("data-id");
     const overflow = firstPane.locator('[data-action="more"]');
 
+    await expect(firstPane).toHaveClass(/is-narrow/);
     await expect(overflow).toBeVisible();
     for (const action of ["move-left", "move-right", "color", "duplicate"]) {
       await expect(firstPane.locator(`[data-action="${action}"]`)).toBeHidden();
     }
+    // Primary actions stay in the header even when narrow.
+    await expect(firstPane.locator('[data-action="close"]')).toBeVisible();
 
     await overflow.click();
     await expect(overflow).toHaveAttribute("aria-expanded", "true");
@@ -135,6 +146,17 @@ test.describe("MultiTerm Workbench UI", () => {
     await movedPane.locator('[data-action="more"]').click();
     await menu.locator(".ctx-item", { hasText: "Duplicate" }).click();
     await expect(page.locator(".terminal-pane")).toHaveCount(beforeDuplicate + 1);
+  });
+
+  test("restores pane actions to the header when panes get wide again", async () => {
+    await setNative("#columnCount", "1", "input");
+
+    const firstPane = page.locator(".terminal-pane").first();
+    await expect(firstPane).not.toHaveClass(/is-narrow/);
+    await expect(firstPane.locator('[data-action="more"]')).toBeHidden();
+    for (const action of ["move-left", "move-right", "color", "duplicate"]) {
+      await expect(firstPane.locator(`[data-action="${action}"]`)).toBeVisible();
+    }
   });
 
   test("opens the About dialog and shows the version", async () => {

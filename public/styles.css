@@ -2332,8 +2332,18 @@ body.is-pane-dragging {
   display: none;
 }
 
-.terminal-host.compact .pane-actions button[data-action="more"] {
+.terminal-host.compact .pane-actions button[data-action="more"],
+.terminal-pane.is-narrow .pane-actions button[data-action="more"] {
   display: inline-flex;
+}
+
+/* Narrow panes keep the primary actions but move the secondary ones (which the
+   overflow menu re-exposes) out of the header so the title keeps its space. */
+.terminal-pane.is-narrow .pane-actions button[data-action="move-left"],
+.terminal-pane.is-narrow .pane-actions button[data-action="move-right"],
+.terminal-pane.is-narrow .pane-actions button[data-action="color"],
+.terminal-pane.is-narrow .pane-actions button[data-action="duplicate"] {
+  display: none;
 }
 
 .control-panel[data-mode="auto"] [data-control="columns"],
