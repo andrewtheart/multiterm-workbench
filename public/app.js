@@ -41,7 +41,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.11";
+const APP_VERSION = "0.1.13";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
@@ -237,6 +237,7 @@ const elements = {
   shortcutsOverlay: document.querySelector("#shortcutsOverlay"),
   startupCommand: document.querySelector("#startupCommand"),
   statusConn: document.querySelector("#statusConn"),
+  statusAdmin: document.querySelector("#statusAdmin"),
   statusMem: document.querySelector("#statusMem"),
   statusMemText: document.querySelector("#statusMemText"),
   statusSessions: document.querySelector("#statusSessions"),
@@ -264,6 +265,7 @@ const state = {
   activeId: null,
   bridgeClosingDown: false,
   findAll: { active: false, order: [], ti: 0, li: -1 },
+  appElevated: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
   nextIndex: 1,
@@ -362,6 +364,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   connectBridge();
   refreshIcons();
+  refreshElevationStatus();
   // Perf (Electron guideline #4): defer low-priority, non-visual startup work to
   // an idle period so the first terminal connects and becomes interactive sooner.
   // Ripples are cosmetic; the log/diagnostics panel is opened on demand — neither
@@ -667,6 +670,10 @@ function handleBridgeMessage(message) {
     terminal.pid = message.pid;
     terminal.remoteRequested = true;
     terminal.status = "live";
+    if (message.elevated) {
+      terminal.elevated = true;
+      terminal.pane.classList.add("is-admin");
+    }
     setTerminalStatus(terminal, `pid ${message.pid}`, "live");
     log.info("session", `Session live: ${terminal.titleInput.value}`, { id: message.id, pid: message.pid });
     updateTerminalSearchVisibility(terminal);
@@ -858,6 +865,7 @@ function addTerminal(options = {}) {
     elevated,
     fitAddon,
     id,
+    elevated: Boolean(options.elevated),
     logging: false,
     logPath: null,
     minimized: false,
@@ -894,6 +902,7 @@ function addTerminal(options = {}) {
   bindPaneDrag(terminal);
   bindPaneFind(terminal);
   applyPaneColor(terminal);
+  if (terminal.elevated) pane.classList.add("is-admin");
   applyManualLayout(terminal, ensureManualLayout(id));
   setActiveTerminal(id);
   refreshIcons();
@@ -1142,6 +1151,38 @@ function clearSnapLayout(shouldFit) {
   }
 }
 
+/* ---------------- Administrator elevation --------------- */
+
+async function refreshElevationStatus() {
+  if (!window.multiterm || typeof window.multiterm.isElevated !== "function") return;
+  try {
+    state.appElevated = await window.multiterm.isElevated();
+  } catch {
+    state.appElevated = false;
+  }
+  applyElevationBadge();
+}
+
+function applyElevationBadge() {
+  document.body.classList.toggle("app-elevated", Boolean(state.appElevated));
+  if (elements.statusAdmin) elements.statusAdmin.hidden = !state.appElevated;
+}
+
+async function restartAsAdmin() {
+  if (state.appElevated) { toast("Already running as administrator", "info", 1800); return; }
+  if (!window.multiterm || typeof window.multiterm.restartAsAdmin !== "function") {
+    toast("Administrator relaunch is only available in the desktop app", "error", 3000);
+    return;
+  }
+  toast("Relaunching as administrator \u2014 approve the UAC prompt\u2026", "info", 3000);
+  try {
+    const ok = await window.multiterm.restartAsAdmin();
+    if (!ok) toast("Could not relaunch as administrator", "error");
+  } catch {
+    toast("Could not relaunch as administrator", "error");
+  }
+}
+
 function requestSession(terminal) {
   if (!state.socketReady) {
     terminal.remoteRequested = false;
@@ -1173,7 +1214,8 @@ function requestSession(terminal) {
     id: terminal.id,
     rows: terminal.term.rows,
     shell: terminal.shell || elements.shellSelect.value,
-    title: terminal.titleInput.value
+    title: terminal.titleInput.value,
+    elevated: Boolean(terminal.elevated)
   });
 }
 
@@ -2325,6 +2367,7 @@ function getCommands() {
     { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd", title: "Command Prompt" }) },
     { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl", title: "WSL" }) },
     { label: "New Administrator terminal", run: () => newAdminTerminal() },
+    { label: "Restart as Administrator", run: restartAsAdmin },
     { label: "Close active terminal", hint: "Ctrl+Shift+W", run: () => state.activeId && removeTerminal(state.activeId) },
     { label: "Minimize active terminal", run: () => state.activeId && minimizeTerminal(state.activeId) },
     { label: "Restore all minimized terminals", run: restoreAllTerminals },

@@ -1438,6 +1438,59 @@ body.header-hidden .status-hint kbd,
   margin: 6px 0 0;
 }
 
+/* ---------------- Administrator (elevated) --------------- */
+
+.pane-admin {
+  align-items: center;
+  background: var(--danger);
+  border-radius: var(--radius-full);
+  color: #2a0d09;
+  display: none;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 750;
+  gap: 4px;
+  letter-spacing: 0.04em;
+  padding: 3px 8px 3px 6px;
+}
+
+.pane-admin svg {
+  color: #2a0d09;
+  height: 13px;
+  width: 13px;
+}
+
+.terminal-pane.is-admin .pane-admin {
+  display: inline-flex;
+}
+
+.terminal-pane.is-admin {
+  border-color: var(--danger);
+}
+
+.terminal-pane.is-admin .pane-bar {
+  background: color-mix(in srgb, var(--danger) 20%, var(--surface-high));
+}
+
+.terminal-pane.is-admin .pane-title-wrap > svg {
+  color: var(--danger);
+}
+
+.status-admin {
+  color: var(--danger);
+  font-weight: 650;
+}
+
+.status-admin[hidden] {
+  display: none;
+}
+
+.status-admin svg {
+  color: var(--danger);
+  height: 14px;
+  width: 14px;
+}
+
 /* ---------------- Toasts (Material snackbar) --------------- */
 
 .toast-host {

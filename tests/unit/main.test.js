@@ -579,3 +579,134 @@ describe("bootstrap", () => {
     expect(win.focus).toHaveBeenCalled();
   });
 });
+
+describe("administrator elevation IPC", () => {
+  const adminHandler = (event) => {
+    const call = electron.ipcMain.handle.mock.calls.find(([e]) => e === event);
+    return call && call[1];
+  };
+  let originalPlatform;
+  beforeEach(() => { originalPlatform = process.platform; });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+  const setPlatform = (value) =>
+    Object.defineProperty(process, "platform", { value, configurable: true });
+
+  it("registerAdminIpc is a no-op without a usable ipcMain", () => {
+    main.__setElectron({ ...electron, ipcMain: null });
+    expect(() => main.registerAdminIpc()).not.toThrow();
+    main.__setElectron({ ...electron, ipcMain: { handle: undefined } });
+    expect(() => main.registerAdminIpc()).not.toThrow();
+  });
+
+  it("registers is-elevated and relaunch-as-admin, clearing any stale handlers first", () => {
+    main.registerAdminIpc();
+    expect(electron.ipcMain.removeHandler).toHaveBeenCalledWith("multiterm:is-elevated");
+    expect(electron.ipcMain.removeHandler).toHaveBeenCalledWith("multiterm:relaunch-as-admin");
+    expect(adminHandler("multiterm:is-elevated")).toBeInstanceOf(Function);
+    expect(adminHandler("multiterm:relaunch-as-admin")).toBeInstanceOf(Function);
+    // The relay-only channels from main's original design must NOT be registered.
+    expect(electron.ipcMain.handle.mock.calls.some(([e]) => e === "multiterm:get-ui-token")).toBe(false);
+    expect(electron.ipcMain.handle.mock.calls.some(([e]) => e === "multiterm:spawn-admin-bridge")).toBe(false);
+  });
+
+  it("still registers handlers when removeHandler throws", () => {
+    electron.ipcMain.removeHandler = vi.fn(() => { throw new Error("no such handler"); });
+    expect(() => main.registerAdminIpc()).not.toThrow();
+    expect(adminHandler("multiterm:is-elevated")).toBeInstanceOf(Function);
+  });
+
+  it("is-elevated handler reports the cached elevation flag (non-Windows short-circuit)", async () => {
+    setPlatform("linux");
+    main.registerAdminIpc();
+    await expect(adminHandler("multiterm:is-elevated")()).resolves.toBe(false);
+  });
+
+  it("is-elevated handler resolves true after a successful net session check on Windows", async () => {
+    setPlatform("win32");
+    vi.spyOn(childProcess, "exec").mockImplementation((cmd, opts, cb) => { cb(null); });
+    main.registerAdminIpc();
+    await expect(adminHandler("multiterm:is-elevated")()).resolves.toBe(true);
+    expect(childProcess.exec).toHaveBeenCalledWith("net session", expect.any(Object), expect.any(Function));
+  });
+
+  it("relaunch-as-admin handler flags quit and schedules app.quit when relaunch succeeds", () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    childProcess.spawn.mockImplementation(() => ({ unref: vi.fn() }));
+    main.registerAdminIpc();
+    const result = adminHandler("multiterm:relaunch-as-admin")();
+    expect(result).toBe(true);
+    expect(electron.app.isQuiting).toBe(true);
+    expect(electron.app.quit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(600);
+    expect(electron.app.quit).toHaveBeenCalled();
+  });
+
+  it("relaunch-as-admin handler returns false without quitting when relaunch is unsupported", () => {
+    setPlatform("linux");
+    main.registerAdminIpc();
+    const result = adminHandler("multiterm:relaunch-as-admin")();
+    expect(result).toBe(false);
+    expect(electron.app.isQuiting).toBe(false);
+    expect(electron.app.quit).not.toHaveBeenCalled();
+  });
+
+  it("ensureElevationChecked short-circuits once already checked", async () => {
+    setPlatform("win32");
+    const execSpy = vi.spyOn(childProcess, "exec").mockImplementation((cmd, opts, cb) => { cb(null); });
+    await main.ensureElevationChecked();
+    execSpy.mockClear();
+    // Second call must not probe again (cached).
+    await main.ensureElevationChecked();
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it("ensureElevationChecked resolves without probing off Windows", async () => {
+    setPlatform("linux");
+    const execSpy = vi.spyOn(childProcess, "exec");
+    await expect(main.ensureElevationChecked()).resolves.toBeUndefined();
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it("ensureElevationChecked leaves the flag false when net session fails", async () => {
+    setPlatform("win32");
+    vi.spyOn(childProcess, "exec").mockImplementation((cmd, opts, cb) => { cb(new Error("not admin")); });
+    main.registerAdminIpc();
+    await main.ensureElevationChecked();
+    await expect(adminHandler("multiterm:is-elevated")()).resolves.toBe(false);
+  });
+
+  it("ensureElevationChecked swallows a synchronous exec failure", async () => {
+    setPlatform("win32");
+    vi.spyOn(childProcess, "exec").mockImplementation(() => { throw new Error("spawn ENOENT"); });
+    await expect(main.ensureElevationChecked()).resolves.toBeUndefined();
+  });
+
+  it("relaunchAsAdmin returns false off Windows without spawning", () => {
+    setPlatform("linux");
+    expect(main.relaunchAsAdmin()).toBe(false);
+    expect(childProcess.spawn).not.toHaveBeenCalled();
+  });
+
+  it("relaunchAsAdmin spawns an elevated PowerShell relaunch on Windows", () => {
+    setPlatform("win32");
+    const unref = vi.fn();
+    childProcess.spawn.mockImplementation(() => ({ unref }));
+    expect(main.relaunchAsAdmin()).toBe(true);
+    const [file, args, opts] = childProcess.spawn.mock.calls.at(-1);
+    expect(file).toBe("powershell.exe");
+    expect(args).toContain("-Command");
+    expect(args.some((a) => /Start-Process[\s\S]*-Verb RunAs/.test(a))).toBe(true);
+    expect(args.some((a) => /MULTITERM_ELEVATED='1'/.test(a))).toBe(true);
+    expect(opts).toMatchObject({ detached: true, windowsHide: true });
+    expect(unref).toHaveBeenCalled();
+  });
+
+  it("relaunchAsAdmin returns false when the launcher spawn throws", () => {
+    setPlatform("win32");
+    childProcess.spawn.mockImplementation(() => { throw new Error("spawn failed"); });
+    expect(main.relaunchAsAdmin()).toBe(false);
+  });
+});

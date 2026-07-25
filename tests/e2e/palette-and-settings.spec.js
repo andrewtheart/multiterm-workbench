@@ -10,6 +10,7 @@
 // uncaught JS error (pageerror) for every single command.
 
 const { test, expect } = require("@playwright/test");
+const { version: PKG_VERSION } = require("../../package.json");
 
 test.describe.configure({ mode: "serial" });
 
@@ -199,7 +200,8 @@ test.describe("Command palette — every option works", () => {
 
     await runCmd("About MultiTerm");
     await expect(page.locator("#aboutOverlay")).toBeVisible();
-    await expect(page.locator("#aboutVersionText")).toContainText("0.1.11");
+    // The About version must track package.json (and the renderer's APP_VERSION).
+    await expect(page.locator("#aboutVersionText")).toContainText(PKG_VERSION);
     await page.locator("#aboutClose").click();
     await expect(page.locator("#aboutOverlay")).toBeHidden();
   });

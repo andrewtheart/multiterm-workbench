@@ -16,6 +16,11 @@ function formatError(err) {
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
 
+// Whether this process is already elevated (administrator). Cached after a
+// one-time check so "Restart as Administrator" can short-circuit.
+let appIsElevated = process.env.MULTITERM_ELEVATED === "1";
+let elevationChecked = false;
+
 let mainWindow = null;
 let tray = null;
 let serverProcess = null;
@@ -218,6 +223,7 @@ async function onReady() {
 
   registerScriptPicker();
   registerCloseHandler();
+  registerAdminIpc();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -248,6 +254,61 @@ function registerScriptPicker() {
   });
 }
 
+// Elevation (administrator) IPC: whole-window elevation ("Restart as
+// Administrator") plus reporting whether this process is already elevated.
+function registerAdminIpc() {
+  if (!ipcMain || typeof ipcMain.handle !== "function") return;
+  for (const channel of ["multiterm:is-elevated", "multiterm:relaunch-as-admin"]) {
+    try { ipcMain.removeHandler(channel); } catch { /* no existing handler */ }
+  }
+  ipcMain.handle("multiterm:is-elevated", async () => { await ensureElevationChecked(); return appIsElevated; });
+  ipcMain.handle("multiterm:relaunch-as-admin", () => {
+    const ok = relaunchAsAdmin();
+    if (!ok) {
+      /* relaunch unsupported or failed — keep the current window running */
+    } else {
+      app.isQuiting = true;
+      setTimeout(() => app.quit(), 600);
+    }
+    return ok;
+  });
+}
+
+// Detect whether this process is already elevated. `net session` succeeds only
+// for administrators; run once and cache. Skipped off Windows and in tests
+// (only invoked from the is-elevated IPC, which tests never call).
+function ensureElevationChecked() {
+  return new Promise((resolve) => {
+    if (elevationChecked || process.platform !== "win32") { elevationChecked = true; resolve(); return; }
+    elevationChecked = true;
+    try {
+      childProcess.exec("net session", { windowsHide: true, timeout: 4000 }, (error) => {
+        if (!error) appIsElevated = true;
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
+// Relaunch the whole app elevated (one UAC prompt); every terminal in the new
+// window is then an administrator terminal.
+function relaunchAsAdmin() {
+  if (process.platform !== "win32") return false;
+  try {
+    const exe = process.execPath;
+    const args = process.argv.slice(1);
+    const argList = args.length ? args.map((a) => `'${String(a).replace(/'/g, "''")}'`).join(",") : "";
+    const startArgs = argList ? `-ArgumentList ${argList} ` : "";
+    const psCommand = `$env:PORT='${PORT}'; $env:MULTITERM_ELEVATED='1'; Start-Process -FilePath '${exe.replace(/'/g, "''")}' ${startArgs}-WorkingDirectory '${__dirname.replace(/'/g, "''")}' -Verb RunAs`;
+    childProcess.spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function bootstrap() {
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
@@ -272,7 +333,9 @@ function bootstrap() {
   app.on("before-quit", () => {
     app.isQuiting = true;
     stopServer();
-    if (tray) {
+    if (!tray) {
+      /* no tray to tear down */
+    } else {
       try { tray.destroy(); } catch { /* already gone */ }
       tray = null;
     }
@@ -293,6 +356,9 @@ module.exports = {
   quitApp,
   handleCloseResponse,
   registerCloseHandler,
+  registerAdminIpc,
+  ensureElevationChecked,
+  relaunchAsAdmin,
   onReady,
   bootstrap,
   __setElectron,
@@ -305,6 +371,8 @@ module.exports = {
     tray = null;
     serverProcess = null;
     serverRestarts = [];
+    appIsElevated = false;
+    elevationChecked = false;
   }
 };
 

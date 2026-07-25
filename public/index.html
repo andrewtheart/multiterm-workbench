@@ -380,6 +380,10 @@
           <span id="statusShellText">PowerShell 7</span>
         </span>
         <span class="status-dot" id="statusConn" data-tone="offline">Connecting</span>
+        <span class="status-item status-admin" id="statusAdmin" title="This window is running as Administrator" hidden>
+          <i data-lucide="shield"></i>
+          <span>Administrator</span>
+        </span>
         <div id="minimizedDock" class="minimized-dock" aria-label="Minimized terminals" hidden></div>
         <span class="status-spacer"></span>
         <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>T</kbd> new</span>
@@ -538,6 +542,10 @@
             <span class="pane-await" title="This terminal is waiting for input">
               <i data-lucide="keyboard"></i>
               <span>input</span>
+            </span>
+            <span class="pane-admin" title="Administrator terminal" aria-hidden="true">
+              <i data-lucide="shield"></i>
+              <span>ADMIN</span>
             </span>
             <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
           </div>

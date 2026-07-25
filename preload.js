@@ -14,5 +14,10 @@ contextBridge.exposeInMainWorld("multiterm", {
     ipcRenderer.on("multiterm:close-request", () => handler());
   },
   // Reports the user's close decision: "tray", "quit", or "cancel".
-  respondClose: (action) => ipcRenderer.send("multiterm:close-response", action)
+  respondClose: (action) => ipcRenderer.send("multiterm:close-response", action),
+
+  // Whether this MultiTerm process is running elevated (administrator).
+  isElevated: () => ipcRenderer.invoke("multiterm:is-elevated"),
+  // Relaunch the whole app elevated (all panes become administrator terminals).
+  restartAsAdmin: () => ipcRenderer.invoke("multiterm:relaunch-as-admin")
 });
