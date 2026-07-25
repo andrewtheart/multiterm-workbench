@@ -122,11 +122,98 @@
     { category: "value", re: /:\s+\([^)]*\)\s*$/ },                        // npm init: "package name: (multiterm)"
     { category: "value", re: /\b(?:default|leave blank|press enter for default)\b[^:\n]*:?\s*$/i },
 
+    // --- Interactive "Question" headers ----------------------------------
+    // A line that IS a question header (an agent / wizard asking, often with an
+    // enumerated list on the following lines). The word alone on its own line is
+    // almost never ordinary program output.
+    { category: "question", re: /^\s*questions?\s*[:.?)]*\s*$/i },                 // "Question", "Question:", "Questions?"
+    { category: "question", re: /^\s*question\s+\d+(?:\s+of\s+\d+)?\s*[:.?)]*\s*$/i }, // "Question 1", "Question 2 of 5:"
+    { category: "question", re: /^\s*q\s*:\s*$/i },                               // bare "Q:" header
+    { category: "question", re: /\bhow\s+would\s+you\s+like\s+to\b[^?\n]*\?/i },
+    { category: "question", re: /\bwhat\s+(?:is|are|should|would|do|does|will)\b[^?\n]*\?\s*$/i },
+
     // --- Explicit "waiting" indicators -----------------------------------
     { category: "waiting", re: /\b(?:waiting for|awaiting)\s+(?:your\s+)?(?:input|response|confirmation|answer|reply|selection)\b/i },
     { category: "waiting", re: /\binput\s+(?:is\s+)?required\b/i },
     { category: "waiting", re: /\b(?:requires?|needs?)\s+(?:your\s+)?(?:confirmation|input|response|attention)\b/i }
   ];
+
+  // ---- Multi-line / block detection ---------------------------------------
+  // Interactive questions frequently span several lines: a header ("Question",
+  // "Choose one", "Which …?") followed by an enumerated list of options and,
+  // often, a trailing prompt. The single-line classifier can miss these because
+  // no individual line is self-sufficient, so a block scan inspects a small
+  // window of recent lines together.
+
+  // An enumerated / lettered list item: "1.", "1)", "(1)", "[1]", "a.", "b)".
+  const LIST_ITEM_PATTERN =
+    /^\s{0,8}(?:\(\s*(?:\d{1,3}|[a-zA-Z])\s*\)|\[\s*(?:\d{1,3}|[a-zA-Z])\s*\]|(?:\d{1,3}|[a-zA-Z])[.)])\s+\S/;
+
+  // A header that introduces an interactive question / choice across a block.
+  const BLOCK_HEADER_PATTERN =
+    /^\s*(?:questions?|please\s+(?:answer|choose|select|pick|respond|specify)|choose|select|pick|which(?:\s+\w+)?|what(?:'s|\s+is|\s+are)?|how|where|when|who|enter|type|provide)\b/i;
+
+  // The block's concluding line reads like it is waiting for a reply.
+  const BLOCK_TAIL_PATTERN = /[?:>）】]\s*$/;
+
+  function toBlockLines(lines) {
+    const arr = Array.isArray(lines) ? lines : [lines];
+    const out = [];
+    for (const raw of arr) {
+      const text = normalize(raw);
+      if (text) out.push(text);
+    }
+    return out;
+  }
+
+  /**
+   * Classify a *window* of recent lines. Returns `{ category, confidence }` when
+   * the block reads like an interactive question (a header and/or an enumerated
+   * menu that concludes with a prompt), otherwise `null`.
+   *
+   * @param {string[]|string} lines  Recent lines, oldest first, newest last.
+   * @param {object} [context]       Same caret context as classifyInputPrompt.
+   */
+  function classifyInputPromptBlock(lines, context) {
+    const block = toBlockLines(lines);
+    if (block.length === 0) return null;
+
+    const lastLine = block[block.length - 1];
+    // If control has clearly returned to an idle shell, the program is not
+    // waiting on us regardless of what scrolled by above.
+    if (isShellPrompt(lastLine)) return null;
+
+    let listItems = 0;
+    let hasHeader = false;
+    let singleFlag = false;
+    for (const text of block) {
+      if (LIST_ITEM_PATTERN.test(text)) listItems += 1;
+      if (BLOCK_HEADER_PATTERN.test(text)) hasHeader = true;
+      // Only a *high-confidence* single-line prompt corroborates a block; weak
+      // trailing punctuation (e.g. a "Steps:" documentation header) must not.
+      if (!singleFlag) {
+        const inner = classifyInputPrompt(text, context);
+        if (inner && inner.confidence === "high") singleFlag = true;
+      }
+    }
+
+    const tailWaits = singleFlag || BLOCK_TAIL_PATTERN.test(lastLine);
+    const hasQuestionWord = block.some((t) => /^\s*questions?\b/i.test(t));
+
+    // A "Question" header carries an enumerated list or a trailing prompt.
+    if (hasQuestionWord && (listItems >= 1 || tailWaits)) {
+      return { category: "question", confidence: "high" };
+    }
+    // An enumerated menu (2+ options) introduced by a header or ending in a prompt.
+    if (listItems >= 2 && (hasHeader || tailWaits)) {
+      return { category: "select", confidence: "high" };
+    }
+    return null;
+  }
+
+  function looksLikeInputPromptBlock(lines, context) {
+    return classifyInputPromptBlock(lines, context) !== null;
+  }
 
   // ---- Low-confidence trailing punctuation (gated by shell veto) -----------
   const WEAK_PATTERNS = [
@@ -182,6 +269,8 @@
     isShellPrompt,
     looksLikeInputPrompt,
     classifyInputPrompt,
+    looksLikeInputPromptBlock,
+    classifyInputPromptBlock,
     // Exposed for tests / introspection.
     PROMPT_PATTERNS,
     SHELL_PROMPT_PATTERNS

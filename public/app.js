@@ -1543,7 +1543,30 @@ function evaluateInputPrompt(terminal) {
   // The caret sits at the end of the prompt when a program is genuinely blocked
   // waiting for the user; if it's mid-line the program is likely still drawing.
   const cursorAtLineEnd = row !== cursorRow || buffer.cursorX >= line.length;
-  setAwaitingInput(terminal, promptDetector.looksLikeInputPrompt(line, { cursorAtLineEnd }));
+  const singleFlag = promptDetector.looksLikeInputPrompt(line, { cursorAtLineEnd });
+  // Many interactive prompts (an agent asking a "Question" with a numbered list,
+  // a wizard menu, …) span several lines, so no single parked line is enough.
+  // Scan a small window of the most recent lines together as a fallback.
+  let blockFlag = false;
+  if (!singleFlag && typeof promptDetector.looksLikeInputPromptBlock === "function") {
+    const window = readBufferWindow(buffer, cursorRow, PROMPT_WINDOW_ROWS);
+    blockFlag = promptDetector.looksLikeInputPromptBlock(window, { cursorAtLineEnd });
+  }
+  setAwaitingInput(terminal, singleFlag || blockFlag);
+}
+
+// How many rows above the caret the multi-line block scanner considers. Large
+// enough to span a "Question" header + an enumerated list, small enough that a
+// long-answered prompt scrolls out of view quickly.
+const PROMPT_WINDOW_ROWS = 14;
+
+function readBufferWindow(buffer, cursorRow, count) {
+  const lines = [];
+  const first = Math.max(0, cursorRow - count + 1);
+  for (let probe = first; probe <= cursorRow; probe += 1) {
+    lines.push(readBufferLine(buffer, probe));
+  }
+  return lines;
 }
 
 function readBufferLine(buffer, row) {

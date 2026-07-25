@@ -1,6 +1,13 @@
 const detector = require("../../public/input-detection.js");
 
-const { looksLikeInputPrompt, isShellPrompt, stripAnsi, classifyInputPrompt } = detector;
+const {
+  looksLikeInputPrompt,
+  isShellPrompt,
+  stripAnsi,
+  classifyInputPrompt,
+  looksLikeInputPromptBlock,
+  classifyInputPromptBlock
+} = detector;
 
 describe("input-detection: module surface", () => {
   it("exports the expected public helpers", () => {
@@ -8,6 +15,8 @@ describe("input-detection: module surface", () => {
     expect(typeof isShellPrompt).toBe("function");
     expect(typeof stripAnsi).toBe("function");
     expect(typeof classifyInputPrompt).toBe("function");
+    expect(typeof looksLikeInputPromptBlock).toBe("function");
+    expect(typeof classifyInputPromptBlock).toBe("function");
     expect(Array.isArray(detector.PROMPT_PATTERNS)).toBe(true);
   });
 });
@@ -81,6 +90,16 @@ describe("input-detection: positive prompts (should flag)", () => {
     "Waiting for input...",
     "Input required",
     "This action requires confirmation",
+    // interactive "Question" headers (single line)
+    "Question",
+    "Question:",
+    "Questions?",
+    "Question 1:",
+    "Question 2 of 5:",
+    "Q:",
+    "Please answer the following questions:",
+    "How would you like to proceed?",
+    "What is your name?",
     // low-confidence trailing punctuation (not a shell prompt)
     "What now:",
     "Ready to launch?"
@@ -193,5 +212,127 @@ describe("input-detection: isShellPrompt", () => {
   it("does not treat a question as a shell prompt", () => {
     expect(isShellPrompt("Continue? [y/N]")).toBe(false);
     expect(isShellPrompt("Password:")).toBe(false);
+  });
+});
+
+describe("input-detection: classifyInputPrompt — question headers", () => {
+  const cases = [
+    ["Question", "question"],
+    ["Question:", "question"],
+    ["Questions?", "question"],
+    ["Question 3:", "question"],
+    ["Question 2 of 5:", "question"],
+    ["Q:", "question"],
+    ["How would you like to install it?", "confirm"],
+    ["What is your project name?", "question"]
+  ];
+  for (const [line, category] of cases) {
+    it(`classifies ${JSON.stringify(line)} as ${category}`, () => {
+      const result = classifyInputPrompt(line);
+      expect(result).not.toBeNull();
+      expect(result.category).toBe(category);
+      expect(result.confidence).toBe("high");
+    });
+  }
+
+  it("does not treat 'A:' (an answer label) as a question header", () => {
+    // (It may still weak-match the generic colon rule, but never as a question.)
+    const result = classifyInputPrompt("A:");
+    if (result) expect(result.category).not.toBe("question");
+  });
+});
+
+describe("input-detection: classifyInputPromptBlock — multi-line questions", () => {
+  const positives = [
+    [
+      "Question header followed by a numbered list",
+      ["Question", "", "1. Proceed with X?", "2. Also do Y?", "3. Skip both"],
+      "question"
+    ],
+    [
+      "Question: header + list with a blank caret line trailing",
+      ["Question:", "1. PostgreSQL (Recommended)", "2. MySQL", "3. SQLite", ""],
+      "question"
+    ],
+    [
+      "Question header + a single trailing prompt (no list)",
+      ["Question:", "Which database should I use?"],
+      "question"
+    ],
+    [
+      "Choose header introduces a parenthesised menu",
+      ["Choose a template:", "1) blank", "2) react", "3) vue"],
+      "select"
+    ],
+    [
+      "Which header + lettered options",
+      ["Which package manager?", "a) npm", "b) yarn", "c) pnpm"],
+      "select"
+    ],
+    [
+      "Numbered menu concluded by a high-confidence prompt (no header word)",
+      ["1. Apple", "2. Banana", "3. Cherry", "Enter your choice:"],
+      "select"
+    ],
+    [
+      "Bracketed options with a trailing '>' prompt",
+      ["Pick one", "[1] one", "[2] two", "> "],
+      "select"
+    ]
+  ];
+
+  for (const [desc, lines, category] of positives) {
+    it(`flags (${category}): ${desc}`, () => {
+      expect(looksLikeInputPromptBlock(lines)).toBe(true);
+      const result = classifyInputPromptBlock(lines);
+      expect(result).not.toBeNull();
+      expect(result.category).toBe(category);
+      expect(result.confidence).toBe("high");
+    });
+  }
+
+  const negatives = [
+    ["ordinary numbered build log", ["1. Compiling foo", "2. Compiling bar", "3. Done"]],
+    ["a 'Steps:' documentation list is not a prompt", ["Steps:", "1. Install", "2. Build", "3. Run"]],
+    ["an 'Options:' documentation list is not a prompt", ["Options:", "1. verbose", "2. quiet"]],
+    ["a single enumerated item is too weak", ["1. Only one thing here"]],
+    ["a lone numbered item that ends in '?' is still too weak", ["1. Only one?"]],
+    ["empty / whitespace-only window", ["", "   ", "\t"]],
+    ["plain prose with no structure", ["hello world", "goodbye world"]]
+  ];
+
+  for (const [desc, lines] of negatives) {
+    it(`ignores: ${desc}`, () => {
+      expect(looksLikeInputPromptBlock(lines)).toBe(false);
+      expect(classifyInputPromptBlock(lines)).toBeNull();
+    });
+  }
+
+  it("vetoes when control has returned to an idle shell prompt", () => {
+    const lines = ["Question:", "1. A", "2. B", "PS C:\\Users\\me>"];
+    expect(looksLikeInputPromptBlock(lines)).toBe(false);
+  });
+
+  it("does NOT let a weak colon line (e.g. 'Steps:') corroborate a menu", () => {
+    // Two enumerated items + a weak colon header must NOT be treated as a prompt;
+    // only a real header word or a high-confidence trailing prompt qualifies.
+    expect(looksLikeInputPromptBlock(["Steps:", "1. a", "2. b"])).toBe(false);
+    // But swapping in a genuine header word does flag it.
+    expect(looksLikeInputPromptBlock(["Choose:", "1. a", "2. b"])).toBe(true);
+  });
+
+  it("strips ANSI colour before evaluating the block", () => {
+    const lines = ["\u001b[36mQuestion\u001b[0m", "1. \u001b[1mYes\u001b[0m", "2. No"];
+    expect(looksLikeInputPromptBlock(lines)).toBe(true);
+  });
+
+  it("accepts a single string as well as an array of lines", () => {
+    expect(looksLikeInputPromptBlock("Question:")).toBe(true);
+    expect(looksLikeInputPromptBlock("just some output")).toBe(false);
+  });
+
+  it("returns null for an empty or missing argument", () => {
+    expect(classifyInputPromptBlock([])).toBeNull();
+    expect(classifyInputPromptBlock("")).toBeNull();
   });
 });

@@ -878,6 +878,49 @@ test.describe("Settings panel — every control has its expected effect", () => 
       }
     });
 
+    test("Highlight input prompts: a multi-line Question + numbered list flags the pane", async () => {
+      await ensureTerminal();
+      await setCheck("#highlightInputPrompts", true);
+
+      // Drive the REAL renderer path: write a multi-line "Question" block (header
+      // + ordered list) straight into the live xterm buffer, then run the
+      // detector synchronously (bypassing its 500ms settle debounce). The single
+      // parked line is not self-sufficient, so this only passes if the block
+      // scanner (readBufferWindow + classifyInputPromptBlock) sees them together.
+      const flagged = await page.evaluate(async () => {
+        const t = [...state.terminals.values()][0];
+        t.pane.classList.remove("is-awaiting-input");
+        await new Promise((res) =>
+          t.term.write("\r\nQuestion\r\n\r\n1. Proceed with X?\r\n2. Also do Y?\r\n3. Skip both\r\n", res)
+        );
+        evaluateInputPrompt(t);
+        return t.pane.classList.contains("is-awaiting-input");
+      });
+      expect(flagged, "multi-line Question+list flags awaiting-input").toBe(true);
+
+      // Once control returns to an idle shell prompt, the flag must clear even
+      // though the question block is still a few rows up (the shell-prompt veto).
+      const clearedAfterShell = await page.evaluate(async () => {
+        const t = [...state.terminals.values()][0];
+        await new Promise((res) => t.term.write("\r\nPS C:\\Users\\me> ", res));
+        evaluateInputPrompt(t);
+        return t.pane.classList.contains("is-awaiting-input");
+      });
+      expect(clearedAfterShell, "idle shell prompt clears awaiting-input").toBe(false);
+
+      // With the setting OFF the detector must never flag, regardless of content.
+      const flaggedWhenDisabled = await page.evaluate(async () => {
+        const t = [...state.terminals.values()][0];
+        await new Promise((res) => t.term.write("\r\nQuestion:\r\n1. Yes\r\n2. No\r\n", res));
+        state.settings.highlightInputPrompts = false;
+        evaluateInputPrompt(t);
+        return t.pane.classList.contains("is-awaiting-input");
+      });
+      expect(flaggedWhenDisabled, "disabled detector never flags").toBe(false);
+
+      await setCheck("#highlightInputPrompts", false); // restore default
+    });
+
     test("Silence seconds + startup command persist into state.settings", async () => {
       await setNative("#silenceSeconds", "45", "change");
       expect(await setting("silenceSeconds")).toBe(45);
