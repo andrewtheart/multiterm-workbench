@@ -2296,6 +2296,10 @@ body.is-pane-dragging {
   width: 30px;
 }
 
+.pane-actions button[data-action="more"] {
+  display: none;
+}
+
 .pane-actions button[data-action="close"]:hover {
   color: var(--danger);
 }
@@ -2326,6 +2330,10 @@ body.is-pane-dragging {
 .terminal-host.compact .pane-actions button[data-action="restart"],
 .terminal-host.compact .pane-actions button[data-action="duplicate"] {
   display: none;
+}
+
+.terminal-host.compact .pane-actions button[data-action="more"] {
+  display: inline-flex;
 }
 
 .control-panel[data-mode="auto"] [data-control="columns"],

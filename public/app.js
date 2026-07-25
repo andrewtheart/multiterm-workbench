@@ -1045,6 +1045,9 @@ function bindPaneControls(terminal) {
       openFind(terminal);
     } else if (action === "restart") {
       restartSession(terminal.id);
+    } else if (action === "more") {
+      setActiveTerminal(terminal.id);
+      showPaneOverflowMenu(button, terminal);
     } else if (action === "minimize") {
       minimizeTerminal(terminal.id);
     } else if (action === "duplicate") {
@@ -3944,6 +3947,33 @@ function buildContextMenu(terminal) {
     { label: "Close", hint: "Ctrl+Shift+W", icon: "x", danger: true, run: () => removeTerminal(terminal.id) }
   ];
 
+  renderContextMenu(items);
+}
+
+function buildPaneOverflowMenu(terminal) {
+  renderContextMenu([
+    {
+      label: "Move left",
+      icon: "arrow-left",
+      disabled: !terminal.pane.previousElementSibling,
+      run: () => moveTerminal(terminal.id, -1)
+    },
+    {
+      label: "Move right",
+      icon: "arrow-right",
+      disabled: !terminal.pane.nextElementSibling,
+      run: () => moveTerminal(terminal.id, 1)
+    },
+    { label: "Cycle label color", icon: "tag", run: () => cyclePaneColor(terminal) },
+    {
+      label: "Duplicate",
+      icon: "copy-plus",
+      run: () => addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` })
+    }
+  ]);
+}
+
+function renderContextMenu(items) {
   elements.contextMenu.innerHTML = "";
   for (const item of items) {
     if (item.separator) {
@@ -3985,13 +4015,25 @@ function buildContextMenu(terminal) {
 
 function showContextMenu(x, y, terminal) {
   buildContextMenu(terminal);
+  showBuiltContextMenu(x, y);
+}
+
+function showPaneOverflowMenu(button, terminal) {
+  buildPaneOverflowMenu(terminal);
+  button.setAttribute("aria-expanded", "true");
+  const rect = button.getBoundingClientRect();
+  showBuiltContextMenu(rect.right, rect.bottom + 4, true);
+}
+
+function showBuiltContextMenu(x, y, alignRight = false) {
   const menu = elements.contextMenu;
   menu.hidden = false;
   menu.style.left = "0px";
   menu.style.top = "0px";
 
   const rect = menu.getBoundingClientRect();
-  const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
+  const desiredLeft = alignRight ? x - rect.width : x;
+  const left = Math.max(8, Math.min(desiredLeft, window.innerWidth - rect.width - 8));
   const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
@@ -4001,6 +4043,9 @@ function showContextMenu(x, y, terminal) {
 function hideContextMenu() {
   if (!elements.contextMenu.hidden) {
     elements.contextMenu.hidden = true;
+  }
+  for (const button of elements.host.querySelectorAll('button[data-action="more"][aria-expanded="true"]')) {
+    button.setAttribute("aria-expanded", "false");
   }
 }
 

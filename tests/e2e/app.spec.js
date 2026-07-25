@@ -97,6 +97,46 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("body")).not.toHaveClass(/sidecar-hidden/);
   });
 
+  test("moves compact pane actions into an overflow menu", async () => {
+    const firstPane = page.locator(".terminal-pane").first();
+    const firstId = await firstPane.getAttribute("data-id");
+    const overflow = firstPane.locator('[data-action="more"]');
+
+    await expect(overflow).toBeVisible();
+    for (const action of ["move-left", "move-right", "color", "duplicate"]) {
+      await expect(firstPane.locator(`[data-action="${action}"]`)).toBeHidden();
+    }
+
+    await overflow.click();
+    await expect(overflow).toHaveAttribute("aria-expanded", "true");
+    const menu = page.locator("#contextMenu");
+    await expect(menu).toBeVisible();
+    await expect(menu.locator(".ctx-item")).toHaveText([
+      "Move left",
+      "Move right",
+      "Cycle label color",
+      "Duplicate"
+    ]);
+    await expect(menu.locator(".ctx-item", { hasText: "Move left" })).toHaveAttribute("aria-disabled", "true");
+
+    await menu.locator(".ctx-item", { hasText: "Move right" }).click();
+    await expect(page.locator(".terminal-pane").nth(1)).toHaveAttribute("data-id", firstId);
+
+    const movedPane = page.locator(`.terminal-pane[data-id="${firstId}"]`);
+    await movedPane.locator('[data-action="more"]').click();
+    await menu.locator(".ctx-item", { hasText: "Move left" }).click();
+    await expect(page.locator(".terminal-pane").first()).toHaveAttribute("data-id", firstId);
+
+    await movedPane.locator('[data-action="more"]').click();
+    await menu.locator(".ctx-item", { hasText: "Cycle label color" }).click();
+    await expect(movedPane).toHaveClass(/has-color/);
+
+    const beforeDuplicate = await page.locator(".terminal-pane").count();
+    await movedPane.locator('[data-action="more"]').click();
+    await menu.locator(".ctx-item", { hasText: "Duplicate" }).click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(beforeDuplicate + 1);
+  });
+
   test("opens the About dialog and shows the version", async () => {
     await page.locator("#aboutToggle").click();
     await expect(page.locator("#aboutOverlay")).toBeVisible();

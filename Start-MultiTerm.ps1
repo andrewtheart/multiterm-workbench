@@ -371,19 +371,48 @@ namespace MultiTerm.PowerShellBridge
 
                 string iconPath = this.ResolveAppIconPath();
                 string aumid = AppUserModelId;
+                string relaunchCommand = this.ResolveRelaunchCommand();
 
                 // Branding must wait for the browser window to appear, so run it
                 // off the startup path on a background thread. Failures are
                 // non-fatal - the app still works, just with the browser's icon.
                 Thread worker = new Thread(new ThreadStart(delegate()
                 {
-                    try { WindowBrander.Apply(started, "MultiTerm Workbench", aumid, iconPath); }
+                    try { WindowBrander.Apply(started, "MultiTerm Workbench", aumid, iconPath, relaunchCommand); }
                     catch { }
                 }));
                 worker.IsBackground = true;
                 worker.Start();
             }
             catch { }
+        }
+
+        // Command the taskbar uses when the pinned button is launched, so a pin
+        // starts MultiTerm through its own script rather than the host browser.
+        private string ResolveRelaunchCommand()
+        {
+            try
+            {
+                string scriptPath = Path.GetFullPath(Path.Combine(this.publicDir, "..", "Start-MultiTerm.ps1"));
+                if (!File.Exists(scriptPath))
+                {
+                    return null;
+                }
+
+                string powershell = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "WindowsPowerShell\\v1.0\\powershell.exe");
+                if (!File.Exists(powershell))
+                {
+                    return null;
+                }
+
+                return "\"" + powershell + "\" -NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + "\"";
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // Gives a Chromium "--app" window its own taskbar identity by stamping
@@ -404,12 +433,13 @@ namespace MultiTerm.PowerShellBridge
             private const uint TH32CS_SNAPPROCESS = 0x00000002;
             private const ushort VT_LPWSTR = 31;
 
-            // PKEY_AppUserModel_* live under this format id. pid 5 = ID,
-            // pid 3 = RelaunchIconResource.
+            // PKEY_AppUserModel_* live under this format id. pid 2 = RelaunchCommand,
+            // pid 3 = RelaunchIconResource, pid 4 = RelaunchDisplayNameResource,
+            // pid 5 = ID.
             private static readonly Guid APPMODEL_FMTID = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
             private static readonly Guid IID_IPropertyStore = new Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99");
 
-            public static void Apply(Process started, string titleFragment, string aumid, string iconPath)
+            public static void Apply(Process started, string titleFragment, string aumid, string iconPath, string relaunchCommand)
             {
                 try
                 {
@@ -445,7 +475,7 @@ namespace MultiTerm.PowerShellBridge
                     // settled. Re-find the window each pass in case it was recreated.
                     for (int pass = 0; pass < 6; pass++)
                     {
-                        try { ApplyOnce(hwnd, aumid, iconPath, hIconBig, hIconSmall); }
+                        try { ApplyOnce(hwnd, aumid, iconPath, relaunchCommand, hIconBig, hIconSmall); }
                         catch { }
                         Thread.Sleep(800);
                         IntPtr again = FindAppWindow(started, titleFragment);
@@ -458,7 +488,7 @@ namespace MultiTerm.PowerShellBridge
                 catch { }
             }
 
-            private static void ApplyOnce(IntPtr hwnd, string aumid, string iconPath, IntPtr hIconBig, IntPtr hIconSmall)
+            private static void ApplyOnce(IntPtr hwnd, string aumid, string iconPath, string relaunchCommand, IntPtr hIconBig, IntPtr hIconSmall)
             {
                 if (hIconBig != IntPtr.Zero)
                 {
@@ -479,11 +509,22 @@ namespace MultiTerm.PowerShellBridge
 
                 try
                 {
-                    SetStringProperty(store, new PROPERTYKEY(APPMODEL_FMTID, 5u), aumid);
+                    // Order matters: setting System.AppUserModel.ID is what notifies
+                    // the taskbar to refresh the window's identity, so the icon and
+                    // relaunch properties must already be in place when it lands.
+                    // Writing the ID first (as before) refreshed the taskbar while the
+                    // window still carried the host browser's icon, which is why the
+                    // button kept showing Edge.
                     if (!String.IsNullOrEmpty(iconPath))
                     {
                         SetStringProperty(store, new PROPERTYKEY(APPMODEL_FMTID, 3u), iconPath + ",0");
                     }
+                    if (!String.IsNullOrEmpty(relaunchCommand))
+                    {
+                        SetStringProperty(store, new PROPERTYKEY(APPMODEL_FMTID, 2u), relaunchCommand);
+                    }
+                    SetStringProperty(store, new PROPERTYKEY(APPMODEL_FMTID, 4u), "MultiTerm Workbench");
+                    SetStringProperty(store, new PROPERTYKEY(APPMODEL_FMTID, 5u), aumid);
                     store.Commit();
                 }
                 finally
