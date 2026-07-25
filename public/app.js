@@ -712,6 +712,16 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "elevateStarted") {
+    toast(`Launching elevated ${message.shell || "terminal"}\u2014approve the UAC prompt`, "info", 2800);
+    return;
+  }
+
+  if (message.type === "elevateError") {
+    toast(message.message || "Could not open administrator terminal", "error");
+    return;
+  }
+
   if (message.type === "memstats") {
     updateMemStatus(message);
     return;
@@ -1609,6 +1619,18 @@ function sendBridge(message) {
   }
 }
 
+// Windows UAC-elevated terminals can't be hosted inside a non-elevated MultiTerm pane
+// (ConPTY can't cross the integrity-level boundary), so the bridge launches the elevated
+// shell in a separate console window via ShellExecute "runas" (raises the UAC prompt).
+function newAdminTerminal(options = {}) {
+  const shell = options.shell || elements.shellSelect.value || "pwsh";
+  const payload = { type: "elevate", shell };
+  if (options.cwd) payload.cwd = options.cwd;
+  if (!sendBridge(payload)) {
+    toast("Bridge disconnected; cannot open administrator terminal", "error");
+  }
+}
+
 function updateTerminalActions() {
   const hasTerminals = state.terminals.size > 0;
   const canCloseAll = hasTerminals && state.socketReady;
@@ -2228,6 +2250,7 @@ function getCommands() {
     { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell", title: "Windows PowerShell" }) },
     { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd", title: "Command Prompt" }) },
     { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl", title: "WSL" }) },
+    { label: "New Administrator terminal", run: () => newAdminTerminal() },
     { label: "Close active terminal", hint: "Ctrl+Shift+W", run: () => state.activeId && removeTerminal(state.activeId) },
     { label: "Minimize active terminal", run: () => state.activeId && minimizeTerminal(state.activeId) },
     { label: "Restore all minimized terminals", run: restoreAllTerminals },
@@ -3564,6 +3587,7 @@ function buildContextMenu(terminal) {
     { separator: true },
     { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
+    { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
     { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScript(terminal.id) },
     { label: terminal.logging ? "Stop logging" : "Log to file\u2026", icon: terminal.logging ? "circle-stop" : "file-text", run: () => toggleLogging(terminal) },
     ...(terminal.logPath ? [{ label: "Reveal log", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }] : []),

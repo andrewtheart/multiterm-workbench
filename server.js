@@ -225,6 +225,8 @@ module.exports = {
   sanitizeLogName,
   stripAnsiForLog,
   revealPath,
+  launchElevatedTerminal,
+  buildElevatedShellArgs,
   computeMemStats,
   pushMemStats,
   scheduleMemStats,
@@ -395,6 +397,9 @@ function handleClientMessage(client, rawMessage) {
       break;
     case "reveal":
       revealPath(client, message);
+      break;
+    case "elevate":
+      launchElevatedTerminal(client, message);
       break;
     case "list":
       client.send({ type: "sessions", sessions: [...sessions.values()].map(toSessionSummary) });
@@ -621,6 +626,80 @@ function revealPath(client, message) {
   } catch (error) {
     client.send({ type: "revealError", message: error.message });
   }
+}
+
+// A Windows UAC-elevated process runs at a higher integrity level than this bridge, and
+// ConPTY/node-pty cannot attach a pseudo-console across that boundary. So an
+// "administrator terminal" is launched as a SEPARATE elevated console window via
+// ShellExecute's "runas" verb (PowerShell's Start-Process -Verb RunAs), which raises the
+// UAC prompt. It intentionally does not stream back into a MultiTerm pane.
+function launchElevatedTerminal(client, message) {
+  if (process.platform !== "win32") {
+    client.send({ type: "elevateError", message: "Administrator terminals are only supported on Windows." });
+    return;
+  }
+
+  const shell = getShell(message.shell);
+  const cwd = getWorkingDirectory(message.cwd);
+  const args = buildElevatedShellArgs(shell, cwd);
+
+  // Pass the target file/args/cwd via environment variables so the -Command string stays
+  // fixed and carries no interpolated (potentially injectable) values.
+  const command = [
+    "$ErrorActionPreference = 'Stop';",
+    "$file = $env:MT_ELEVATE_FILE;",
+    "$cwd = $env:MT_ELEVATE_CWD;",
+    "$list = if ($env:MT_ELEVATE_ARGS) { @($env:MT_ELEVATE_ARGS | ConvertFrom-Json) } else { @() };",
+    "if ($list.Count -gt 0) {",
+    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $list;",
+    "} else {",
+    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd;",
+    "}"
+  ].join(" ");
+
+  try {
+    const child = childProcess.spawn(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+      {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+        env: {
+          ...process.env,
+          MT_ELEVATE_FILE: shell.file,
+          MT_ELEVATE_CWD: cwd,
+          MT_ELEVATE_ARGS: JSON.stringify(args)
+        }
+      }
+    );
+    child.on("error", (error) => {
+      client.send({ type: "elevateError", message: error.message });
+    });
+    child.unref();
+    client.send({ type: "elevateStarted", shell: shell.label });
+  } catch (error) {
+    client.send({ type: "elevateError", message: error.message });
+  }
+}
+
+// Build the argument list for an elevated shell so it opens in `cwd` and stays open.
+// -WorkingDirectory alone is unreliable under "runas" on Windows PowerShell 5.1, so we
+// also change directory via the shell's own startup arguments.
+function buildElevatedShellArgs(shell, cwd) {
+  if (shell.file === "cmd.exe") {
+    // /k keeps the window open after the initial command; cd /d changes drive + dir.
+    // Windows paths cannot contain double quotes, so quoting is sufficient here.
+    return ["/k", `cd /d "${cwd}"`];
+  }
+  if (shell.file === "wsl.exe") {
+    // wsl --cd accepts a Windows path and starts the login shell there.
+    return ["--cd", cwd];
+  }
+  // pwsh.exe / powershell.exe: -NoExit keeps the session; set the location up front.
+  // Escape single quotes for the single-quoted -LiteralPath argument.
+  const escaped = String(cwd).replace(/'/g, "''");
+  return ["-NoLogo", "-NoExit", "-Command", `Set-Location -LiteralPath '${escaped}'`];
 }
 
 function shutdown() {

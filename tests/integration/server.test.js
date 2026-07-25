@@ -173,3 +173,82 @@ describe("shutdown", () => {
     expect(exit).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("elevated (administrator) terminal", () => {
+  const childProcess = require("node:child_process");
+  let platformDescriptor;
+
+  const makeClient = () => ({ send: vi.fn() });
+  const setPlatform = (value) =>
+    Object.defineProperty(process, "platform", { value, configurable: true });
+
+  beforeEach(() => {
+    platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    setPlatform("win32");
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platformDescriptor);
+    vi.restoreAllMocks();
+  });
+
+  it("builds pwsh args that cd into the cwd and keep the window open", () => {
+    expect(app.buildElevatedShellArgs({ file: "pwsh.exe" }, "C:\\Users\\me")).toEqual([
+      "-NoLogo",
+      "-NoExit",
+      "-Command",
+      "Set-Location -LiteralPath 'C:\\Users\\me'"
+    ]);
+  });
+
+  it("escapes single quotes in the cwd for powershell", () => {
+    const args = app.buildElevatedShellArgs({ file: "powershell.exe" }, "C:\\O'Brien");
+    expect(args[3]).toBe("Set-Location -LiteralPath 'C:\\O''Brien'");
+  });
+
+  it("builds cmd args with /k cd /d", () => {
+    expect(app.buildElevatedShellArgs({ file: "cmd.exe" }, "C:\\work")).toEqual(["/k", 'cd /d "C:\\work"']);
+  });
+
+  it("builds wsl args with --cd", () => {
+    expect(app.buildElevatedShellArgs({ file: "wsl.exe" }, "C:\\work")).toEqual(["--cd", "C:\\work"]);
+  });
+
+  it("spawns an elevated launcher via Start-Process -Verb RunAs and confirms", () => {
+    const child = { on: vi.fn(), unref: vi.fn() };
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+
+    app.launchElevatedTerminal(client, { type: "elevate", shell: "pwsh", cwd: "C:\\Windows" });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [file, spawnArgs, opts] = spawn.mock.calls[0];
+    expect(file).toBe("powershell.exe");
+    const command = spawnArgs[spawnArgs.length - 1];
+    expect(command).toContain("Start-Process");
+    expect(command).toContain("-Verb RunAs");
+    expect(opts).toMatchObject({ detached: true, windowsHide: true });
+    expect(opts.env.MT_ELEVATE_FILE).toBe("pwsh.exe");
+    expect(opts.env.MT_ELEVATE_CWD).toBe("C:\\Windows");
+    expect(JSON.parse(opts.env.MT_ELEVATE_ARGS)).toContain("-NoExit");
+    expect(child.unref).toHaveBeenCalled();
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateStarted" }));
+  });
+
+  it("reports an error and does not spawn on non-Windows platforms", () => {
+    setPlatform("linux");
+    const spawn = vi.spyOn(childProcess, "spawn");
+    const client = makeClient();
+    app.launchElevatedTerminal(client, { shell: "pwsh" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateError" }));
+  });
+
+  it("routes an 'elevate' client message to the launcher", () => {
+    const child = { on: vi.fn(), unref: vi.fn() };
+    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+    app.handleClientMessage(client, JSON.stringify({ type: "elevate", shell: "cmd" }));
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateStarted" }));
+  });
+});

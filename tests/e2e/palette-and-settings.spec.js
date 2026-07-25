@@ -36,6 +36,7 @@ const STATIC_LABELS = [
   "New Windows PowerShell terminal",
   "New Command Prompt terminal",
   "New WSL terminal",
+  "New Administrator terminal",
   "Close active terminal",
   "Minimize active terminal",
   "Restore all minimized terminals",
@@ -430,6 +431,46 @@ test.describe("Command palette — every option works", () => {
     });
     await runCmd("Toggle logging for active terminal");
     expect(await page.evaluate(() => window.__sent.some((m) => m.type === "logStop"))).toBe(true);
+
+    await page.evaluate(() => {
+      // eslint-disable-next-line no-global-assign
+      sendBridge = window.__origSendBridge;
+    });
+  });
+
+  test("New Administrator terminal emits an elevate request (no real UAC/window)", async () => {
+    await resetTo(1);
+    // Spy on sendBridge so selecting the command verifies the emitted message
+    // WITHOUT the bridge actually launching an elevated shell / raising UAC.
+    await page.evaluate(() => {
+      window.__origSendBridge = sendBridge;
+      window.__sent = [];
+      // eslint-disable-next-line no-global-assign
+      sendBridge = (msg) => {
+        window.__sent.push(msg);
+        return true;
+      };
+    });
+
+    // Palette entry: elevates the default shell, does NOT create a pane.
+    const before = await paneCount();
+    await runCmd("New Administrator terminal");
+    await expect(page.locator(".terminal-pane")).toHaveCount(before);
+    const elevateMsg = await page.evaluate(() => window.__sent.find((m) => m.type === "elevate"));
+    expect(elevateMsg, "palette emitted an elevate message").toBeTruthy();
+    expect(typeof elevateMsg.shell).toBe("string");
+    expect(elevateMsg.shell.length).toBeGreaterThan(0);
+
+    // Context-menu path: elevates the pane's own shell + cwd.
+    await page.evaluate(() => {
+      window.__sent = [];
+      const active = state.terminals.get(state.activeId);
+      active.shell = "cmd";
+      active.cwd = "C:\\Windows";
+      newAdminTerminal({ shell: active.shell, cwd: active.cwd });
+    });
+    const ctxMsg = await page.evaluate(() => window.__sent.find((m) => m.type === "elevate"));
+    expect(ctxMsg).toMatchObject({ type: "elevate", shell: "cmd", cwd: "C:\\Windows" });
 
     await page.evaluate(() => {
       // eslint-disable-next-line no-global-assign
