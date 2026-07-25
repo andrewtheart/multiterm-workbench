@@ -323,6 +323,63 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(result.sent[1].cols).toBe(88);
   });
 
+  test("keeps every pane's close button clickable when the terminal host scrolls", async () => {
+    // Regression guard for "pressing the right-most terminal's X does nothing".
+    // At the default 1280x720 viewport, 3 panes overflow the host vertically, so
+    // revealing the newly-added pane scrolls the top row's headers up toward the
+    // topbar. Before the sticky-header fix a top-row pane's X slid under the
+    // topbar's action buttons (e.g. #toggleHeaderTop), which then intercepted the
+    // click, so the X had no effect. Note a naive locator.click() auto-scrolls the
+    // button into view and MASKS the bug — the guard must hit-test real
+    // coordinates and click via the raw mouse.
+    await page.evaluate(() => {
+      for (const t of [...state.terminals.values()]) disposeTerminal(t);
+      state.terminals.clear();
+      state.activeId = null;
+      addTerminal({ reveal: true });
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await page.locator("#addTerminal").click();
+    await page.locator("#addTerminal").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(3);
+    await page.waitForTimeout(200); // let the reveal scroll settle
+
+    const probe = await page.evaluate(() => {
+      const host = document.querySelector("#terminalHost");
+      const panes = [...document.querySelectorAll(".terminal-pane")];
+      panes.sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
+      const pane = panes[0]; // the right-most pane (worst-affected top-row pane)
+      const btn = pane.querySelector('[data-action="close"]');
+      const r = btn.getBoundingClientRect();
+      const cx = Math.round(r.left + r.width / 2);
+      const cy = Math.round(r.top + r.height / 2);
+      const at = document.elementFromPoint(cx, cy);
+      return {
+        overflows: host.scrollHeight > host.clientHeight,
+        scrollTop: host.scrollTop,
+        hostTop: Math.round(host.getBoundingClientRect().top),
+        buttonTop: Math.round(r.top),
+        cx,
+        cy,
+        hitsButton: !!(at && btn.contains(at))
+      };
+    });
+
+    // The scenario must genuinely scroll the host, else it guards nothing.
+    expect(probe.overflows).toBe(true);
+    expect(probe.scrollTop).toBeGreaterThan(0);
+    // The sticky header pins the X below the host's top edge (clear of the topbar)
+    // and a real hit-test at the X's centre lands on the close button — not the
+    // topbar. Both assertions fail on the pre-fix (clipped) layout.
+    expect(probe.buttonTop).toBeGreaterThanOrEqual(probe.hostTop);
+    expect(probe.hitsButton).toBe(true);
+
+    // A real coordinate click (raw mouse, no auto-scroll) closes that pane.
+    const before = await page.evaluate(() => state.terminals.size);
+    await page.mouse.click(probe.cx, probe.cy);
+    await expect(page.locator(".terminal-pane")).toHaveCount(before - 1);
+  });
+
   test("closes all terminals", async () => {
     await page.locator("#closeAllTerminals").click();
     await expect(page.locator("#statusSessions")).toHaveText("0 sessions");

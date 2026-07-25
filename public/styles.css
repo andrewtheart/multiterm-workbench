@@ -2023,6 +2023,35 @@ body.is-pane-dragging {
   cursor: move;
 }
 
+/* Keep every pane's header — and its close (X) button — reachable when the
+   terminal host scrolls. In the flowing grid layouts (auto/columns/rows/grid/
+   master/snap) enough panes overflow the host vertically; revealing a lower
+   pane then scrolls the top row's headers up under the topbar, where the
+   topbar's own action buttons (e.g. #toggleHeaderTop) sit on those pixels and
+   intercept the click — so pressing a top-row pane's X did nothing. Dropping
+   the pane's own clip and making the header sticky pins each visible pane's
+   header just below the topbar, so the X is always on-screen and clickable.
+   The body (.terminal-screen) keeps overflow:hidden + rounded corners, so the
+   pane still clips its terminal content exactly as before. Manual layout
+   re-asserts overflow:hidden at higher specificity (it needs a non-visible
+   overflow for `resize: both`), so it is unaffected. */
+.terminal-host .terminal-pane {
+  overflow: visible;
+}
+
+.terminal-host .terminal-pane > .pane-bar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  border-top-left-radius: calc(var(--radius) - 1px);
+  border-top-right-radius: calc(var(--radius) - 1px);
+}
+
+.terminal-host .terminal-pane > .terminal-screen {
+  border-bottom-left-radius: calc(var(--radius) - 1px);
+  border-bottom-right-radius: calc(var(--radius) - 1px);
+}
+
 .pane-title-wrap {
   align-items: center;
   display: flex;
