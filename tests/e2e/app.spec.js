@@ -380,6 +380,91 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(before - 1);
   });
 
+  test("moves keyboard focus into a pane when its chrome is clicked", async () => {
+    // Regression guard for "click the second terminal, then type, and the text
+    // lands in the FIRST terminal". Clicking a pane's CHROME (its header bar or
+    // the padding around the terminal) marks it active via the pointerdown
+    // handler, but before the fix it did NOT move DOM focus into that pane's
+    // xterm. The browser blurred the previously focused terminal to <body>, so
+    // the active pane and the keyboard-focused pane diverged and keystrokes kept
+    // flowing to whichever terminal was focused before. The fix intercepts a
+    // primary-button mousedown on non-interactive chrome and focuses THIS pane's
+    // terminal, so keystrokes always land in the pane that was just clicked.
+    await page.evaluate(() => {
+      for (const t of [...state.terminals.values()]) disposeTerminal(t);
+      state.terminals.clear();
+      state.activeId = null;
+      addTerminal();
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await page.locator("#addTerminal").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await page.waitForTimeout(150); // let the layout + fit settle
+
+    // Identify the left (A) and right (B) panes and a click point in B's top
+    // screen-padding gutter: inside .terminal-screen but ABOVE the .xterm
+    // surface and clear of every control (the exact "chrome" the fix targets).
+    const info = await page.evaluate(() => {
+      const panes = [...document.querySelectorAll(".terminal-pane")];
+      panes.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
+      const [A, B] = panes;
+      const screen = B.querySelector(".terminal-screen").getBoundingClientRect();
+      const cx = Math.round(screen.left + screen.width / 2);
+      const cy = Math.round(screen.top + 3);
+      const hit = document.elementFromPoint(cx, cy);
+      return {
+        aId: A.dataset.id,
+        bId: B.dataset.id,
+        cx,
+        cy,
+        hitInXterm: !!(hit && hit.closest(".xterm")),
+        hitIsControl: !!(hit && hit.closest("button, select, input, textarea, a, [contenteditable]")),
+        hitInB: !!(hit && hit.closest(".terminal-pane") === B)
+      };
+    });
+
+    // The chosen point must be pane B's chrome (not the xterm surface, not a
+    // control), otherwise it would not exercise the focus-follows-activation path.
+    expect(info.hitInB).toBe(true);
+    expect(info.hitInXterm).toBe(false);
+    expect(info.hitIsControl).toBe(false);
+
+    // Focus terminal A first by clicking its xterm, and confirm it holds focus.
+    const aCenter = await page.evaluate((aId) => {
+      const A = [...document.querySelectorAll(".terminal-pane")].find((p) => p.dataset.id === aId);
+      const r = A.querySelector(".xterm").getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    }, info.aId);
+    await page.mouse.click(aCenter.x, aCenter.y);
+
+    const readFocus = () => page.evaluate(() => {
+      const a = document.activeElement;
+      const pane = a && a.closest ? a.closest(".terminal-pane") : null;
+      return {
+        activeId: state.activeId,
+        focusPaneId: pane ? pane.dataset.id : null,
+        isTerminalTextarea: !!(a && a.classList && a.classList.contains("xterm-helper-textarea"))
+      };
+    });
+
+    const before = await readFocus();
+    expect(before.activeId).toBe(info.aId);
+    expect(before.focusPaneId).toBe(info.aId);
+    expect(before.isTerminalTextarea).toBe(true);
+
+    // Click terminal B's chrome with the raw mouse (no auto-scroll/synthetic focus).
+    await page.mouse.click(info.cx, info.cy);
+    await page.waitForTimeout(50);
+
+    // Activation AND keyboard focus both move to B: xterm routes keystrokes to
+    // the focused terminal, so typing now lands in the pane the user clicked.
+    // Pre-fix, focus stayed off B (blurred to <body>), so these fail.
+    const after = await readFocus();
+    expect(after.activeId).toBe(info.bId);
+    expect(after.focusPaneId).toBe(info.bId);
+    expect(after.isTerminalTextarea).toBe(true);
+  });
+
   test("closes all terminals", async () => {
     await page.locator("#closeAllTerminals").click();
     await expect(page.locator("#statusSessions")).toHaveText("0 sessions");

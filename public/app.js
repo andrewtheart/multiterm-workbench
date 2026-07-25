@@ -946,6 +946,26 @@ function addTerminal(options = {}) {
   pane.addEventListener("pointerdown", () => setActiveTerminal(id));
   pane.addEventListener("pointerup", () => syncManualLayout(terminal));
 
+  // Keep keyboard focus in sync with the pane the user clicks. The pointerdown
+  // handler above marks a pane active (highlight + state.activeId), but clicking
+  // a pane's CHROME — its header bar, the padding around the terminal, or the
+  // gaps between the screen and the xterm surface — does not move DOM focus into
+  // the terminal. The browser instead blurs the previously focused terminal to
+  // <body>, so the active pane and the keyboard-focused pane diverge: keystrokes
+  // silently keep flowing to whichever terminal was focused before (or vanish).
+  // Intercept a primary-button mousedown on non-interactive chrome, cancel the
+  // default focus shift, and focus THIS pane's terminal so typing always lands
+  // in the pane that was just clicked. Clicks on the xterm surface and on
+  // interactive controls (title field, buttons, selects) are left untouched so
+  // xterm keeps managing its own focus/selection and controls stay usable.
+  pane.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest("button, select, input, textarea, a, [contenteditable]")) return;
+    if (event.target.closest(".xterm")) return;
+    event.preventDefault();
+    term.focus();
+  });
+
   if (options.reattach) {
     setTerminalStatus(terminal, session.pid ? `pid ${session.pid}` : "live", "live");
     writelnTerminal(terminal, "\x1b[36mReattached to running session.\x1b[0m");
