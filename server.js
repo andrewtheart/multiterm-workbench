@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
+const net = require("node:net");
 const childProcess = require("node:child_process");
 // `pty` is a mutable binding so tests can inject a fake terminal factory
 // via `__setPty` without spawning real shells.
@@ -238,9 +239,18 @@ module.exports = {
   stripAnsiForLog,
   revealPath,
   launchElevatedTerminal,
+  launchElevatedHost,
+  handleElevatedConnection,
+  registerElevatedSession,
+  finishElevatedSession,
+  finishElevationAttempt,
   describeElevationError,
   elevationErrorMessage,
-  buildElevatedShellArgs,
+  timingSafeStringEqual,
+  encodeElevationData,
+  decodeElevationData,
+  defaultElevationServerFactory,
+  __setElevationServerFactory,
   computeMemStats,
   computeMemStatsDefault,
   pushMemStats,
@@ -651,36 +661,145 @@ function revealPath(client, message) {
 // bridge can distinguish a genuine failure from normal output.
 const ELEVATE_ERROR_PREFIX = "MT_ELEVATE_ERR:";
 
-// A Windows UAC-elevated process runs at a higher integrity level than this bridge, and
-// ConPTY/node-pty cannot attach a pseudo-console across that boundary. So an
-// "administrator terminal" is launched as a SEPARATE elevated console window via
-// ShellExecute's "runas" verb (PowerShell's Start-Process -Verb RunAs), which raises the
-// UAC prompt. It intentionally does not stream back into a MultiTerm pane.
+// Absolute path to the elevated PTY helper. It runs at HIGH integrity (via UAC) and owns
+// the elevated shell's pseudo-console on that side of the integrity boundary, streaming its
+// I/O back to this (medium-integrity) bridge over an authenticated loopback channel.
+const ELEVATED_HOST_SCRIPT = path.join(__dirname, "elevated-pty-host.js");
+
+// A generous window for the whole "raise the UAC prompt, user approves, helper elevates and
+// connects back" round-trip. If nothing connects by then, the attempt is torn down.
+const ELEVATION_CONNECT_TIMEOUT_MS = 120000;
+
+// Once a connection arrives it must authenticate quickly; otherwise a stray loopback
+// connection could consume the one-shot listener and hang the tab forever.
+const ELEVATION_AUTH_TIMEOUT_MS = 15000;
+
+// Overridable so tests can supply a fake one-shot server without opening real sockets.
+function defaultElevationServerFactory(onConnection) {
+  return net.createServer(onConnection);
+}
+let elevationServerFactory = defaultElevationServerFactory;
+function __setElevationServerFactory(factory) {
+  elevationServerFactory = factory;
+}
+
+// Constant-time comparison for the channel token. Guards the length first because
+// timingSafeEqual throws on differing buffer lengths.
+function timingSafeStringEqual(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function encodeElevationData(text) {
+  return Buffer.from(String(text), "utf8").toString("base64");
+}
+
+function decodeElevationData(text) {
+  return Buffer.from(String(text), "base64").toString("utf8");
+}
+
+// Best-effort teardown helpers, funnelled through one place so every call site tears down
+// the same way. node's socket.destroy() and server.close() are safe to call repeatedly and
+// never throw synchronously (a non-listening server surfaces its error via callback), so no
+// defensive try/catch is needed here.
+function destroySocket(socket) {
+  socket.destroy();
+}
+
+function closeElevationServer(server) {
+  server.close();
+}
+
+// Host an administrator terminal INSIDE MultiTerm. A UAC-elevated shell runs at high
+// integrity, which ConPTY cannot attach across from this medium-integrity bridge, so the
+// pseudo-console is owned by a high-integrity helper (elevated-pty-host.js) launched via
+// UAC. The helper streams the terminal back over a loopback channel guarded by a one-time
+// token; crucially, the helper independently verifies (by PID) that it is talking to THIS
+// bridge before it applies any of our input to the elevated shell — so a lower-integrity
+// process cannot drive the elevated session. Success is wired into the normal session map,
+// so the renderer treats it like any other terminal tab.
 function launchElevatedTerminal(client, message) {
   if (process.platform !== "win32") {
     client.send({ type: "elevateError", message: "Administrator terminals are only supported on Windows." });
     return;
   }
 
+  const id = sanitizeId(message.id);
+  if (sessions.has(id)) {
+    client.send({ type: "error", id, message: "A session with this id already exists." });
+  } else {
+    beginElevationAttempt(client, id, message);
+  }
+}
+
+// Set up the loopback listener + UAC launcher for a fresh (non-duplicate) admin terminal.
+function beginElevationAttempt(client, id, message) {
   const shell = getShell(message.shell);
   const cwd = getWorkingDirectory(message.cwd);
-  const args = buildElevatedShellArgs(shell, cwd);
+  const cols = Number(message.cols) || 120;
+  const rows = Number(message.rows) || 30;
+  const title = typeof message.title === "string" && message.title.trim() ? message.title.trim() : shell.label;
+  const token = crypto.randomBytes(32).toString("hex");
 
-  // Pass the target file/args/cwd via environment variables so the -Command string stays
-  // fixed and carries no interpolated (potentially injectable) values. The inner
-  // Start-Process is wrapped so a failure (e.g. the user declining the UAC prompt, or the
-  // shell being missing) is reported on stdout with a sentinel rather than lost silently.
+  const attempt = {
+    id,
+    client,
+    cols,
+    rows,
+    cwd,
+    title,
+    token,
+    label: shell.label,
+    settled: false,
+    session: null,
+    server: null,
+    timer: null
+  };
+
+  const server = elevationServerFactory((socket) => handleElevatedConnection(attempt, socket));
+  attempt.server = server;
+  server.on("error", (error) => finishElevationAttempt(attempt, error.message));
+
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address();
+    const listenPort = address && typeof address === "object" ? address.port : 0;
+    launchElevatedHost(attempt, {
+      port: listenPort,
+      token,
+      bridgePid: process.pid,
+      shellFile: shell.file,
+      shellArgs: shell.args,
+      cwd,
+      cols,
+      rows,
+      label: shell.label
+    });
+  });
+
+  attempt.timer = setTimeout(
+    () => finishElevationAttempt(attempt, "Administrator terminal did not connect in time."),
+    ELEVATION_CONNECT_TIMEOUT_MS
+  );
+  attempt.timer.unref();
+}
+
+// Spawn the helper elevated via ShellExecute "runas" (which raises the UAC prompt), reusing
+// the hardened launcher. It MUST run attached — detached:true silently no-ops "runas" — and
+// its stdout/stderr are piped so a declined prompt or launch failure is relayed rather than
+// lost. We elevate the SAME node runtime this bridge runs under (process.execPath) so the
+// helper's node-pty prebuilt binary matches the ABI.
+function launchElevatedHost(attempt, config) {
+  const encoded = Buffer.from(JSON.stringify(config)).toString("base64");
+  const hostArgs = [ELEVATED_HOST_SCRIPT, encoded];
+
   const command = [
     "$ErrorActionPreference = 'Stop';",
     "$file = $env:MT_ELEVATE_FILE;",
     "$cwd = $env:MT_ELEVATE_CWD;",
-    "$list = if ($env:MT_ELEVATE_ARGS) { @($env:MT_ELEVATE_ARGS | ConvertFrom-Json) } else { @() };",
+    "$list = @($env:MT_ELEVATE_ARGS | ConvertFrom-Json);",
     "try {",
-    "  if ($list.Count -gt 0) {",
-    "    Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $list;",
-    "  } else {",
-    "    Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd;",
-    "  }",
+    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $list;",
     "  Write-Output 'MT_ELEVATE_OK';",
     "} catch {",
     `  Write-Output ('${ELEVATE_ERROR_PREFIX}' + $_.Exception.Message);`,
@@ -692,18 +811,16 @@ function launchElevatedTerminal(client, message) {
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
       {
-        // `detached: true` (DETACHED_PROCESS) makes ShellExecute's "runas" verb silently
-        // no-op — the UAC consent prompt never appears and the launcher exits 0 — so the
-        // launcher MUST run attached. `windowsHide` keeps its console from flashing and
-        // does not affect the prompt. stdout/stderr are piped so failures can be relayed.
+        // Never set detached:true here — DETACHED_PROCESS makes "runas" silently skip the
+        // UAC prompt. windowsHide keeps the launcher console from flashing.
         detached: false,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         env: {
           ...process.env,
-          MT_ELEVATE_FILE: shell.file,
-          MT_ELEVATE_CWD: cwd,
-          MT_ELEVATE_ARGS: JSON.stringify(args)
+          MT_ELEVATE_FILE: process.execPath,
+          MT_ELEVATE_CWD: config.cwd,
+          MT_ELEVATE_ARGS: JSON.stringify(hostArgs)
         }
       }
     );
@@ -714,21 +831,148 @@ function launchElevatedTerminal(client, message) {
     };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
-    child.on("error", (error) => {
-      client.send({ type: "elevateError", message: error.message });
-    });
+    child.on("error", (error) => finishElevationAttempt(attempt, error.message));
     child.on("close", () => {
-      // Relay a launcher-reported failure. Wrapping the single message in filter(Boolean)
-      // keeps this branchless (no implicit-else the coverage gate miscounts): the success
-      // case yields "" and is dropped, a real error yields one elevateError.
+      // Only a launcher-reported failure (declined UAC, missing node, ...) matters here; on
+      // success the helper connects asynchronously and drives the session from there.
       [elevationErrorMessage(launcherOutput)]
         .filter(Boolean)
-        .forEach((message) => client.send({ type: "elevateError", message }));
+        .forEach((message) => finishElevationAttempt(attempt, message));
     });
     child.unref();
-    client.send({ type: "elevateStarted", shell: shell.label });
+    attempt.client.send({ type: "elevateStarted", id: attempt.id, shell: config.label });
   } catch (error) {
-    client.send({ type: "elevateError", message: error.message });
+    finishElevationAttempt(attempt, error.message);
+  }
+}
+
+// Accept the helper's loopback connection: authenticate the one-time token, then relay the
+// elevated terminal as a normal session. Only ONE connection is honored per attempt.
+function handleElevatedConnection(attempt, socket) {
+  clearTimeout(attempt.timer);
+  // One-shot: stop accepting further connections as soon as one arrives.
+  closeElevationServer(attempt.server);
+
+  socket.setEncoding("utf8");
+  let buffer = "";
+  let authed = false;
+
+  const authTimer = setTimeout(() => {
+    destroySocket(socket);
+    finishElevationAttempt(attempt, "Administrator terminal authentication timed out.");
+  }, ELEVATION_AUTH_TIMEOUT_MS);
+  authTimer.unref();
+
+  const sendFrame = (payload) => {
+    try { socket.write(JSON.stringify(payload) + "\n"); } catch { /* socket gone */ }
+  };
+
+  const handleLine = (line) => {
+    let msg;
+    try { msg = JSON.parse(line); } catch { return; }
+
+    if (!authed) {
+      clearTimeout(authTimer);
+      if (msg.type === "auth" && timingSafeStringEqual(msg.token, attempt.token)) {
+        authed = true;
+        sendFrame({ type: "ready" });
+      } else {
+        destroySocket(socket);
+        finishElevationAttempt(attempt, "Administrator terminal failed authentication.");
+      }
+    } else if (msg.type === "started") {
+      attempt.settled = true;
+      attempt.session = registerElevatedSession(attempt, socket, sendFrame, Number(msg.pid) || 0);
+      attempt.client.send({ type: "created", ...toSessionSummary(attempt.session) });
+    } else if (msg.type === "output" && attempt.session) {
+      const data = decodeElevationData(msg.data);
+      if (attempt.session.logStream) {
+        try { attempt.session.logStream.write(stripAnsiForLog(data)); } catch { /* logging must never break the session */ }
+      }
+      broadcast({ type: "output", id: attempt.id, stream: "pty", data });
+    } else if (msg.type === "exit" && attempt.session) {
+      finishElevatedSession(attempt.session, Number.isFinite(Number(msg.code)) ? Number(msg.code) : null);
+    }
+  };
+
+  socket.on("data", (chunk) => {
+    buffer += chunk;
+    let index;
+    while ((index = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, index);
+      buffer = buffer.slice(index + 1);
+      // Empty/blank lines are harmless: handleLine's JSON.parse rejects them and returns.
+      handleLine(line);
+    }
+  });
+
+  socket.on("close", () => {
+    clearTimeout(authTimer);
+    if (attempt.session) {
+      finishElevatedSession(attempt.session, null);
+    } else {
+      finishElevationAttempt(attempt, "Administrator terminal closed before it started.");
+    }
+  });
+  // 'error' is always followed by 'close', which performs teardown.
+  socket.on("error", () => {});
+}
+
+// Wrap the helper socket in a node-pty-compatible terminal shim and register it as a normal
+// session, so writeSession / rememberSize / killSession / toSessionSummary / mem-stats all
+// operate on it unchanged.
+function registerElevatedSession(attempt, socket, sendFrame, pid) {
+  const terminal = {
+    pid,
+    write(data) { sendFrame({ type: "input", data: encodeElevationData(data) }); },
+    resize(cols, rows) { sendFrame({ type: "resize", cols, rows }); },
+    kill() {
+      sendFrame({ type: "kill" });
+      destroySocket(socket);
+    }
+  };
+
+  const session = {
+    cols: attempt.cols,
+    cwd: attempt.cwd,
+    elevated: true,
+    exited: false,
+    id: attempt.id,
+    logStream: null,
+    logPath: null,
+    rows: attempt.rows,
+    shell: attempt.label,
+    startedAt: new Date().toISOString(),
+    terminal,
+    title: attempt.title
+  };
+
+  sessions.set(attempt.id, session);
+  scheduleMemStats(2000);
+  return session;
+}
+
+function finishElevatedSession(session, code) {
+  if (session.exited) {
+    return;
+  } else {
+    session.exited = true;
+    closeLog(session);
+    sessions.delete(session.id);
+    broadcast({ type: "exited", id: session.id, code, signal: null });
+    scheduleMemStats(1500);
+  }
+}
+
+// Tear down a failed elevation attempt exactly once and tell the client why.
+function finishElevationAttempt(attempt, message) {
+  if (attempt.settled) {
+    return;
+  } else {
+    attempt.settled = true;
+    clearTimeout(attempt.timer);
+    closeElevationServer(attempt.server);
+    attempt.client.send({ type: "elevateError", id: attempt.id, message });
   }
 }
 
@@ -752,25 +996,6 @@ function describeElevationError(detail) {
     return "Administrator terminal canceled — the UAC prompt was declined.";
   }
   return text || "Failed to launch the administrator terminal.";
-}
-
-// Build the argument list for an elevated shell so it opens in `cwd` and stays open.
-// -WorkingDirectory alone is unreliable under "runas" on Windows PowerShell 5.1, so we
-// also change directory via the shell's own startup arguments.
-function buildElevatedShellArgs(shell, cwd) {
-  if (shell.file === "cmd.exe") {
-    // /k keeps the window open after the initial command; cd /d changes drive + dir.
-    // Windows paths cannot contain double quotes, so quoting is sufficient here.
-    return ["/k", `cd /d "${cwd}"`];
-  }
-  if (shell.file === "wsl.exe") {
-    // wsl --cd accepts a Windows path and starts the login shell there.
-    return ["--cd", cwd];
-  }
-  // pwsh.exe / powershell.exe: -NoExit keeps the session; set the location up front.
-  // Escape single quotes for the single-quoted -LiteralPath argument.
-  const escaped = String(cwd).replace(/'/g, "''");
-  return ["-NoLogo", "-NoExit", "-Command", `Set-Location -LiteralPath '${escaped}'`];
 }
 
 function shutdown() {
@@ -805,8 +1030,11 @@ function computeMemStats(callback) {
           const pid = Number(proc.ProcessId);
           const ppid = Number(proc.ParentProcessId);
           wsById.set(pid, Number(proc.WorkingSetSize) || 0);
-          if (!childrenByParent.has(ppid)) childrenByParent.set(ppid, []);
-          childrenByParent.get(ppid).push(pid);
+          if (childrenByParent.has(ppid)) {
+            childrenByParent.get(ppid).push(pid);
+          } else {
+            childrenByParent.set(ppid, [pid]);
+          }
         }
 
         // Sum the process tree rooted at the Electron main process (our parent),

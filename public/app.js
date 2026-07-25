@@ -730,6 +730,13 @@ function handleBridgeMessage(message) {
   }
 
   if (message.type === "elevateError") {
+    const terminal = message.id ? state.terminals.get(message.id) : null;
+    if (terminal) {
+      terminal.status = "error";
+      setTerminalStatus(terminal, "error", "dead");
+      writelnTerminal(terminal, `\x1b[31m${message.message || "Administrator terminal failed to launch."}\x1b[0m`);
+      log.error("session", `Administrator terminal failed: ${message.message || "unknown"}`, { id: message.id });
+    }
     toast(message.message || "Could not open administrator terminal", "error");
     return;
   }
@@ -833,6 +840,12 @@ function addTerminal(options = {}) {
 
   titleInput.value = title;
   pane.dataset.id = id;
+  const elevated = Boolean(options.elevated || session.elevated);
+  if (elevated) {
+    pane.dataset.elevated = "true";
+    const headerIcon = pane.querySelector(".pane-title-wrap i[data-lucide]");
+    if (headerIcon) headerIcon.dataset.lucide = "shield";
+  }
   elements.host.append(pane);
   term.open(screen);
   const webglAddon = loadWebglRenderer(term);
@@ -842,6 +855,7 @@ function addTerminal(options = {}) {
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
     awaitingInput: false,
+    elevated,
     fitAddon,
     id,
     logging: false,
@@ -1140,6 +1154,18 @@ function requestSession(terminal) {
   terminal.remoteRequested = true;
   setTerminalStatus(terminal, "starting", "dead");
   log.debug("session", `Requesting session: ${terminal.titleInput.value}`, { id: terminal.id, shell: terminal.shell || elements.shellSelect.value });
+  if (terminal.elevated) {
+    sendBridge({
+      type: "elevate",
+      cols: terminal.term.cols,
+      cwd: terminal.cwd || elements.cwdInput.value,
+      id: terminal.id,
+      rows: terminal.term.rows,
+      shell: terminal.shell || elements.shellSelect.value,
+      title: terminal.titleInput.value
+    });
+    return;
+  }
   sendBridge({
     type: "create",
     cols: terminal.term.cols,
@@ -1636,11 +1662,13 @@ function sendBridge(message) {
 // shell in a separate console window via ShellExecute "runas" (raises the UAC prompt).
 function newAdminTerminal(options = {}) {
   const shell = options.shell || elements.shellSelect.value || "pwsh";
-  const payload = { type: "elevate", shell };
-  if (options.cwd) payload.cwd = options.cwd;
-  if (!sendBridge(payload)) {
-    toast("Bridge disconnected; cannot open administrator terminal", "error");
-  }
+  return addTerminal({
+    elevated: true,
+    shell,
+    cwd: options.cwd,
+    title: options.title || `Administrator ${state.nextIndex}`,
+    reveal: true
+  });
 }
 
 function updateTerminalActions() {

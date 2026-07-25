@@ -9,7 +9,7 @@ module.exports = defineConfig({
       provider: "v8",
       reporter: ["text", "text-summary", "html", "json"],
       reportsDirectory: "coverage/vitest",
-      include: ["server.js", "main.js"],
+      include: ["server.js", "main.js", "elevated-pty-host.js"],
       // public/app.js is a browser renderer script exercised by Playwright E2E.
       all: true,
       thresholds: {

@@ -237,15 +237,16 @@ describe("connection: memory stats welcome + client data isolation", () => {
 
 describe("elevated (administrator) terminal", () => {
   const childProcess = require("node:child_process");
+  const net = require("node:net");
   const { EventEmitter } = require("node:events");
   let platformDescriptor;
+  let currentServer;
 
   const makeClient = () => ({ send: vi.fn() });
   const setPlatform = (value) =>
     Object.defineProperty(process, "platform", { value, configurable: true });
 
-  // A controllable stand-in for a spawned launcher: EventEmitter for the process plus
-  // stdout/stderr streams, so tests can drive 'data'/'close'/'error' deterministically.
+  // A controllable stand-in for the spawned UAC launcher.
   const makeChild = () => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
@@ -254,123 +255,91 @@ describe("elevated (administrator) terminal", () => {
     return child;
   };
 
+  // Fake one-shot elevation listener. listen() fires its callback synchronously so the
+  // launcher spawn happens inline; the captured onConnection lets tests drive a helper.
+  const makeElevationServer = (onConnection) => {
+    const handlers = {};
+    const server = {
+      onConnection,
+      on: vi.fn((event, cb) => { handlers[event] = cb; return server; }),
+      listen: vi.fn((_port, _host, cb) => { cb(); return server; }),
+      address: vi.fn(() => ({ port: 55501 })),
+      close: vi.fn(),
+      emitServer(event, arg) { if (handlers[event]) handlers[event](arg); }
+    };
+    return server;
+  };
+
+  // Fake helper socket for the bridge side of the channel.
+  const makeConnSocket = () => {
+    const handlers = {};
+    const socket = {
+      writes: [],
+      destroyed: false,
+      setEncoding: vi.fn(),
+      write: vi.fn((chunk) => { socket.writes.push(chunk); return true; }),
+      end: vi.fn(),
+      destroy: vi.fn(() => { socket.destroyed = true; }),
+      on: vi.fn((event, cb) => { handlers[event] = cb; return socket; }),
+      emit(event, arg) { if (handlers[event]) handlers[event](arg); },
+      feed(obj) { socket.emit("data", JSON.stringify(obj) + "\n"); },
+      feedRaw(str) { socket.emit("data", str); },
+      frames() { return socket.writes.join("").split("\n").filter(Boolean).map((line) => JSON.parse(line)); }
+    };
+    return socket;
+  };
+
+  const launch = (client, overrides = {}) => {
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(makeChild());
+    app.launchElevatedTerminal(client, {
+      type: "elevate",
+      id: "admin-term-1",
+      shell: "pwsh",
+      cwd: process.cwd(),
+      cols: 100,
+      rows: 40,
+      title: "Admin",
+      ...overrides
+    });
+    return spawn;
+  };
+
+  const configFromSpawn = (spawn) => {
+    const env = spawn.mock.calls[spawn.mock.calls.length - 1][2].env;
+    const hostArgs = JSON.parse(env.MT_ELEVATE_ARGS);
+    return { hostArgs, env, config: JSON.parse(Buffer.from(hostArgs[1], "base64").toString("utf8")) };
+  };
+
   beforeEach(() => {
     platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     setPlatform("win32");
+    app.__setElevationServerFactory((onConnection) => {
+      currentServer = makeElevationServer(onConnection);
+      return currentServer;
+    });
   });
 
   afterEach(() => {
     Object.defineProperty(process, "platform", platformDescriptor);
     vi.restoreAllMocks();
+    vi.useRealTimers();
+    app.__setElevationServerFactory((onConnection) => net.createServer(onConnection));
+    for (const id of [...app.sessions.keys()]) app.sessions.delete(id);
+    app.clients.clear();
   });
 
-  it("builds pwsh args that cd into the cwd and keep the window open", () => {
-    expect(app.buildElevatedShellArgs({ file: "pwsh.exe" }, "C:\\Users\\me")).toEqual([
-      "-NoLogo",
-      "-NoExit",
-      "-Command",
-      "Set-Location -LiteralPath 'C:\\Users\\me'"
-    ]);
+  // --- pure helpers -------------------------------------------------------
+
+  it("timingSafeStringEqual is true only for identical strings", () => {
+    expect(app.timingSafeStringEqual("abc123", "abc123")).toBe(true);
+    expect(app.timingSafeStringEqual("abc123", "abc124")).toBe(false);
+    expect(app.timingSafeStringEqual("abc", "abcd")).toBe(false);
   });
 
-  it("escapes single quotes in the cwd for powershell", () => {
-    const args = app.buildElevatedShellArgs({ file: "powershell.exe" }, "C:\\O'Brien");
-    expect(args[3]).toBe("Set-Location -LiteralPath 'C:\\O''Brien'");
-  });
-
-  it("builds cmd args with /k cd /d", () => {
-    expect(app.buildElevatedShellArgs({ file: "cmd.exe" }, "C:\\work")).toEqual(["/k", 'cd /d "C:\\work"']);
-  });
-
-  it("builds wsl args with --cd", () => {
-    expect(app.buildElevatedShellArgs({ file: "wsl.exe" }, "C:\\work")).toEqual(["--cd", "C:\\work"]);
-  });
-
-  it("spawns an ATTACHED, hidden launcher via Start-Process -Verb RunAs and confirms", () => {
-    const child = makeChild();
-    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
-    const client = makeClient();
-
-    app.launchElevatedTerminal(client, { type: "elevate", shell: "pwsh", cwd: "C:\\Windows" });
-
-    expect(spawn).toHaveBeenCalledTimes(1);
-    const [file, spawnArgs, opts] = spawn.mock.calls[0];
-    expect(file).toBe("powershell.exe");
-    const command = spawnArgs[spawnArgs.length - 1];
-    expect(command).toContain("Start-Process");
-    expect(command).toContain("-Verb RunAs");
-    // `detached: true` suppresses the UAC prompt — the launcher must run attached.
-    expect(opts.detached).toBe(false);
-    expect(opts.windowsHide).toBe(true);
-    expect(opts.stdio).toEqual(["ignore", "pipe", "pipe"]);
-    expect(opts.env.MT_ELEVATE_FILE).toBe("pwsh.exe");
-    expect(opts.env.MT_ELEVATE_CWD).toBe("C:\\Windows");
-    expect(JSON.parse(opts.env.MT_ELEVATE_ARGS)).toContain("-NoExit");
-    expect(child.unref).toHaveBeenCalled();
-    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateStarted" }));
-  });
-
-  it("reports an error and does not spawn on non-Windows platforms", () => {
-    setPlatform("linux");
-    const spawn = vi.spyOn(childProcess, "spawn");
-    const client = makeClient();
-    app.launchElevatedTerminal(client, { shell: "pwsh" });
-    expect(spawn).not.toHaveBeenCalled();
-    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateError" }));
-  });
-
-  it("relays a launcher spawn 'error' event back to the client", () => {
-    const child = makeChild();
-    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
-    const client = makeClient();
-
-    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
-    child.emit("error", new Error("launch blocked"));
-
-    expect(client.send).toHaveBeenCalledWith({ type: "elevateError", message: "launch blocked" });
-  });
-
-  it("surfaces an in-launcher failure reported on stdout after the process closes", () => {
-    const child = makeChild();
-    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
-    const client = makeClient();
-
-    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
-    child.stdout.emit("data", Buffer.from("MT_ELEVATE_ERR:pwsh.exe is not recognized"));
-    child.emit("close", 0);
-
-    expect(client.send).toHaveBeenCalledWith({
-      type: "elevateError",
-      message: "pwsh.exe is not recognized"
-    });
-  });
-
-  it("maps a declined UAC prompt (on stderr) to a friendly canceled message", () => {
-    const child = makeChild();
-    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
-    const client = makeClient();
-
-    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
-    child.stderr.emit("data", Buffer.from("MT_ELEVATE_ERR:The operation was canceled by the user."));
-    child.emit("close", 0);
-
-    expect(client.send).toHaveBeenCalledWith({
-      type: "elevateError",
-      message: "Administrator terminal canceled — the UAC prompt was declined."
-    });
-  });
-
-  it("does not emit an error when the launcher reports success", () => {
-    const child = makeChild();
-    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
-    const client = makeClient();
-
-    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
-    child.stdout.emit("data", Buffer.from("MT_ELEVATE_OK"));
-    child.emit("close", 0);
-
-    expect(client.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: "elevateError" }));
-    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateStarted" }));
+  it("encode/decode elevation data round-trips through base64", () => {
+    const encoded = app.encodeElevationData("héllo \x1b[0m");
+    expect(encoded).not.toContain("héllo");
+    expect(app.decodeElevationData(encoded)).toBe("héllo \x1b[0m");
   });
 
   it("describeElevationError phrases known and unknown failures", () => {
@@ -387,22 +356,274 @@ describe("elevated (administrator) terminal", () => {
     expect(app.elevationErrorMessage("noise MT_ELEVATE_ERR:boom")).toBe("boom");
   });
 
-  it("reports an error when spawning the launcher throws synchronously", () => {
-    vi.spyOn(childProcess, "spawn").mockImplementation(() => {
-      throw new Error("spawn ENOENT");
-    });
-    const client = makeClient();
-
-    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
-
-    expect(client.send).toHaveBeenCalledWith({ type: "elevateError", message: "spawn ENOENT" });
+  it("defaultElevationServerFactory builds a real net.Server bound to the connection handler", () => {
+    const onConnection = vi.fn();
+    const server = app.defaultElevationServerFactory(onConnection);
+    try {
+      expect(typeof server.listen).toBe("function");
+      expect(typeof server.close).toBe("function");
+      // net.createServer wires the connection listener it is given.
+      expect(server.listeners("connection")).toContain(onConnection);
+    } finally {
+      server.close();
+    }
   });
 
-  it("routes an 'elevate' client message to the launcher", () => {
+  // --- launch guards ------------------------------------------------------
+
+  it("reports an error and does not spawn on non-Windows platforms", () => {
+    setPlatform("linux");
+    const spawn = vi.spyOn(childProcess, "spawn");
+    const client = makeClient();
+    app.launchElevatedTerminal(client, { id: "admin-term-1", shell: "pwsh" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateError" }));
+  });
+
+  it("rejects an id that already has a live session", () => {
+    app.sessions.set("admin-term-1", { id: "admin-term-1" });
+    const spawn = vi.spyOn(childProcess, "spawn");
+    const client = makeClient();
+    app.launchElevatedTerminal(client, { id: "admin-term-1", shell: "pwsh", cwd: process.cwd() });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(client.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "error", id: "admin-term-1" })
+    );
+  });
+
+  // --- launcher spawn -----------------------------------------------------
+
+  it("elevates the bridge's own node runtime via an attached, hidden runas launcher", () => {
+    const client = makeClient();
+    const spawn = launch(client);
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const [file, spawnArgs, opts] = spawn.mock.calls[0];
+    expect(file).toBe("powershell.exe");
+    const command = spawnArgs[spawnArgs.length - 1];
+    expect(command).toContain("Start-Process");
+    expect(command).toContain("-Verb RunAs");
+    expect(opts.detached).toBe(false);
+    expect(opts.windowsHide).toBe(true);
+    expect(opts.stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(opts.env.MT_ELEVATE_FILE).toBe(process.execPath);
+    expect(opts.env.MT_ELEVATE_CWD).toBe(process.cwd());
+
+    const { hostArgs, config } = configFromSpawn(spawn);
+    expect(hostArgs[0].endsWith("elevated-pty-host.js")).toBe(true);
+    expect(config.port).toBe(55501);
+    expect(config.bridgePid).toBe(process.pid);
+    expect(config.shellFile).toBe("pwsh.exe");
+    expect(config.shellArgs).toEqual(["-NoLogo", "-NoExit"]);
+    expect(config.cols).toBe(100);
+    expect(config.rows).toBe(40);
+    expect(config.label).toBe("PowerShell 7");
+    expect(config.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(client.send).toHaveBeenCalledWith({ type: "elevateStarted", id: "admin-term-1", shell: "PowerShell 7" });
+  });
+
+  it("relays a launcher spawn 'error' event as a failed attempt", () => {
     const child = makeChild();
     vi.spyOn(childProcess, "spawn").mockReturnValue(child);
     const client = makeClient();
-    app.handleClientMessage(client, JSON.stringify({ type: "elevate", shell: "cmd" }));
-    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateStarted" }));
+    app.launchElevatedTerminal(client, { id: "admin-term-1", shell: "pwsh", cwd: process.cwd() });
+    child.emit("error", new Error("launch blocked"));
+    expect(client.send).toHaveBeenCalledWith({ type: "elevateError", id: "admin-term-1", message: "launch blocked" });
+  });
+
+  it("surfaces an in-launcher failure reported on stdout after the process closes", () => {
+    const child = makeChild();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+    app.launchElevatedTerminal(client, { id: "admin-term-1", shell: "pwsh", cwd: process.cwd() });
+    child.stdout.emit("data", Buffer.from("MT_ELEVATE_ERR:The operation was canceled by the user."));
+    child.emit("close", 0);
+    expect(client.send).toHaveBeenCalledWith({
+      type: "elevateError",
+      id: "admin-term-1",
+      message: "Administrator terminal canceled — the UAC prompt was declined."
+    });
+  });
+
+  it("does not fail the attempt when the launcher reports success", () => {
+    const child = makeChild();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+    app.launchElevatedTerminal(client, { id: "admin-term-1", shell: "pwsh", cwd: process.cwd() });
+    child.stdout.emit("data", Buffer.from("MT_ELEVATE_OK"));
+    child.emit("close", 0);
+    expect(client.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: "elevateError" }));
+    expect(child.unref).toHaveBeenCalled();
+  });
+
+  it("reports an error when spawning the launcher throws synchronously", () => {
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => { throw new Error("spawn ENOENT"); });
+    const client = makeClient();
+    app.launchElevatedTerminal(client, { id: "admin-term-1", shell: "pwsh", cwd: process.cwd() });
+    expect(client.send).toHaveBeenCalledWith({ type: "elevateError", id: "admin-term-1", message: "spawn ENOENT" });
+  });
+
+  it("fails the attempt when the loopback listener errors", () => {
+    const client = makeClient();
+    launch(client);
+    currentServer.emitServer("error", new Error("EADDRINUSE"));
+    expect(client.send).toHaveBeenCalledWith({ type: "elevateError", id: "admin-term-1", message: "EADDRINUSE" });
+  });
+
+  it("tears down the attempt if the helper never connects in time", () => {
+    vi.useFakeTimers();
+    const client = makeClient();
+    launch(client);
+    vi.advanceTimersByTime(120000);
+    expect(client.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "elevateError", id: "admin-term-1" })
+    );
+  });
+
+  it("routes an 'elevate' client message to the launcher", () => {
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(makeChild());
+    const client = makeClient();
+    app.handleClientMessage(client, JSON.stringify({ type: "elevate", id: "admin-term-1", shell: "cmd", cwd: process.cwd() }));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateStarted", id: "admin-term-1" }));
+  });
+
+  // --- authenticated channel + session relay ------------------------------
+
+  it("authenticates, registers an in-app session, and relays the full lifecycle", () => {
+    const client = makeClient();
+    const observer = { send: vi.fn() };
+    app.clients.add(observer);
+    const spawn = launch(client);
+    const { config } = configFromSpawn(spawn);
+
+    const socket = makeConnSocket();
+    currentServer.onConnection(socket);
+    expect(socket.setEncoding).toHaveBeenCalledWith("utf8");
+
+    // Ignored noise before auth: a blank line and an unparseable line.
+    socket.feedRaw("\n");
+    socket.feedRaw("not-json\n");
+
+    // Authenticate -> the bridge replies "ready".
+    socket.feed({ type: "auth", token: config.token });
+    expect(socket.frames()).toContainEqual({ type: "ready" });
+
+    // Output/exit before "started" are ignored (no session yet).
+    socket.feed({ type: "output", data: app.encodeElevationData("early") });
+    socket.feed({ type: "exit", code: 0 });
+    expect(client.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: "created" }));
+
+    // Helper reports the elevated shell is live.
+    socket.feed({ type: "started", pid: 999 });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "admin-term-1", pid: 999 }));
+    expect(app.sessions.has("admin-term-1")).toBe(true);
+
+    // Output is decoded and broadcast to connected clients.
+    socket.feed({ type: "output", data: app.encodeElevationData("hello world") });
+    expect(observer.send).toHaveBeenCalledWith({ type: "output", id: "admin-term-1", stream: "pty", data: "hello world" });
+
+    // Output while logging is enabled also writes to the log stream.
+    const logStream = { write: vi.fn() };
+    app.sessions.get("admin-term-1").logStream = logStream;
+    socket.feed({ type: "output", data: app.encodeElevationData("logged line") });
+    expect(logStream.write).toHaveBeenCalled();
+
+    // The session shim forwards input and resize as frames.
+    app.writeSession("admin-term-1", "whoami\r");
+    app.rememberSize("admin-term-1", 80, 24);
+    const inputFrame = socket.frames().find((frame) => frame.type === "input");
+    expect(app.decodeElevationData(inputFrame.data)).toBe("whoami\r");
+    expect(socket.frames()).toContainEqual({ type: "resize", cols: 80, rows: 24 });
+
+    // Killing the session sends a kill frame and destroys the socket.
+    app.closeSessions(false);
+    expect(socket.frames()).toContainEqual({ type: "kill" });
+    expect(socket.destroyed).toBe(true);
+
+    // The helper reports the shell exited -> the session is removed and broadcast.
+    socket.feed({ type: "exit", code: 0 });
+    expect(observer.send).toHaveBeenCalledWith({ type: "exited", id: "admin-term-1", code: 0, signal: null });
+    expect(app.sessions.has("admin-term-1")).toBe(false);
+
+    // A late socket 'error' + 'close' after exit is harmless (idempotent teardown).
+    expect(() => { socket.emit("error", new Error("reset")); socket.emit("close"); }).not.toThrow();
+  });
+
+  it("defaults a missing pid to 0 and a non-numeric exit code to null", () => {
+    const client = makeClient();
+    const observer = { send: vi.fn() };
+    app.clients.add(observer);
+    const spawn = launch(client);
+    const { config } = configFromSpawn(spawn);
+
+    const socket = makeConnSocket();
+    currentServer.onConnection(socket);
+    socket.feed({ type: "auth", token: config.token });
+    socket.feed({ type: "started" });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", pid: 0 }));
+
+    socket.feed({ type: "exit", code: "not-a-number" });
+    expect(observer.send).toHaveBeenCalledWith({ type: "exited", id: "admin-term-1", code: null, signal: null });
+  });
+
+  it("rejects a bad token, destroys the socket, and fails the attempt once", () => {
+    const client = makeClient();
+    launch(client);
+    const socket = makeConnSocket();
+    currentServer.onConnection(socket);
+
+    socket.feed({ type: "auth", token: "deadbeef" });
+    expect(socket.destroyed).toBe(true);
+    expect(client.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "elevateError", id: "admin-term-1", message: "Administrator terminal failed authentication." })
+    );
+
+    // A follow-up close must not emit a second elevateError (attempt already settled).
+    client.send.mockClear();
+    socket.emit("close");
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it("fails the attempt if the connection closes before the shell starts", () => {
+    const client = makeClient();
+    launch(client);
+    const socket = makeConnSocket();
+    currentServer.onConnection(socket);
+    socket.emit("close");
+    expect(client.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "elevateError", id: "admin-term-1", message: "Administrator terminal closed before it started." })
+    );
+  });
+
+  it("times out a connection that never authenticates", () => {
+    vi.useFakeTimers();
+    const client = makeClient();
+    launch(client);
+    const socket = makeConnSocket();
+    currentServer.onConnection(socket);
+    vi.advanceTimersByTime(15000);
+    expect(socket.destroyed).toBe(true);
+    expect(client.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "elevateError", id: "admin-term-1", message: "Administrator terminal authentication timed out." })
+    );
+  });
+
+  it("cleans up the elevated session when the helper socket closes unexpectedly", () => {
+    const client = makeClient();
+    const observer = { send: vi.fn() };
+    app.clients.add(observer);
+    const spawn = launch(client);
+    const { config } = configFromSpawn(spawn);
+
+    const socket = makeConnSocket();
+    currentServer.onConnection(socket);
+    socket.feed({ type: "auth", token: config.token });
+    socket.feed({ type: "started", pid: 42 });
+    expect(app.sessions.has("admin-term-1")).toBe(true);
+
+    socket.emit("close");
+    expect(observer.send).toHaveBeenCalledWith({ type: "exited", id: "admin-term-1", code: null, signal: null });
+    expect(app.sessions.has("admin-term-1")).toBe(false);
   });
 });

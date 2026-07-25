@@ -1910,6 +1910,20 @@ body.is-pane-dragging {
   display: none;
 }
 
+/* Administrator (UAC-elevated) terminals get an amber accent + shield tint so it is
+   obvious the pane runs at a higher privilege level. */
+.terminal-pane[data-elevated="true"] {
+  box-shadow: var(--elev-2), inset 3px 0 0 #f5a623;
+}
+
+.terminal-pane[data-elevated="true"].is-active {
+  box-shadow: var(--elev-3), 0 0 0 1px var(--primary) inset, inset 3px 0 0 #f5a623;
+}
+
+.terminal-pane[data-elevated="true"] .pane-title-wrap > svg {
+  color: #f5a623;
+}
+
 .terminal-pane.is-minimized {
   display: none;
 }

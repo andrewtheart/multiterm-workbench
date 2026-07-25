@@ -438,10 +438,10 @@ test.describe("Command palette — every option works", () => {
     });
   });
 
-  test("New Administrator terminal emits an elevate request (no real UAC/window)", async () => {
+  test("New Administrator terminal opens an in-app elevated tab and requests elevation", async () => {
     await resetTo(1);
-    // Spy on sendBridge so selecting the command verifies the emitted message
-    // WITHOUT the bridge actually launching an elevated shell / raising UAC.
+    // Spy on sendBridge so the elevated session is REQUESTED (and observable)
+    // without the bridge actually launching an elevated shell / raising UAC.
     await page.evaluate(() => {
       window.__origSendBridge = sendBridge;
       window.__sent = [];
@@ -452,30 +452,41 @@ test.describe("Command palette — every option works", () => {
       };
     });
 
-    // Palette entry: elevates the default shell, does NOT create a pane.
+    // Palette entry: creates a NEW in-app elevated pane and emits an elevate request.
     const before = await paneCount();
     await runCmd("New Administrator terminal");
-    await expect(page.locator(".terminal-pane")).toHaveCount(before);
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
+    // The freshly created pane is flagged elevated (shield accent / data attribute).
+    await expect(page.locator('.terminal-pane[data-elevated="true"]')).toHaveCount(1);
+
     const elevateMsg = await page.evaluate(() => window.__sent.find((m) => m.type === "elevate"));
-    expect(elevateMsg, "palette emitted an elevate message").toBeTruthy();
+    expect(elevateMsg, "palette emitted an elevate request").toBeTruthy();
     expect(typeof elevateMsg.shell).toBe("string");
     expect(elevateMsg.shell.length).toBeGreaterThan(0);
+    expect(typeof elevateMsg.id).toBe("string");
+    expect(elevateMsg.id.length).toBeGreaterThan(0);
+    // The elevate request targets the same in-app pane that was created.
+    await expect(page.locator(`.terminal-pane[data-id="${elevateMsg.id}"][data-elevated="true"]`)).toHaveCount(1);
 
-    // Context-menu path: elevates the pane's own shell + cwd.
+    // Context-menu path: elevates the pane's own shell + cwd in a new in-app tab.
     await page.evaluate(() => {
       window.__sent = [];
-      const active = state.terminals.get(state.activeId);
-      active.shell = "cmd";
-      active.cwd = "C:\\Windows";
-      newAdminTerminal({ shell: active.shell, cwd: active.cwd });
+      newAdminTerminal({ shell: "cmd", cwd: "C:\\Windows" });
     });
+    await expect(page.locator('.terminal-pane[data-elevated="true"]')).toHaveCount(2);
     const ctxMsg = await page.evaluate(() => window.__sent.find((m) => m.type === "elevate"));
     expect(ctxMsg).toMatchObject({ type: "elevate", shell: "cmd", cwd: "C:\\Windows" });
 
+    // Clean up: restore the real bridge and drop the two intercepted elevated panes
+    // (their sessions were never actually created on the bridge).
     await page.evaluate(() => {
       // eslint-disable-next-line no-global-assign
       sendBridge = window.__origSendBridge;
+      for (const [id, t] of [...state.terminals]) {
+        if (t.elevated) removeTerminal(id);
+      }
     });
+    await expect(page.locator('.terminal-pane[data-elevated="true"]')).toHaveCount(0);
   });
 
   test("all new-terminal commands create a pane", async () => {
