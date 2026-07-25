@@ -383,8 +383,8 @@ test.describe("MultiTerm Workbench UI", () => {
   test("moves keyboard focus into a pane when its chrome is clicked", async () => {
     // Regression guard for "click the second terminal, then type, and the text
     // lands in the FIRST terminal". Clicking a pane's CHROME (its header bar or
-    // the padding around the terminal) marks it active via the pointerdown
-    // handler, but before the fix it did NOT move DOM focus into that pane's
+    // the padding around the terminal) marks it active after the click completes,
+    // but before the fix it did NOT move DOM focus into that pane's
     // xterm. The browser blurred the previously focused terminal to <body>, so
     // the active pane and the keyboard-focused pane diverged and keystrokes kept
     // flowing to whichever terminal was focused before. The fix intercepts a
@@ -436,6 +436,7 @@ test.describe("MultiTerm Workbench UI", () => {
       return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     }, info.aId);
     await page.mouse.click(aCenter.x, aCenter.y);
+    await page.waitForTimeout(50);
 
     const readFocus = () => page.evaluate(() => {
       const a = document.activeElement;
@@ -542,8 +543,8 @@ test.describe("MultiTerm Workbench UI", () => {
   test("keeps a rail pane's controls working when activating it reflows the layout", async () => {
     // Regression guard for the Focus-rail "press a control, the layout reflows the
     // pane out from under the cursor, and the click misses the button" bug. In
-    // Focus-rail (and the master layouts) marking a pane active promotes it to the
-    // large primary slot. That re-activation ran on POINTERDOWN — before the click
+    // The explicit Focus action promotes a pane to the large primary slot. The old
+    // pointerdown coupling ran before the control click
     // was delivered — so pressing a small rail pane's Focus/Close button moved the
     // button hundreds of pixels between mousedown and mouseup: mouseup/click landed
     // on empty chrome, the button's own handler never ran, and the Focus button
@@ -571,9 +572,10 @@ test.describe("MultiTerm Workbench UI", () => {
     // Enter Focus-rail with the FIRST pane as the large primary, so the other four
     // are small rail panes whose controls WILL move when they are activated.
     await page.evaluate((id) => {
-      setActiveTerminal(id);
       state.settings.layout = "focus";
       elements.layoutMode.value = "focus";
+      if (typeof setPrimaryTerminal === "function") setPrimaryTerminal(id);
+      setActiveTerminal(id);
       applySettings();
       saveSettings();
     }, ids[0]);
@@ -630,6 +632,131 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator(`.terminal-pane[data-id="${closeTargetId}"]`)).toHaveCount(0);
 
     // Restore a normal layout so later tests start from a clean state.
+    await page.evaluate(() => {
+      state.settings.layout = "auto";
+      elements.layoutMode.value = "auto";
+      applySettings();
+      saveSettings();
+    });
+  });
+
+  test("focuses a rail xterm without promoting it", async () => {
+    await page.evaluate(() => {
+      for (const t of [...state.terminals.values()]) disposeTerminal(t);
+      state.terminals.clear();
+      state.activeId = null;
+      state.settings.layout = "auto";
+      elements.layoutMode.value = "auto";
+      applySettings();
+      addTerminal();
+    });
+    for (let i = 0; i < 4; i++) await page.locator("#addTerminal").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(5);
+
+    const ids = await page.evaluate(() =>
+      [...document.querySelectorAll(".terminal-pane")].map((pane) => pane.dataset.id)
+    );
+    const originalPrimaryId = ids[3];
+    const targetId = ids[1];
+    await page.evaluate((id) => {
+      state.settings.layout = "focus";
+      elements.layoutMode.value = "focus";
+      if (typeof setPrimaryTerminal === "function") setPrimaryTerminal(id);
+      setActiveTerminal(id);
+      applySettings();
+    }, originalPrimaryId);
+    await page.waitForTimeout(200);
+
+    const point = await page.evaluate((id) => {
+      const pane = [...document.querySelectorAll(".terminal-pane")]
+        .find((candidate) => candidate.dataset.id === id);
+      const xterm = pane.querySelector(".xterm");
+      const rect = xterm.getBoundingClientRect();
+      for (const yRatio of [0.3, 0.5, 0.7]) {
+        for (const xRatio of [0.3, 0.5, 0.7]) {
+          const x = rect.left + (rect.width * xRatio);
+          const y = rect.top + (rect.height * yRatio);
+          const hit = document.elementFromPoint(x, y);
+          if (hit?.closest(".xterm") === xterm && hit.closest(".terminal-pane") === pane) {
+            state.terminals.get(id).term.clearSelection();
+            const paneRect = pane.getBoundingClientRect();
+            return {
+              x,
+              y,
+              paneRect: {
+                x: paneRect.x,
+                y: paneRect.y,
+                width: paneRect.width,
+                height: paneRect.height
+              }
+            };
+          }
+        }
+      }
+      return null;
+    }, targetId);
+    expect(point).not.toBeNull();
+
+    await page.mouse.move(point.x - 80, point.y - 40);
+    await page.mouse.move(point.x, point.y, { steps: 24 });
+    await page.mouse.down();
+    await page.waitForTimeout(100);
+
+    // Clicking changes only the keyboard-active pane. The explicit Focus button
+    // remains the sole owner of primary-pane promotion.
+    const whilePressed = await page.evaluate(() => ({
+      activeId: state.activeId,
+      primaryId: document.querySelector(".terminal-pane.is-primary")?.dataset.id
+    }));
+    expect(whilePressed.activeId).toBe(targetId);
+    expect(whilePressed.primaryId).toBe(originalPrimaryId);
+
+    await page.mouse.up();
+    await page.waitForTimeout(50);
+
+    const afterRelease = await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      const focusedPane = document.activeElement?.closest(".terminal-pane");
+      const paneRect = terminal.pane.getBoundingClientRect();
+      return {
+        activeId: state.activeId,
+        primaryId: document.querySelector(".terminal-pane.is-primary")?.dataset.id,
+        focusPaneId: focusedPane?.dataset.id || null,
+        isTerminalTextarea: document.activeElement?.classList.contains("xterm-helper-textarea") || false,
+        hasSelection: terminal.term.hasSelection(),
+        selection: terminal.term.getSelection(),
+        paneRect: {
+          x: paneRect.x,
+          y: paneRect.y,
+          width: paneRect.width,
+          height: paneRect.height
+        }
+      };
+    }, targetId);
+    expect(afterRelease.activeId).toBe(targetId);
+    expect(afterRelease.primaryId).toBe(originalPrimaryId);
+    expect(afterRelease.focusPaneId).toBe(targetId);
+    expect(afterRelease.isTerminalTextarea).toBe(true);
+    expect(afterRelease.hasSelection).toBe(false);
+    expect(afterRelease.selection).toBe("");
+    expect(afterRelease.paneRect.x).toBeCloseTo(point.paneRect.x, 1);
+    expect(afterRelease.paneRect.y).toBeCloseTo(point.paneRect.y, 1);
+    expect(afterRelease.paneRect.width).toBeCloseTo(point.paneRect.width, 1);
+    expect(afterRelease.paneRect.height).toBeCloseTo(point.paneRect.height, 1);
+
+    const routedPromise = page.evaluate((id) => new Promise((resolve) => {
+      const sub = state.terminals.get(id).term.onData((data) => {
+        sub.dispose();
+        resolve(data);
+      });
+      setTimeout(() => {
+        sub.dispose();
+        resolve(null);
+      }, 2000);
+    }), targetId);
+    await page.keyboard.type("z");
+    expect(await routedPromise).toBe("z");
+
     await page.evaluate(() => {
       state.settings.layout = "auto";
       elements.layoutMode.value = "auto";

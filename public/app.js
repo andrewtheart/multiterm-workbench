@@ -269,6 +269,7 @@ const state = {
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
   nextIndex: 1,
+  primaryId: null,
   reconnectAttempts: 0,
   reconnectTimer: null,
   settings: loadSettings(),
@@ -944,30 +945,17 @@ function addTerminal(options = {}) {
 
   term.element?.addEventListener("focusin", () => setActiveTerminal(id));
   pane.addEventListener("pointerdown", (event) => {
-    // Marking a pane active can reflow the whole layout (e.g. Focus-rail and the
-    // master layouts promote the active pane to the large primary slot). Doing
-    // that on pointerdown while the user is pressing a pane-action control would
-    // move the control out from under the cursor BEFORE the click is delivered:
-    // mousedown lands on the button, the layout shifts it hundreds of pixels, and
-    // mouseup/click then land on whatever chrome is now under the cursor. The
-    // button's own click handler never runs — so the Focus button would grab DOM
-    // focus but never focus the terminal (typing goes nowhere), and Close/Clear/
-    // etc. would silently do nothing. Skip re-activation for control presses; the
-    // action handlers below activate/focus the pane themselves, after their click
-    // has actually been delivered. Clicks on the xterm surface and bare chrome
-    // still activate on pointerdown as before (they don't move the hit target).
+    // Controls own their click behavior. Terminal/chrome presses only change the
+    // keyboard-active pane; the explicit Focus action owns primary-pane promotion.
     if (event.target.closest("button, select, input, a, [contenteditable]")) return;
     setActiveTerminal(id);
   });
   pane.addEventListener("pointerup", () => syncManualLayout(terminal));
 
-  // Keep keyboard focus in sync with the pane the user clicks. The pointerdown
-  // handler above marks a pane active (highlight + state.activeId), but clicking
-  // a pane's CHROME — its header bar, the padding around the terminal, or the
-  // gaps between the screen and the xterm surface — does not move DOM focus into
-  // the terminal. The browser instead blurs the previously focused terminal to
-  // <body>, so the active pane and the keyboard-focused pane diverge: keystrokes
-  // silently keep flowing to whichever terminal was focused before (or vanish).
+  // Keep keyboard focus in sync with the pane the user clicks. Clicking a pane's
+  // CHROME — its header bar, terminal padding, or screen gaps — does not move DOM
+  // focus into the terminal by itself. The browser instead blurs the previously
+  // focused terminal to <body>, so keystrokes can silently vanish.
   // Intercept a primary-button mousedown on non-interactive chrome, cancel the
   // default focus shift, and focus THIS pane's terminal so typing always lands
   // in the pane that was just clicked. Clicks on the xterm surface and on
@@ -1036,6 +1024,7 @@ function bindPaneControls(terminal) {
       clearSnapLayout(false);
       state.settings.layout = "focus";
       elements.layoutMode.value = "focus";
+      setPrimaryTerminal(terminal.id);
       setActiveTerminal(terminal.id);
       applySettings();
       saveSettings();
@@ -1278,6 +1267,14 @@ function removeTerminal(id) {
   log.info("terminal", `Terminal closed: ${terminal.titleInput.value}`, { id });
   disposeTerminal(terminal);
 
+  if (state.primaryId === id) {
+    state.primaryId = null;
+    const nextPrimary = state.terminals.has(state.activeId)
+      ? state.activeId
+      : firstVisibleTerminalId();
+    if (nextPrimary) setPrimaryTerminal(nextPrimary);
+  }
+
   if (state.activeId === id) {
     const next = state.terminals.keys().next().value;
     state.activeId = null;
@@ -1306,6 +1303,7 @@ function closeAllTerminals() {
   }
 
   state.activeId = null;
+  state.primaryId = null;
   saveManualLayouts();
   updateTerminalActions();
   saveSessionSnapshot();
@@ -1366,6 +1364,11 @@ function minimizeTerminal(id) {
     state.activeId = null;
     const next = firstVisibleTerminalId();
     if (next) setActiveTerminal(next);
+  }
+  if (state.primaryId === id) {
+    state.primaryId = null;
+    const nextPrimary = firstVisibleTerminalId();
+    if (nextPrimary) setPrimaryTerminal(nextPrimary);
   }
 
   updateMinimizedDock();
@@ -1456,17 +1459,28 @@ function moveTerminal(id, direction) {
 }
 
 function setActiveTerminal(id) {
+  if (!state.terminals.has(id)) return;
   state.activeId = id;
+  if (!state.primaryId || !state.terminals.has(state.primaryId)) {
+    setPrimaryTerminal(id);
+  }
   for (const terminal of state.terminals.values()) {
     const isActive = terminal.id === id;
     terminal.pane.classList.toggle("is-active", isActive);
-    terminal.pane.classList.toggle("is-primary", isActive);
     if (isActive) {
       window.clearTimeout(terminal.activityTimer);
       terminal.pane.classList.remove("has-activity");
     }
   }
   updateStatusBar();
+}
+
+function setPrimaryTerminal(id) {
+  if (!state.terminals.has(id)) return;
+  state.primaryId = id;
+  for (const terminal of state.terminals.values()) {
+    terminal.pane.classList.toggle("is-primary", terminal.id === id);
+  }
 }
 
 function setTerminalStatus(terminal, text, tone) {
@@ -3679,6 +3693,7 @@ function restoreWorkspace(name) {
     disposeTerminal(terminal);
   }
   state.activeId = null;
+  state.primaryId = null;
 
   const list = Array.isArray(workspace.terminals) && workspace.terminals.length > 0
     ? workspace.terminals
