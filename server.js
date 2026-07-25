@@ -238,6 +238,8 @@ module.exports = {
   stripAnsiForLog,
   revealPath,
   launchElevatedTerminal,
+  describeElevationError,
+  elevationErrorMessage,
   buildElevatedShellArgs,
   computeMemStats,
   computeMemStatsDefault,
@@ -645,6 +647,10 @@ function revealPath(client, message) {
   }
 }
 
+// Sentinel the elevation launcher prints (to stdout) ahead of an error message so the
+// bridge can distinguish a genuine failure from normal output.
+const ELEVATE_ERROR_PREFIX = "MT_ELEVATE_ERR:";
+
 // A Windows UAC-elevated process runs at a higher integrity level than this bridge, and
 // ConPTY/node-pty cannot attach a pseudo-console across that boundary. So an
 // "administrator terminal" is launched as a SEPARATE elevated console window via
@@ -661,16 +667,23 @@ function launchElevatedTerminal(client, message) {
   const args = buildElevatedShellArgs(shell, cwd);
 
   // Pass the target file/args/cwd via environment variables so the -Command string stays
-  // fixed and carries no interpolated (potentially injectable) values.
+  // fixed and carries no interpolated (potentially injectable) values. The inner
+  // Start-Process is wrapped so a failure (e.g. the user declining the UAC prompt, or the
+  // shell being missing) is reported on stdout with a sentinel rather than lost silently.
   const command = [
     "$ErrorActionPreference = 'Stop';",
     "$file = $env:MT_ELEVATE_FILE;",
     "$cwd = $env:MT_ELEVATE_CWD;",
     "$list = if ($env:MT_ELEVATE_ARGS) { @($env:MT_ELEVATE_ARGS | ConvertFrom-Json) } else { @() };",
-    "if ($list.Count -gt 0) {",
-    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $list;",
-    "} else {",
-    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd;",
+    "try {",
+    "  if ($list.Count -gt 0) {",
+    "    Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $list;",
+    "  } else {",
+    "    Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd;",
+    "  }",
+    "  Write-Output 'MT_ELEVATE_OK';",
+    "} catch {",
+    `  Write-Output ('${ELEVATE_ERROR_PREFIX}' + $_.Exception.Message);`,
     "}"
   ].join(" ");
 
@@ -679,8 +692,12 @@ function launchElevatedTerminal(client, message) {
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
       {
-        detached: true,
-        stdio: "ignore",
+        // `detached: true` (DETACHED_PROCESS) makes ShellExecute's "runas" verb silently
+        // no-op — the UAC consent prompt never appears and the launcher exits 0 — so the
+        // launcher MUST run attached. `windowsHide` keeps its console from flashing and
+        // does not affect the prompt. stdout/stderr are piped so failures can be relayed.
+        detached: false,
+        stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         env: {
           ...process.env,
@@ -690,14 +707,51 @@ function launchElevatedTerminal(client, message) {
         }
       }
     );
+
+    let launcherOutput = "";
+    const collect = (chunk) => {
+      launcherOutput += chunk.toString();
+    };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
     child.on("error", (error) => {
       client.send({ type: "elevateError", message: error.message });
+    });
+    child.on("close", () => {
+      // Relay a launcher-reported failure. Wrapping the single message in filter(Boolean)
+      // keeps this branchless (no implicit-else the coverage gate miscounts): the success
+      // case yields "" and is dropped, a real error yields one elevateError.
+      [elevationErrorMessage(launcherOutput)]
+        .filter(Boolean)
+        .forEach((message) => client.send({ type: "elevateError", message }));
     });
     child.unref();
     client.send({ type: "elevateStarted", shell: shell.label });
   } catch (error) {
     client.send({ type: "elevateError", message: error.message });
   }
+}
+
+// Extract a launcher failure message from its captured stdout/stderr. Returns "" when the
+// launcher reported success (no error sentinel). Kept as a ternary so both arms are
+// countable by the coverage gate.
+function elevationErrorMessage(output) {
+  const text = String(output);
+  const index = text.indexOf(ELEVATE_ERROR_PREFIX);
+  return index === -1
+    ? ""
+    : describeElevationError(text.slice(index + ELEVATE_ERROR_PREFIX.length).trim());
+}
+
+// Turn the raw error text the elevation launcher reports into a user-facing message. The
+// common case is the user declining the UAC prompt (Win32 ERROR_CANCELLED), which is an
+// expected outcome rather than a failure, so it gets a friendlier phrasing.
+function describeElevationError(detail) {
+  const text = String(detail || "").trim();
+  if (/cancell?ed by the user/i.test(text)) {
+    return "Administrator terminal canceled — the UAC prompt was declined.";
+  }
+  return text || "Failed to launch the administrator terminal.";
 }
 
 // Build the argument list for an elevated shell so it opens in `cwd` and stays open.

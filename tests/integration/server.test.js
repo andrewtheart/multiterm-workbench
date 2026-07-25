@@ -237,11 +237,22 @@ describe("connection: memory stats welcome + client data isolation", () => {
 
 describe("elevated (administrator) terminal", () => {
   const childProcess = require("node:child_process");
+  const { EventEmitter } = require("node:events");
   let platformDescriptor;
 
   const makeClient = () => ({ send: vi.fn() });
   const setPlatform = (value) =>
     Object.defineProperty(process, "platform", { value, configurable: true });
+
+  // A controllable stand-in for a spawned launcher: EventEmitter for the process plus
+  // stdout/stderr streams, so tests can drive 'data'/'close'/'error' deterministically.
+  const makeChild = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.unref = vi.fn();
+    return child;
+  };
 
   beforeEach(() => {
     platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -275,8 +286,8 @@ describe("elevated (administrator) terminal", () => {
     expect(app.buildElevatedShellArgs({ file: "wsl.exe" }, "C:\\work")).toEqual(["--cd", "C:\\work"]);
   });
 
-  it("spawns an elevated launcher via Start-Process -Verb RunAs and confirms", () => {
-    const child = { on: vi.fn(), unref: vi.fn() };
+  it("spawns an ATTACHED, hidden launcher via Start-Process -Verb RunAs and confirms", () => {
+    const child = makeChild();
     const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
     const client = makeClient();
 
@@ -288,7 +299,10 @@ describe("elevated (administrator) terminal", () => {
     const command = spawnArgs[spawnArgs.length - 1];
     expect(command).toContain("Start-Process");
     expect(command).toContain("-Verb RunAs");
-    expect(opts).toMatchObject({ detached: true, windowsHide: true });
+    // `detached: true` suppresses the UAC prompt — the launcher must run attached.
+    expect(opts.detached).toBe(false);
+    expect(opts.windowsHide).toBe(true);
+    expect(opts.stdio).toEqual(["ignore", "pipe", "pipe"]);
     expect(opts.env.MT_ELEVATE_FILE).toBe("pwsh.exe");
     expect(opts.env.MT_ELEVATE_CWD).toBe("C:\\Windows");
     expect(JSON.parse(opts.env.MT_ELEVATE_ARGS)).toContain("-NoExit");
@@ -306,18 +320,71 @@ describe("elevated (administrator) terminal", () => {
   });
 
   it("relays a launcher spawn 'error' event back to the client", () => {
-    const child = {
-      on: vi.fn((event, cb) => {
-        if (event === "error") cb(new Error("launch blocked"));
-      }),
-      unref: vi.fn()
-    };
+    const child = makeChild();
     vi.spyOn(childProcess, "spawn").mockReturnValue(child);
     const client = makeClient();
 
     app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
+    child.emit("error", new Error("launch blocked"));
 
     expect(client.send).toHaveBeenCalledWith({ type: "elevateError", message: "launch blocked" });
+  });
+
+  it("surfaces an in-launcher failure reported on stdout after the process closes", () => {
+    const child = makeChild();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+
+    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
+    child.stdout.emit("data", Buffer.from("MT_ELEVATE_ERR:pwsh.exe is not recognized"));
+    child.emit("close", 0);
+
+    expect(client.send).toHaveBeenCalledWith({
+      type: "elevateError",
+      message: "pwsh.exe is not recognized"
+    });
+  });
+
+  it("maps a declined UAC prompt (on stderr) to a friendly canceled message", () => {
+    const child = makeChild();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+
+    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
+    child.stderr.emit("data", Buffer.from("MT_ELEVATE_ERR:The operation was canceled by the user."));
+    child.emit("close", 0);
+
+    expect(client.send).toHaveBeenCalledWith({
+      type: "elevateError",
+      message: "Administrator terminal canceled — the UAC prompt was declined."
+    });
+  });
+
+  it("does not emit an error when the launcher reports success", () => {
+    const child = makeChild();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    const client = makeClient();
+
+    app.launchElevatedTerminal(client, { shell: "pwsh", cwd: "C:\\Windows" });
+    child.stdout.emit("data", Buffer.from("MT_ELEVATE_OK"));
+    child.emit("close", 0);
+
+    expect(client.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: "elevateError" }));
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "elevateStarted" }));
+  });
+
+  it("describeElevationError phrases known and unknown failures", () => {
+    expect(app.describeElevationError("The operation was cancelled by the user")).toBe(
+      "Administrator terminal canceled — the UAC prompt was declined."
+    );
+    expect(app.describeElevationError("Some other failure")).toBe("Some other failure");
+    expect(app.describeElevationError("")).toBe("Failed to launch the administrator terminal.");
+    expect(app.describeElevationError(undefined)).toBe("Failed to launch the administrator terminal.");
+  });
+
+  it("elevationErrorMessage returns '' for success output and a message for a failure", () => {
+    expect(app.elevationErrorMessage("MT_ELEVATE_OK")).toBe("");
+    expect(app.elevationErrorMessage("noise MT_ELEVATE_ERR:boom")).toBe("boom");
   });
 
   it("reports an error when spawning the launcher throws synchronously", () => {
@@ -332,7 +399,7 @@ describe("elevated (administrator) terminal", () => {
   });
 
   it("routes an 'elevate' client message to the launcher", () => {
-    const child = { on: vi.fn(), unref: vi.fn() };
+    const child = makeChild();
     vi.spyOn(childProcess, "spawn").mockReturnValue(child);
     const client = makeClient();
     app.handleClientMessage(client, JSON.stringify({ type: "elevate", shell: "cmd" }));
