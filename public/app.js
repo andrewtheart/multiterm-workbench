@@ -649,6 +649,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "scriptPicked") {
+    resolveBridgeRequest(message, message.path || null);
+    return;
+  }
+
   if (message.type === "welcome") {
     log.info("bridge", "Received welcome", { cwd: message.cwd, sessions: Array.isArray(message.sessions) ? message.sessions.length : 0 });
     if (!elements.cwdInput.value) {
@@ -2141,6 +2146,36 @@ function sendBridge(message) {
   }
 }
 
+// The bridge protocol is otherwise one-way; a few operations (opening a native
+// file dialog) need an answer back. Requests carry a requestId the bridge echoes,
+// and resolve to null when the bridge is unreachable or never replies.
+const pendingBridgeRequests = new Map();
+
+function requestBridge(message, { timeout = 300000 } = {}) {
+  return new Promise((resolve) => {
+    const requestId = createId();
+    const settle = (value) => {
+      const pending = pendingBridgeRequests.get(requestId);
+      if (!pending) return;
+      pendingBridgeRequests.delete(requestId);
+      window.clearTimeout(pending.timer);
+      resolve(value);
+    };
+
+    pendingBridgeRequests.set(requestId, { settle, timer: window.setTimeout(() => settle(null), timeout) });
+    if (!sendBridge({ ...message, requestId })) settle(null);
+  });
+}
+
+// Returns true when the message answered a pending request, so the caller can
+// stop routing it.
+function resolveBridgeRequest(message, value) {
+  const pending = message.requestId ? pendingBridgeRequests.get(message.requestId) : null;
+  if (!pending) return false;
+  pending.settle(value);
+  return true;
+}
+
 // Windows UAC-elevated terminals can't be hosted inside a non-elevated MultiTerm pane
 // (ConPTY can't cross the integrity-level boundary), so the bridge launches the elevated
 // shell in a separate console window via ShellExecute "runas" (raises the UAC prompt).
@@ -2151,6 +2186,8 @@ function newAdminTerminal(options = {}) {
     shell,
     cwd: options.cwd,
     title: options.title || `Administrator ${state.nextIndex}`,
+    pendingCommand: options.pendingCommand,
+    runStartup: Boolean(options.runStartup),
     reveal: true
   });
 }
@@ -3872,7 +3909,16 @@ function revealTerminalCwd(terminal) {
     toast("Working directory unknown", "info", 1800);
     return;
   }
-  if (!sendBridge({ type: "reveal", path: terminal.cwd })) {
+  revealPath(terminal.cwd);
+}
+
+// Only the bridge can open Explorer; the browser cannot reach the file system.
+function revealPath(path) {
+  if (!path) {
+    toast("Working directory unknown", "info", 1800);
+    return;
+  }
+  if (!sendBridge({ type: "reveal", path })) {
     toast("Bridge unavailable", "error");
   }
 }
@@ -3973,27 +4019,17 @@ function openLogFile(terminal) {
 
 /* ---------------- Run a script --------------- */
 
-// Opens the native file picker (exposed by preload as window.multiterm) and
-// runs the chosen .ps1/.bat/.cmd in the target terminal.
+// Opens the native file picker and runs the chosen .ps1/.bat/.cmd in the target
+// terminal, starting from that terminal's own folder.
 async function browseAndRunScript(id) {
   const targetId = id || state.activeId;
   if (!targetId || !state.terminals.has(targetId)) {
     toast("No active terminal", "info", 1600);
     return;
   }
-  if (!window.multiterm || typeof window.multiterm.pickScript !== "function") {
-    toast("Script browsing is only available in the desktop app", "error", 3000);
-    return;
-  }
 
-  let scriptPath;
-  try {
-    scriptPath = await window.multiterm.pickScript();
-  } catch {
-    toast("Could not open the file picker", "error");
-    return;
-  }
-  if (!scriptPath) return; // cancelled
+  const scriptPath = await pickScriptPath(state.terminals.get(targetId).cwd);
+  if (!scriptPath) return;
 
   const command = buildScriptCommand(state.terminals.get(targetId), scriptPath);
   if (!sendBridge({ type: "input", id: targetId, data: `${command}\r` })) {
@@ -4002,6 +4038,51 @@ async function browseAndRunScript(id) {
   }
   setActiveTerminal(targetId);
   toast(`Running ${scriptPath.split(/[\\/]/).pop()}`, "success", 2400);
+}
+
+// Returns the chosen script path, or null when the user cancelled or no picker
+// could be opened. Electron's dialog is used when the app runs under it; the
+// installed build is a plain browser window, so the bridge opens the native
+// dialog on its behalf.
+async function pickScriptPath(cwd) {
+  if (window.multiterm && typeof window.multiterm.pickScript === "function") {
+    try {
+      return (await window.multiterm.pickScript()) || null;
+    } catch {
+      toast("Could not open the file picker", "error");
+      return null;
+    }
+  }
+
+  if (!state.socketReady) {
+    toast("Bridge unavailable", "error");
+    return null;
+  }
+  return requestBridge({ type: "pickScript", cwd: cwd || elements.cwdInput.value || "" });
+}
+
+// The surface menu has no terminal to run in, so one is opened for the script.
+// The picker runs first on purpose: cancelling it must not leave an empty
+// terminal behind.
+async function browseAndRunScriptInNewTerminal(options = {}) {
+  const scriptPath = await pickScriptPath(options.cwd);
+  if (!scriptPath) return;
+
+  const shell = elements.shellSelect.value;
+  const command = buildScriptCommand({ shell }, scriptPath);
+  const name = scriptPath.split(/[\\/]/).pop();
+  const spawn = options.elevated ? newAdminTerminal : addTerminal;
+
+  spawn({
+    reveal: true,
+    runStartup: true,
+    shell,
+    cwd: options.cwd || undefined,
+    title: options.elevated ? `Admin: ${name}` : name,
+    // Queued rather than sent: the shell is not live yet.
+    pendingCommand: command
+  });
+  toast(`Running ${name} in a new terminal`, "success", 2400);
 }
 
 function buildScriptCommand(terminal, scriptPath) {
@@ -4852,7 +4933,12 @@ function closeAbout() {
 function bindContextMenu() {
   elements.host.addEventListener("contextmenu", (event) => {
     const pane = event.target.closest(".terminal-pane");
-    if (!pane) return;
+    if (!pane) {
+      // Blank surface: no pane to act on, so offer the workspace-wide menu.
+      showSurfaceContextMenu(event.clientX, event.clientY);
+      event.preventDefault();
+      return;
+    }
     // Let the pane title input use the native editing menu.
     if (event.target.closest(".pane-title")) return;
 
@@ -4976,6 +5062,52 @@ function buildContextMenu(terminal) {
   renderContextMenu(items);
 }
 
+// "Here" on the blank surface means the folder you were last working in, which
+// tracks `cd` via OSC 7/9, falling back to the workspace CWD field.
+function surfaceCwd() {
+  const active = state.activeId ? state.terminals.get(state.activeId) : null;
+  return (active && active.cwd) || elements.cwdInput.value || "";
+}
+
+// Right-clicking the empty area around the panes gets the same menu styling as a
+// pane, minus everything that needs a specific terminal. Terminal-specific
+// actions that still make sense here (running a script) open a terminal to act
+// on instead of being dropped.
+function buildSurfaceContextMenu() {
+  const here = surfaceCwd();
+  const hasTerminals = state.terminals.size > 0;
+  const minimized = [...state.terminals.values()].filter((terminal) => terminal.minimized).length;
+  const newTerminal = (options) => addTerminal({ reveal: true, runStartup: true, ...options });
+
+  renderContextMenu([
+    { label: "New terminal", hint: "Ctrl+T", icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
+    { label: "New terminal here", icon: "folder-plus", title: here || undefined, disabled: !here, run: () => newTerminal({ cwd: here }) },
+    { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ cwd: here || undefined, runStartup: true }) },
+    { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here }) },
+    { label: "Run script as Administrator\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here, elevated: true }) },
+    { separator: true },
+    { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", title: "PowerShell 7", cwd: here || undefined }) },
+    { label: "New Windows PowerShell terminal", icon: "terminal", run: () => newTerminal({ shell: "powershell", title: "Windows PowerShell", cwd: here || undefined }) },
+    { label: "New Command Prompt terminal", icon: "terminal", run: () => newTerminal({ shell: "cmd", title: "Command Prompt", cwd: here || undefined }) },
+    { label: "New WSL terminal", icon: "terminal", run: () => newTerminal({ shell: "wsl", title: "WSL", cwd: here || undefined }) },
+    { separator: true },
+    { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", disabled: !hasTerminals, run: openFindAll },
+    { label: "Broadcast command\u2026", hint: "Ctrl+Shift+B", icon: "megaphone", disabled: !hasTerminals, run: () => toggleBroadcast(true) },
+    { label: "Command palette\u2026", hint: "Ctrl+Shift+P", icon: "command", run: openPalette },
+    { separator: true },
+    { label: "Open folder", icon: "folder-open", title: here || undefined, disabled: !here, run: () => revealPath(here) },
+    ...(minimized
+      ? [{ label: `Restore ${minimized} minimized terminal${minimized === 1 ? "" : "s"}`, icon: "maximize-2", run: restoreAllTerminals }]
+      : []),
+    { label: "Fit all terminals", icon: "maximize", disabled: !hasTerminals, run: fitAllTerminals },
+    { label: "Reset layout", icon: "rotate-ccw", run: resetLayout },
+    { separator: true },
+    { label: "New page", icon: "plus", run: () => addPage() },
+    { separator: true },
+    { label: "Close all terminals", icon: "trash-2", danger: true, disabled: !hasTerminals, run: closeAllTerminals }
+  ]);
+}
+
 function buildPaneOverflowMenu(terminal) {
   renderContextMenu([
     {
@@ -5055,6 +5187,10 @@ function renderContextMenu(items) {
     label.textContent = item.label;
     el.append(label);
 
+    // Rows whose label cannot spell out the whole story (a path, say) carry the
+    // detail as a tooltip rather than growing the menu.
+    if (item.title) el.title = item.title;
+
     if (item.hint) {
       const hint = document.createElement("span");
       hint.className = "ctx-hint";
@@ -5074,6 +5210,11 @@ function renderContextMenu(items) {
 
 function showContextMenu(x, y, terminal) {
   buildContextMenu(terminal);
+  showBuiltContextMenu(x, y);
+}
+
+function showSurfaceContextMenu(x, y) {
+  buildSurfaceContextMenu();
   showBuiltContextMenu(x, y);
 }
 

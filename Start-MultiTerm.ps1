@@ -1163,6 +1163,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.OpenPath(client, Json.Get(message, "path"));
             }
+            else if (type == "pickScript")
+            {
+                this.PickScript(client, message);
+            }
             else if (type == "elevate")
             {
                 this.ElevateSession(client, message);
@@ -1633,6 +1637,50 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
+        // Opens the Windows "choose a file" common dialog and reports the chosen
+        // script back to the browser. The browser cannot do this itself: a file
+        // input hands over the bytes but never the path, and the shipped app has
+        // no Electron shell to ask. The dialog is a Win32 common dialog rather
+        // than WinForms so it needs no extra assembly reference.
+        private void PickScript(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string initialDirectory = String.Empty;
+            try
+            {
+                string candidate = Json.Get(message, "cwd");
+                if (!String.IsNullOrEmpty(candidate) && Directory.Exists(candidate))
+                {
+                    initialDirectory = Path.GetFullPath(candidate);
+                }
+            }
+            catch
+            {
+                initialDirectory = String.Empty;
+            }
+
+            // The dialog blocks its thread until the user answers, so it cannot run
+            // on the bridge's message loop, and the shell dialog requires STA.
+            Thread dialogThread = new Thread(delegate()
+            {
+                string chosen = null;
+                try
+                {
+                    chosen = FileDialog.Open("Select a script to run", initialDirectory);
+                }
+                catch (Exception error)
+                {
+                    this.Log("warn", "Script picker failed: " + error.Message);
+                }
+
+                string payload = String.IsNullOrEmpty(chosen) ? "null" : Json.Quote(chosen);
+                client.Send("{\"type\":\"scriptPicked\",\"requestId\":" + Json.Quote(requestId) + ",\"path\":" + payload + "}");
+            });
+            dialogThread.IsBackground = true;
+            dialogThread.SetApartmentState(ApartmentState.STA);
+            dialogThread.Start();
+        }
+
         private string WelcomeJson()
         {
             return "{\"type\":\"welcome\",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + ",\"sessions\":" + this.SessionsJson() + "}";
@@ -1883,6 +1931,88 @@ namespace MultiTerm.PowerShellBridge
         public string File { get; private set; }
 
         public string Label { get; private set; }
+    }
+
+    // The Windows "Open file" common dialog, driven directly rather than through
+    // System.Windows.Forms so the bridge needs no extra assembly reference (the
+    // C# here is compiled with the default reference set).
+    internal static class FileDialog
+    {
+        private const int OFN_FILEMUSTEXIST = 0x00001000;
+        private const int OFN_PATHMUSTEXIST = 0x00000800;
+        private const int OFN_HIDEREADONLY = 0x00000004;
+        private const int OFN_EXPLORER = 0x00080000;
+        private const int OFN_NOCHANGEDIR = 0x00000008;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct OpenFileName
+        {
+            public int lStructSize;
+            public IntPtr hwndOwner;
+            public IntPtr hInstance;
+            public string lpstrFilter;
+            public string lpstrCustomFilter;
+            public int nMaxCustFilter;
+            public int nFilterIndex;
+            public IntPtr lpstrFile;
+            public int nMaxFile;
+            public string lpstrFileTitle;
+            public int nMaxFileTitle;
+            public string lpstrInitialDir;
+            public string lpstrTitle;
+            public int Flags;
+            public short nFileOffset;
+            public short nFileExtension;
+            public string lpstrDefExt;
+            public IntPtr lCustData;
+            public IntPtr lpfnHook;
+            public string lpTemplateName;
+            public IntPtr pvReserved;
+            public int dwReserved;
+            public int FlagsEx;
+        }
+
+        [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetOpenFileNameW", ExactSpelling = true, SetLastError = true)]
+        private static extern bool GetOpenFileNameW(ref OpenFileName options);
+
+        // Returns the chosen path, or null when the user cancelled.
+        public static string Open(string title, string initialDirectory)
+        {
+            OpenFileName options = new OpenFileName();
+            options.lStructSize = Marshal.SizeOf(typeof(OpenFileName));
+            // Each filter is a "label\0pattern\0" pair, and the list as a whole ends
+            // with a second NUL. Embedded NULs survive marshalling, which copies the
+            // string by length rather than stopping at the first one.
+            options.lpstrFilter = "Scripts (*.ps1;*.bat;*.cmd)\0*.ps1;*.bat;*.cmd\0PowerShell (*.ps1)\0*.ps1\0Batch (*.bat;*.cmd)\0*.bat;*.cmd\0All files (*.*)\0*.*\0\0";
+            options.nFilterIndex = 1;
+            options.lpstrTitle = title;
+            options.lpstrInitialDir = String.IsNullOrEmpty(initialDirectory) ? null : initialDirectory;
+            // OFN_NOCHANGEDIR: the dialog must not move the bridge's process-wide
+            // working directory, which new sessions inherit.
+            options.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NOCHANGEDIR;
+            options.nMaxFile = 4096;
+
+            IntPtr buffer = Marshal.AllocCoTaskMem(options.nMaxFile * 2);
+            try
+            {
+                // The buffer doubles as the initial file name, so it must start empty.
+                for (int i = 0; i < 2; i++)
+                {
+                    Marshal.WriteByte(buffer, i, 0);
+                }
+                options.lpstrFile = buffer;
+
+                if (!GetOpenFileNameW(ref options))
+                {
+                    return null; // Cancelled, or the dialog could not be shown.
+                }
+                return Marshal.PtrToStringUni(buffer);
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(buffer);
+            }
+        }
     }
 
     internal sealed class TerminalSession

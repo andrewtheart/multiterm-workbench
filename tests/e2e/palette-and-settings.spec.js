@@ -112,6 +112,34 @@ test.describe("Command palette — every option works", () => {
   // closeAllTerminals() early-returns if the bridge is momentarily offline (its
   // killAll send fails), so retry the close across any transient drop — the app
   // auto-reconnects within ~1s — until the session count actually drains to 0.
+  // A pane is reported "live" as soon as the pty exists, but the shell is still
+  // printing its banner and prompt for a while after that. Tests that write
+  // straight into a terminal buffer lose that text when the late output lands,
+  // so wait until every buffer has stopped changing before handing back.
+  async function settleTerminals() {
+    const snapshot = () =>
+      page.evaluate(() =>
+        [...state.terminals.values()]
+          .map((t) => {
+            const buffer = t.term.buffer.active;
+            return `${t.id}:${t.status}:${buffer.length}:${buffer.cursorY}:${buffer.cursorX}`;
+          })
+          .join("|")
+      );
+    let previous = null;
+    await expect
+      .poll(
+        async () => {
+          const current = await snapshot();
+          const stable = previous !== null && current === previous;
+          previous = current;
+          return stable;
+        },
+        { timeout: 30000, intervals: [400], message: "terminal buffers should stop changing" }
+      )
+      .toBe(true);
+  }
+
   async function resetTo(n) {
     await expect
       .poll(
@@ -276,6 +304,7 @@ test.describe("Command palette — every option works", () => {
 
     // Typing highlights real matches (SearchAddon decorations require the
     // proposed-API terminal option — this asserts that highlight path works).
+    await settleTerminals();
     await page.evaluate(
       () =>
         new Promise((resolve) => {
@@ -335,6 +364,7 @@ test.describe("Command palette — every option works", () => {
 
     // Seed a unique, searchable token into every terminal's buffer (direct
     // xterm writes — no shell involvement — so the match set is deterministic).
+    await settleTerminals();
     await page.evaluate(
       () =>
         new Promise((resolve) => {

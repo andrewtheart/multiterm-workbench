@@ -256,6 +256,96 @@ describe("openPath", () => {
   });
 });
 
+describe("pickScript", () => {
+  // A fake picker process: stdout is a plain event source so the test can decide
+  // what the dialog "returned" and when it closed.
+  function fakePicker() {
+    const handlers = {};
+    return {
+      stdout: { on: (event, fn) => { handlers[`stdout:${event}`] = fn; } },
+      on: (event, fn) => { handlers[event] = fn; },
+      emitStdout: (text) => handlers["stdout:data"](Buffer.from(text)),
+      emitClose: () => handlers.close(),
+      emitError: (error) => handlers.error(error)
+    };
+  }
+
+  it("answers null off Windows rather than leaving the client waiting", () => {
+    setPlatform("linux");
+    const client = fakeClient();
+    server.pickScript(client, { requestId: "r1", cwd: "/home/me" });
+    expect(client.send).toHaveBeenCalledWith({ type: "scriptPicked", requestId: "r1", path: null });
+  });
+
+  it("runs the dialog on an STA thread with no visible console", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    const picker = fakePicker();
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(picker);
+    server.pickScript(fakeClient(), { requestId: "r2", cwd: "C:\\work" });
+
+    const [command, args, options] = spawn.mock.calls[0];
+    expect(command).toBe("powershell.exe");
+    // -STA is not cosmetic: the shell file dialog cannot be shown from an MTA thread.
+    expect(args).toContain("-STA");
+    expect(options.windowsHide).toBe(true);
+    expect(args[args.length - 1]).toContain("C:\\work");
+  });
+
+  it("returns the chosen path once the picker closes", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    const picker = fakePicker();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(picker);
+    const client = fakeClient();
+    server.pickScript(client, { requestId: "r3", cwd: "C:\\work" });
+
+    picker.emitStdout("C:\\work\\deploy.ps1\r\n");
+    picker.emitClose();
+    expect(client.send).toHaveBeenCalledWith({
+      type: "scriptPicked",
+      requestId: "r3",
+      path: "C:\\work\\deploy.ps1"
+    });
+  });
+
+  it("treats an empty result as a cancellation", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    const picker = fakePicker();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(picker);
+    const client = fakeClient();
+    server.pickScript(client, { requestId: "r4", cwd: "C:\\work" });
+
+    picker.emitClose();
+    expect(client.send).toHaveBeenCalledWith({ type: "scriptPicked", requestId: "r4", path: null });
+  });
+
+  it("answers exactly once even when the picker both errors and closes", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    const picker = fakePicker();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(picker);
+    const client = fakeClient();
+    server.pickScript(client, { requestId: "r5", cwd: "C:\\work" });
+
+    picker.emitError(new Error("boom"));
+    picker.emitClose();
+    // A second reply would resolve an unrelated later request with a stale answer.
+    expect(client.send).toHaveBeenCalledTimes(1);
+    expect(client.send).toHaveBeenCalledWith({ type: "scriptPicked", requestId: "r5", path: null });
+  });
+
+  it("answers null when the picker cannot be launched at all", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => { throw new Error("spawn EACCES"); });
+    const client = fakeClient();
+    server.pickScript(client, { requestId: "r6", cwd: "C:\\work" });
+    expect(client.send).toHaveBeenCalledWith({ type: "scriptPicked", requestId: "r6", path: null });
+  });
+});
+
 describe("computeMemStats", () => {
   it("returns null when the PowerShell probe errors", () => {
     vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) => cb(new Error("nope"), ""));
@@ -405,6 +495,13 @@ describe("handleClientMessage dispatch (log + reveal + open + killAll)", () => {
     childProcess.spawn.mockClear();
     server.handleClientMessage(client, JSON.stringify({ type: "openPath", path: "C:\\Users\\me\\s.log" }));
     expect(childProcess.spawn.mock.calls[0][0]).toBe("cmd.exe");
+
+    // pickScript must be routed, not fall through to "Unsupported message type":
+    // an unanswered request leaves the browser waiting on a promise for minutes.
+    childProcess.spawn.mockClear();
+    childProcess.spawn.mockReturnValue({ stdout: { on: vi.fn() }, on: vi.fn() });
+    server.handleClientMessage(client, JSON.stringify({ type: "pickScript", requestId: "r", cwd: "C:\\Users\\me" }));
+    expect(childProcess.spawn.mock.calls[0][0]).toBe("powershell.exe");
 
     expect(() => server.handleClientMessage(client, JSON.stringify({ type: "killAll" }))).not.toThrow();
   });
