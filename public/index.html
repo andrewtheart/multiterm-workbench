@@ -369,6 +369,13 @@
         </main>
       </div>
 
+      <nav id="pager" class="pager" role="tablist" aria-label="Pages">
+        <div id="pagerList" class="pager-list"></div>
+        <button id="pagerAdd" class="pager-add" type="button" title="New page" aria-label="New page">
+          <i data-lucide="plus"></i>
+        </button>
+      </nav>
+
       <footer class="status-bar" aria-label="Status bar">
         <span class="status-item" id="statusMem" title="Memory used by MultiTerm and its terminals vs. total system memory in use">
           <i data-lucide="memory-stick"></i>
@@ -433,6 +440,13 @@
       </div>
     </div>
 
+    <div id="quickSwitchOverlay" class="palette-overlay" hidden>
+      <div class="palette quick-switch" role="dialog" aria-modal="true" aria-label="Switch terminal">
+        <input id="quickSwitchInput" class="palette-input" type="text" placeholder="Search terminals… (Alt+key to jump)" autocomplete="off" spellcheck="false" aria-label="Search terminals">
+        <ul id="quickSwitchList" class="palette-list" role="listbox"></ul>
+      </div>
+    </div>
+
     <div id="shortcutsOverlay" class="palette-overlay" hidden>
       <div class="palette shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
         <div class="shortcuts-head">
@@ -443,6 +457,10 @@
         </div>
         <ul class="shortcuts-list">
           <li><span>Command palette</span><span class="kbd">Ctrl+Shift+P</span></li>
+          <li><span>Switch terminal</span><span class="kbd">Alt+Q</span></li>
+          <li><span>Jump to a listed terminal</span><span class="kbd">Alt+1…9, Alt+A…Z</span></li>
+          <li><span>Next / previous page</span><span class="kbd">Ctrl+PageDown / Ctrl+PageUp</span></li>
+          <li><span>Go to page 1–9</span><span class="kbd">Alt+1…9</span></li>
           <li><span>Keyboard shortcuts</span><span class="kbd">Ctrl+/</span></li>
           <li><span>New terminal</span><span class="kbd">Ctrl+T / Ctrl+Shift+T</span></li>
           <li><span>Close active terminal</span><span class="kbd">Ctrl+Shift+W</span></li>

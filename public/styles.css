@@ -340,7 +340,7 @@ input[type="range"] {
 
 .app-shell {
   display: grid;
-  grid-template-rows: [topbar] auto [broadcast] auto [workbench] 1fr [status] auto;
+  grid-template-rows: [topbar] auto [broadcast] auto [workbench] 1fr [pager] auto [status] auto;
   height: 100vh;
   overflow: hidden;
 }
@@ -1107,6 +1107,179 @@ body.header-hidden .status-hint kbd,
   color: var(--muted);
   padding: 18px 14px;
   text-align: center;
+}
+
+/* ---------------- Pager (pages) --------------- */
+
+.pager {
+  align-items: center;
+  background: var(--surface-translucent);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+  grid-row: pager;
+  min-height: 38px;
+  padding: 4px 10px;
+}
+
+.pager-list {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.pager-chip {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 10px;
+  transition: background var(--dur) var(--ease-standard), color var(--dur) var(--ease-standard);
+}
+
+.pager-chip:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pager-chip.is-active {
+  background: var(--primary-container);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.pager-name {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pager-count {
+  background: rgb(255 255 255 / 0.09);
+  border-radius: 999px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  min-width: 16px;
+  padding: 3px 5px;
+  text-align: center;
+}
+
+.pager-chip.is-active .pager-count {
+  background: rgb(255 255 255 / 0.16);
+}
+
+/* Only offer the close affordance on the page you are pointing at, so the strip
+   stays quiet when you are just reading it. */
+.pager-close {
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 14px;
+  height: 16px;
+  line-height: 1;
+  opacity: 0;
+  align-items: center;
+  justify-content: center;
+  transition: opacity var(--dur) var(--ease-standard), background var(--dur) var(--ease-standard);
+  width: 16px;
+}
+
+.pager-chip:hover .pager-close,
+.pager-chip.is-active .pager-close {
+  opacity: 0.75;
+}
+
+.pager-close:hover {
+  background: rgb(255 255 255 / 0.16);
+  color: var(--text);
+  opacity: 1;
+}
+
+.pager-rename {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  min-height: 0;
+  padding: 1px 5px;
+  width: 12ch;
+}
+
+.pager-add {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 9px;
+}
+
+.pager-add:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.pager-add svg {
+  height: 14px;
+  width: 14px;
+}
+
+/* ---------------- Terminal quick switcher --------------- */
+
+.quick-item {
+  justify-content: flex-start;
+}
+
+/* Fixed width keeps every title starting at the same x, so the list reads as a
+   column even as keys go from 1 to z. */
+.quick-key {
+  background: rgb(255 255 255 / 0.09);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  width: 20px;
+}
+
+.quick-key.is-empty {
+  background: transparent;
+}
+
+.quick-item[aria-selected="true"] .quick-key {
+  background: rgb(255 255 255 / 0.2);
+}
+
+.quick-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-page {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 11px;
 }
 
 /* Shortcuts cheat sheet */
@@ -2054,6 +2227,13 @@ body.is-pane-dragging {
 }
 
 .terminal-pane.is-search-hidden {
+  display: none;
+}
+
+/* Panes on an inactive page stay mounted — their xterm instance and pty session
+   keep running — but are pulled out of layout so the grid only sizes the page
+   you are looking at. */
+.terminal-pane.is-page-hidden {
   display: none;
 }
 

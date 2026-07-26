@@ -213,6 +213,11 @@ const elements = {
   paletteInput: document.querySelector("#paletteInput"),
   paletteList: document.querySelector("#paletteList"),
   paletteOverlay: document.querySelector("#paletteOverlay"),
+  pagerAdd: document.querySelector("#pagerAdd"),
+  pagerList: document.querySelector("#pagerList"),
+  quickSwitchInput: document.querySelector("#quickSwitchInput"),
+  quickSwitchList: document.querySelector("#quickSwitchList"),
+  quickSwitchOverlay: document.querySelector("#quickSwitchOverlay"),
   closeConfirmOverlay: document.querySelector("#closeConfirmOverlay"),
   closeConfirmRemember: document.querySelector("#closeConfirmRemember"),
   closeConfirmTray: document.querySelector("#closeConfirmTray"),
@@ -272,12 +277,14 @@ const palette = { open: false, index: 0, items: [] };
 
 const state = {
   activeId: null,
+  activePageId: null,
   bridgeClosingDown: false,
   findAll: { active: false, order: [], ti: 0, li: -1 },
   appElevated: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
   nextIndex: 1,
+  pages: loadPages(),
   primaryId: null,
   reconnectAttempts: 0,
   reconnectTimer: null,
@@ -286,11 +293,13 @@ const state = {
   socket: null,
   socketReady: false,
   statusPillClearanceScheduled: false,
+  terminalPages: loadTerminalPages(),
   terminalSearch: "",
   terminals: new Map(),
   workspaces: loadWorkspaces(),
   zoomedId: null
 };
+state.activePageId = loadActivePageId(state.pages);
 
 /* ---------------- Logging & tail console --------------- */
 
@@ -365,6 +374,9 @@ window.addEventListener("DOMContentLoaded", () => {
   enhanceComboboxes();
   refreshWorkspaceSelect();
   bindPalette();
+  bindPager();
+  bindQuickSwitch();
+  renderPager();
   bindContextMenu();
   bindRightClickWarning();
   bindCloseConfirm();
@@ -895,6 +907,7 @@ function addTerminal(options = {}) {
     lastSentCols: 0,
     lastSentRows: 0,
     pid: session.pid,
+    pageId: resolvePageId(options.pageId || session.pageId, id),
     remoteRequested: Boolean(options.reattach),
     runStartup: Boolean(options.runStartup),
     searchAddon,
@@ -927,7 +940,12 @@ function addTerminal(options = {}) {
   applyPaneColor(terminal);
   if (terminal.elevated) pane.classList.add("is-admin");
   applyManualLayout(terminal, ensureManualLayout(id));
-  setActiveTerminal(id);
+  // Panes for other pages are hidden immediately so a reattached session never
+  // flashes onto the page you are looking at.
+  pane.classList.toggle("is-page-hidden", terminal.pageId !== state.activePageId);
+  renderPager();
+  saveTerminalPages();
+  if (isOnActivePage(terminal)) setActiveTerminal(id);
   refreshIcons();
   bindTerminalKeyHandling(terminal);
   registerCwdTracking(terminal);
@@ -1470,13 +1488,15 @@ function removeTerminal(id) {
   }
 
   if (state.activeId === id) {
-    const next = state.terminals.keys().next().value;
+    const next = terminalsOnActivePage()[0]?.id || state.terminals.keys().next().value;
     state.activeId = null;
     if (next) setActiveTerminal(next);
   }
 
   applyZoom();
   saveManualLayouts();
+  renderPager();
+  forgetTerminalPages([id]);
   updateTerminalActions();
   saveSessionSnapshot();
 }
@@ -1492,6 +1512,7 @@ function closeAllTerminals() {
   }
 
   log.info("terminal", `Closing all terminals (${state.terminals.size})`);
+  const closedIds = [...state.terminals.keys()];
   for (const terminal of [...state.terminals.values()]) {
     disposeTerminal(terminal);
   }
@@ -1499,6 +1520,8 @@ function closeAllTerminals() {
   state.activeId = null;
   state.primaryId = null;
   saveManualLayouts();
+  renderPager();
+  forgetTerminalPages(closedIds);
   updateTerminalActions();
   saveSessionSnapshot();
 }
@@ -1593,7 +1616,7 @@ function restoreAllTerminals() {
 }
 
 function firstVisibleTerminalId() {
-  for (const terminal of state.terminals.values()) {
+  for (const terminal of terminalsOnActivePage()) {
     if (!terminal.minimized) return terminal.id;
   }
   return null;
@@ -1601,7 +1624,7 @@ function firstVisibleTerminalId() {
 
 function countVisibleTerminals() {
   let visible = 0;
-  for (const terminal of state.terminals.values()) {
+  for (const terminal of terminalsOnActivePage()) {
     if (!terminal.minimized) visible += 1;
   }
   return visible;
@@ -2260,6 +2283,10 @@ function scheduleFit(terminal) {
   terminal.fitScheduled = true;
   window.requestAnimationFrame(() => {
     terminal.fitScheduled = false;
+    // A pane on an inactive page is display:none, so it measures as zero and
+    // would resize the pty down to a nonsense size. applyPageVisibility refits
+    // it when the page comes back.
+    if (terminal.pane.classList.contains("is-page-hidden")) return;
     try {
       terminal.fitAddon.fit();
     } catch {
@@ -2720,7 +2747,8 @@ function copyActiveTerminal() {
 }
 
 function cycleTerminal(direction) {
-  const ids = [...state.terminals.keys()];
+  // Cycling stays on the page you are looking at; Alt+Q crosses pages.
+  const ids = terminalsOnActivePage().map((terminal) => terminal.id);
   if (ids.length === 0) return;
   const current = ids.indexOf(state.activeId);
   const next = ids[(current + direction + ids.length) % ids.length];
@@ -2730,6 +2758,11 @@ function cycleTerminal(direction) {
 function setActiveTerminalAndReveal(id) {
   const terminal = state.terminals.get(id);
   if (!terminal) return;
+  // Focusing a terminal that lives on another page brings that page forward
+  // first, otherwise the pane is display:none and cannot be scrolled to.
+  if (!isOnActivePage(terminal)) {
+    setActivePage(terminal.pageId, { focus: false });
+  }
   setActiveTerminal(id);
   revealTerminal(terminal);
   terminal.term.focus();
@@ -2792,6 +2825,11 @@ function getCommands() {
     { label: "Cycle broadcast scope", run: () => { toggleBroadcastScope(); toast(`Broadcast: ${broadcastScopeLabel()}`, "info", 1600); } },
     { label: "Next terminal", run: () => cycleTerminal(1) },
     { label: "Previous terminal", run: () => cycleTerminal(-1) },
+    { label: "Switch terminal\u2026", hint: "Alt+Q", run: openQuickSwitch },
+    { label: "New page", run: () => addPage() },
+    { label: "Next page", hint: "Ctrl+PageDown", run: () => cyclePage(1) },
+    { label: "Previous page", hint: "Ctrl+PageUp", run: () => cyclePage(-1) },
+    { label: "Close current page", run: () => removePage(state.activePageId) },
     { label: "Increase font size", hint: "Ctrl++", run: () => fontZoom(1) },
     { label: "Decrease font size", hint: "Ctrl+-", run: () => fontZoom(-1) },
     { label: "Toggle app theme", run: toggleAppTheme },
@@ -2834,6 +2872,14 @@ function getCommands() {
   for (const terminal of state.terminals.values()) {
     const id = terminal.id;
     commands.push({ label: `Focus: ${terminal.titleInput.value}`, run: () => setActiveTerminalAndReveal(id) });
+  }
+
+  if (state.pages.length > 1) {
+    for (const page of state.pages) {
+      if (page.id === state.activePageId) continue;
+      const id = page.id;
+      commands.push({ label: `Go to page: ${page.name}`, run: () => setActivePage(id) });
+    }
   }
 
   for (const name of Object.keys(state.workspaces).sort((a, b) => a.localeCompare(b))) {
@@ -2948,6 +2994,167 @@ function runPaletteSelection() {
   }
 }
 
+/* ---------------- Terminal quick switcher (Alt+Q) --------------- */
+
+// Every visible row gets a jump key: 1-9 first, then a-z, then nothing. Keys are
+// assigned over the *filtered* list, so they stay dense as you type.
+const QUICK_SWITCH_KEYS = "123456789abcdefghijklmnopqrstuvwxyz";
+const quickSwitch = { open: false, index: 0, items: [] };
+
+function quickSwitchKeyFor(index) {
+  return index < QUICK_SWITCH_KEYS.length ? QUICK_SWITCH_KEYS[index] : null;
+}
+
+// Builds the searchable row list. Terminals from every page are included so the
+// switcher can cross pages, which is the main reason it exists.
+function quickSwitchCandidates(rawQuery) {
+  const query = normalizeSearchText(rawQuery || "");
+  const rows = [...state.terminals.values()].map((terminal) => ({
+    id: terminal.id,
+    title: terminal.titleInput.value,
+    pageId: terminal.pageId,
+    page: pageName(terminal.pageId),
+    cwd: terminal.cwd || "",
+    status: terminal.status || ""
+  }));
+  if (!query) return rows;
+  return rows.filter((row) =>
+    normalizeSearchText(`${row.title} ${row.page} ${row.cwd}`).includes(query)
+  );
+}
+
+function openQuickSwitch() {
+  if (state.terminals.size === 0) {
+    toast("No terminals open", "info", 1600);
+    return;
+  }
+  closePalette();
+  quickSwitch.open = true;
+  quickSwitch.index = 0;
+  elements.quickSwitchOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.quickSwitchOverlay.classList.add("is-open"));
+  elements.quickSwitchInput.value = "";
+  renderQuickSwitch();
+  elements.quickSwitchInput.focus();
+}
+
+function closeQuickSwitch(refocus = true) {
+  if (!quickSwitch.open) return;
+  quickSwitch.open = false;
+  elements.quickSwitchOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.quickSwitchOverlay.hidden = true;
+  }, 150);
+  if (refocus && state.activeId) {
+    state.terminals.get(state.activeId)?.term.focus();
+  }
+}
+
+function renderQuickSwitch() {
+  if (!quickSwitch.open || !elements.quickSwitchList) return;
+
+  quickSwitch.items = quickSwitchCandidates(elements.quickSwitchInput.value);
+  quickSwitch.index = Math.min(quickSwitch.index, Math.max(0, quickSwitch.items.length - 1));
+
+  const list = elements.quickSwitchList;
+  list.textContent = "";
+  if (quickSwitch.items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "palette-empty";
+    empty.textContent = "No matching terminals";
+    list.append(empty);
+    return;
+  }
+
+  const multiPage = state.pages.length > 1;
+  quickSwitch.items.forEach((row, index) => {
+    const li = document.createElement("li");
+    li.className = "palette-item quick-item";
+    li.dataset.index = index;
+    li.dataset.id = row.id;
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", String(index === quickSwitch.index));
+
+    const key = quickSwitchKeyFor(index);
+    const badge = document.createElement("span");
+    badge.className = key ? "quick-key" : "quick-key is-empty";
+    badge.textContent = key ? key.toUpperCase() : "";
+    if (key) badge.title = `Alt+${key.toUpperCase()}`;
+    li.append(badge);
+
+    const label = document.createElement("span");
+    label.className = "quick-title";
+    label.textContent = row.title;
+    li.append(label);
+
+    if (multiPage) {
+      const page = document.createElement("span");
+      page.className = "quick-page";
+      page.textContent = row.page;
+      li.append(page);
+    }
+
+    list.append(li);
+  });
+}
+
+function moveQuickSwitchSelection(direction) {
+  if (quickSwitch.items.length === 0) return;
+  quickSwitch.index = (quickSwitch.index + direction + quickSwitch.items.length) % quickSwitch.items.length;
+  const nodes = elements.quickSwitchList.querySelectorAll(".quick-item");
+  nodes.forEach((node, index) => node.setAttribute("aria-selected", String(index === quickSwitch.index)));
+  nodes[quickSwitch.index]?.scrollIntoView({ block: "nearest" });
+}
+
+function runQuickSwitchSelection(index = quickSwitch.index) {
+  const row = quickSwitch.items[index];
+  if (!row) return;
+  closeQuickSwitch(false);
+  window.setTimeout(() => setActiveTerminalAndReveal(row.id), 60);
+}
+
+function bindQuickSwitch() {
+  if (!elements.quickSwitchOverlay) return;
+
+  elements.quickSwitchInput.addEventListener("input", () => renderQuickSwitch());
+
+  elements.quickSwitchInput.addEventListener("keydown", (event) => {
+    // Alt+<key> jumps straight to a row. Alt is already held coming from Alt+Q,
+    // and keeping the plain keys free is what lets the box stay searchable.
+    if (event.altKey && !event.ctrlKey && !event.metaKey) {
+      const index = QUICK_SWITCH_KEYS.indexOf(event.key.toLowerCase());
+      if (index !== -1 && index < quickSwitch.items.length) {
+        event.preventDefault();
+        runQuickSwitchSelection(index);
+        return;
+      }
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveQuickSwitchSelection(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      moveQuickSwitchSelection(-1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      runQuickSwitchSelection();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeQuickSwitch();
+    }
+  });
+
+  elements.quickSwitchOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.quickSwitchOverlay) closeQuickSwitch();
+  });
+
+  elements.quickSwitchList.addEventListener("click", (event) => {
+    const item = event.target.closest(".quick-item");
+    if (!item) return;
+    runQuickSwitchSelection(Number(item.dataset.index));
+  });
+}
+
 /* ---------------- Global keyboard shortcuts --------------- */
 
 function bindGlobalShortcuts() {
@@ -2963,6 +3170,12 @@ function bindGlobalShortcuts() {
     if (event.ctrlKey && event.key === "/") {
       event.preventDefault();
       elements.shortcutsOverlay.hidden ? openShortcuts() : closeShortcuts();
+      return;
+    }
+
+    if (event.altKey && !event.ctrlKey && !event.metaKey && key === "q") {
+      event.preventDefault();
+      quickSwitch.open ? closeQuickSwitch() : openQuickSwitch();
       return;
     }
 
@@ -2991,6 +3204,8 @@ function bindGlobalShortcuts() {
     }
 
     if (palette.open) return;
+    // The switcher owns Alt+<key> while it is open; let its own handler see them.
+    if (quickSwitch.open) return;
 
     if (event.key === "Escape") {
       if (state.findAll.active) {
@@ -3046,6 +3261,18 @@ function bindGlobalShortcuts() {
     } else if (event.ctrlKey && event.altKey && event.key === "ArrowLeft") {
       event.preventDefault();
       cycleTerminal(-1);
+    } else if (event.ctrlKey && !event.altKey && event.key === "PageDown") {
+      event.preventDefault();
+      cyclePage(1);
+    } else if (event.ctrlKey && !event.altKey && event.key === "PageUp") {
+      event.preventDefault();
+      cyclePage(-1);
+    } else if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
+      const page = state.pages[Number(event.key) - 1];
+      if (page) {
+        event.preventDefault();
+        setActivePage(page.id);
+      }
     } else if (event.ctrlKey && (event.key === "=" || event.key === "+")) {
       event.preventDefault();
       fontZoom(1);
@@ -3872,6 +4099,340 @@ function bindCloseConfirm() {
   } catch { /* not running under Electron */ }
 }
 
+/* ---------------- Pages --------------- */
+
+// A page is a live container. Switching pages only hides the panes that belong
+// to other pages; their sessions keep running, so a long build on page 2 is
+// still going when you come back to it. That is the whole difference between a
+// page and a saved workspace, which tears every terminal down and rebuilds it
+// from metadata.
+
+function defaultPages() {
+  return [{ id: "page-1", name: "Page 1" }];
+}
+
+// These run during `const state = {...}` near the top of the file, so they must
+// not reference module constants declared further down: those are still in the
+// temporal dead zone and would throw straight into the catch, silently
+// resetting every page. Inline literals, same as loadSettings.
+function loadPages() {
+  try {
+    const raw = JSON.parse(localStorage.getItem("multiterm.pages") || "null");
+    const list = Array.isArray(raw) ? raw : raw?.pages;
+    const pages = (Array.isArray(list) ? list : [])
+      .filter((page) => page && typeof page.id === "string" && page.id)
+      .map((page) => ({ id: page.id, name: String(page.name || "Page") }));
+    return pages.length > 0 ? pages : defaultPages();
+  } catch {
+    return defaultPages();
+  }
+}
+
+function loadActivePageId(pages) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("multiterm.pages") || "null");
+    const saved = raw?.activePageId;
+    if (saved && pages.some((page) => page.id === saved)) return saved;
+  } catch { /* fall through to the first page */ }
+  return pages[0].id;
+}
+
+// Sessions outlive the tab: the bridge hands them back on reconnect, so the
+// page each one belonged to has to be remembered separately from the pane list.
+function loadTerminalPages() {
+  try {
+    const value = JSON.parse(localStorage.getItem("multiterm.terminalPages") || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePages() {
+  localStorage.setItem("multiterm.pages", JSON.stringify({ pages: state.pages, activePageId: state.activePageId }));
+}
+
+// Merges rather than replaces. On reconnect the bridge re-adopts sessions one at
+// a time, and each one calls through here; rebuilding the map from only the
+// terminals adopted so far would erase the assignments of every session still
+// waiting, collapsing them all onto the active page.
+function saveTerminalPages() {
+  const map = { ...state.terminalPages };
+  for (const terminal of state.terminals.values()) {
+    map[terminal.id] = terminal.pageId;
+  }
+  state.terminalPages = map;
+  localStorage.setItem("multiterm.terminalPages", JSON.stringify(map));
+}
+
+// Closing a terminal for real is the one moment we know an id will never come
+// back, so it is also the only safe moment to drop it from the map.
+function forgetTerminalPages(ids) {
+  for (const id of ids) delete state.terminalPages[id];
+  localStorage.setItem("multiterm.terminalPages", JSON.stringify(state.terminalPages));
+}
+
+function activePage() {
+  return state.pages.find((page) => page.id === state.activePageId) || state.pages[0];
+}
+
+function pageById(id) {
+  return state.pages.find((page) => page.id === id) || null;
+}
+
+function pageName(id) {
+  return pageById(id)?.name || "";
+}
+
+// Resolves whatever a caller supplied down to a page that actually exists,
+// falling back to the remembered page for reattached sessions.
+function resolvePageId(candidate, terminalId) {
+  if (candidate && pageById(candidate)) return candidate;
+  const remembered = terminalId ? state.terminalPages[terminalId] : null;
+  if (remembered && pageById(remembered)) return remembered;
+  return state.activePageId;
+}
+
+function terminalsOnPage(pageId) {
+  return [...state.terminals.values()].filter((terminal) => terminal.pageId === pageId);
+}
+
+function terminalsOnActivePage() {
+  return terminalsOnPage(state.activePageId);
+}
+
+function isOnActivePage(terminal) {
+  return Boolean(terminal) && terminal.pageId === state.activePageId;
+}
+
+// Panes stay in the DOM and keep their xterm instance alive; only a class
+// decides whether they are laid out. Same trick the terminal filter uses.
+function applyPageVisibility() {
+  for (const terminal of state.terminals.values()) {
+    const hidden = terminal.pageId !== state.activePageId;
+    const wasHidden = terminal.pane.classList.contains("is-page-hidden");
+    if (hidden === wasHidden) continue;
+    terminal.pane.classList.toggle("is-page-hidden", hidden);
+    // A pane that was display:none has a zero-size viewport, so xterm needs a
+    // fit once it is back in flow or it renders at the wrong dimensions.
+    if (wasHidden && !hidden) scheduleFit(terminal);
+  }
+}
+
+function setActivePage(id, options = {}) {
+  const page = pageById(id);
+  if (!page || state.activePageId === id) return;
+
+  state.activePageId = id;
+  applyPageVisibility();
+  renderPager();
+  savePages();
+
+  // Keep the active terminal on the page you are looking at.
+  const onPage = terminalsOnActivePage();
+  const active = state.activeId ? state.terminals.get(state.activeId) : null;
+  if (options.focus !== false && onPage.length > 0 && (!active || !isOnActivePage(active))) {
+    setActiveTerminal(onPage[0].id);
+    if (options.focusTerm !== false) onPage[0].term.focus();
+  }
+
+  applyZoom();
+  updateTerminalActions();
+  window.requestAnimationFrame(() => fitAllTerminals());
+}
+
+function uniquePageId() {
+  let n = state.pages.length + 1;
+  while (state.pages.some((page) => page.id === `page-${n}`)) n += 1;
+  return `page-${n}`;
+}
+
+function addPage(options = {}) {
+  const id = uniquePageId();
+  const name = String(options.name || "").trim() || `Page ${state.pages.length + 1}`;
+  state.pages.push({ id, name });
+  savePages();
+  renderPager();
+  if (options.activate !== false) setActivePage(id);
+  log.info("pages", `Added ${name}`);
+  return id;
+}
+
+function renamePage(id, rawName) {
+  const page = pageById(id);
+  const name = String(rawName || "").trim();
+  if (!page || !name || page.name === name) return;
+  page.name = name;
+  savePages();
+  renderPager();
+  renderQuickSwitch();
+}
+
+// Closing a page must not silently kill work, so its terminals move to a
+// neighbouring page rather than being disposed.
+function removePage(id) {
+  if (state.pages.length <= 1) {
+    toast("Keep at least one page", "info", 1800);
+    return;
+  }
+  const index = state.pages.findIndex((page) => page.id === id);
+  if (index === -1) return;
+
+  const page = state.pages[index];
+  const fallback = state.pages[index === 0 ? 1 : index - 1];
+  const moved = terminalsOnPage(id);
+  for (const terminal of moved) {
+    terminal.pageId = fallback.id;
+  }
+  state.pages.splice(index, 1);
+
+  if (state.activePageId === id) {
+    state.activePageId = fallback.id;
+  }
+  applyPageVisibility();
+  renderPager();
+  savePages();
+  saveTerminalPages();
+  applyZoom();
+  updateTerminalActions();
+  window.requestAnimationFrame(() => fitAllTerminals());
+
+  log.info("pages", `Closed ${page.name}`, { movedTerminals: moved.length });
+  toast(
+    moved.length > 0
+      ? `Closed “${page.name}” — moved ${moved.length} terminal${moved.length === 1 ? "" : "s"} to “${fallback.name}”`
+      : `Closed “${page.name}”`,
+    "info"
+  );
+}
+
+function moveTerminalToPage(terminalId, pageId) {
+  const terminal = state.terminals.get(terminalId);
+  const page = pageById(pageId);
+  if (!terminal || !page || terminal.pageId === pageId) return;
+
+  terminal.pageId = pageId;
+  applyPageVisibility();
+  renderPager();
+  saveTerminalPages();
+  saveSessionSnapshot();
+
+  if (state.activeId === terminalId && !isOnActivePage(terminal)) {
+    const remaining = terminalsOnActivePage();
+    if (remaining.length > 0) setActiveTerminal(remaining[0].id);
+  }
+  applyZoom();
+  updateTerminalActions();
+  toast(`Moved to “${page.name}”`, "success", 1800);
+}
+
+function cyclePage(direction) {
+  if (state.pages.length < 2) return;
+  const index = state.pages.findIndex((page) => page.id === state.activePageId);
+  const next = (index + direction + state.pages.length) % state.pages.length;
+  setActivePage(state.pages[next].id);
+}
+
+function renderPager() {
+  const list = elements.pagerList;
+  if (!list) return;
+
+  list.textContent = "";
+  for (const page of state.pages) {
+    const count = terminalsOnPage(page.id).length;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "pager-chip";
+    chip.dataset.pageId = page.id;
+    chip.setAttribute("role", "tab");
+    const isActive = page.id === state.activePageId;
+    chip.classList.toggle("is-active", isActive);
+    chip.setAttribute("aria-selected", isActive ? "true" : "false");
+    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"} (double-click to rename)`;
+
+    const label = document.createElement("span");
+    label.className = "pager-name";
+    label.textContent = page.name;
+    chip.append(label);
+
+    const badge = document.createElement("span");
+    badge.className = "pager-count";
+    badge.textContent = String(count);
+    chip.append(badge);
+
+    if (state.pages.length > 1) {
+      const close = document.createElement("span");
+      close.className = "pager-close";
+      close.dataset.pageClose = page.id;
+      close.setAttribute("role", "button");
+      close.setAttribute("aria-label", `Close ${page.name}`);
+      close.title = `Close ${page.name}`;
+      close.textContent = "\u00d7";
+      chip.append(close);
+    }
+
+    list.append(chip);
+  }
+}
+
+// Renames in place so the chip does not jump around while you type.
+function startPageRename(chip) {
+  const page = pageById(chip.dataset.pageId);
+  const label = chip.querySelector(".pager-name");
+  if (!page || !label || chip.querySelector(".pager-rename")) return;
+
+  const input = document.createElement("input");
+  input.className = "pager-rename";
+  input.type = "text";
+  input.value = page.name;
+  input.spellcheck = false;
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const finish = (commit) => {
+    if (settled) return;
+    settled = true;
+    if (commit) renamePage(page.id, input.value);
+    renderPager();
+  };
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+function bindPager() {
+  const list = elements.pagerList;
+  if (!list) return;
+
+  list.addEventListener("click", (event) => {
+    const close = event.target.closest("[data-page-close]");
+    if (close) {
+      event.stopPropagation();
+      removePage(close.dataset.pageClose);
+      return;
+    }
+    const chip = event.target.closest(".pager-chip");
+    if (chip && !chip.querySelector(".pager-rename")) setActivePage(chip.dataset.pageId);
+  });
+
+  list.addEventListener("dblclick", (event) => {
+    const chip = event.target.closest(".pager-chip");
+    if (chip) startPageRename(chip);
+  });
+
+  elements.pagerAdd?.addEventListener("click", () => addPage());
+}
+
 /* ---------------- Workspaces --------------- */
 
 function loadWorkspaces() {
@@ -3923,17 +4484,20 @@ function saveWorkspace(rawName) {
   state.workspaces[name] = {
     savedAt: new Date().toISOString(),
     settings: { ...state.settings },
+    pages: state.pages.map((page) => ({ id: page.id, name: page.name })),
+    activePageId: state.activePageId,
     terminals: [...state.terminals.values()].map((terminal) => ({
       title: terminal.titleInput.value,
       shell: terminal.shell,
       cwd: terminal.cwd,
-      color: terminal.color
+      color: terminal.color,
+      pageId: terminal.pageId
     }))
   };
   saveWorkspaces();
   refreshWorkspaceSelect(name);
   elements.workspaceName.value = "";
-  log.info("workspace", `Saved workspace “${name}”`, { terminals: state.terminals.size });
+  log.info("workspace", `Saved workspace “${name}”`, { terminals: state.terminals.size, pages: state.pages.length });
   toast(`Saved workspace “${name}”`, "success");
 }
 
@@ -3956,15 +4520,38 @@ function restoreWorkspace(name) {
   state.activeId = null;
   state.primaryId = null;
 
+  // Workspaces saved before pages existed carry a flat terminal list; treat that
+  // as a single page so old saves keep restoring.
+  const savedPages = Array.isArray(workspace.pages) && workspace.pages.length > 0
+    ? workspace.pages
+        .filter((page) => page && typeof page.id === "string" && page.id)
+        .map((page) => ({ id: page.id, name: String(page.name || "Page") }))
+    : [];
+  state.pages = savedPages.length > 0 ? savedPages : defaultPages();
+  state.activePageId = state.pages.some((page) => page.id === workspace.activePageId)
+    ? workspace.activePageId
+    : state.pages[0].id;
+  state.terminalPages = {};
+  savePages();
+  renderPager();
+
   const list = Array.isArray(workspace.terminals) && workspace.terminals.length > 0
     ? workspace.terminals
     : [{ title: "PowerShell 7", shell: "pwsh" }];
   for (const meta of list) {
-    addTerminal({ title: meta.title, shell: meta.shell, cwd: meta.cwd, color: meta.color });
+    addTerminal({
+      title: meta.title,
+      shell: meta.shell,
+      cwd: meta.cwd,
+      color: meta.color,
+      pageId: meta.pageId
+    });
   }
 
+  applyPageVisibility();
+  renderPager();
   updateTerminalActions();
-  log.info("workspace", `Restored workspace “${name}”`, { terminals: list.length });
+  log.info("workspace", `Restored workspace “${name}”`, { terminals: list.length, pages: state.pages.length });
   toast(`Restored “${name}”`, "success");
 }
 
@@ -4060,7 +4647,8 @@ function saveSessionSnapshot() {
     shell: terminal.shell,
     cwd: terminal.cwd,
     color: terminal.color,
-    minimized: terminal.minimized
+    minimized: terminal.minimized,
+    pageId: terminal.pageId
   }));
   localStorage.setItem("multiterm.lastSession", JSON.stringify(snapshot));
   // The snapshot carries no ids, so it cannot restore an arrangement when the
@@ -4200,6 +4788,26 @@ function bindContextMenu() {
   elements.host.addEventListener("scroll", scheduleStatusPillClearance, { passive: true });
 }
 
+// Offers the other pages plus a "new page" escape hatch, so a pane can always be
+// moved somewhere even when only one page exists.
+function buildMoveToPageItems(terminal) {
+  const others = state.pages.filter((page) => page.id !== terminal.pageId);
+  const items = others.map((page) => ({
+    label: `Move to ${page.name}`,
+    icon: "corner-up-right",
+    run: () => moveTerminalToPage(terminal.id, page.id)
+  }));
+  items.push({
+    label: "Move to new page",
+    icon: "plus",
+    run: () => {
+      const id = addPage({ activate: false });
+      moveTerminalToPage(terminal.id, id);
+    }
+  });
+  return [{ separator: true }, ...items];
+}
+
 function buildLoggingMenuItems(terminal) {
   if (!terminal.logging) {
     return [
@@ -4263,6 +4871,7 @@ function buildContextMenu(terminal) {
     { label: "Split (duplicate)", icon: "copy-plus", run: () => addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` }) },
     { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", run: () => restartSession(terminal.id) },
     { label: "Cycle color", icon: "tag", run: () => cyclePaneColor(terminal) },
+    ...buildMoveToPageItems(terminal),
     { separator: true },
     { label: "Close", hint: "Ctrl+Shift+W", icon: "x", danger: true, run: () => removeTerminal(terminal.id) }
   ];
