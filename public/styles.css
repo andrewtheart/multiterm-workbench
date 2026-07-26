@@ -1629,6 +1629,64 @@ body.header-hidden .status-hint kbd,
   padding-left: 16px;
 }
 
+/* A row whose parts act independently: the row highlight would imply a single
+   action, so it is suppressed and each part shows its own affordance. */
+.ctx-item.ctx-multi {
+  cursor: default;
+}
+
+.ctx-item.ctx-multi:hover {
+  background: transparent;
+}
+
+.ctx-parts {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* The global button rule gives every button a chrome-like box (38px min-height,
+   a border and centred content). These parts are inline text inside a menu row,
+   so that box has to be undone rather than merely restyled. */
+.ctx-part {
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  cursor: pointer;
+  display: inline-block;
+  font: inherit;
+  line-height: inherit;
+  min-height: 0;
+  padding: 0 2px;
+  text-align: left;
+  vertical-align: baseline;
+}
+
+.ctx-part:hover,
+.ctx-part:focus-visible {
+  background: var(--state-hover);
+}
+
+.ctx-link {
+  color: var(--accent);
+  /* Buttons centre their text, which clips a truncated name at both ends and
+     hides the beginning of the file name; keep it left-aligned so the ellipsis
+     only ever trims the tail. */
+  max-width: 24ch;
+  overflow: hidden;
+  text-decoration: underline;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-muted {
+  color: var(--muted);
+}
+
+.ctx-muted:hover {
+  color: var(--text);
+}
+
 .ctx-sep {
   background: var(--border);
   height: 1px;

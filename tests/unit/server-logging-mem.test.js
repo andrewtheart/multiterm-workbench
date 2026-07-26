@@ -197,6 +197,65 @@ describe("revealPath", () => {
   });
 });
 
+describe("openPath", () => {
+  it("ignores an empty or non-string path", () => {
+    const client = fakeClient();
+    server.openPath(client, { path: "   " });
+    server.openPath(client, {});
+    server.openPath(client, { path: 42 });
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it("reports 'Path not found.' when the target does not exist", () => {
+    const client = fakeClient();
+    vi.spyOn(fs, "statSync").mockImplementation(() => { throw new Error("ENOENT"); });
+    server.openPath(client, { path: "C:\\missing\\file.log" });
+    expect(client.send).toHaveBeenCalledWith({ type: "openError", message: "Path not found." });
+  });
+
+  it("goes through the shell on Windows so the file association is honoured", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => false });
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue({ unref: vi.fn() });
+    server.openPath(fakeClient(), { path: "C:\\Users\\me\\session.log" });
+
+    const [command, args] = spawn.mock.calls[0];
+    expect(command).toBe("cmd.exe");
+    // The empty title argument matters: without it 'start' consumes the quoted
+    // path as the window title and never opens the file.
+    expect(args.slice(0, 3)).toEqual(["/c", "start", ""]);
+    expect(args[3]).toContain("session.log");
+  });
+
+  it("opens the file itself, not its parent folder", () => {
+    setPlatform("darwin");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => false });
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue({ unref: vi.fn() });
+    server.openPath(fakeClient(), { path: "/Users/me/session.log" });
+
+    const [command, args] = spawn.mock.calls[0];
+    expect(command).toBe("open");
+    expect(args[0]).toContain("session.log");
+  });
+
+  it("uses xdg-open on Linux", () => {
+    setPlatform("linux");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => false });
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue({ unref: vi.fn() });
+    server.openPath(fakeClient(), { path: "/home/me/session.log" });
+    expect(spawn.mock.calls[0][0]).toBe("xdg-open");
+  });
+
+  it("reports an error when the viewer cannot be launched", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => false });
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => { throw new Error("spawn EACCES"); });
+    const client = fakeClient();
+    server.openPath(client, { path: "C:\\Users\\me\\session.log" });
+    expect(client.send).toHaveBeenCalledWith({ type: "openError", message: "spawn EACCES" });
+  });
+});
+
 describe("computeMemStats", () => {
   it("returns null when the PowerShell probe errors", () => {
     vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) => cb(new Error("nope"), ""));
@@ -322,8 +381,8 @@ describe("memory-stats timers", () => {
   });
 });
 
-describe("handleClientMessage dispatch (log + reveal + killAll)", () => {
-  it("routes logStart, logStop, reveal, and killAll to their handlers", () => {
+describe("handleClientMessage dispatch (log + reveal + open + killAll)", () => {
+  it("routes logStart, logStop, reveal, openPath, and killAll to their handlers", () => {
     const client = fakeClient();
     const stream = { write: vi.fn(), end: vi.fn() };
     vi.spyOn(fs, "mkdirSync").mockImplementation(() => {});
@@ -342,6 +401,10 @@ describe("handleClientMessage dispatch (log + reveal + killAll)", () => {
 
     server.handleClientMessage(client, JSON.stringify({ type: "reveal", path: "C:\\Users\\me" }));
     expect(childProcess.spawn).toHaveBeenCalled();
+
+    childProcess.spawn.mockClear();
+    server.handleClientMessage(client, JSON.stringify({ type: "openPath", path: "C:\\Users\\me\\s.log" }));
+    expect(childProcess.spawn.mock.calls[0][0]).toBe("cmd.exe");
 
     expect(() => server.handleClientMessage(client, JSON.stringify({ type: "killAll" }))).not.toThrow();
   });

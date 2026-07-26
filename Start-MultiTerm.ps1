@@ -922,6 +922,22 @@ namespace MultiTerm.PowerShellBridge
                     session.RequestExit();
                 }
             }
+            else if (type == "logStart")
+            {
+                this.StartLog(client, Json.Get(message, "id"));
+            }
+            else if (type == "logStop")
+            {
+                this.StopLog(client, Json.Get(message, "id"));
+            }
+            else if (type == "reveal")
+            {
+                this.RevealPath(client, Json.Get(message, "path"));
+            }
+            else if (type == "openPath")
+            {
+                this.OpenPath(client, Json.Get(message, "path"));
+            }
             else if (type == "list")
             {
                 client.Send("{\"type\":\"sessions\",\"sessions\":" + this.SessionsJson() + "}");
@@ -990,6 +1006,132 @@ namespace MultiTerm.PowerShellBridge
             if (this.sessions.TryGetValue(id, out session))
             {
                 session.RequestExit();
+            }
+        }
+
+        // Logs live under the user's profile rather than the install directory, which is
+        // read-only for a standard user once MultiTerm is installed under Program Files.
+        private static string LogDirectory()
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "MultiTerm", "logs");
+        }
+
+        private void StartLog(BridgeClient client, string id)
+        {
+            TerminalSession session;
+            if (!this.sessions.TryGetValue(id, out session))
+            {
+                return;
+            }
+
+            bool already = session.IsLogging;
+            try
+            {
+                string path = session.StartLog(LogDirectory());
+                if (!already)
+                {
+                    this.Log("info", "Logging session " + id + " to " + path);
+                }
+                client.Send("{\"type\":\"logStarted\",\"id\":" + Json.Quote(id) + ",\"path\":" + Json.Quote(path) + (already ? ",\"already\":true" : "") + "}");
+            }
+            catch (Exception error)
+            {
+                this.Log("error", "Could not start logging for " + id + ": " + error.Message);
+                client.Send("{\"type\":\"logError\",\"id\":" + Json.Quote(id) + ",\"message\":" + Json.Quote(error.Message) + "}");
+            }
+        }
+
+        private void StopLog(BridgeClient client, string id)
+        {
+            TerminalSession session;
+            if (!this.sessions.TryGetValue(id, out session))
+            {
+                return;
+            }
+
+            string path = session.StopLog();
+            if (path == null)
+            {
+                return;
+            }
+
+            this.Log("info", "Stopped logging session " + id);
+            client.Send("{\"type\":\"logStopped\",\"id\":" + Json.Quote(id) + ",\"path\":" + Json.Quote(path) + "}");
+        }
+
+        // Opens the folder containing the target in Explorer.
+        private void RevealPath(BridgeClient client, string target)
+        {
+            string path = target == null ? String.Empty : target.Trim();
+            if (path.Length == 0)
+            {
+                return;
+            }
+
+            string directory;
+            try
+            {
+                string resolved = Path.GetFullPath(path);
+                directory = Directory.Exists(resolved) ? resolved : Path.GetDirectoryName(resolved);
+            }
+            catch
+            {
+                client.Send("{\"type\":\"revealError\",\"message\":\"Path not found.\"}");
+                return;
+            }
+
+            if (String.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            {
+                client.Send("{\"type\":\"revealError\",\"message\":\"Path not found.\"}");
+                return;
+            }
+
+            try
+            {
+                // Explorer takes the path literally rather than as MSVCRT-style argv, so it
+                // must be plainly quoted; Json.QuoteCommandLine would double the backslashes.
+                Process.Start(new ProcessStartInfo("explorer.exe", "\"" + directory + "\"") { UseShellExecute = true });
+            }
+            catch (Exception error)
+            {
+                client.Send("{\"type\":\"revealError\",\"message\":" + Json.Quote(error.Message) + "}");
+            }
+        }
+
+        // Opens a file with whatever Windows has associated with its extension. Shell
+        // execution is what performs the association lookup, so it has to stay enabled.
+        private void OpenPath(BridgeClient client, string target)
+        {
+            string path = target == null ? String.Empty : target.Trim();
+            if (path.Length == 0)
+            {
+                return;
+            }
+
+            string resolved;
+            try
+            {
+                resolved = Path.GetFullPath(path);
+            }
+            catch
+            {
+                client.Send("{\"type\":\"openError\",\"message\":\"Path not found.\"}");
+                return;
+            }
+
+            if (!File.Exists(resolved) && !Directory.Exists(resolved))
+            {
+                client.Send("{\"type\":\"openError\",\"message\":\"Path not found.\"}");
+                return;
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(resolved) { UseShellExecute = true });
+            }
+            catch (Exception error)
+            {
+                client.Send("{\"type\":\"openError\",\"message\":" + Json.Quote(error.Message) + "}");
             }
         }
 
@@ -1257,6 +1399,11 @@ namespace MultiTerm.PowerShellBridge
 
         private readonly object inputLock = new object();
 
+        // Guards the log writer: it is opened and closed from the message-loop thread but
+        // written from the output-pump thread, and closed again from the exit watcher.
+        private readonly object logLock = new object();
+        private StreamWriter logWriter;
+
         // Guards the unmanaged handles below. They are read on the message-loop thread
         // (Resize/Kill) and released on the exit-watcher thread, so an unsynchronised read
         // can hand a freed pseudo console to ResizePseudoConsole (access violation) or a
@@ -1299,6 +1446,192 @@ namespace MultiTerm.PowerShellBridge
         public int Pid { get; private set; }
 
         public string StartedAt { get; private set; }
+
+        // Absolute path of the file this session is currently logging to, or null when
+        // logging is off. Read by the message loop to answer logStart/logStop.
+        public string LogPath { get; private set; }
+
+        public bool IsLogging
+        {
+            get
+            {
+                lock (this.logLock)
+                {
+                    return this.logWriter != null;
+                }
+            }
+        }
+
+        // Begins mirroring this session's output to disk. Returns the file being written,
+        // or the existing one when logging is already running, so the caller can tell the
+        // client either way. Throws if the file cannot be opened.
+        public string StartLog(string directory)
+        {
+            lock (this.logLock)
+            {
+                if (this.logWriter != null)
+                {
+                    return this.LogPath;
+                }
+
+                Directory.CreateDirectory(directory);
+                string stamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
+                string path = Path.Combine(directory, SanitizeLogName(this.Title) + "-" + stamp + ".log");
+
+                StreamWriter writer = new StreamWriter(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false));
+                writer.AutoFlush = true;
+                writer.Write("# MultiTerm log for \"" + this.Title + "\" (" + this.Shell.Label + ") started " + DateTime.UtcNow.ToString("o") + "\r\n");
+
+                this.logWriter = writer;
+                this.LogPath = path;
+                return path;
+            }
+        }
+
+        // Stops logging and returns the file that was being written, or null if logging was
+        // not running. LogPath is deliberately kept so the client can still reveal the file.
+        public string StopLog()
+        {
+            lock (this.logLock)
+            {
+                if (this.logWriter == null)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    this.logWriter.Dispose();
+                }
+                catch
+                {
+                    // The file handle may already be gone; the session is no longer logging either way.
+                }
+
+                this.logWriter = null;
+                return this.LogPath;
+            }
+        }
+
+        private void AppendToLog(string data)
+        {
+            lock (this.logLock)
+            {
+                if (this.logWriter == null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    this.logWriter.Write(StripAnsiForLog(data));
+                }
+                catch
+                {
+                    // A full or disconnected disk must not take the terminal down with it;
+                    // drop the log instead so the session keeps running.
+                    try
+                    {
+                        this.logWriter.Dispose();
+                    }
+                    catch
+                    {
+                    }
+                    this.logWriter = null;
+                }
+            }
+        }
+
+        private static string SanitizeLogName(string value)
+        {
+            string name = value == null ? String.Empty : value;
+            StringBuilder builder = new StringBuilder();
+            foreach (char character in name)
+            {
+                bool safe = (character >= 'a' && character <= 'z')
+                    || (character >= 'A' && character <= 'Z')
+                    || (character >= '0' && character <= '9')
+                    || character == '.' || character == '_' || character == '-';
+                builder.Append(safe ? character : '_');
+                if (builder.Length >= 60)
+                {
+                    break;
+                }
+            }
+
+            string sanitized = builder.ToString();
+            return sanitized.Length == 0 ? "session" : sanitized;
+        }
+
+        // Terminals emit ANSI/OSC escape sequences to paint the screen; strip them so the
+        // log reads as plain text. Tabs and line breaks are kept.
+        private static string StripAnsiForLog(string data)
+        {
+            StringBuilder builder = new StringBuilder(data.Length);
+            int index = 0;
+            while (index < data.Length)
+            {
+                char character = data[index];
+                if (character == '\u001b' && index + 1 < data.Length)
+                {
+                    char next = data[index + 1];
+                    if (next == ']')
+                    {
+                        // OSC: runs until BEL or a String Terminator (ESC backslash).
+                        int scan = index + 2;
+                        while (scan < data.Length && data[scan] != '\u0007')
+                        {
+                            if (data[scan] == '\u001b' && scan + 1 < data.Length && data[scan + 1] == '\\')
+                            {
+                                scan++;
+                                break;
+                            }
+                            scan++;
+                        }
+                        index = scan + 1;
+                        continue;
+                    }
+
+                    if (next == '[')
+                    {
+                        // CSI: parameter and intermediate bytes, then a final byte in @-~.
+                        int scan = index + 2;
+                        while (scan < data.Length && data[scan] >= '\u0020' && data[scan] <= '\u003f')
+                        {
+                            scan++;
+                        }
+                        while (scan < data.Length && data[scan] >= '\u0020' && data[scan] <= '\u002f')
+                        {
+                            scan++;
+                        }
+                        index = scan < data.Length ? scan + 1 : scan;
+                        continue;
+                    }
+
+                    if (next == '=' || next == '>' || next == '(' || next == ')' || next == '#')
+                    {
+                        index += (index + 2 < data.Length && IsAsciiAlphanumeric(data[index + 2])) ? 3 : 2;
+                        continue;
+                    }
+                }
+
+                bool control = character < '\u0020' && character != '\t' && character != '\n' && character != '\r';
+                if (!control && character != '\u007f')
+                {
+                    builder.Append(character);
+                }
+                index++;
+            }
+
+            return builder.ToString();
+        }
+
+        private static bool IsAsciiAlphanumeric(char character)
+        {
+            return (character >= 'a' && character <= 'z')
+                || (character >= 'A' && character <= 'Z')
+                || (character >= '0' && character <= '9');
+        }
 
         public void Start()
         {
@@ -1487,9 +1820,11 @@ namespace MultiTerm.PowerShellBridge
                     }
 
                     Action<string> handler = this.Output;
+                    string text = Encoding.UTF8.GetString(buffer, 0, count);
+                    this.AppendToLog(text);
                     if (handler != null)
                     {
-                        handler(Encoding.UTF8.GetString(buffer, 0, count));
+                        handler(text);
                     }
                 }
             });
@@ -1508,6 +1843,7 @@ namespace MultiTerm.PowerShellBridge
 
                 this.exited = true;
                 this.DisposeHandles();
+                this.StopLog();
                 Action<int> handler = this.Exited;
                 if (handler != null)
                 {

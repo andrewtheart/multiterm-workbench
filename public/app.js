@@ -743,6 +743,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "openError") {
+    toast(message.message || "Could not open file", "error");
+    return;
+  }
+
   if (message.type === "elevateStarted") {
     toast(`Launching elevated ${message.shell || "terminal"}\u2014approve the UAC prompt`, "info", 2800);
     return;
@@ -3632,6 +3637,16 @@ function toggleLogging(terminal) {
   }
 }
 
+// Hands the log to whatever the OS opens .log files with. Only the bridge can do
+// this — the browser cannot launch a local file, and the installed app has no
+// Electron shell to fall back on.
+function openLogFile(terminal) {
+  if (!terminal || !terminal.logPath) return;
+  if (!sendBridge({ type: "openPath", path: terminal.logPath })) {
+    toast("Bridge unavailable", "error");
+  }
+}
+
 /* ---------------- Run a script --------------- */
 
 // Opens the native file picker (exposed by preload as window.multiterm) and
@@ -4185,6 +4200,39 @@ function bindContextMenu() {
   elements.host.addEventListener("scroll", scheduleStatusPillClearance, { passive: true });
 }
 
+function buildLoggingMenuItems(terminal) {
+  if (!terminal.logging) {
+    return [
+      { label: "Log to file\u2026", icon: "file-text", run: () => toggleLogging(terminal) },
+      ...(terminal.logPath
+        ? [{ label: "Reveal last log", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }]
+        : [])
+    ];
+  }
+
+  // While logging, the row names the file being written and offers both opening it
+  // and stopping, so the state is legible without leaving the menu.
+  const file = logFileName(terminal.logPath);
+  return [
+    {
+      icon: "circle-dot",
+      label: `Logging to ${file}. Stop logging`,
+      parts: [
+        { text: "Logging to " },
+        { text: file, title: terminal.logPath, className: "ctx-link", run: () => openLogFile(terminal) },
+        { text: " " },
+        { text: "(Stop logging)", className: "ctx-muted", run: () => toggleLogging(terminal) }
+      ]
+    },
+    { label: "Reveal log folder", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }
+  ];
+}
+
+function logFileName(logPath) {
+  const parts = String(logPath || "").split(/[\\/]/);
+  return parts[parts.length - 1] || "log";
+}
+
 function buildContextMenu(terminal) {
   const hasSelection = Boolean(terminal.term.getSelection());
   const isZoomed = state.zoomedId === terminal.id;
@@ -4209,8 +4257,7 @@ function buildContextMenu(terminal) {
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
     { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
     { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScript(terminal.id) },
-    { label: terminal.logging ? "Stop logging" : "Log to file\u2026", icon: terminal.logging ? "circle-stop" : "file-text", run: () => toggleLogging(terminal) },
-    ...(terminal.logPath ? [{ label: "Reveal log", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }] : []),
+    ...buildLoggingMenuItems(terminal),
     ...(snippetItems.length ? [{ separator: true }, ...snippetItems] : []),
     { separator: true },
     { label: "Split (duplicate)", icon: "copy-plus", run: () => addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` }) },
@@ -4264,6 +4311,37 @@ function renderContextMenu(items) {
     const icon = document.createElement("i");
     icon.setAttribute("data-lucide", item.icon);
     el.append(icon);
+
+    // A row can carry several independent actions (the logging row offers both the
+    // log file and a stop control), in which case the row itself is not clickable
+    // and each part handles its own activation.
+    if (item.parts) {
+      el.classList.add("ctx-multi");
+      const label = document.createElement("span");
+      label.className = "ctx-parts";
+      label.setAttribute("aria-label", item.label);
+      for (const part of item.parts) {
+        if (!part.run) {
+          label.append(document.createTextNode(part.text));
+          continue;
+        }
+
+        const action = document.createElement("button");
+        action.type = "button";
+        action.className = `ctx-part${part.className ? ` ${part.className}` : ""}`;
+        action.textContent = part.text;
+        if (part.title) action.title = part.title;
+        action.addEventListener("click", (event) => {
+          event.stopPropagation();
+          hideContextMenu();
+          part.run();
+        });
+        label.append(action);
+      }
+      el.append(label);
+      elements.contextMenu.append(el);
+      continue;
+    }
 
     const label = document.createElement("span");
     label.textContent = item.label;

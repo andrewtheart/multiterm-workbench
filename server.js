@@ -282,6 +282,7 @@ module.exports = {
   sanitizeLogName,
   stripAnsiForLog,
   revealPath,
+  openPath,
   launchElevatedTerminal,
   launchElevatedHost,
   handleElevatedConnection,
@@ -468,6 +469,9 @@ function handleClientMessage(client, rawMessage) {
       break;
     case "reveal":
       revealPath(client, message);
+      break;
+    case "openPath":
+      openPath(client, message);
       break;
     case "elevate":
       launchElevatedTerminal(client, message);
@@ -741,6 +745,38 @@ function revealPath(client, message) {
       childProcess.spawn(command, [dir], { detached: true, stdio: "ignore" }).unref();
     } catch (error) {
       client.send({ type: "revealError", message: error.message });
+    }
+  }
+}
+
+// Opens a file with whatever the OS has associated with it, so a log can be read in
+// the user's default text viewer. Distinct from revealPath, which opens the folder.
+function openPath(client, message) {
+  const target = typeof message.path === "string" ? message.path.trim() : "";
+  if (!target) {
+    return;
+  } else {
+    let resolved;
+    try {
+      resolved = path.resolve(target);
+      fs.statSync(resolved);
+    } catch {
+      client.send({ type: "openError", message: "Path not found." });
+      return;
+    }
+
+    try {
+      if (process.platform === "win32") {
+        // Association lookup is a shell operation, so it has to go through the shell.
+        // The empty string is start's title argument: without it a quoted path is
+        // consumed as the window title and nothing opens.
+        childProcess.spawn("cmd.exe", ["/c", "start", "", resolved], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      } else {
+        const command = process.platform === "darwin" ? "open" : "xdg-open";
+        childProcess.spawn(command, [resolved], { detached: true, stdio: "ignore" }).unref();
+      }
+    } catch (error) {
+      client.send({ type: "openError", message: error.message });
     }
   }
 }
