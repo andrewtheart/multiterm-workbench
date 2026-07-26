@@ -913,6 +913,17 @@ function beginElevationAttempt(client, id, message) {
 // its stdout/stderr are piped so a declined prompt or launch failure is relayed rather than
 // lost. We elevate the SAME node runtime this bridge runs under (process.execPath) so the
 // helper's node-pty prebuilt binary matches the ABI.
+//
+// TWO windows have to be suppressed here, via two different mechanisms:
+//   * The launcher powershell.exe — hidden by spawn's windowsHide below.
+//   * The elevated helper itself — hidden by -WindowStyle Hidden. process.execPath is
+//     node.exe, a CONSOLE-subsystem binary, so without this Windows gives it a visible
+//     console window. windowsHide does not reach it: that option only affects the child
+//     this process creates, and the helper is created by the UAC broker, not by us.
+//     -WindowStyle Hidden lands in ShellExecuteEx's nShow, which the broker forwards into
+//     the elevated process's STARTUPINFO, so the console is never shown in the first place.
+//     The UAC consent dialog is drawn by a separate secure-desktop process and is unaffected.
+//     The elevated shell itself is a ConPTY pseudo-console and never had a window.
 function launchElevatedHost(attempt, config) {
   const encoded = Buffer.from(JSON.stringify(config)).toString("base64");
   // Pass a single, pre-quoted argument LINE — never an array. Windows PowerShell 5.1's
@@ -930,7 +941,7 @@ function launchElevatedHost(attempt, config) {
     "$file = $env:MT_ELEVATE_FILE;",
     "$cwd = $env:MT_ELEVATE_CWD;",
     "try {",
-    "  Start-Process -FilePath $file -Verb RunAs -WorkingDirectory $cwd -ArgumentList $env:MT_ELEVATE_ARGS;",
+    "  Start-Process -FilePath $file -Verb RunAs -WindowStyle Hidden -WorkingDirectory $cwd -ArgumentList $env:MT_ELEVATE_ARGS;",
     "  Write-Output 'MT_ELEVATE_OK';",
     "} catch {",
     `  Write-Output ('${ELEVATE_ERROR_PREFIX}' + $_.Exception.Message);`,

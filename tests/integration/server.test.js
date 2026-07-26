@@ -437,6 +437,10 @@ describe("elevated (administrator) terminal", () => {
     const command = spawnArgs[spawnArgs.length - 1];
     expect(command).toContain("Start-Process");
     expect(command).toContain("-Verb RunAs");
+    // Regression guard: the ELEVATED helper is node.exe, a console-subsystem binary, so
+    // without -WindowStyle Hidden it gets a visible console window. spawn's windowsHide
+    // below only hides the launcher — it cannot reach a process created by the UAC broker.
+    expect(command).toContain("-WindowStyle Hidden");
     // Regression guard: the launcher MUST pass a single argument-line string straight to
     // -ArgumentList. The old array form ($list = ... ConvertFrom-Json; -ArgumentList $list)
     // throws "Specified method is not supported" under Windows PowerShell 5.1's ShellExecute.
