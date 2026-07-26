@@ -639,7 +639,7 @@ function handleBridgeMessage(message) {
 
     if (Array.isArray(message.sessions) && message.sessions.length > 0) {
       const known = new Set();
-      for (const session of message.sessions) {
+      for (const session of orderSessionsBySavedArrangement(message.sessions)) {
         known.add(session.id);
         const existing = state.terminals.get(session.id);
         if (existing) {
@@ -1078,28 +1078,7 @@ function bindPaneDrag(terminal) {
   const handle = terminal.pane.querySelector(".pane-bar");
   let drag = null;
 
-  handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || event.target.closest("button,select")) return;
-
-    const layout = ensureManualLayout(terminal.id);
-    drag = {
-      edge: null,
-      pointerId: event.pointerId,
-      started: false,
-      startX: event.clientX,
-      startY: event.clientY,
-      x: layout.x,
-      y: layout.y
-    };
-
-    try {
-      handle.setPointerCapture(event.pointerId);
-    } catch {
-      return;
-    }
-  });
-
-  handle.addEventListener("pointermove", (event) => {
+  const onMove = (event) => {
     if (!drag || drag.pointerId !== event.pointerId) return;
 
     const deltaX = event.clientX - drag.startX;
@@ -1113,27 +1092,93 @@ function bindPaneDrag(terminal) {
       document.body.classList.add("is-pane-dragging");
     }
 
-    drag.edge = getSnapEdge(event.clientX, event.clientY);
+    const active = getSnapEdges(event.clientX, event.clientY);
+    for (const edge of drag.suppressEdges) {
+      if (!active.includes(edge)) drag.suppressEdges.delete(edge);
+    }
+    drag.edge = active.find((edge) => !drag.suppressEdges.has(edge)) ?? null;
     setSnapPreview(drag.edge);
 
-    if (state.settings.layout === "manual" && !drag.edge) {
-      const layout = ensureManualLayout(terminal.id);
-      layout.x = Math.max(0, drag.x + deltaX);
-      layout.y = Math.max(0, drag.y + deltaY);
-      applyManualLayout(terminal, layout);
+    if (state.settings.layout === "manual") {
+      if (!drag.edge) {
+        const layout = ensureManualLayout(terminal.id);
+        layout.x = Math.max(0, drag.x + deltaX);
+        layout.y = Math.max(0, drag.y + deltaY);
+        applyManualLayout(terminal, layout);
+      }
+      return;
     }
-  });
 
-  handle.addEventListener("pointerup", (event) => {
+    // Every non-manual layout positions panes by DOM order, so dragging one over
+    // its neighbours can rearrange the grid live. An edge snap takes priority:
+    // while one is previewed the pane drops back into its slot so the preview
+    // reads as the outcome.
+    if (drag.edge) {
+      clearPaneLift(terminal.pane, drag);
+      return;
+    }
+
+    if (reorderPaneDuringDrag(terminal.pane, drag, event.clientX, event.clientY)) {
+      drag.reordered = true;
+    }
+    liftPane(terminal.pane, drag, event.clientX, event.clientY);
+  };
+
+  const onUp = (event) => {
     if (!drag || drag.pointerId !== event.pointerId) return;
+    stopTracking();
     finishPaneDrag(terminal, drag);
     drag = null;
-  });
+  };
 
-  handle.addEventListener("pointercancel", (event) => {
+  const onCancel = (event) => {
     if (!drag || drag.pointerId !== event.pointerId) return;
+    stopTracking();
     endPaneDrag(terminal);
     drag = null;
+  };
+
+  function stopTracking() {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onCancel);
+  }
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest("button,select")) return;
+
+    const layout = ensureManualLayout(terminal.id);
+    const rect = terminal.pane.getBoundingClientRect();
+    drag = {
+      edge: null,
+      grabX: event.clientX - rect.left,
+      grabY: event.clientY - rect.top,
+      pointerId: event.pointerId,
+      reordered: false,
+      started: false,
+      startX: event.clientX,
+      startY: event.clientY,
+      // Pane bars run along the top of each pane, so grabbing one in the top row
+      // or left column puts the pointer inside a snap zone before the drag has
+      // gone anywhere - and a top-row bar never leaves the top zone while being
+      // dragged sideways. Every edge the pointer already occupies is disarmed and
+      // re-armed individually once the pointer leaves it, so a pane can still be
+      // rearranged along the edge it started on while the other edges stay live.
+      suppressEdges: new Set(getSnapEdges(event.clientX, event.clientY)),
+      tx: 0,
+      ty: 0,
+      x: layout.x,
+      y: layout.y
+    };
+
+    // Pointer capture is deliberately not used: rearranging re-inserts the pane,
+    // and re-inserting an element releases its capture, which would strand the
+    // drag with the pane still lifted. Tracking on the window survives that and
+    // also catches a release that happens off the bar.
+    stopTracking();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
   });
 }
 
@@ -1146,34 +1191,161 @@ function finishPaneDrag(terminal, drag) {
     saveManualLayouts();
   } else if (drag.started && state.snap?.id === terminal.id) {
     clearSnapLayout(true);
+  } else if (drag.started && drag.reordered) {
+    syncTerminalOrderToDom();
+    saveSessionSnapshot();
+    fitAllTerminals();
   }
 
   endPaneDrag(terminal);
 }
 
+// The pane tracks the cursor by transform rather than by layout, so the grid can
+// keep reflowing underneath it. The offset is corrected against the pane's live
+// rect each move instead of accumulated from the drag origin, which keeps the
+// grab point under the cursor even after a reorder moves the pane's home slot.
+function liftPane(pane, drag, x, y) {
+  const rect = pane.getBoundingClientRect();
+  drag.tx += x - (rect.left + drag.grabX);
+  drag.ty += y - (rect.top + drag.grabY);
+  pane.style.transform = `translate(${drag.tx}px, ${drag.ty}px)`;
+}
+
+function clearPaneLift(pane, drag) {
+  drag.tx = 0;
+  drag.ty = 0;
+  pane.style.transform = "";
+}
+
+function paneUnderPoint(x, y, exclude) {
+  for (const terminal of state.terminals.values()) {
+    if (terminal.pane === exclude || terminal.minimized) continue;
+    const rect = terminal.pane.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      return terminal.pane;
+    }
+  }
+  return null;
+}
+
+// Moves the dragged pane past whichever pane the cursor is over. The swap only
+// commits once the cursor crosses that pane's midpoint on the axis the two are
+// separated along, so resting near a shared edge cannot oscillate.
+function reorderPaneDuringDrag(pane, drag, x, y) {
+  const target = paneUnderPoint(x, y, pane);
+  if (!target) return false;
+
+  const targetRect = target.getBoundingClientRect();
+  const paneRect = pane.getBoundingClientRect();
+  const horizontal =
+    Math.abs(targetRect.left - (paneRect.left - drag.tx)) >=
+    Math.abs(targetRect.top - (paneRect.top - drag.ty));
+  const pointer = horizontal ? x : y;
+  const midpoint = horizontal
+    ? targetRect.left + targetRect.width / 2
+    : targetRect.top + targetRect.height / 2;
+  const targetIsEarlier = Boolean(
+    target.compareDocumentPosition(pane) & Node.DOCUMENT_POSITION_FOLLOWING
+  );
+
+  if (targetIsEarlier ? pointer > midpoint : pointer < midpoint) return false;
+
+  const before = capturePaneRects(pane);
+  if (targetIsEarlier) {
+    elements.host.insertBefore(pane, target);
+  } else {
+    elements.host.insertBefore(pane, target.nextElementSibling);
+  }
+  animatePaneShuffle(before, pane);
+  return true;
+}
+
+function capturePaneRects(exclude) {
+  const rects = [];
+  for (const terminal of state.terminals.values()) {
+    if (terminal.pane === exclude || terminal.minimized) continue;
+    rects.push([terminal.pane, terminal.pane.getBoundingClientRect()]);
+  }
+  return rects;
+}
+
+// A grid reflow snaps panes to their new cells with no motion, so displaced panes
+// are animated the FLIP way: put each one back where it was, then let the normal
+// transform transition carry it to its new home.
+function animatePaneShuffle(before, exclude) {
+  const moved = [];
+
+  for (const [pane, first] of before) {
+    if (pane === exclude) continue;
+
+    const last = pane.getBoundingClientRect();
+    const dx = first.left - last.left;
+    const dy = first.top - last.top;
+    if (!dx && !dy) continue;
+
+    pane.style.transition = "none";
+    pane.style.transform = `translate(${dx}px, ${dy}px)`;
+    moved.push(pane);
+  }
+
+  if (!moved.length) return;
+
+  // One flush for the whole batch. Reading a layout property forces the inverted
+  // positions to take effect before they are cleared; without it both writes land
+  // in the same frame and only the final one is painted, so nothing animates.
+  // Reading once here rather than per pane keeps a wide reshuffle to a single
+  // forced reflow.
+  void elements.host.offsetWidth;
+
+  for (const pane of moved) {
+    pane.style.transition = "";
+    pane.style.transform = "";
+  }
+}
+
+// Grid order is DOM order, but the session snapshot is written from the terminal
+// map, so the map is realigned after a rearrange to keep a restored session in
+// the order the user left it.
+function syncTerminalOrderToDom() {
+  const ordered = [];
+  for (const pane of elements.host.children) {
+    const terminal = state.terminals.get(pane.dataset.id);
+    if (terminal) ordered.push(terminal);
+  }
+  if (ordered.length !== state.terminals.size) return;
+
+  state.terminals.clear();
+  for (const terminal of ordered) state.terminals.set(terminal.id, terminal);
+}
+
 function endPaneDrag(terminal) {
+  terminal.pane.style.transform = "";
   terminal.pane.classList.remove("is-dragging");
   document.body.classList.remove("is-pane-dragging");
   setSnapPreview(null);
 }
 
-function getSnapEdge(clientX, clientY) {
+// Returns every host edge the pointer is currently within snapping distance of,
+// in priority order. A corner yields two, which is what lets the drag suppress
+// exactly the edges it started in without disarming the others.
+function getSnapEdges(clientX, clientY) {
   const rect = elements.host.getBoundingClientRect();
   const threshold = Math.min(48, Math.max(24, Math.min(rect.width, rect.height) * 0.08));
-  const nearLeft = clientX <= rect.left + threshold;
-  const nearRight = clientX >= rect.right - threshold;
-  const nearTop = clientY <= rect.top + threshold;
-  const nearBottom = clientY >= rect.bottom - threshold;
+  const edges = [];
 
-  if (nearLeft || nearRight) {
-    return nearLeft ? "left" : "right";
+  if (clientX <= rect.left + threshold) {
+    edges.push("left");
+  } else if (clientX >= rect.right - threshold) {
+    edges.push("right");
   }
 
-  if (nearTop || nearBottom) {
-    return nearTop ? "top" : "bottom";
+  if (clientY <= rect.top + threshold) {
+    edges.push("top");
+  } else if (clientY >= rect.bottom - threshold) {
+    edges.push("bottom");
   }
 
-  return null;
+  return edges;
 }
 
 function setSnapPreview(edge) {
@@ -1473,6 +1645,8 @@ function moveTerminal(id, direction) {
   }
 
   scheduleFit(terminal);
+  syncTerminalOrderToDom();
+  saveSessionSnapshot();
 }
 
 function setActiveTerminal(id) {
@@ -3874,6 +4048,34 @@ function saveSessionSnapshot() {
     minimized: terminal.minimized
   }));
   localStorage.setItem("multiterm.lastSession", JSON.stringify(snapshot));
+  // The snapshot carries no ids, so it cannot restore an arrangement when the
+  // bridge still has the sessions alive and we reattach instead of recreating.
+  // Keep the id order alongside it for that path.
+  localStorage.setItem("multiterm.paneOrder", JSON.stringify([...state.terminals.keys()]));
+}
+
+function loadPaneOrder() {
+  try {
+    const value = JSON.parse(localStorage.getItem("multiterm.paneOrder") || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+// Sessions arrive from the bridge in creation order, which throws away any
+// rearranging the user did. Reapply the saved order; anything the saved order
+// does not know about (created elsewhere, or since this tab last wrote) keeps its
+// relative bridge order at the end.
+function orderSessionsBySavedArrangement(sessions) {
+  const saved = loadPaneOrder();
+  if (saved.length === 0) return sessions;
+
+  const rank = new Map(saved.map((id, index) => [id, index]));
+  return [...sessions]
+    .map((session, index) => ({ session, index, rank: rank.get(session.id) ?? Infinity }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.session);
 }
 
 function loadSessionSnapshot() {

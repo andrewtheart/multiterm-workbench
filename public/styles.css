@@ -1755,6 +1755,7 @@ body.header-hidden .status-hint kbd,
 }
 
 body.is-pane-dragging {
+  cursor: grabbing;
   -webkit-user-select: none;
   user-select: none;
 }
@@ -1951,9 +1952,17 @@ body.is-pane-dragging {
 /* ---------------- Panes --------------- */
 
 .terminal-pane.is-dragging {
+  box-shadow: var(--elev-3);
+  cursor: grabbing;
   opacity: 0.72;
+  /* The pointer-follow transform is rewritten every pointermove, so transitioning
+     it here would leave the pane lagging behind the cursor. */
+  transition: none;
+  z-index: 15;
 }
 
+/* `transform` is transitioned so displaced panes glide to their new cell during a
+   drag rearrange (see animatePaneShuffle); a grid reflow alone has no motion. */
 .terminal-pane {
   background: var(--surface-raised);
   border: 1px solid var(--border);
@@ -1965,7 +1974,8 @@ body.is-pane-dragging {
   min-width: 0;
   overflow: hidden;
   position: relative;
-  transition: border-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard);
+  transition: border-color var(--dur-fast) var(--ease-standard), box-shadow var(--dur-fast) var(--ease-standard),
+    transform var(--dur) var(--ease-emphasized);
 }
 
 .terminal-pane.is-active {
@@ -2011,7 +2021,7 @@ body.is-pane-dragging {
   align-items: center;
   background: var(--surface-high);
   border-bottom: 1px solid var(--border);
-  cursor: default;
+  cursor: grab;
   display: grid;
   gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2258,9 +2268,9 @@ body.is-pane-dragging {
 }
 
 /* The session/PID pill floats over the bottom-right of the terminal instead of
-   taking a column in the header. It rests at a low opacity so it never competes
-   with terminal output, lifts slightly while the pane is hovered so it can be
-   found, and goes fully opaque on direct hover for a deliberate read. */
+   taking a column in the header. It stays at a low opacity so it never competes
+   with terminal output — including while its pane is focused or hovered — and
+   only goes fully opaque when the pointer is directly over the pill itself. */
 .pane-status {
   -webkit-backdrop-filter: blur(10px) saturate(140%);
   backdrop-filter: blur(10px) saturate(140%);
@@ -2284,13 +2294,7 @@ body.is-pane-dragging {
   z-index: 12;
 }
 
-.terminal-pane:hover .pane-status {
-  opacity: 0.55;
-}
-
-/* Kept more specific than the pane-hover rule above, which would otherwise also
-   match whenever the pointer is over the pill itself. */
-.terminal-pane:hover .pane-status:hover {
+.pane-status:hover {
   opacity: 1;
 }
 

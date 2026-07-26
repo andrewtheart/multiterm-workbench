@@ -1,0 +1,201 @@
+const { test, expect } = require("@playwright/test");
+
+// Rearranging panes by dragging their title bar. These cover two failure modes
+// that are easy to reintroduce and invisible without a real pointer:
+//  - the pane bar of a top-row pane sits inside the host's top snap zone, so a
+//    naive edge check swallows every horizontal drag;
+//  - reordering re-inserts the pane, which releases pointer capture, so a drag
+//    tracked on the bar loses its own pointerup and strands the pane lifted.
+test.describe.configure({ mode: "serial" });
+
+test.describe("pane drag to rearrange", () => {
+  let context;
+  let page;
+
+  const setLayout = (value) => page.evaluate((layout) => {
+    const el = document.querySelector("#layoutMode");
+    el.value = layout;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+
+  const paneOrder = () => page.evaluate(() =>
+    [...document.querySelector("#terminalHost").children].map((pane) => pane.dataset.id));
+
+  const paneBoxes = () => page.evaluate(() =>
+    [...document.querySelector("#terminalHost").children].map((pane) => {
+      const rect = pane.getBoundingClientRect();
+      return {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        midX: Math.round(rect.left + rect.width / 2),
+        midY: Math.round(rect.top + rect.height / 2)
+      };
+    }));
+
+  const dragState = () => page.evaluate(() => ({
+    lifted: [...document.querySelectorAll(".terminal-pane")].filter((pane) => pane.style.transform).length,
+    dragging: document.querySelectorAll(".terminal-pane.is-dragging").length,
+    bodyFlag: document.body.classList.contains("is-pane-dragging"),
+    preview: document.querySelector("#snapPreview").dataset.edge || null
+  }));
+
+  const dragPane = async (from, path) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    for (const point of path) {
+      await page.mouse.move(point.x, point.y, { steps: 8 });
+      await page.waitForTimeout(120);
+    }
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+  };
+
+  test.beforeAll(async ({ browser }) => {
+    // Enough room for four panes to sit in view at once. In a smaller window the
+    // host scrolls and pane 0 can be above the fold, which no pointer drag can
+    // reach.
+    context = await browser.newContext({
+      baseURL: "http://127.0.0.1:3199",
+      viewport: { width: 1600, height: 1000 }
+    });
+    page = await context.newPage();
+    await page.goto("/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    // The bridge is shared across spec files, so start from a known four panes
+    // rather than inheriting however many an earlier spec left running.
+    if ((await page.locator(".terminal-pane").count()) > 0) {
+      await page.locator("#closeAllTerminals").click();
+      await expect(page.locator(".terminal-pane")).toHaveCount(0);
+    }
+    for (let i = 0; i < 4; i += 1) {
+      await page.locator("#addTerminal").click();
+      await expect(page.locator(".terminal-pane")).toHaveCount(i + 1);
+    }
+
+    await setLayout("auto");
+    await page.waitForTimeout(600);
+
+    const boxes = await paneBoxes();
+    const hostTop = await page.evaluate(() =>
+      Math.round(document.querySelector("#terminalHost").getBoundingClientRect().top));
+    expect(boxes[0].top).toBeGreaterThanOrEqual(hostTop - 1);
+  });
+
+  test.afterAll(async () => {
+    await context.close();
+  });
+
+  test("dragging a pane past its neighbour's midpoint swaps them", async () => {
+    const before = await paneOrder();
+    const boxes = await paneBoxes();
+
+    await dragPane(
+      { x: boxes[0].left + 5, y: boxes[0].top + 3 },
+      [{ x: boxes[0].midX, y: boxes[0].top + 3 }, { x: boxes[1].midX + 25, y: boxes[1].top + 3 }]
+    );
+
+    const after = await paneOrder();
+    expect(after[0]).toBe(before[1]);
+    expect(after[1]).toBe(before[0]);
+    expect(after.slice(2)).toEqual(before.slice(2));
+  });
+
+  test("a drag released away from the pane bar still completes", async () => {
+    const before = await paneOrder();
+    const boxes = await paneBoxes();
+
+    // Release deep inside another pane's body. Pointer capture is gone by now
+    // because the reorder re-inserted the pane, so this only works if the drag
+    // is tracked on the window.
+    await dragPane(
+      { x: boxes[0].left + 5, y: boxes[0].top + 3 },
+      [{ x: boxes[1].midX, y: boxes[1].midY }, { x: boxes[2].midX, y: boxes[2].midY }]
+    );
+
+    expect(await paneOrder()).not.toEqual(before);
+    expect(await dragState()).toEqual({ lifted: 0, dragging: 0, bodyFlag: false, preview: null });
+  });
+
+  test("the arrangement survives a reload", async () => {
+    const expected = await paneOrder();
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator(".terminal-pane")).toHaveCount(expected.length);
+    await page.waitForTimeout(800);
+
+    expect(await paneOrder()).toEqual(expected);
+  });
+
+  test("dragging to the host edge still snaps instead of rearranging", async () => {
+    await setLayout("auto");
+    await page.waitForTimeout(600);
+
+    const before = await paneOrder();
+    const boxes = await paneBoxes();
+    const host = await page.evaluate(() => {
+      const rect = document.querySelector("#terminalHost").getBoundingClientRect();
+      return { right: Math.round(rect.right) - 8, midY: Math.round(rect.top + rect.height / 2) };
+    });
+
+    await page.mouse.move(boxes[0].left + 5, boxes[0].top + 3);
+    await page.mouse.down();
+    await page.mouse.move(boxes[0].midX + 60, host.midY, { steps: 8 });
+    await page.waitForTimeout(120);
+    await page.mouse.move(host.right, host.midY, { steps: 8 });
+    await page.waitForTimeout(180);
+
+    await expect(page.locator("#snapPreview")).toHaveAttribute("data-edge", "right");
+
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+
+    await expect(page.locator("#terminalHost")).toHaveAttribute("data-snap-edge", "right");
+    await expect(page.locator(".terminal-pane.is-snapped")).toHaveCount(1);
+    // Snapping wins over rearranging, so the order is left alone.
+    expect(await paneOrder()).toEqual(before);
+  });
+
+  test("manual layout keeps free positioning instead of rearranging", async () => {
+    await setLayout("manual");
+    await page.waitForTimeout(700);
+
+    const before = await paneOrder();
+    const boxes = await paneBoxes();
+
+    await dragPane(
+      { x: boxes[0].left + 5, y: boxes[0].top + 3 },
+      [{ x: boxes[0].left + 205, y: boxes[0].top + 163 }]
+    );
+
+    expect(await paneOrder()).toEqual(before);
+    expect(await dragState()).toEqual({ lifted: 0, dragging: 0, bodyFlag: false, preview: null });
+
+    await setLayout("auto");
+    await page.waitForTimeout(600);
+  });
+
+  test("the pid pill only brightens on direct hover", async () => {
+    const pill = page.locator(".terminal-pane .pane-status").first();
+    const opacity = () => pill.evaluate((el) => getComputedStyle(el).opacity);
+
+    await page.mouse.move(5, 5);
+    await page.waitForTimeout(250);
+    const resting = await opacity();
+    expect(Number(resting)).toBeLessThan(0.4);
+
+    // Focusing the pane must not change it.
+    await page.locator(".terminal-pane .terminal-screen").first().click();
+    await page.waitForTimeout(250);
+    expect(await opacity()).toBe(resting);
+
+    await pill.hover();
+    await page.waitForTimeout(300);
+    expect(Number(await opacity())).toBeGreaterThan(0.9);
+
+    await page.mouse.move(5, 5);
+    await page.waitForTimeout(300);
+    expect(await opacity()).toBe(resting);
+  });
+});

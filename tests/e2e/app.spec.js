@@ -192,13 +192,21 @@ test.describe("MultiTerm Workbench UI", () => {
     // Very translucent when idle so it does not compete with terminal output.
     await expect.poll(opacity).toBeLessThan(0.35);
 
-    // Hovering the pane lifts it enough to be noticed...
+    // Hovering or focusing the pane must leave it alone - only the pill itself
+    // reacts, so the number never brightens just because a pane is in use.
+    const resting = await opacity();
     await pane.locator(".pane-title").hover();
-    await expect.poll(opacity).toBeGreaterThan(0.35);
+    await expect.poll(opacity).toBe(resting);
 
-    // ...and hovering the pill itself makes it fully legible.
+    await pane.locator(".terminal-screen").click();
+    await expect.poll(opacity).toBe(resting);
+
+    // Hovering the pill itself makes it fully legible.
     await status.hover();
     await expect.poll(opacity).toBe(1);
+
+    await page.mouse.move(0, 0);
+    await expect.poll(opacity).toBe(resting);
   });
 
   test("keeps the pid pill clear of the floating log button", async () => {
