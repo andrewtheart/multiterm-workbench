@@ -746,13 +746,18 @@ test.describe("MultiTerm Workbench UI", () => {
     // Typing now routes to the focused pane (the actual user-visible symptom):
     // xterm delivers the keystroke to the terminal whose textarea holds focus.
     // Pre-fix that textarea was never focused, so this keystroke never arrives.
-    const routedPromise = page.evaluate((id) => new Promise((resolve) => {
-      const term = state.terminals.get(id).term;
-      const sub = term.onData((d) => { sub.dispose(); resolve(d); });
-      setTimeout(() => { try { sub.dispose(); } catch {} resolve(null); }, 2000);
-    }), focusTargetId);
+    // Arm the listener in its own awaited evaluate: a pending page.evaluate is not
+    // ordered against page.keyboard.type, so registering and typing in parallel can
+    // deliver the keystroke before onData is subscribed.
+    await page.evaluate((id) => {
+      window.__routedKey = new Promise((resolve) => {
+        const term = state.terminals.get(id).term;
+        const sub = term.onData((d) => { sub.dispose(); resolve(d); });
+        setTimeout(() => { try { sub.dispose(); } catch {} resolve(null); }, 2000);
+      });
+    }, focusTargetId);
     await page.keyboard.type("x");
-    const routed = await routedPromise;
+    const routed = await page.evaluate(() => window.__routedKey);
     expect(routed).toBe("x");
 
     // A DIFFERENT rail pane's Close button must actually close it despite the same
@@ -875,18 +880,21 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(afterRelease.paneRect.width).toBeCloseTo(point.paneRect.width, 1);
     expect(afterRelease.paneRect.height).toBeCloseTo(point.paneRect.height, 1);
 
-    const routedPromise = page.evaluate((id) => new Promise((resolve) => {
-      const sub = state.terminals.get(id).term.onData((data) => {
-        sub.dispose();
-        resolve(data);
+    // Arm the listener before typing; see the note above about evaluate/keyboard ordering.
+    await page.evaluate((id) => {
+      window.__routedKey = new Promise((resolve) => {
+        const sub = state.terminals.get(id).term.onData((data) => {
+          sub.dispose();
+          resolve(data);
+        });
+        setTimeout(() => {
+          try { sub.dispose(); } catch {}
+          resolve(null);
+        }, 2000);
       });
-      setTimeout(() => {
-        sub.dispose();
-        resolve(null);
-      }, 2000);
-    }), targetId);
+    }, targetId);
     await page.keyboard.type("z");
-    expect(await routedPromise).toBe("z");
+    expect(await page.evaluate(() => window.__routedKey)).toBe("z");
 
     await page.evaluate(() => {
       state.settings.layout = "auto";

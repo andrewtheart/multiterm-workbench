@@ -3,15 +3,23 @@
 // Test webServer supervisor.
 //
 // Playwright launches the bridge once and never restarts it. On Windows the
-// node-pty ConPTY path can occasionally abort the whole process natively (the
-// "AttachConsole failed" helper crash during heavy kill/spawn churn) — an
-// uncatchable, in-process failure. Without supervision that leaves the socket
-// permanently refused and every later test fails.
+// node-pty ConPTY path can abort the whole process natively — an uncatchable,
+// in-process failure. Without supervision that leaves the socket permanently
+// refused and every later test fails.
 //
-// This wrapper keeps `node server.js` alive: it forwards stdio, respawns the
-// bridge if it exits unexpectedly, and tears the child down cleanly when
-// Playwright stops the webServer. It mirrors the production restart behaviour
-// in main.js so the client's auto-reconnect can actually recover.
+// The known cause was a use-after-free: node-pty frees the native ConPTY inside
+// kill() but reports the exit asynchronously, so any write/resize/clear/kill
+// issued in that gap crashed the bridge (0xC0000005 / 0xC0000374). server.js now
+// marks sessions dead synchronously via killSessionPty(), which closes that
+// window. This wrapper stays as defence in depth against any remaining native
+// aborts: it forwards stdio, respawns the bridge if it exits unexpectedly, and
+// tears the child down cleanly when Playwright stops the webServer. It mirrors
+// the production restart behaviour in main.js so the client's auto-reconnect can
+// actually recover.
+//
+// Note: "AttachConsole failed" stack traces in the test output come from
+// node-pty's forked conpty_console_list_agent helper. They are noisy but
+// harmless — that is a separate short-lived child process, not the bridge.
 
 const childProcess = require("node:child_process");
 const path = require("node:path");

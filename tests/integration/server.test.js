@@ -172,6 +172,38 @@ describe("shutdown", () => {
     vi.advanceTimersByTime(1500);
     expect(exit).toHaveBeenCalledTimes(2);
   });
+
+  // Sessions close on a stagger, so quitting must wait for them to drain rather
+  // than exiting on a fixed timer and force-killing the stragglers.
+  it("waits for sessions to drain before exiting", () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {});
+    vi.spyOn(app.server, "close").mockImplementation((cb) => { if (cb) cb(); return app.server; });
+    const terminal = { pid: 1, onData: vi.fn(), onExit: vi.fn(), write: vi.fn(), resize: vi.fn(), kill: vi.fn() };
+    app.sessions.set("s", { id: "s", terminal, exited: false, killed: false, closing: false });
+
+    app.shutdown();
+    expect(exit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(3000);
+    expect(exit).not.toHaveBeenCalled();
+
+    app.sessions.delete("s");
+    vi.advanceTimersByTime(100);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("gives up waiting if a session never exits", () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {});
+    vi.spyOn(app.server, "close").mockImplementation((cb) => { if (cb) cb(); return app.server; });
+    const terminal = { pid: 1, onData: vi.fn(), onExit: vi.fn(), write: vi.fn(), resize: vi.fn(), kill: vi.fn() };
+    app.sessions.set("stuck", { id: "stuck", terminal, exited: false, killed: false, closing: false });
+
+    app.shutdown();
+    vi.advanceTimersByTime(9000);
+    expect(exit).toHaveBeenCalledWith(0);
+
+    app.sessions.clear();
+  });
 });
 
 describe("connection: memory stats welcome + client data isolation", () => {

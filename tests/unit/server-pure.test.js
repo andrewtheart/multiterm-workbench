@@ -162,6 +162,11 @@ describe("isSessionRunning", () => {
     expect(server.isSessionRunning({ terminal: {}, exited: true })).toBe(false);
     expect(server.isSessionRunning({ terminal: {}, exited: false })).toBe(true);
   });
+
+  it("treats a killed session as dead before onExit arrives", () => {
+    expect(server.isSessionRunning({ terminal: {}, exited: false, killed: true })).toBe(false);
+    expect(server.isSessionRunning({ terminal: {}, exited: false, killed: false })).toBe(true);
+  });
 });
 
 describe("toSessionSummary", () => {

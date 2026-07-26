@@ -19,6 +19,46 @@ const websocketAcceptHash = ["sha", "1"].join("");
 const sessions = new Map();
 const clients = new Set();
 
+// Session teardown timings. Force-killing a ConPTY is genuinely dangerous — see
+// killSessionPty — so a closing session is given two chances to exit on its own:
+// first a plain "exit", then an interrupt in case the shell is busy in a
+// foreground command and never sees it. Measured PowerShell exit latency is
+// ~1.2s, so the first window has real headroom rather than racing the shell.
+const SESSION_EXIT_GRACE_MS = 2500;
+const SESSION_INTERRUPT_GRACE_MS = 2500;
+
+// Tearing several ConPTYs down at the same moment aborts the process natively with
+// an access violation (0xC0000005), even when every shell exits gracefully and no
+// kill() is involved. Reproducible on node-pty 0.13.1 and 0.14.1 from ~8 concurrent
+// closes; spacing them out is reliable. Closing one session stays immediate.
+const SESSION_TEARDOWN_STAGGER_MS = 150;
+let nextTeardownAt = 0;
+
+// Quitting has to outlast a staggered close of every open session, but must still
+// give up rather than hanging if a shell refuses to exit.
+const SHUTDOWN_MAX_WAIT_MS = 8000;
+const SHUTDOWN_POLL_MS = 100;
+
+function scheduleSessionTeardown(run) {
+  const now = Date.now();
+  const runAt = Math.max(now, nextTeardownAt);
+  nextTeardownAt = runAt + SESSION_TEARDOWN_STAGGER_MS;
+
+  const delay = runAt - now;
+  if (delay <= 0) {
+    run();
+    return;
+  }
+
+  setTimeout(run, delay).unref();
+}
+
+// Test hook: the stagger cursor is module state, so suites that drive teardown with
+// fake timers need a clean starting point.
+function __resetTeardownSchedule() {
+  nextTeardownAt = 0;
+}
+
 // Memory stats are computed entirely in this bridge process (never the
 // renderer) so the UI thread is never blocked. Gated behind an env flag set by
 // the Electron main process and Windows-only, so tests and other platforms are
@@ -220,6 +260,10 @@ module.exports = {
   writeSession,
   rememberSize,
   killSession,
+  killSessionPty,
+  interruptAndExit,
+  scheduleSessionTeardown,
+  __resetTeardownSchedule,
   killAllSessions,
   closeSessions,
   endSessionInput,
@@ -474,6 +518,8 @@ function createSession(client, options) {
     cwd,
     exited: false,
     id,
+    killed: false,
+    closing: false,
     logStream: null,
     logPath: null,
     rows,
@@ -533,17 +579,58 @@ function rememberSize(id, cols, rows) {
   }
 }
 
-function killSession(id) {
-  const session = sessions.get(id);
+// On Windows, node-pty frees the native ConPTY synchronously inside kill(), but the
+// JS-side exit signal only arrives later from the native onExit callback. Any write,
+// resize, clear or second kill issued in that gap dereferences freed memory and takes
+// the whole bridge down with an access violation (0xC0000005) or heap corruption
+// (0xC0000374). Mark the session dead synchronously so nothing can touch it afterwards.
+//
+// Even a single well-formed kill() can abort the process inside node-pty's own ConPTY
+// teardown (reproducible with bare spawn/kill churn on 0.13.1 and 0.14.1, on both the
+// conpty and conpty.dll paths), so callers should exhaust the graceful routes in
+// killSession before reaching for this.
+function killSessionPty(session) {
   if (!isSessionRunning(session)) return;
 
-  endSessionInput(session);
+  session.killed = true;
 
-  setTimeout(() => {
-    if (isSessionRunning(session)) {
-      session.terminal.kill();
-    }
-  }, 1500).unref();
+  try {
+    session.terminal.kill();
+  } catch {
+    // The pty may have already torn itself down; the session is dead either way.
+  }
+}
+
+// Ask a session to end without force-killing it. A shell sitting at its prompt honours
+// "exit"; one busy in a foreground command never sees it, so interrupt it first.
+function interruptAndExit(session) {
+  if (!isSessionRunning(session)) return;
+
+  try {
+    session.terminal.write("\u0003");
+    session.terminal.write("exit\r");
+  } catch {
+    killSessionPty(session);
+  }
+}
+
+function killSession(id) {
+  const session = sessions.get(id);
+  if (!isSessionRunning(session) || session.closing) return;
+
+  session.closing = true;
+
+  scheduleSessionTeardown(() => {
+    endSessionInput(session);
+
+    setTimeout(() => {
+      interruptAndExit(session);
+    }, SESSION_EXIT_GRACE_MS).unref();
+
+    setTimeout(() => {
+      killSessionPty(session);
+    }, SESSION_EXIT_GRACE_MS + SESSION_INTERRUPT_GRACE_MS).unref();
+  });
 }
 
 function killAllSessions() {
@@ -555,9 +642,10 @@ function killAllSessions() {
 function closeSessions(graceful) {
   for (const session of sessions.values()) {
     if (graceful) {
-      endSessionInput(session);
-    } else if (isSessionRunning(session)) {
-      session.terminal.kill();
+      scheduleSessionTeardown(() => endSessionInput(session));
+    } else {
+      // Reached from the process 'exit' handler, which cannot wait for staggering.
+      killSessionPty(session);
     }
   }
 }
@@ -568,12 +656,12 @@ function endSessionInput(session) {
   try {
     session.terminal.write("exit\r");
   } catch {
-    session.terminal.kill();
+    killSessionPty(session);
   }
 }
 
 function isSessionRunning(session) {
-  return Boolean(session && session.terminal && !session.exited);
+  return Boolean(session && session.terminal && !session.exited && !session.killed);
 }
 
 function startLog(client, id) {
@@ -945,6 +1033,8 @@ function registerElevatedSession(attempt, socket, sendFrame, pid) {
     elevated: true,
     exited: false,
     id: attempt.id,
+    killed: false,
+    closing: false,
     logStream: null,
     logPath: null,
     rows: attempt.rows,
@@ -1008,8 +1098,20 @@ function describeElevationError(detail) {
 function shutdown() {
   stopMemStats();
   closeSessions(true);
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 1500).unref();
+  server.close(() => {
+    if (sessions.size === 0) process.exit(0);
+  });
+
+  // Sessions now close on a stagger, so poll until they have actually drained
+  // instead of exiting on a fixed timer and falling through to the force-kill in
+  // handleProcessExit, which is exactly the crash-prone path we are avoiding.
+  const deadline = Date.now() + SHUTDOWN_MAX_WAIT_MS;
+  const drain = setInterval(() => {
+    if (sessions.size > 0 && Date.now() < deadline) return;
+    clearInterval(drain);
+    process.exit(0);
+  }, SHUTDOWN_POLL_MS);
+  drain.unref();
 }
 
 function computeMemStats(callback) {

@@ -45,6 +45,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   server.__setPty(pty);
+  server.__resetTeardownSchedule();
   server.sessions.clear();
   server.clients.clear();
 });
@@ -122,7 +123,7 @@ describe("non-running session branches", () => {
     server.sessions.set("s", session);
     server.killSession("s");
     session.exited = true;
-    vi.advanceTimersByTime(1500);
+    vi.advanceTimersByTime(60000);
     expect(terminal.kill).not.toHaveBeenCalled();
   });
 });
