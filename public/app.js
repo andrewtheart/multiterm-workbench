@@ -50,7 +50,7 @@ const PANE_OVERFLOW_WIDTH = 600;
 const STATUS_PILL_FAB_GAP = 8;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.17";
+const APP_VERSION = "0.1.18";
 
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
