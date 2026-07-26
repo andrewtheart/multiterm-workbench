@@ -2356,22 +2356,27 @@ body.is-pane-dragging {
   width: 13px;
 }
 
-.terminal-pane.is-awaiting-input .pane-await {
+/* The awaiting-input treatment is an attention-getter for terminals you are
+   not looking at, so suppress every part of it on the focused pane: if you are
+   already typing there, the prompt itself is the cue and the pill, yellow
+   border and glow are just noise competing with the active-pane highlight.
+   Switching away re-arms it automatically, since .is-active moves with focus. */
+.terminal-pane.is-awaiting-input:not(.is-active) .pane-await {
   animation: await-pulse 1.3s var(--ease-standard) infinite;
   display: inline-flex;
 }
 
-.terminal-pane.is-awaiting-input {
+.terminal-pane.is-awaiting-input:not(.is-active) {
   animation: await-glow 1.5s var(--ease-standard) infinite;
   border-color: var(--warn);
   z-index: 3;
 }
 
-.terminal-pane.is-awaiting-input .pane-bar {
+.terminal-pane.is-awaiting-input:not(.is-active) .pane-bar {
   background: color-mix(in srgb, var(--warn) 22%, var(--surface-high));
 }
 
-.terminal-pane.is-awaiting-input .pane-title-wrap > svg {
+.terminal-pane.is-awaiting-input:not(.is-active) .pane-title-wrap > svg {
   color: var(--warn);
 }
 

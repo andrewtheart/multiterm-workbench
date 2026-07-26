@@ -52,6 +52,12 @@ const STATUS_PILL_FAB_GAP = 8;
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.18";
 
+// xterm reports focus changes back to the shell as data when the application
+// enables DECSET 1004 (which ConPTY does): ESC [ I on focus in, ESC [ O on
+// focus out. That is protocol chatter, not the user answering a prompt, so it
+// must still be forwarded but must not count as input.
+const FOCUS_REPORT_SEQUENCE = /^\u001b\[[IO]$/;
+
 const fontStacks = {
   "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
   "Cascadia Code": "'Cascadia Code', 'Cascadia Mono', Consolas, monospace",
@@ -951,10 +957,13 @@ function addTerminal(options = {}) {
   registerCwdTracking(terminal);
 
   term.onData((data) => {
+    // Merely clicking away from a terminal blocked on a prompt would otherwise
+    // clear its awaiting flag, erasing the indicator meant to call you back.
+    const isUserInput = !FOCUS_REPORT_SEQUENCE.test(data);
     const targets = state.settings.syncInput ? [...state.terminals.keys()] : [id];
     for (const targetId of targets) {
       const target = state.terminals.get(targetId);
-      if (target) setAwaitingInput(target, false);
+      if (target && isUserInput) setAwaitingInput(target, false);
       sendBridge({ type: "input", id: targetId, data });
     }
   });
