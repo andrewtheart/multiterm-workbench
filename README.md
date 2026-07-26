@@ -57,6 +57,15 @@ To start the bridge without opening a browser:
 .\Start-MultiTerm.ps1 -NoBrowser
 ```
 
+Run from a terminal, the bridge keeps its console window and Ctrl+C stops it.
+Launched from a shortcut it creates its own console window, which is hidden
+once the app window is up. Add `-ShowConsole` to keep that window visible, and
+stop a bridge whose console is hidden with:
+
+```powershell
+.\Start-MultiTerm.ps1 -Stop
+```
+
 Node bridge only (no window), useful during development:
 
 ```powershell
@@ -75,7 +84,9 @@ http://127.0.0.1:3177
 An [Inno Setup](https://www.innosetup.com/) script packages the self-contained
 PowerShell bridge (no Node.js runtime required) into a Windows installer. It
 installs `Start-MultiTerm.ps1`, the `public/` assets, and Start Menu / optional
-desktop shortcuts that launch the bridge and open it in your browser.
+desktop shortcuts that launch the bridge and open it in your browser. The
+bridge runs without a console window; a "Stop MultiTerm Workbench" Start Menu
+entry shuts it down and closes every session.
 
 ### Download
 

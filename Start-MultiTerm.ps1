@@ -2,7 +2,9 @@ param(
   [int]$Port = 0,
   [string]$HostName = "",
     [switch]$AllowRemote,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$ShowConsole,
+    [switch]$Stop
 )
 
 if ($Port -le 0) {
@@ -19,6 +21,87 @@ if (-not $HostName) {
   } else {
     $HostName = "127.0.0.1"
   }
+}
+
+# The console window is hidden for installed launches, so Ctrl+C is no longer
+# available to stop the bridge. The Start Menu "Stop" shortcut re-runs this
+# script with -Stop, which asks a running bridge to shut down over loopback.
+if ($Stop.IsPresent) {
+  $stopUrl = "http://{0}:{1}/shutdown" -f $HostName, $Port
+  try {
+    Invoke-WebRequest -Uri $stopUrl -Method Post -UseBasicParsing -TimeoutSec 5 | Out-Null
+    Write-Host "Stopped the MultiTerm bridge on ${HostName}:${Port}."
+  } catch {
+    Write-Host "No MultiTerm bridge is running on ${HostName}:${Port}."
+  }
+  return
+}
+
+if (-not ("MultiTerm.PowerShellBridge.ConsoleWindow" -as [type])) {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace MultiTerm.PowerShellBridge
+{
+    public static class ConsoleWindow
+    {
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetConsoleWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint GetConsoleProcessList(uint[] processList, uint processCount);
+
+        private const int SW_HIDE = 0;
+        private const int SW_SHOWNORMAL = 1;
+
+        // True only when this process created the console it is attached to.
+        // Launching from a shortcut allocates a fresh console owned by us alone;
+        // launching from an existing shell attaches us to that shell's console,
+        // which we must never hide or we would take the user's terminal with it.
+        public static bool OwnsConsole()
+        {
+            if (GetConsoleWindow() == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            uint[] buffer = new uint[4];
+            return GetConsoleProcessList(buffer, (uint)buffer.Length) == 1;
+        }
+
+        public static void Hide()
+        {
+            IntPtr handle = GetConsoleWindow();
+            if (handle != IntPtr.Zero)
+            {
+                ShowWindow(handle, SW_HIDE);
+            }
+        }
+
+        public static void Show()
+        {
+            IntPtr handle = GetConsoleWindow();
+            if (handle != IntPtr.Zero)
+            {
+                ShowWindow(handle, SW_SHOWNORMAL);
+            }
+        }
+    }
+}
+'@
+}
+
+# Once the app window is up the console behind it is just noise, so hide it.
+# Only when we own it: run from a terminal (including the VS Code one) the
+# console stays put, which is what you want while debugging.
+$consoleHidden = $false
+if (-not $ShowConsole.IsPresent -and [MultiTerm.PowerShellBridge.ConsoleWindow]::OwnsConsole()) {
+  [MultiTerm.PowerShellBridge.ConsoleWindow]::Hide()
+  $consoleHidden = $true
 }
 
 $effectiveAllowRemote = $AllowRemote.IsPresent -or $env:ALLOW_REMOTE -eq "1"
@@ -194,10 +277,39 @@ namespace MultiTerm.PowerShellBridge
                     return;
                 }
 
+                // Installed launches hide the console, so Ctrl+C is not available.
+                // This is how the Stop shortcut asks for a clean shutdown. Loopback
+                // only, and POST only, so no page can navigate the app into quitting.
+                if (path == "/shutdown")
+                {
+                    if (context.Request.HttpMethod != "POST")
+                    {
+                        // Allow must be set before SendText, which closes the response.
+                        context.Response.Headers["Allow"] = "POST";
+                        this.SendText(context.Response, 405, "Method not allowed", "text/plain; charset=utf-8");
+                        return;
+                    }
+
+                    if (!context.Request.IsLocal)
+                    {
+                        this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8");
+                        return;
+                    }
+
+                    this.SendText(context.Response, 200, "{\"ok\":true,\"stopping\":true}", "application/json; charset=utf-8");
+                    // Stop off-thread so this response is flushed before the listener dies.
+                    Task.Run(delegate
+                    {
+                        Thread.Sleep(150);
+                        this.Stop(true);
+                    });
+                    return;
+                }
+
                 if (context.Request.HttpMethod != "GET" && context.Request.HttpMethod != "HEAD")
                 {
-                    this.SendText(context.Response, 405, "Method not allowed", "text/plain; charset=utf-8");
                     context.Response.Headers["Allow"] = "GET, HEAD";
+                    this.SendText(context.Response, 405, "Method not allowed", "text/plain; charset=utf-8");
                     return;
                 }
 
@@ -2261,6 +2373,19 @@ $bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new($HostName, $Port, $effe
 
 try {
   $bridge.Run()
+} catch {
+  # A hidden console would swallow a startup failure and leave nothing on screen
+  # but a window that never appeared, so bring it back and hold it open.
+  if ($consoleHidden) {
+    [MultiTerm.PowerShellBridge.ConsoleWindow]::Show()
+    Write-Host ""
+    Write-Host "MultiTerm could not start:" -ForegroundColor Red
+    Write-Host $_.Exception.Message
+    Write-Host ""
+    Write-Host "Press Enter to close this window."
+    try { [void][Console]::ReadLine() } catch { }
+  }
+  throw
 } finally {
   $bridge.Stop($true)
 }
