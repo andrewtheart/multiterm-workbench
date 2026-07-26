@@ -239,9 +239,17 @@ namespace MultiTerm.PowerShellBridge
                     // Launch a chromeless, standalone "app" window (no tabs or
                     // address bar) using an isolated profile so it behaves like
                     // a dedicated desktop app rather than a browser tab.
+                    //
+                    // --max-active-webgl-contexts raises Chromium's default cap of
+                    // ~16 live WebGL contexts. Past that cap Chromium force-loses
+                    // the oldest context, and xterm's WebGL addon leaves the pane
+                    // with no renderer at all when that happens, so the pane turns
+                    // blank. app.js also caps how many renderers it hands out; this
+                    // is extra headroom so terminals never compete for contexts.
                     string args = "--app=" + this.Url
                         + " --user-data-dir=\"" + dataDir + "\""
                         + " --window-size=1200,800"
+                        + " --max-active-webgl-contexts=64"
                         + " --no-first-run --no-default-browser-check";
 
                     ProcessStartInfo appInfo = new ProcessStartInfo(browser, args);

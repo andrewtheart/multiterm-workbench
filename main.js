@@ -16,6 +16,15 @@ function formatError(err) {
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
 
+// Chromium force-loses the oldest WebGL context once ~16 are live, and xterm's
+// WebGL addon leaves a pane with no renderer when its context dies. Raising the
+// ceiling keeps terminal renderers from competing with each other (and with the
+// app's other canvases) on machines running many panes. app.js still enforces its
+// own, lower budget, so this is headroom rather than something we depend on.
+if (app?.commandLine?.appendSwitch) {
+  app.commandLine.appendSwitch("max-active-webgl-contexts", "64");
+}
+
 // Whether this process is already elevated (administrator). Cached after a
 // one-time check so "Restart as Administrator" can short-circuit.
 let appIsElevated = process.env.MULTITERM_ELEVATED === "1";

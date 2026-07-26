@@ -1710,24 +1710,44 @@ function setTerminalStatus(terminal, text, tone) {
   updateTerminalSearchVisibility(terminal);
 }
 
-// Load the WebGL (GPU) renderer when available. It replaces xterm's default DOM
-// renderer with a canvas/WebGL one, which is dramatically faster under heavy
-// output. Every failure mode degrades gracefully back to the DOM renderer:
-//   - addon script missing (offline/headless): window.WebglAddon is undefined.
-//   - GPU unavailable / blocklisted: construction or loadAddon throws (caught).
-//   - GPU context lost at runtime (driver reset, tab backgrounded): onContextLoss
-//     disposes the addon and xterm transparently falls back.
-// Attach the WebGL renderer to a terminal and keep it alive across GPU context
-// loss. Browsers and Electron cap the number of simultaneous WebGL contexts
-// (~16 per GPU process); once that budget is exceeded the oldest contexts are
-// force-lost. xterm's WebGL addon does NOT fall back to the DOM renderer on
-// loss — disposing it leaves the pane with no renderer at all, so it freezes on
-// its last frame and fresh output paints over the stale glyphs (the overlapping
-// command/response pairs users report). To stay resilient we recreate a fresh
-// addon after a loss, which re-establishes a working render layer.
+// Browsers cap simultaneous WebGL contexts per GPU process (16 by default in
+// Chrome/Electron) and force-lose the OLDEST context once you exceed it. That cap
+// is the hard constraint here, because xterm's WebGL addon does NOT fall back to
+// the DOM renderer when its context dies: disposing it removes the canvas and
+// leaves the pane with no renderer at all, so the pane goes blank while its
+// buffer still holds the text. Past ~16 panes that became a rolling eviction
+// cascade — every recovered pane evicted another one — which is the white,
+// flickering panes users reported.
+//
+// So we hand out a bounded number of contexts. Panes past the budget never get
+// the addon at all and therefore keep xterm's DOM renderer, which is slower under
+// heavy output but always correct. The budget sits below the stock cap so this
+// holds even in a plain browser tab; our launchers additionally raise the ceiling
+// with --max-active-webgl-contexts so terminal renderers never have to compete
+// with the app's other canvases.
+const WEBGL_MAX_CONTEXTS = 12;
+
+function liveWebglRendererCount() {
+  let count = 0;
+  for (const terminal of state.terminals.values()) {
+    if (terminal.webglAddon) count += 1;
+  }
+  return count;
+}
+
+// Attach the WebGL renderer to a terminal unless that would push us past the
+// context budget. Returning null is a normal outcome, not a failure: the pane
+// simply keeps xterm's DOM renderer. The other degradations land here too — addon
+// script missing (offline/headless), or GPU blocklisted so construction throws.
+//
+// Recovery after a genuine context loss is deliberately still allowed through:
+// the lost addon has already been cleared off the terminal so it no longer counts
+// against the budget, and a pane that lost its context has no renderer left at
+// all — it MUST get one back or it stays blank.
 function attachWebglRenderer(terminal) {
   const WebglCtor = window.WebglAddon?.WebglAddon;
   if (!WebglCtor) return null;
+  if (!terminal.webglAddon && liveWebglRendererCount() >= WEBGL_MAX_CONTEXTS) return null;
   const { term } = terminal;
   let webgl;
   try {
