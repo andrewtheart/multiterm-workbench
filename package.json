@@ -23,7 +23,7 @@
     "@playwright/test": "^1.61.1",
     "@vitest/coverage-istanbul": "^4.1.10",
     "@vitest/coverage-v8": "^4.1.10",
-    "electron": "^33.0.0",
+    "electron": "^43.2.0",
     "jsdom": "^29.1.1",
     "monocart-coverage-reports": "^2.12.12",
     "v8-to-istanbul": "^9.3.0",
