@@ -1774,6 +1774,21 @@ body.header-hidden .status-hint kbd,
   pointer-events: none;
 }
 
+/* A row that reports a fact instead of offering an action. It must not look
+   clickable, but it is the whole point of the menu it appears in, so it keeps
+   full contrast rather than borrowing the dimmed disabled treatment. Text is
+   selectable so the value can be picked out by hand. */
+.ctx-item.ctx-info {
+  color: var(--muted);
+  cursor: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.ctx-item.ctx-info:hover {
+  background: transparent;
+}
+
 .ctx-item.danger:hover {
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);

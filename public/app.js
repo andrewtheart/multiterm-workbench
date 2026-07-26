@@ -698,6 +698,10 @@ function handleBridgeMessage(message) {
     if (!terminal) return;
     terminal.cwd = message.cwd;
     terminal.pid = message.pid;
+    // The bridge stamps startedAt when it spawns the shell. Fall back to now if
+    // an older bridge omits it — accurate to the round-trip, and better than
+    // showing nothing.
+    terminal.startedAt = message.startedAt || new Date().toISOString();
     terminal.remoteRequested = true;
     terminal.status = "live";
     if (message.elevated) {
@@ -824,6 +828,9 @@ function reattachExistingSession(terminal, session) {
   terminal.status = "live";
   if (session.cwd) terminal.cwd = session.cwd;
   if (session.pid != null) terminal.pid = session.pid;
+  // The shell kept running across the drop, so its original launch time is still
+  // the truth — take the bridge's copy rather than treating this as a new start.
+  if (session.startedAt) terminal.startedAt = session.startedAt;
   setTerminalStatus(terminal, session.pid != null ? `pid ${session.pid}` : "live", "live");
   updateTerminalSearchVisibility(terminal);
   scheduleFit(terminal);
@@ -923,6 +930,7 @@ function addTerminal(options = {}) {
     webglRecoveryHandle: 0,
     screen,
     shell: options.shell || session.shell || elements.shellSelect.value,
+    startedAt: session.startedAt || null,
     status: options.reattach ? "live" : "starting",
     statusElement: status,
     term,
@@ -1103,6 +1111,22 @@ function bindPaneControls(terminal) {
     } else if (action === "move-right") {
       moveTerminal(terminal.id, 1);
     }
+  });
+
+  // The elapsed time in the tooltip is only correct at the instant it is built,
+  // so build it when the pointer arrives rather than leaving a stale one behind.
+  terminal.statusElement.addEventListener("pointerenter", () => {
+    refreshStatusPillTooltip(terminal);
+  });
+
+  // Without this the pane's own handler wins, and with "right-click pastes"
+  // configured that would dump the clipboard into the shell — an odd thing for
+  // a status readout to do. Right-click here reports on the session instead.
+  terminal.statusElement.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveTerminal(terminal.id);
+    showSessionInfoMenu(terminal);
   });
 }
 
@@ -1715,8 +1739,52 @@ function setTerminalStatus(terminal, text, tone) {
   terminal.statusElement.textContent = text;
   terminal.statusElement.classList.toggle("is-live", tone === "live");
   terminal.statusElement.classList.toggle("is-dead", tone === "dead");
+  refreshStatusPillTooltip(terminal);
   refreshTerminalSearchText(terminal);
   updateTerminalSearchVisibility(terminal);
+}
+
+/* ---------------- Session launch time --------------- */
+
+// Both bridges stamp startedAt (ISO 8601) when they spawn the shell and repeat
+// it in every session summary, so the launch time survives a reconnect or a page
+// reload without the client having to remember anything.
+
+function formatLaunchTimestamp(startedAt) {
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return "";
+  // Seconds are kept: two shells launched moments apart are otherwise
+  // indistinguishable, which is exactly when you go looking for this.
+  return new Date(started).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "medium" });
+}
+
+function formatUptime(startedAt, now = Date.now()) {
+  const started = Date.parse(startedAt);
+  if (!Number.isFinite(started)) return "";
+  const seconds = Math.max(0, Math.round((now - started) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+// Recomputed on hover rather than written once, because the elapsed time in it
+// goes stale the moment it is set.
+function refreshStatusPillTooltip(terminal) {
+  const launched = formatLaunchTimestamp(terminal.startedAt);
+  if (!launched) {
+    terminal.statusElement.removeAttribute("title");
+    return;
+  }
+
+  const lines = [`Launched ${launched}`];
+  if (terminal.status !== "exited" && terminal.status !== "error") {
+    lines.push(`Up ${formatUptime(terminal.startedAt)}`);
+  }
+  lines.push("Right-click for details");
+  terminal.statusElement.title = lines.join("\n");
 }
 
 // Browsers cap simultaneous WebGL contexts per GPU process (16 by default in
@@ -4942,8 +5010,10 @@ function renderContextMenu(items) {
     }
 
     const el = document.createElement("div");
-    el.className = `ctx-item${item.danger ? " danger" : ""}`;
-    el.setAttribute("role", "menuitem");
+    el.className = `ctx-item${item.danger ? " danger" : ""}${item.info ? " ctx-info" : ""}`;
+    // An info row reports a fact rather than offering an action, so it is not a
+    // menuitem and must not be reachable or announced as one.
+    el.setAttribute("role", item.info ? "presentation" : "menuitem");
     if (item.disabled) el.setAttribute("aria-disabled", "true");
 
     const icon = document.createElement("i");
@@ -4992,7 +5062,7 @@ function renderContextMenu(items) {
       el.append(hint);
     }
 
-    if (!item.disabled) {
+    if (!item.disabled && !item.info) {
       el.addEventListener("click", () => {
         hideContextMenu();
         item.run();
@@ -5011,22 +5081,79 @@ function showPaneOverflowMenu(button, terminal) {
   buildPaneOverflowMenu(terminal);
   button.setAttribute("aria-expanded", "true");
   const rect = button.getBoundingClientRect();
-  showBuiltContextMenu(rect.right, rect.bottom + 4, true);
+  showBuiltContextMenu(rect.right, rect.bottom + 4, { alignRight: true });
 }
 
-function showBuiltContextMenu(x, y, alignRight = false) {
+// Right-clicking the PID pill reports on the session behind it. Built fresh each
+// time so the elapsed time is current.
+function showSessionInfoMenu(terminal) {
+  const launched = formatLaunchTimestamp(terminal.startedAt);
+  const items = [];
+
+  if (launched) {
+    items.push({ info: true, icon: "calendar-clock", label: `Launched ${launched}` });
+    if (terminal.status !== "exited" && terminal.status !== "error") {
+      items.push({ info: true, icon: "timer", label: `Up ${formatUptime(terminal.startedAt)}` });
+    }
+  } else {
+    items.push({ info: true, icon: "calendar-clock", label: "Launch time unavailable" });
+  }
+
+  if (terminal.pid != null) {
+    items.push({ info: true, icon: "hash", label: `PID ${terminal.pid}` });
+  }
+
+  const details = [
+    terminal.titleInput.value,
+    terminal.pid != null ? `PID ${terminal.pid}` : null,
+    launched ? `launched ${launched}` : null,
+    terminal.shell || null,
+    terminal.cwd || null
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  items.push({ separator: true });
+  items.push({
+    label: "Copy session details",
+    icon: "clipboard-copy",
+    run: () =>
+      navigator.clipboard.writeText(details).then(
+        () => toast("Session details copied", "success", 1600),
+        () => toast("Copy failed", "error", 1800)
+      )
+  });
+
+  renderContextMenu(items);
+  // Anchored to the pill rather than the pointer, growing up and to the left, so
+  // it reads as belonging to the pill and never covers it. The pill lives in the
+  // bottom-right of a pane, which is the only direction with room anyway.
+  const rect = terminal.statusElement.getBoundingClientRect();
+  showBuiltContextMenu(rect.right, rect.top - 6, { alignRight: true, alignBottom: true });
+}
+
+function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } = {}) {
   const menu = elements.contextMenu;
   menu.hidden = false;
   menu.style.left = "0px";
   menu.style.top = "0px";
 
+  // Swap the <i data-lucide> placeholders for real SVGs *before* measuring.
+  // Placeholders occupy no width, so measuring first reports a menu ~16px
+  // narrower than the one that ends up on screen, and every right/bottom-aligned
+  // menu lands 16px off its anchor.
+  refreshIcons();
+
+  // x/y name the corner the menu should hang from: alignRight grows it leftward,
+  // alignBottom grows it upward. Clamping still wins, so a menu anchored near an
+  // edge stays on screen rather than honouring the requested direction.
   const rect = menu.getBoundingClientRect();
   const desiredLeft = alignRight ? x - rect.width : x;
+  const desiredTop = alignBottom ? y - rect.height : y;
   const left = Math.max(8, Math.min(desiredLeft, window.innerWidth - rect.width - 8));
-  const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
+  const top = Math.max(8, Math.min(desiredTop, window.innerHeight - rect.height - 8));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
-  refreshIcons();
 }
 
 function hideContextMenu() {
