@@ -1247,7 +1247,21 @@ namespace MultiTerm.PowerShellBridge
 
     internal sealed class TerminalSession
     {
+        // ClosePseudoConsole cannot safely run concurrently across sessions: tearing several
+        // pseudo consoles down at the same instant faults the host process. Closes are
+        // serialised and spaced out so a "close all" never collapses into one simultaneous
+        // teardown.
+        private const int TeardownStaggerMs = 150;
+        private static readonly object teardownLock = new object();
+        private static DateTime nextTeardownUtc = DateTime.MinValue;
+
         private readonly object inputLock = new object();
+
+        // Guards the unmanaged handles below. They are read on the message-loop thread
+        // (Resize/Kill) and released on the exit-watcher thread, so an unsynchronised read
+        // can hand a freed pseudo console to ResizePseudoConsole (access violation) or a
+        // recycled process handle to TerminateProcess (kills an unrelated process).
+        private readonly object handleLock = new object();
         private FileStream inputStream;
         private FileStream outputStream;
         private IntPtr pseudoConsole = IntPtr.Zero;
@@ -1348,37 +1362,53 @@ namespace MultiTerm.PowerShellBridge
 
         public void Resize(int cols, int rows)
         {
-            if (this.exited || this.pseudoConsole == IntPtr.Zero)
+            lock (this.handleLock)
             {
-                return;
-            }
+                if (this.exited || this.pseudoConsole == IntPtr.Zero)
+                {
+                    return;
+                }
 
-            this.Cols = Math.Max(20, cols);
-            this.Rows = Math.Max(5, rows);
-            Native.ResizePseudoConsole(this.pseudoConsole, new Native.COORD((short)this.Cols, (short)this.Rows));
+                this.Cols = Math.Max(20, cols);
+                this.Rows = Math.Max(5, rows);
+                Native.ResizePseudoConsole(this.pseudoConsole, new Native.COORD((short)this.Cols, (short)this.Rows));
+            }
         }
 
         public void RequestExit()
         {
+            // A shell sitting at its prompt exits well inside the first grace window, but one
+            // busy in a foreground command ignores "exit" entirely until it is interrupted.
+            // Force-kill is the last resort, never the first move.
             this.Write("exit\r");
-            Task.Delay(1500).ContinueWith(delegate
+            Task.Delay(2500).ContinueWith(delegate
             {
-                if (!this.exited)
+                if (this.exited)
                 {
-                    this.Kill();
+                    return;
                 }
+
+                this.Write("\u0003");
+                this.Write("exit\r");
+                Task.Delay(2500).ContinueWith(delegate
+                {
+                    if (!this.exited)
+                    {
+                        this.Kill();
+                    }
+                });
             });
         }
 
         public void Kill()
         {
-            if (this.exited)
+            lock (this.handleLock)
             {
-                return;
-            }
+                if (this.exited || this.processHandle == IntPtr.Zero)
+                {
+                    return;
+                }
 
-            if (this.processHandle != IntPtr.Zero)
-            {
                 Native.TerminateProcess(this.processHandle, 1);
             }
         }
@@ -1488,25 +1518,62 @@ namespace MultiTerm.PowerShellBridge
 
         private void DisposeHandles()
         {
-            try { if (this.inputStream != null) this.inputStream.Dispose(); } catch { }
+            IntPtr consoleToClose;
+
+            // Retire the handles under the lock so Resize/Kill can never observe one that is
+            // about to be freed. The lock is released before the (slow) console teardown so a
+            // closing session cannot stall the message loop.
+            lock (this.handleLock)
+            {
+                if (this.threadHandle != IntPtr.Zero)
+                {
+                    Native.CloseHandle(this.threadHandle);
+                    this.threadHandle = IntPtr.Zero;
+                }
+
+                if (this.processHandle != IntPtr.Zero)
+                {
+                    Native.CloseHandle(this.processHandle);
+                    this.processHandle = IntPtr.Zero;
+                }
+
+                consoleToClose = this.pseudoConsole;
+                this.pseudoConsole = IntPtr.Zero;
+            }
+
+            // Take inputLock so an in-flight Write is not left holding a disposed stream.
+            lock (this.inputLock)
+            {
+                try { if (this.inputStream != null) this.inputStream.Dispose(); } catch { }
+            }
+
             try { if (this.outputStream != null) this.outputStream.Dispose(); } catch { }
 
-            if (this.threadHandle != IntPtr.Zero)
+            if (consoleToClose != IntPtr.Zero)
             {
-                Native.CloseHandle(this.threadHandle);
-                this.threadHandle = IntPtr.Zero;
+                CloseConsoleSerialized(consoleToClose);
             }
+        }
 
-            if (this.processHandle != IntPtr.Zero)
+        private static void CloseConsoleSerialized(IntPtr handle)
+        {
+            lock (teardownLock)
             {
-                Native.CloseHandle(this.processHandle);
-                this.processHandle = IntPtr.Zero;
-            }
+                TimeSpan wait = nextTeardownUtc - DateTime.UtcNow;
+                if (wait > TimeSpan.Zero)
+                {
+                    int waitMs = (int)Math.Ceiling(wait.TotalMilliseconds);
+                    Thread.Sleep(Math.Min(waitMs, TeardownStaggerMs));
+                }
 
-            if (this.pseudoConsole != IntPtr.Zero)
-            {
-                Native.ClosePseudoConsole(this.pseudoConsole);
-                this.pseudoConsole = IntPtr.Zero;
+                try
+                {
+                    Native.ClosePseudoConsole(handle);
+                }
+                finally
+                {
+                    nextTeardownUtc = DateTime.UtcNow.AddMilliseconds(TeardownStaggerMs);
+                }
             }
         }
     }
