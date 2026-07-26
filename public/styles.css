@@ -614,10 +614,6 @@ body.sidecar-hidden .control-panel {
   display: none;
 }
 
-body.header-hidden .terminal-host[data-layout="focus"] .terminal-pane.is-primary {
-  min-height: calc(100vh - 48px);
-}
-
 .control-panel {
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -2043,9 +2039,14 @@ body.is-pane-dragging {
   grid-template-columns: minmax(0, var(--focus-width)) minmax(220px, 1fr);
 }
 
+/* The primary must span every row the rail occupies. A fixed span meant that
+   once the rail held more panes than the span, the overflow landed in column 1
+   directly beneath the primary — and the primary's min-height, which exceeded
+   its four-row area, then painted straight over it. Spanning the live pane
+   count keeps column 1 reserved, and makes the grid itself size the primary,
+   so no min-height is needed to fill the stage. */
 .terminal-host[data-layout="focus"] .terminal-pane.is-primary {
-  grid-row: 1 / span 4;
-  min-height: calc(100vh - 150px);
+  grid-row: 1 / span var(--rest-count, 1);
 }
 
 .terminal-host[data-layout="grid"] {
@@ -2691,6 +2692,7 @@ body.is-pane-dragging {
     grid-template-rows: none;
   }
 
+  .terminal-host[data-layout="focus"] .terminal-pane.is-primary,
   .terminal-host[data-layout="master-top"] .terminal-pane.is-primary,
   .terminal-host[data-layout="master-right"] .terminal-pane.is-primary {
     grid-column: auto;
