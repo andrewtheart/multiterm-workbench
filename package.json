@@ -1,6 +1,6 @@
 {
   "name": "multiterm-workbench",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "private": true,
   "description": "Local xterm.js multi-terminal workbench for PowerShell sessions.",
   "type": "commonjs",
