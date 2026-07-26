@@ -1,5 +1,6 @@
 const { test, expect } = require("@playwright/test");
 const MCR = require("monocart-coverage-reports");
+const { version: PKG_VERSION } = require("../../package.json");
 
 // A single shared page collects JS coverage across all steps so the
 // renderer (public/app.js) is exercised as one continuous session.
@@ -239,7 +240,9 @@ test.describe("MultiTerm Workbench UI", () => {
   test("opens the About dialog and shows the version", async () => {
     await page.locator("#aboutToggle").click();
     await expect(page.locator("#aboutOverlay")).toBeVisible();
-    await expect(page.locator("#aboutVersionText")).toContainText("0.1.1");
+    // Read the version from package.json rather than hard-coding a prefix, so
+    // the assertion keeps its teeth across releases instead of going stale.
+    await expect(page.locator("#aboutVersionText")).toContainText(PKG_VERSION);
     await page.locator("#aboutClose").click();
     await expect(page.locator("#aboutOverlay")).toBeHidden();
   });

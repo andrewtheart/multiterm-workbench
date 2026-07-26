@@ -197,7 +197,16 @@ namespace MultiTerm.PowerShellBridge
                 Console.WriteLine("MultiTerm is already running on " + this.Url + ". Opening the existing instance.");
                 if (this.openBrowser)
                 {
-                    this.OpenBrowser();
+                    // Branding runs on a background thread, and this path exits the
+                    // process moments later, which would kill that thread before it
+                    // ever found the window - leaving the taskbar showing the host
+                    // browser's icon. Wait for it to finish before returning.
+                    Thread brander = this.OpenBrowser();
+                    if (brander != null)
+                    {
+                        try { brander.Join(TimeSpan.FromSeconds(40)); }
+                        catch { }
+                    }
                 }
                 return;
             }
@@ -343,7 +352,10 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
-        private void OpenBrowser()
+        // Returns the background thread that re-brands the browser window, or null
+        // if none was started. Callers that exit the process straight afterwards
+        // must join it, or the branding never lands.
+        private Thread OpenBrowser()
         {
             try
             {
@@ -374,6 +386,15 @@ namespace MultiTerm.PowerShellBridge
 
                     ProcessStartInfo appInfo = new ProcessStartInfo(browser, args);
                     appInfo.UseShellExecute = false;
+
+                    // Record which MultiTerm windows already exist so the brander
+                    // can tell ours apart from theirs. Edge hands an "--app" launch
+                    // to an existing browser process whenever one already uses this
+                    // profile, and the process we start then exits immediately - so
+                    // there is no process tree to match on. Taking the difference of
+                    // the window set before and after is the only reliable way to
+                    // identify the window this launch actually created.
+                    HashSet<IntPtr> preexisting = WindowBrander.SnapshotAppWindows("MultiTerm Workbench");
                     Process started = Process.Start(appInfo);
 
                     // Windows groups a Chromium "--app" window under the host
@@ -381,8 +402,7 @@ namespace MultiTerm.PowerShellBridge
                     // Microsoft Edge icon rather than the site favicon. Re-brand
                     // the window with MultiTerm's own AppUserModelID + icon so the
                     // taskbar shows MultiTerm and it can be pinned as its own app.
-                    this.BrandAppWindow(started);
-                    return;
+                    return this.BrandAppWindow(started, preexisting);
                 }
 
                 // No Chromium-based browser found - open the default browser.
@@ -401,6 +421,8 @@ namespace MultiTerm.PowerShellBridge
                 }
                 catch { }
             }
+
+            return null;
         }
 
         private string FindAppModeBrowser()
@@ -488,13 +510,13 @@ namespace MultiTerm.PowerShellBridge
             return null;
         }
 
-        private void BrandAppWindow(Process started)
+        private Thread BrandAppWindow(Process started, HashSet<IntPtr> preexisting)
         {
             try
             {
                 if (started == null)
                 {
-                    return;
+                    return null;
                 }
 
                 string iconPath = this.ResolveAppIconPath();
@@ -506,13 +528,16 @@ namespace MultiTerm.PowerShellBridge
                 // non-fatal - the app still works, just with the browser's icon.
                 Thread worker = new Thread(new ThreadStart(delegate()
                 {
-                    try { WindowBrander.Apply(started, "MultiTerm Workbench", aumid, iconPath, relaunchCommand); }
+                    try { WindowBrander.Apply(started, "MultiTerm Workbench", aumid, iconPath, relaunchCommand, preexisting); }
                     catch { }
                 }));
                 worker.IsBackground = true;
                 worker.Start();
+                return worker;
             }
             catch { }
+
+            return null;
         }
 
         // Command the taskbar uses when the pinned button is launched, so a pin
@@ -567,7 +592,24 @@ namespace MultiTerm.PowerShellBridge
             private static readonly Guid APPMODEL_FMTID = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
             private static readonly Guid IID_IPropertyStore = new Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99");
 
-            public static void Apply(Process started, string titleFragment, string aumid, string iconPath, string relaunchCommand)
+            // Every visible Chromium app window whose title matches, regardless of
+            // which process owns it. Called once before the browser is launched so
+            // Apply can identify the window that launch creates.
+            public static HashSet<IntPtr> SnapshotAppWindows(string titleFragment)
+            {
+                HashSet<IntPtr> found = new HashSet<IntPtr>();
+                try
+                {
+                    foreach (IntPtr hwnd in FindAppWindows(null, titleFragment))
+                    {
+                        found.Add(hwnd);
+                    }
+                }
+                catch { }
+                return found;
+            }
+
+            public static void Apply(Process started, string titleFragment, string aumid, string iconPath, string relaunchCommand, HashSet<IntPtr> preexisting)
             {
                 try
                 {
@@ -581,36 +623,50 @@ namespace MultiTerm.PowerShellBridge
                         catch { }
                     }
 
-                    IntPtr hwnd = IntPtr.Zero;
-                    // Poll ~20s for the app window (page + title must load first).
-                    for (int i = 0; i < 40 && hwnd == IntPtr.Zero; i++)
+                    if (preexisting == null)
                     {
-                        hwnd = FindAppWindow(started, titleFragment);
-                        if (hwnd == IntPtr.Zero)
-                        {
-                            Thread.Sleep(500);
-                        }
+                        preexisting = new HashSet<IntPtr>();
                     }
 
-                    if (hwnd == IntPtr.Zero)
+                    // Brand the window this launch created - that is, any matching
+                    // window that was not already on screen beforehand.
+                    //
+                    // Matching on title alone and taking the first hit was wrong
+                    // three times over: with a second MultiTerm window open it could
+                    // brand somebody else's window; when Edge hands the "--app"
+                    // launch to an existing browser process (it prints "Opening in
+                    // existing browser session") the process we started exits at
+                    // once, so there is no process tree left to disambiguate by; and
+                    // stopping once every *current* window was branded returned
+                    // before the new window had even been created, leaving the one
+                    // window that mattered still wearing the browser's icon.
+                    //
+                    // ~20s: the browser has to start and the page title has to load
+                    // before a new window can be matched.
+                    for (int i = 0; i < 40; i++)
                     {
-                        return;
-                    }
-
-                    // Edge/Chrome stamp their own AppUserModelID + icon on the
-                    // window at creation (and do not re-enforce it afterwards), so
-                    // apply a few times to comfortably land after the browser has
-                    // settled. Re-find the window each pass in case it was recreated.
-                    for (int pass = 0; pass < 6; pass++)
-                    {
-                        try { ApplyOnce(hwnd, aumid, iconPath, relaunchCommand, hIconBig, hIconSmall); }
-                        catch { }
-                        Thread.Sleep(800);
-                        IntPtr again = FindAppWindow(started, titleFragment);
-                        if (again != IntPtr.Zero)
+                        foreach (IntPtr candidate in FindAppWindows(started, titleFragment))
                         {
-                            hwnd = again;
+                            if (preexisting.Contains(candidate))
+                            {
+                                continue; // somebody else's window - leave it alone
+                            }
+
+                            if (ReadAppUserModelId(candidate) == aumid)
+                            {
+                                return; // already branded, by us, just now
+                            }
+
+                            try { ApplyOnce(candidate, aumid, iconPath, relaunchCommand, hIconBig, hIconSmall); }
+                            catch { }
+
+                            if (ReadAppUserModelId(candidate) == aumid)
+                            {
+                                return;
+                            }
                         }
+
+                        Thread.Sleep(500);
                     }
                 }
                 catch { }
@@ -662,6 +718,49 @@ namespace MultiTerm.PowerShellBridge
                 }
             }
 
+            // Reads System.AppUserModel.ID back off the window so Apply can tell
+            // whether its write actually took, instead of blindly re-applying on a
+            // fixed schedule and hoping.
+            private static string ReadAppUserModelId(IntPtr hwnd)
+            {
+                IPropertyStore store = null;
+                Guid iid = IID_IPropertyStore;
+                try
+                {
+                    int hr = SHGetPropertyStoreForWindow(hwnd, ref iid, out store);
+                    if (hr < 0 || store == null)
+                    {
+                        return null;
+                    }
+
+                    PROPERTYKEY key = new PROPERTYKEY(APPMODEL_FMTID, 5u);
+                    PROPVARIANT pv;
+                    if (store.GetValue(ref key, out pv) < 0)
+                    {
+                        return null;
+                    }
+
+                    try
+                    {
+                        if (pv.varType != VT_LPWSTR || pv.value1 == IntPtr.Zero)
+                        {
+                            return null;
+                        }
+                        return Marshal.PtrToStringUni(pv.value1);
+                    }
+                    finally { try { PropVariantClear(ref pv); } catch { } }
+                }
+                catch { return null; }
+                finally
+                {
+                    if (store != null)
+                    {
+                        try { Marshal.ReleaseComObject(store); }
+                        catch { }
+                    }
+                }
+            }
+
             private static void SetStringProperty(IPropertyStore store, PROPERTYKEY key, string value)
             {
                 // NOTE: InitPropVariantFromString is an inline helper in the
@@ -680,7 +779,7 @@ namespace MultiTerm.PowerShellBridge
                 finally { try { PropVariantClear(ref pv); } catch { } }
             }
 
-            private static IntPtr FindAppWindow(Process started, string titleFragment)
+            private static List<IntPtr> FindAppWindows(Process started, string titleFragment)
             {
                 HashSet<int> pids = null;
                 try
@@ -757,21 +856,19 @@ namespace MultiTerm.PowerShellBridge
                     return true;
                 }
 
-                public IntPtr Resolve()
+                public List<IntPtr> Resolve()
                 {
-                    // Prefer a window in our own browser process tree (isolated
-                    // profile) with a matching title. Otherwise only accept a
-                    // title match when it is unambiguous, so we never re-brand an
-                    // unrelated browser window.
+                    // Prefer windows in our own browser process tree when we still
+                    // have one. Edge often hands a "--app" launch to an existing
+                    // browser process, in which case the process we started has
+                    // already exited and title matching is all that is left; every
+                    // Chromium app window carrying our title is a MultiTerm window,
+                    // so returning them all is safe.
                     if (this.pidAndTitle.Count > 0)
                     {
-                        return this.pidAndTitle[0];
+                        return this.pidAndTitle;
                     }
-                    if (this.titleOnly.Count == 1)
-                    {
-                        return this.titleOnly[0];
-                    }
-                    return IntPtr.Zero;
+                    return this.titleOnly;
                 }
             }
 
