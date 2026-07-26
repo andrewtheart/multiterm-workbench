@@ -66,6 +66,21 @@ stop a bridge whose console is hidden with:
 .\Start-MultiTerm.ps1 -Stop
 ```
 
+### Administrator terminals
+
+Both bridges can open a terminal that runs elevated. Windows offers no way to
+hand a pseudo console to a process across the elevation boundary, so the bridge
+starts a short-lived elevated helper (one UAC prompt per terminal) that owns the
+elevated pty and relays it back over a loopback socket. The helper runs with no
+visible window and exits with its terminal; if the bridge stops, the helper and
+its shell are torn down with it.
+
+The helper authenticates with a single-use token *and* verifies that the process
+listening on the loopback port is the bridge that spawned it, so a lower
+privileged process cannot hijack the elevated session even if it learns the
+token. Declining the UAC prompt reports "Administrator access was declined."
+and leaves nothing behind.
+
 Node bridge only (no window), useful during development:
 
 ```powershell

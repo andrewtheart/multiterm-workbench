@@ -4,7 +4,8 @@ param(
     [switch]$AllowRemote,
     [switch]$NoBrowser,
     [switch]$ShowConsole,
-    [switch]$Stop
+    [switch]$Stop,
+    [string]$ElevatedHost = ""
 )
 
 if ($Port -le 0) {
@@ -121,8 +122,10 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -157,6 +160,11 @@ namespace MultiTerm.PowerShellBridge
 
         private HttpListener listener;
         private volatile bool stopping;
+
+        // Absolute path of this script, set from PowerShell at startup. Administrator
+        // terminals re-launch it elevated (-ElevatedHost) to own the high-integrity
+        // pseudo-console, so we need to know where we came from.
+        public static string ScriptPath;
 
         public BridgeServer(string host, int port, bool allowRemote, string publicDir, bool openBrowser)
         {
@@ -1058,6 +1066,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.OpenPath(client, Json.Get(message, "path"));
             }
+            else if (type == "elevate")
+            {
+                this.ElevateSession(client, message);
+            }
             else if (type == "list")
             {
                 client.Send("{\"type\":\"sessions\",\"sessions\":" + this.SessionsJson() + "}");
@@ -1127,6 +1139,275 @@ namespace MultiTerm.PowerShellBridge
             {
                 session.RequestExit();
             }
+        }
+
+        // --- Administrator terminals -------------------------------------------------
+        //
+        // An elevated shell runs at HIGH integrity, and this (medium-integrity) bridge
+        // cannot attach a ConPTY across that boundary. Nor can it elevate directly:
+        // CreateProcessW has no elevation path at all, and the one that does --
+        // ShellExecute "runas" -- cannot hand over a pseudo-console. So the elevated
+        // shell's ConPTY is owned by a copy of THIS script re-launched elevated
+        // (-ElevatedHost), which relays the terminal back over a loopback socket.
+        //
+        // The channel is guarded by a one-time token, and the helper independently
+        // verifies (by PID) that the listener really belongs to this bridge before it
+        // applies any input, so a lower-integrity process cannot drive the elevated
+        // shell even if it learned the token. Once connected the session is wired into
+        // the normal session map, so input/resize/kill/logging all work unchanged.
+        private void ElevateSession(BridgeClient client, Dictionary<string, string> options)
+        {
+            string id = this.SanitizeId(Json.Get(options, "id"));
+            if (this.sessions.ContainsKey(id))
+            {
+                client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"A session with this id already exists.\"}");
+                return;
+            }
+
+            string script = ScriptPath;
+            if (String.IsNullOrEmpty(script) || !File.Exists(script))
+            {
+                this.SendElevateError(client, id, "Could not locate the MultiTerm script to relaunch elevated.");
+                return;
+            }
+
+            ShellInfo shell = this.GetShell(Json.Get(options, "shell"));
+            string cwd = this.GetWorkingDirectory(Json.Get(options, "cwd"));
+            int cols = Math.Max(20, Json.GetInt(options, "cols", 120));
+            int rows = Math.Max(5, Json.GetInt(options, "rows", 30));
+            string title = Json.Get(options, "title");
+            if (String.IsNullOrWhiteSpace(title))
+            {
+                title = shell.Label;
+            }
+            title = title.Trim();
+
+            string token = NewElevationToken();
+            TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+            try
+            {
+                listener.Start();
+            }
+            catch (Exception error)
+            {
+                this.SendElevateError(client, id, error.Message);
+                return;
+            }
+
+            int listenPort = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+            // Bind BEFORE elevating: the helper verifies the listener's owning PID, and
+            // the port being already held by us is what makes that check meaningful.
+            string config = "{\"port\":" + listenPort
+                + ",\"token\":" + Json.Quote(token)
+                + ",\"bridgePid\":" + Process.GetCurrentProcess().Id
+                + ",\"shellFile\":" + Json.Quote(shell.File)
+                + ",\"shellLabel\":" + Json.Quote(shell.Label)
+                + ",\"cwd\":" + Json.Quote(cwd)
+                + ",\"cols\":" + cols
+                + ",\"rows\":" + rows
+                + ",\"title\":" + Json.Quote(title)
+                + ",\"id\":" + Json.Quote(id) + "}";
+            string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(config));
+
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = "powershell.exe";
+                startInfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File "
+                    + Json.QuoteCommandLine(script) + " -ElevatedHost " + encoded;
+                startInfo.WorkingDirectory = cwd;
+                // "runas" is what raises the UAC prompt, and it is only honoured when
+                // UseShellExecute is true. WindowStyle Hidden reaches the elevated process
+                // through the UAC broker's STARTUPINFO, so powershell.exe -- a console
+                // application -- never shows a window. The consent dialog is drawn on the
+                // secure desktop by a different process and is unaffected.
+                startInfo.UseShellExecute = true;
+                startInfo.Verb = "runas";
+                startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+                Process.Start(startInfo);
+            }
+            catch (Win32Exception error)
+            {
+                this.StopElevationListener(listener);
+                // 1223 == ERROR_CANCELLED: the user dismissed the UAC prompt.
+                string message = error.NativeErrorCode == 1223
+                    ? "Administrator access was declined."
+                    : error.Message;
+                this.Log("info", "Elevation failed for " + id + ": " + message);
+                this.SendElevateError(client, id, message);
+                return;
+            }
+            catch (Exception error)
+            {
+                this.StopElevationListener(listener);
+                this.SendElevateError(client, id, error.Message);
+                return;
+            }
+
+            this.Log("info", "Elevation requested for " + id + " (" + shell.Label + ")");
+            client.Send("{\"type\":\"elevateStarted\",\"id\":" + Json.Quote(id) + ",\"shell\":" + Json.Quote(shell.Label) + "}");
+            this.AwaitElevatedHost(client, listener, id, token, title, shell, cwd, cols, rows);
+        }
+
+        // Wait (off the message loop) for the elevated helper to call back. The user may sit
+        // on the UAC prompt for a while, so the window is generous; stopping the listener is
+        // what unblocks the accept, which doubles as the timeout mechanism.
+        private void AwaitElevatedHost(BridgeClient client, TcpListener listener, string id, string token, string title, ShellInfo shell, string cwd, int cols, int rows)
+        {
+            int settled = 0;
+            Timer timeout = null;
+            timeout = new Timer(delegate
+            {
+                if (Interlocked.CompareExchange(ref settled, 1, 0) == 0)
+                {
+                    this.StopElevationListener(listener);
+                    this.SendElevateError(client, id, "Administrator terminal did not start in time.");
+                }
+                try { timeout.Dispose(); } catch { }
+            }, null, 180000, System.Threading.Timeout.Infinite);
+
+            Task.Run(delegate
+            {
+                TcpClient connection = null;
+                try
+                {
+                    connection = listener.AcceptTcpClient();
+                }
+                catch
+                {
+                    // Listener stopped: either the timeout above fired or the bridge is
+                    // shutting down. Whoever stopped it already reported the outcome.
+                    return;
+                }
+
+                if (Interlocked.CompareExchange(ref settled, 1, 0) != 0)
+                {
+                    try { connection.Close(); } catch { }
+                    return;
+                }
+
+                try { timeout.Dispose(); } catch { }
+                // One connection only; a second caller must not get a shot at the token.
+                this.StopElevationListener(listener);
+
+                try
+                {
+                    this.AdoptElevatedSession(client, connection, id, token, title, shell, cwd, cols, rows);
+                }
+                catch (Exception error)
+                {
+                    try { connection.Close(); } catch { }
+                    this.Log("error", "Elevated session failed for " + id + ": " + error.Message);
+                    this.SendElevateError(client, id, error.Message);
+                }
+            });
+        }
+
+        // Authenticate the helper, then wire its relayed terminal in as a normal session.
+        private void AdoptElevatedSession(BridgeClient client, TcpClient connection, string id, string token, string title, ShellInfo shell, string cwd, int cols, int rows)
+        {
+            NetworkStream stream = connection.GetStream();
+            // The helper must present the token promptly; without a read timeout a stalled
+            // peer would pin this thread for the life of the bridge.
+            stream.ReadTimeout = 30000;
+            UTF8Encoding encoding = new UTF8Encoding(false);
+            StreamReader reader = new StreamReader(stream, encoding);
+            StreamWriter writer = new StreamWriter(stream, encoding);
+            writer.AutoFlush = true;
+
+            Dictionary<string, string> auth = Json.ParseFlatObject(reader.ReadLine());
+            if (Json.Get(auth, "type") != "auth" || !TokensMatch(Json.Get(auth, "token"), token))
+            {
+                try { connection.Close(); } catch { }
+                this.SendElevateError(client, id, "The administrator terminal failed to authenticate.");
+                return;
+            }
+
+            writer.WriteLine("{\"type\":\"ready\"}");
+
+            Dictionary<string, string> started = Json.ParseFlatObject(reader.ReadLine());
+            if (Json.Get(started, "type") != "started")
+            {
+                string reported = Json.Get(started, "message");
+                try { connection.Close(); } catch { }
+                this.SendElevateError(client, id, String.IsNullOrEmpty(reported) ? "The administrator terminal did not start." : reported);
+                return;
+            }
+
+            // Relayed sessions have no local pseudo-console; input, resize and kill travel
+            // over the socket instead. Everything downstream treats it as a normal session.
+            TerminalSession session = new TerminalSession(id, title, shell, cwd, cols, rows);
+            session.Output += delegate(string data)
+            {
+                this.Broadcast("{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data) + "}");
+            };
+            session.Exited += delegate(int exitCode)
+            {
+                TerminalSession removed;
+                this.sessions.TryRemove(id, out removed);
+                this.Log("info", "Administrator session exited: " + id + " (code " + exitCode + ")");
+                this.Broadcast("{\"type\":\"exited\",\"id\":" + Json.Quote(id) + ",\"code\":" + exitCode + "}");
+            };
+
+            // No further blocking reads once the relay owns the socket.
+            stream.ReadTimeout = System.Threading.Timeout.Infinite;
+            session.AttachRemote(connection, reader, writer, Json.GetInt(started, "pid", 0));
+
+            if (!this.sessions.TryAdd(id, session))
+            {
+                session.Kill();
+                client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"A session with this id already exists.\"}");
+                return;
+            }
+
+            this.Log("info", "Administrator session created: " + title + " [" + id + ", " + shell.Label + "]");
+            client.Send("{\"type\":\"created\"," + session.SummaryJson().Substring(1));
+        }
+
+        private void SendElevateError(BridgeClient client, string id, string message)
+        {
+            client.Send("{\"type\":\"elevateError\",\"id\":" + Json.Quote(id) + ",\"message\":" + Json.Quote(message) + "}");
+        }
+
+        private void StopElevationListener(TcpListener listener)
+        {
+            try { listener.Stop(); } catch { }
+        }
+
+        private static string NewElevationToken()
+        {
+            byte[] raw = new byte[32];
+            using (RandomNumberGenerator rng = RandomNumberGenerator.Create())
+            {
+                rng.GetBytes(raw);
+            }
+
+            StringBuilder builder = new StringBuilder(raw.Length * 2);
+            foreach (byte value in raw)
+            {
+                builder.Append(value.ToString("x2"));
+            }
+
+            return builder.ToString();
+        }
+
+        // Length-independent, early-exit-free comparison so the token cannot be recovered
+        // one byte at a time by timing repeated connections.
+        private static bool TokensMatch(string candidate, string expected)
+        {
+            if (candidate == null || expected == null || candidate.Length != expected.Length)
+            {
+                return false;
+            }
+
+            int difference = 0;
+            for (int index = 0; index < expected.Length; index++)
+            {
+                difference |= candidate[index] ^ expected[index];
+            }
+
+            return difference == 0;
         }
 
         // Logs live under the user's profile rather than the install directory, which is
@@ -1536,6 +1817,15 @@ namespace MultiTerm.PowerShellBridge
         private IntPtr threadHandle = IntPtr.Zero;
         private volatile bool exited;
 
+        // Set for administrator terminals, whose pseudo-console lives in an elevated helper
+        // process. Input, resize and kill are forwarded over this socket instead of touching
+        // a local ConPTY; output and exit arrive back the same way.
+        private volatile bool remote;
+        private TcpClient remoteSocket;
+        private StreamReader remoteReader;
+        private StreamWriter remoteWriter;
+        private readonly object remoteWriteLock = new object();
+
         public TerminalSession(string id, string title, ShellInfo shell, string cwd, int cols, int rows)
         {
             this.Id = id;
@@ -1796,7 +2086,18 @@ namespace MultiTerm.PowerShellBridge
 
         public void Write(string data)
         {
-            if (this.exited || String.IsNullOrEmpty(data) || this.inputStream == null)
+            if (this.exited || String.IsNullOrEmpty(data))
+            {
+                return;
+            }
+
+            if (this.remote)
+            {
+                this.SendRemote("{\"type\":\"input\",\"data\":" + Json.Quote(data) + "}");
+                return;
+            }
+
+            if (this.inputStream == null)
             {
                 return;
             }
@@ -1815,6 +2116,19 @@ namespace MultiTerm.PowerShellBridge
 
         public void Resize(int cols, int rows)
         {
+            if (this.remote)
+            {
+                if (this.exited)
+                {
+                    return;
+                }
+
+                this.Cols = Math.Max(20, cols);
+                this.Rows = Math.Max(5, rows);
+                this.SendRemote("{\"type\":\"resize\",\"cols\":" + this.Cols + ",\"rows\":" + this.Rows + "}");
+                return;
+            }
+
             lock (this.handleLock)
             {
                 if (this.exited || this.pseudoConsole == IntPtr.Zero)
@@ -1855,6 +2169,15 @@ namespace MultiTerm.PowerShellBridge
 
         public void Kill()
         {
+            if (this.remote)
+            {
+                if (!this.exited)
+                {
+                    this.SendRemote("{\"type\":\"kill\"}");
+                }
+                return;
+            }
+
             lock (this.handleLock)
             {
                 if (this.exited || this.processHandle == IntPtr.Zero)
@@ -1863,6 +2186,99 @@ namespace MultiTerm.PowerShellBridge
                 }
 
                 Native.TerminateProcess(this.processHandle, 1);
+            }
+        }
+
+        // Adopt an authenticated elevated helper as this session's terminal. The helper has
+        // already started the shell (hence the pid); from here we only relay.
+        public void AttachRemote(TcpClient socket, StreamReader reader, StreamWriter writer, int pid)
+        {
+            this.remoteSocket = socket;
+            this.remoteReader = reader;
+            this.remoteWriter = writer;
+            this.Pid = pid;
+            this.remote = true;
+            this.StartRemoteLoop();
+        }
+
+        private void SendRemote(string payload)
+        {
+            lock (this.remoteWriteLock)
+            {
+                try
+                {
+                    this.remoteWriter.WriteLine(payload);
+                }
+                catch
+                {
+                    // The helper is gone; the read loop will settle the session.
+                }
+            }
+        }
+
+        private void StartRemoteLoop()
+        {
+            Task.Run(delegate
+            {
+                int exitCode = 1;
+                try
+                {
+                    string line;
+                    while ((line = this.remoteReader.ReadLine()) != null)
+                    {
+                        Dictionary<string, string> message;
+                        try
+                        {
+                            message = Json.ParseFlatObject(line);
+                        }
+                        catch
+                        {
+                            continue;
+                        }
+
+                        string type = Json.Get(message, "type");
+                        if (type == "output")
+                        {
+                            string data = Json.Get(message, "data");
+                            Action<string> handler = this.Output;
+                            this.AppendToLog(data);
+                            if (handler != null)
+                            {
+                                handler(data);
+                            }
+                        }
+                        else if (type == "exit")
+                        {
+                            exitCode = Json.GetInt(message, "code", 0);
+                            break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Socket faulted: treat it exactly like the helper exiting.
+                }
+
+                this.FinishRemote(exitCode);
+            });
+        }
+
+        // Single settle point for a relayed session, whether it ended cleanly, the socket
+        // dropped, or the elevated helper was killed out from under us.
+        private void FinishRemote(int exitCode)
+        {
+            if (this.exited)
+            {
+                return;
+            }
+
+            this.exited = true;
+            try { if (this.remoteSocket != null) this.remoteSocket.Close(); } catch { }
+            this.StopLog();
+            Action<int> handler = this.Exited;
+            if (handler != null)
+            {
+                handler(exitCode);
             }
         }
 
@@ -2030,6 +2446,151 @@ namespace MultiTerm.PowerShellBridge
                 {
                     nextTeardownUtc = DateTime.UtcNow.AddMilliseconds(TeardownStaggerMs);
                 }
+            }
+        }
+    }
+
+    // The high-integrity half of an administrator terminal. This runs inside the elevated
+    // copy of the script (-ElevatedHost): it owns the real pseudo-console -- which the
+    // medium-integrity bridge cannot create for an elevated process -- and relays it back
+    // over loopback. The caller verifies the bridge BEFORE invoking this, so by the time we
+    // are here the only remaining job is to prove ourselves with the one-time token.
+    public static class ElevatedHost
+    {
+        public static int Run(string encodedConfig)
+        {
+            Dictionary<string, string> config;
+            try
+            {
+                config = Json.ParseFlatObject(Encoding.UTF8.GetString(Convert.FromBase64String(encodedConfig)));
+            }
+            catch
+            {
+                return 2;
+            }
+
+            TcpClient socket = new TcpClient();
+            try
+            {
+                socket.Connect(IPAddress.Loopback, Json.GetInt(config, "port", 0));
+            }
+            catch
+            {
+                return 3;
+            }
+
+            UTF8Encoding encoding = new UTF8Encoding(false);
+            NetworkStream stream = socket.GetStream();
+            StreamReader reader = new StreamReader(stream, encoding);
+            StreamWriter writer = new StreamWriter(stream, encoding);
+            writer.AutoFlush = true;
+
+            TerminalSession session = null;
+            try
+            {
+                writer.WriteLine("{\"type\":\"auth\",\"token\":" + Json.Quote(Json.Get(config, "token")) + "}");
+
+                // Do not touch the shell until the bridge has accepted the token.
+                Dictionary<string, string> ready = Json.ParseFlatObject(reader.ReadLine());
+                if (Json.Get(ready, "type") != "ready")
+                {
+                    return 4;
+                }
+
+                ShellInfo shell = new ShellInfo(Json.Get(config, "shellFile"), Json.Get(config, "shellLabel"));
+                session = new TerminalSession(
+                    Json.Get(config, "id"),
+                    Json.Get(config, "title"),
+                    shell,
+                    Json.Get(config, "cwd"),
+                    Json.GetInt(config, "cols", 120),
+                    Json.GetInt(config, "rows", 30));
+
+                object writeLock = new object();
+                ManualResetEventSlim finished = new ManualResetEventSlim(false);
+
+                session.Output += delegate(string data)
+                {
+                    lock (writeLock)
+                    {
+                        try { writer.WriteLine("{\"type\":\"output\",\"data\":" + Json.Quote(data) + "}"); }
+                        catch { }
+                    }
+                };
+                session.Exited += delegate(int code)
+                {
+                    lock (writeLock)
+                    {
+                        try { writer.WriteLine("{\"type\":\"exit\",\"code\":" + code + "}"); }
+                        catch { }
+                    }
+                    finished.Set();
+                };
+
+                try
+                {
+                    session.Start();
+                }
+                catch (Exception error)
+                {
+                    lock (writeLock)
+                    {
+                        try { writer.WriteLine("{\"type\":\"startFailed\",\"message\":" + Json.Quote(error.Message) + "}"); }
+                        catch { }
+                    }
+                    return 5;
+                }
+
+                lock (writeLock)
+                {
+                    writer.WriteLine("{\"type\":\"started\",\"pid\":" + session.Pid + "}");
+                }
+
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    Dictionary<string, string> message;
+                    try
+                    {
+                        message = Json.ParseFlatObject(line);
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    string type = Json.Get(message, "type");
+                    if (type == "input")
+                    {
+                        session.Write(Json.Get(message, "data"));
+                    }
+                    else if (type == "resize")
+                    {
+                        session.Resize(Json.GetInt(message, "cols", 120), Json.GetInt(message, "rows", 30));
+                    }
+                    else if (type == "kill")
+                    {
+                        session.RequestExit();
+                    }
+                }
+
+                // The bridge hung up (app closed, or the session was removed). An orphaned
+                // elevated shell would be invisible and unkillable from the UI, so end it.
+                session.Kill();
+                finished.Wait(5000);
+                return 0;
+            }
+            catch
+            {
+                if (session != null)
+                {
+                    try { session.Kill(); } catch { }
+                }
+                return 1;
+            }
+            finally
+            {
+                try { socket.Close(); } catch { }
             }
         }
     }
@@ -2369,8 +2930,39 @@ namespace MultiTerm.PowerShellBridge
 '@
 }
 
-$bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new($HostName, $Port, $effectiveAllowRemote, $publicDir, -not $NoBrowser.IsPresent)
+# Administrator terminals relaunch this script elevated with -ElevatedHost. In that
+# mode we are not a bridge at all: we own the elevated shell's pseudo-console (which a
+# medium-integrity bridge cannot create) and relay it back over loopback.
+#
+# The escalation gate lives here, BEFORE any elevated shell is spawned: confirm the
+# loopback listener we were pointed at is owned by the exact process that launched us
+# and that it really is a MultiTerm bridge. We run at higher integrity than the bridge,
+# so we can inspect it fully. The bridge binds the port before elevating us, so the
+# owner is deterministically the real bridge -- a lower-integrity impostor can neither
+# hold that PID nor pre-empt the bound port, even if it somehow learned the token.
+if ($ElevatedHost) {
+  try {
+    $raw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($ElevatedHost))
+    $cfg = $raw | ConvertFrom-Json
+    $listen = Get-NetTCPConnection -State Listen -LocalPort ([int]$cfg.port) -ErrorAction Stop |
+      Select-Object -First 1
+    $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$listen.OwningProcess)" -ErrorAction Stop
+    if ([int]$listen.OwningProcess -ne [int]$cfg.bridgePid) {
+      exit 10
+    }
+    if ($owner.CommandLine -notmatch 'Start-MultiTerm\.ps1') {
+      exit 11
+    }
+  } catch {
+    exit 12
+  }
 
+  exit ([MultiTerm.PowerShellBridge.ElevatedHost]::Run($ElevatedHost))
+}
+
+[MultiTerm.PowerShellBridge.BridgeServer]::ScriptPath = $PSCommandPath
+
+$bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new($HostName, $Port, $effectiveAllowRemote, $publicDir, -not $NoBrowser.IsPresent)
 try {
   $bridge.Run()
 } catch {
