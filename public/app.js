@@ -50,7 +50,7 @@ const PANE_OVERFLOW_WIDTH = 600;
 const STATUS_PILL_FAB_GAP = 8;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.19";
+const APP_VERSION = "0.1.20";
 
 // xterm reports focus changes back to the shell as data when the application
 // enables DECSET 1004 (which ConPTY does): ESC [ I on focus in, ESC [ O on
