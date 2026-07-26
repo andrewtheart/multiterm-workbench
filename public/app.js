@@ -46,6 +46,9 @@ const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94
 // the actions move into the menu rather than crowding or hiding the title.
 const PANE_OVERFLOW_WIDTH = 600;
 
+// Gap kept between the status pill and the log FAB when they would collide.
+const STATUS_PILL_FAB_GAP = 8;
+
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.16";
 
@@ -282,6 +285,7 @@ const state = {
   snap: null,
   socket: null,
   socketReady: false,
+  statusPillClearanceScheduled: false,
   terminalSearch: "",
   terminals: new Map(),
   workspaces: loadWorkspaces(),
@@ -903,6 +907,7 @@ function addTerminal(options = {}) {
 
   terminal.observer = new ResizeObserver(() => {
     updatePaneDensity(terminal);
+    scheduleStatusPillClearance();
     scheduleFit(terminal);
   });
   state.terminals.set(id, terminal);
@@ -2028,6 +2033,47 @@ function updatePaneDensity(terminal) {
   terminal.pane.classList.toggle("is-narrow", width < PANE_OVERFLOW_WIDTH);
 }
 
+// The log FAB is fixed to the viewport's bottom-right corner, so whichever pane
+// currently sits there would have its status pill painted over (the FAB stacks
+// above it). Nudge just that one pill clear of the FAB rather than insetting
+// every pane's pill for a collision only one of them can have.
+function updateStatusPillClearance() {
+  if (!state.terminals.size) return;
+  const fab = elements.logToggle;
+  const pills = [...state.terminals.values()].map((terminal) => terminal.statusElement);
+
+  // Clear every override first, then measure, then apply, so the reads and
+  // writes stay batched instead of forcing a reflow per pane.
+  for (const pill of pills) pill.style.removeProperty("--pane-status-shift");
+  if (!fab || fab.hidden) return;
+
+  const fabBox = fab.getBoundingClientRect();
+  if (!fabBox.width) return;
+
+  const shifts = pills.map((pill) => {
+    const box = pill.getBoundingClientRect();
+    if (!box.width) return 0;
+    const overlaps = box.right > fabBox.left - STATUS_PILL_FAB_GAP
+      && box.left < fabBox.right
+      && box.bottom > fabBox.top
+      && box.top < fabBox.bottom;
+    return overlaps ? Math.ceil(box.right - fabBox.left + STATUS_PILL_FAB_GAP) : 0;
+  });
+
+  shifts.forEach((shift, index) => {
+    if (shift > 0) pills[index].style.setProperty("--pane-status-shift", `${shift}px`);
+  });
+}
+
+function scheduleStatusPillClearance() {
+  if (state.statusPillClearanceScheduled) return;
+  state.statusPillClearanceScheduled = true;
+  window.requestAnimationFrame(() => {
+    state.statusPillClearanceScheduled = false;
+    updateStatusPillClearance();
+  });
+}
+
 function scheduleFit(terminal) {
   // The ResizeObserver watches both the pane and its screen, so a single layout
   // change can fire this twice; coalesce to one visual fit per animation frame.
@@ -2319,6 +2365,7 @@ function setLogPanel(open) {
   elements.logPanel.hidden = !open;
   elements.logToggle.hidden = open;
   elements.logToggle.setAttribute("aria-expanded", String(open));
+  scheduleStatusPillClearance();
   if (open) {
     logStore.unseenError = false;
     if (elements.logFabDot) elements.logFabDot.hidden = true;
@@ -3932,6 +3979,8 @@ function bindContextMenu() {
   window.addEventListener("blur", hideContextMenu);
   window.addEventListener("resize", hideContextMenu);
   elements.host.addEventListener("scroll", hideContextMenu, true);
+  // Scrolling moves panes under the fixed log FAB, changing which pill collides.
+  elements.host.addEventListener("scroll", scheduleStatusPillClearance, { passive: true });
 }
 
 function buildContextMenu(terminal) {

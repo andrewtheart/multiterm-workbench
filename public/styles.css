@@ -2014,7 +2014,7 @@ body.is-pane-dragging {
   cursor: default;
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
   padding: 0 8px 0 10px;
 }
@@ -2257,18 +2257,41 @@ body.is-pane-dragging {
   background: var(--state-hover);
 }
 
+/* The session/PID pill floats over the bottom-right of the terminal instead of
+   taking a column in the header. It rests at a low opacity so it never competes
+   with terminal output, lifts slightly while the pane is hovered so it can be
+   found, and goes fully opaque on direct hover for a deliberate read. */
 .pane-status {
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  backdrop-filter: blur(10px) saturate(140%);
+  background: var(--surface-translucent);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
+  bottom: 8px;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   max-width: 110px;
+  opacity: 0.22;
   overflow: hidden;
-  padding: 5px 9px;
+  padding: 4px 9px;
+  position: absolute;
+  right: calc(12px + var(--pane-status-shift, 0px));
   text-overflow: ellipsis;
+  transition: opacity var(--dur-fast) var(--ease-standard);
   white-space: nowrap;
+  z-index: 12;
+}
+
+.terminal-pane:hover .pane-status {
+  opacity: 0.55;
+}
+
+/* Kept more specific than the pane-hover rule above, which would otherwise also
+   match whenever the pointer is over the pill itself. */
+.terminal-pane:hover .pane-status:hover {
+  opacity: 1;
 }
 
 .pane-status.is-live {
@@ -2320,7 +2343,6 @@ body.is-pane-dragging {
   grid-template-rows: 32px minmax(0, 1fr);
 }
 
-.terminal-host.compact .pane-status,
 .terminal-host.compact .pane-actions button[data-action="move-left"],
 .terminal-host.compact .pane-actions button[data-action="move-right"],
 .terminal-host.compact .pane-actions button[data-action="clear"],

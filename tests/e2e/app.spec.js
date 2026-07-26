@@ -159,6 +159,75 @@ test.describe("MultiTerm Workbench UI", () => {
     }
   });
 
+  test("shows the pid as a translucent pill at the bottom right of the pane", async () => {
+    const pane = page.locator(".terminal-pane").first();
+    const status = pane.locator(".pane-status");
+
+    await expect(status).toHaveText(/^pid \d+$/);
+    // The pill overlays the terminal rather than sitting in the header.
+    await expect(pane.locator(".pane-bar .pane-status")).toHaveCount(0);
+
+    const boxes = await pane.evaluate((el) => {
+      const pill = el.querySelector(".pane-status");
+      const paneBox = el.getBoundingClientRect();
+      const pillBox = pill.getBoundingClientRect();
+      const barBox = el.querySelector(".pane-bar").getBoundingClientRect();
+      return {
+        position: getComputedStyle(pill).position,
+        fromRight: paneBox.right - pillBox.right,
+        fromBottom: paneBox.bottom - pillBox.bottom,
+        belowBar: pillBox.top > barBox.bottom
+      };
+    });
+
+    expect(boxes.position).toBe("absolute");
+    expect(boxes.belowBar).toBe(true);
+    expect(boxes.fromRight).toBeLessThan(24);
+    expect(boxes.fromBottom).toBeLessThan(24);
+
+    const opacity = () => status.evaluate((el) => Number(getComputedStyle(el).opacity));
+
+    // Park the pointer away from the pane; earlier tests can leave it hovering.
+    await page.mouse.move(0, 0);
+    // Very translucent when idle so it does not compete with terminal output.
+    await expect.poll(opacity).toBeLessThan(0.35);
+
+    // Hovering the pane lifts it enough to be noticed...
+    await pane.locator(".pane-title").hover();
+    await expect.poll(opacity).toBeGreaterThan(0.35);
+
+    // ...and hovering the pill itself makes it fully legible.
+    await status.hover();
+    await expect.poll(opacity).toBe(1);
+  });
+
+  test("keeps the pid pill clear of the floating log button", async () => {
+    const report = await page.evaluate(() => {
+      const fab = document.querySelector("#logToggle");
+      const f = fab.getBoundingClientRect();
+      return [...document.querySelectorAll(".terminal-pane")].map((pane) => {
+        const pill = pane.querySelector(".pane-status");
+        const b = pill.getBoundingClientRect();
+        return {
+          overlapsFab: b.right > f.left && b.left < f.right && b.bottom > f.top && b.top < f.bottom,
+          clipped: pill.scrollWidth > pill.clientWidth,
+          insetFromPaneRight: pane.getBoundingClientRect().right - b.right
+        };
+      });
+    });
+
+    expect(report.length).toBeGreaterThan(0);
+    for (const pane of report) {
+      // The FAB is fixed above the panes, so an overlapping pill would be
+      // painted over and unreadable.
+      expect(pane.overlapsFab).toBe(false);
+      expect(pane.clipped).toBe(false);
+      expect(pane.insetFromPaneRight).toBeGreaterThan(0);
+    }
+    // Only the pane under the FAB should be nudged; the rest stay flush right.
+    expect(Math.min(...report.map((p) => p.insetFromPaneRight))).toBeLessThan(24);
+  });
+
   test("opens the About dialog and shows the version", async () => {
     await page.locator("#aboutToggle").click();
     await expect(page.locator("#aboutOverlay")).toBeVisible();
