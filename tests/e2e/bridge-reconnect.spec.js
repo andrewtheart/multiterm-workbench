@@ -14,6 +14,25 @@ test.describe("Bridge auto-reconnect", () => {
   const socketReady = () => page.evaluate(() => state.socketReady);
   const statusOf = (id) => page.evaluate((i) => state.terminals.get(i)?.status ?? null, id);
 
+  // How many sessions the bridge still holds. A throwaway socket's welcome
+  // payload is exactly what a reconnect is handed, so this answers the only
+  // question that matters here: would reconnecting re-adopt anything?
+  const bridgeSessionCount = () =>
+    page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const probe = new WebSocket(`${protocol}//${window.location.host}/ws`);
+          probe.addEventListener("message", (event) => {
+            const message = JSON.parse(event.data);
+            if (message.type !== "welcome") return;
+            probe.close();
+            resolve(message.sessions.length);
+          });
+          probe.addEventListener("error", () => reject(new Error("probe socket failed")));
+        })
+    );
+
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({ baseURL: "http://127.0.0.1:3199" });
     page = await context.newPage();
@@ -30,9 +49,12 @@ test.describe("Bridge auto-reconnect", () => {
   // fresh terminal and wait until the bridge confirms it live.
   async function freshLiveTerminal() {
     await page.evaluate(() => closeAllTerminals());
-    // Let the "exit" reach each pty (+1.5s force-kill fallback) so no orphan
-    // sessions linger on the server to be re-adopted on reconnect.
-    await page.waitForTimeout(2000);
+    // The bridge only forgets a session once its pty has really exited, and it
+    // deliberately staggers teardown and gives each shell seconds of grace to
+    // leave on its own. Anything still in that map when the socket drops gets
+    // re-adopted on reconnect, so wait for the map to actually be empty — a
+    // fixed delay here silently rots as earlier specs leave more to clear.
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(0);
     const id = await page.evaluate(() => addTerminal().id);
     await expect.poll(() => statusOf(id), { timeout: 15000 }).toBe("live");
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
