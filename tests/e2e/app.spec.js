@@ -247,6 +247,25 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#aboutOverlay")).toBeHidden();
   });
 
+  test("renders the brand mark from the shipped app icon", async () => {
+    // The taskbar icon and the in-app brand mark must be the same artwork; the
+    // mark used to be an unrelated CSS gradient blob.
+    for (const selector of [".topbar .brand-mark", ".about-head .brand-mark"]) {
+      const image = await page
+        .locator(selector)
+        .evaluate((el) => getComputedStyle(el).backgroundImage);
+      expect(image).toContain("favicon.svg");
+    }
+    const reachable = await page.evaluate(async () => {
+      const res = await fetch("favicon.svg");
+      return { ok: res.ok, body: await res.text() };
+    });
+    expect(reachable.ok).toBe(true);
+    // Same two marks the .ico carries: the teal chevron and the amber cursor.
+    expect(reachable.body).toContain("#79d7bd");
+    expect(reachable.body).toContain("#f0b35a");
+  });
+
   test("opens the keyboard shortcuts dialog", async () => {
     await page.locator("#helpToggle").click();
     await expect(page.locator("#shortcutsOverlay")).toBeVisible();
