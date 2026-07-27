@@ -10,13 +10,15 @@
 
     Build only (no -Push):
         The version in package.json is treated as the source of truth and the
-        script verifies that installer\MultiTerm.iss declares the same version
-        (the .iss derives the output filename from it). No files are modified.
+        script verifies that installer\MultiTerm.iss (which derives the output
+        filename from it) and public\app.js (whose APP_VERSION the running app
+        reports and checks updates against) declare the same version. No files
+        are modified.
 
     Publish (-Push):
-        The version is bumped automatically (patch by default) in BOTH
-        package.json and installer\MultiTerm.iss, the installer is built for the
-        new version, the two edited files are committed as
+        The version is bumped automatically (patch by default) in package.json,
+        installer\MultiTerm.iss, and public\app.js, the installer is built for the
+        new version, the edited files are committed as
         "chore(release): v<version>", the current branch is pushed, and a GitHub
         release tagged v<version> is created via the gh CLI targeting that commit,
         with the installer attached as an asset.
@@ -147,9 +149,11 @@ function Set-VersionInFile {
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $PackageJsonPath = Join-Path $RepoRoot 'package.json'
 $IssPath = Join-Path $RepoRoot 'installer\MultiTerm.iss'
+$AppJsPath = Join-Path $RepoRoot 'public\app.js'
 
 if (-not (Test-Path -LiteralPath $PackageJsonPath)) { throw "Cannot find package.json at $PackageJsonPath" }
 if (-not (Test-Path -LiteralPath $IssPath)) { throw "Cannot find installer script at $IssPath" }
+if (-not (Test-Path -LiteralPath $AppJsPath)) { throw "Cannot find renderer at $AppJsPath" }
 
 if ($SetVersion -and $SetVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "-SetVersion must be x.y.z (got '$SetVersion')."
@@ -163,6 +167,11 @@ $IssText = Get-Content -LiteralPath $IssPath -Raw
 $IssMatch = [regex]::Match($IssText, '(?m)^\s*#define\s+MyAppVersion\s+"([^"]+)"')
 if (-not $IssMatch.Success) { throw "Could not find '#define MyAppVersion' in $IssPath" }
 $IssVersion = $IssMatch.Groups[1].Value
+
+$AppJsText = Get-Content -LiteralPath $AppJsPath -Raw
+$AppJsMatch = [regex]::Match($AppJsText, '(?m)^\s*const\s+APP_VERSION\s*=\s*"([^"]+)"')
+if (-not $AppJsMatch.Success) { throw "Could not find 'const APP_VERSION' in $AppJsPath" }
+$AppJsVersion = $AppJsMatch.Groups[1].Value
 
 # --- Decide the version to build ------------------------------------------------
 $BumpVersion = $Push -and -not $NoVersionBump
@@ -178,16 +187,19 @@ if ($BumpVersion) {
 }
 else {
     # Build-only, or -Push -NoVersionBump: use current version and require the
-    # .iss to agree (its output filename is derived from MyAppVersion).
+    # .iss (output filename) and app.js (reported/checked version) to agree.
     $Version = $CurrentVersion
-    if ($IssVersion -ne $Version) {
-        $msg = "Version mismatch: package.json=$Version but installer\MultiTerm.iss=$IssVersion."
+    $mismatches = @()
+    if ($IssVersion -ne $Version) { $mismatches += "installer\MultiTerm.iss=$IssVersion" }
+    if ($AppJsVersion -ne $Version) { $mismatches += "public\app.js=$AppJsVersion" }
+    if ($mismatches.Count -gt 0) {
+        $msg = "Version mismatch: package.json=$Version but " + ($mismatches -join ', ') + "."
         if ($Force) {
             Write-Warning "$msg Continuing because -Force was supplied; the installer will be named MultiTerm-Setup-$IssVersion.exe."
             $Version = $IssVersion
         }
         else {
-            throw "$msg Update MyAppVersion in installer\MultiTerm.iss, or run -Push to auto-bump both, or pass -Force."
+            throw "$msg Update the mismatched file(s), or run -Push to auto-bump all, or pass -Force."
         }
     }
     Write-Step "Version: $Version"
@@ -239,13 +251,14 @@ if ($Push) {
 
 # --- Apply the version bump (gated) ---------------------------------------------
 if ($BumpVersion) {
-    if ($PSCmdlet.ShouldProcess("package.json & installer\MultiTerm.iss", "Set version to $Version")) {
+    if ($PSCmdlet.ShouldProcess("package.json, installer\MultiTerm.iss & public\app.js", "Set version to $Version")) {
         Set-VersionInFile -Path $PackageJsonPath -Pattern '("version"\s*:\s*")([^"]+)(")' -NewVersion $Version
         Set-VersionInFile -Path $IssPath -Pattern '(#define\s+MyAppVersion\s+")([^"]+)(")' -NewVersion $Version
-        Write-Step "Version set to $Version in package.json and installer\MultiTerm.iss."
+        Set-VersionInFile -Path $AppJsPath -Pattern '(const\s+APP_VERSION\s*=\s*")([^"]+)(")' -NewVersion $Version
+        Write-Step "Version set to $Version in package.json, installer\MultiTerm.iss, and public\app.js."
     }
     else {
-        Write-Step "[WhatIf] Would set version to $Version in package.json and installer\MultiTerm.iss."
+        Write-Step "[WhatIf] Would set version to $Version in package.json, installer\MultiTerm.iss, and public\app.js."
     }
 }
 
@@ -274,7 +287,7 @@ $Target = $null
 if ($BumpVersion) {
     if ($PSCmdlet.ShouldProcess($RepoSlug, "Commit '$Tag' bump and push branch")) {
         Write-Step "Committing version bump..."
-        Invoke-Native { git -C $RepoRoot add -- package.json installer/MultiTerm.iss } "git add failed"
+        Invoke-Native { git -C $RepoRoot add -- package.json installer/MultiTerm.iss public/app.js } "git add failed"
         Invoke-Native { git -C $RepoRoot commit -m "chore(release): $Tag" } "git commit failed"
         Write-Step "Pushing branch..."
         Invoke-Native { git -C $RepoRoot push origin HEAD } "git push failed"

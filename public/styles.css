@@ -2180,7 +2180,8 @@ body.header-hidden .status-hint kbd,
   padding-left: 16px;
 }
 
-/* The 1-9 quick-jump badge shown on the first nine actionable rows. */
+/* The 1-9 quick-jump badge shown on the first nine actionable rows. The digit is
+   drawn as generated content so it stays out of the row's textContent. */
 .ctx-accel-num {
   align-items: center;
   border: 1px solid var(--border);
@@ -2195,6 +2196,10 @@ body.header-hidden .status-hint kbd,
   line-height: 1;
   min-width: 15px;
   padding: 0 3px;
+}
+
+.ctx-accel-num::after {
+  content: attr(data-num);
 }
 
 .ctx-item.is-key-focus .ctx-accel-num,

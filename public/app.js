@@ -48,7 +48,7 @@ const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94
 const PANE_OVERFLOW_WIDTH = 600;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.22";
+const APP_VERSION = "0.1.24";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 
@@ -5363,6 +5363,12 @@ async function checkForUpdates({ manual = false } = {}) {
 }
 
 function maybeCheckForUpdatesOnStartup() {
+  // Under browser automation (Playwright/WebDriver) this unsolicited network probe
+  // can resolve mid-test and pop the update modal, whose overlay then swallows
+  // pointer events for every unrelated spec that follows. Automated runs exercise
+  // the update flow explicitly through checkForUpdates(); only the automatic
+  // startup probe is skipped here, leaving real launches untouched.
+  if (navigator.webdriver) return;
   const last = Number(loadUpdateMeta().lastCheck) || 0;
   if (Date.now() - last < UPDATE_CHECK_INTERVAL_MS) return;
   checkForUpdates({ manual: false });
@@ -5930,7 +5936,10 @@ function renderContextMenu(items) {
       if (number != null) {
         const badge = document.createElement("span");
         badge.className = "ctx-accel-num";
-        badge.textContent = String(number);
+        // The digit is painted by CSS (::after) rather than a text node so this
+        // purely decorative, aria-hidden affordance never leaks into the row's
+        // textContent — keyboard activation reads dataset.accelNum, not this label.
+        badge.setAttribute("data-num", String(number));
         badge.setAttribute("aria-hidden", "true");
         accessories.append(badge);
       }
