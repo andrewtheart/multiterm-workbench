@@ -430,17 +430,18 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   z-index: 40;
 }
 
-/* "Hide layout controls" toggle floats at the bottom-right of the left control
-   panel. It lives inside .control-panel so it disappears automatically when the
-   panel collapses; the fixed positioning keeps it pinned above panel scroll. */
+/* "Hide layout controls" toggle sits at the bottom-right INSIDE the left control
+   panel. It is the panel's last child and uses sticky positioning so it stays
+   pinned to the panel's own bottom edge while the panel scrolls — it never drifts
+   past the panel into the pager / status-bar zone the way viewport-fixed did. It
+   lives inside .control-panel so it disappears automatically when the panel
+   collapses. Translucent at rest, fully opaque on hover / focus. */
 .panel-tools {
-  bottom: 46px;
+  bottom: 10px;
   display: flex;
   justify-content: flex-end;
-  left: 0;
   pointer-events: none;
-  position: fixed;
-  width: calc(var(--sidecar-width) - 14px);
+  position: sticky;
   z-index: 40;
 }
 
@@ -453,6 +454,17 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   backdrop-filter: blur(18px) saturate(150%);
   background: var(--surface-translucent);
   box-shadow: var(--elev-3);
+  opacity: 0.45;
+  transition: opacity var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard),
+    box-shadow var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard);
+}
+
+.panel-tools #toggleSidecarTop:hover,
+.panel-tools #toggleSidecarTop:focus-visible {
+  opacity: 1;
 }
 
 /* ---------------- Top bar --------------- */
@@ -618,7 +630,7 @@ body.sidecar-hidden .control-panel {
   background: var(--surface);
   border-right: 1px solid var(--border);
   overflow: auto;
-  padding: 16px 14px 64px;
+  padding: 16px 14px 16px;
 }
 
 .control-section {
