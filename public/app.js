@@ -48,7 +48,7 @@ const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94
 const PANE_OVERFLOW_WIDTH = 600;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.25";
+const APP_VERSION = "0.1.26";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 
@@ -6146,6 +6146,9 @@ function showSessionInfoMenu(terminal) {
 
 function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } = {}) {
   const menu = elements.contextMenu;
+  // The menu must be displayable to measure it, but must not paint at the
+  // temporary 0,0 measurement position before its final coordinates are set.
+  menu.classList.add("is-positioning");
   menu.hidden = false;
   menu.style.left = "0px";
   menu.style.top = "0px";
@@ -6166,6 +6169,7 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } 
   const top = Math.max(8, Math.min(desiredTop, window.innerHeight - rect.height - 8));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
+  menu.classList.remove("is-positioning");
 }
 
 function hideContextMenu() {
