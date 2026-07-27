@@ -419,7 +419,6 @@ test.describe("Command palette — every option works", () => {
     await runCmd("Copy active output");
     await runCmd("Paste into active terminal");
     await runCmd("Restart active terminal");
-    await runCmd("Browse & run script in active terminal\u2026"); // browser -> graceful toast, no throw
 
     // Sync-input toggle (label reflects current state).
     const [syncLabelOff] = await labelsByPrefix("Toggle sync input");

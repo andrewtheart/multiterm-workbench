@@ -2,8 +2,11 @@ const { test, expect } = require("@playwright/test");
 
 // Exhaustive verification of every command-palette option and every settings
 // control. Runs against `node server.js` (the browser build) on :3199, so
-// desktop-only features (admin, run-script) are expected to degrade gracefully.
+// desktop-only Electron features are expected to degrade gracefully.
 test.describe.configure({ mode: "serial" });
+
+const CAN_SHOW_NATIVE_FILE_DIALOG =
+  process.platform === "win32" && !process.env.CI && !process.env.GITHUB_ACTIONS;
 
 test.describe("Command palette + settings verification", () => {
   let context;
@@ -85,20 +88,32 @@ test.describe("Command palette + settings verification", () => {
     }
   });
 
-  test("desktop-only commands degrade gracefully in the browser build", async () => {
+  test("restart-as-administrator degrades gracefully in the browser build", async () => {
     // "New Administrator terminal" is intentionally excluded: in this build it
     // hosts an in-app elevated pane via the bridge (an `elevate` request) rather
     // than degrading, so it is covered separately (stubbed, no real UAC) in
     // palette-and-settings.spec.js.
-    for (const label of ["Restart as Administrator", "Browse & run script in active terminal\u2026"]) {
-      const before = await size();
-      const res = await runCmd(label);
-      expect(res, `${label} threw`).toMatchObject({ found: true, ok: true });
-      await page.waitForTimeout(150);
-      const toast = await lastToast();
-      expect(toast, `${label} toast=${toast}`).toMatch(/desktop app/i);
-      expect(await size(), `${label} must not add a terminal`).toBe(before);
-    }
+    const label = "Restart as Administrator";
+    const before = await size();
+    const res = await runCmd(label);
+    expect(res, `${label} threw`).toMatchObject({ found: true, ok: true });
+    await page.waitForTimeout(150);
+    const toast = await lastToast();
+    expect(toast, `${label} toast=${toast}`).toMatch(/desktop app/i);
+    expect(await size(), `${label} must not add a terminal`).toBe(before);
+  });
+
+  test("opens the native script picker on an interactive Windows host", async () => {
+    test.skip(
+      !CAN_SHOW_NATIVE_FILE_DIALOG,
+      "Requires a local interactive Windows desktop; native dialogs are unavailable in CI."
+    );
+
+    const res = await runCmd("Browse & run script in active terminal\u2026");
+    expect(res).toMatchObject({ found: true, ok: true });
+    await expect
+      .poll(() => page.evaluate(() => pendingBridgeRequests.size))
+      .toBeGreaterThan(0);
   });
 
   test("layout commands set the host layout", async () => {
