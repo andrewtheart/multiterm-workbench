@@ -304,7 +304,7 @@ const state = {
   appElevated: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
-  mem: { open: false, timer: null, requested: false, stats: null, unsupported: false },
+  mem: { open: false, timer: null, requested: false, stats: null, unsupported: false, unsupportedReason: null },
   nextIndex: 1,
   pages: loadPages(),
   primaryId: null,
@@ -822,6 +822,17 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  // An older bridge that predates on-demand memory stats rejects the probe with
+  // a generic "Unsupported message type: memstats" error. That frame carries no
+  // id, so without this guard it would fall through to the bridge-error branch
+  // below and repaint the whole bridge status as offline every few seconds while
+  // the memory chip is open. Treat it as "capability unavailable" instead so the
+  // feature degrades quietly against bridges that don't speak memstats.
+  if (message.type === "error" && /Unsupported message type:\s*memstats/i.test(message.message || "")) {
+    updateMemStatus({ supported: false, reason: "bridge" });
+    return;
+  }
+
   if (message.type === "exited") {
     const terminal = state.terminals.get(message.id);
     if (!terminal) return;
@@ -1072,6 +1083,13 @@ function addTerminal(options = {}) {
 function bindTerminalKeyHandling(terminal) {
   terminal.term.element?.addEventListener("keydown", (event) => {
     if (event.type !== "keydown") return;
+
+    if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyA") {
+      event.preventDefault();
+      event.stopPropagation();
+      terminal.term.selectAll();
+      return;
+    }
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyC") {
       event.preventDefault();
@@ -2738,6 +2756,7 @@ function requestMemStats() {
 function updateMemStatus(stats) {
   if (stats && stats.supported === false) {
     state.mem.unsupported = true;
+    state.mem.unsupportedReason = stats.reason || null;
     state.mem.stats = null;
     clearInterval(state.mem.timer);
     state.mem.timer = null;
@@ -2762,7 +2781,9 @@ function renderMemStatus(errorText) {
   if (!chip || !elements.statusMemText) return;
 
   if (state.mem.unsupported) {
-    chip.title = "Memory usage is only available on Windows";
+    chip.title = state.mem.unsupportedReason === "bridge"
+      ? "Memory usage isn't supported by this MultiTerm bridge"
+      : "Memory usage is only available on Windows";
     setMemStatusText("unavailable");
     return;
   }
@@ -5697,7 +5718,7 @@ function buildContextMenu(terminal) {
     { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id) },
     { label: "Copy all output", icon: "copy", run: () => { terminal.term.clearSelection(); copyTerminalOutput(terminal.id); } },
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", run: () => pasteIntoTerminal(terminal.id) },
-    { label: "Select all", icon: "text-select", run: () => terminal.term.selectAll() },
+    { label: "Select all", hint: "Ctrl+A", icon: "text-select", run: () => terminal.term.selectAll() },
     { separator: true },
     { label: "Find\u2026", hint: "Ctrl+F", icon: "search", run: () => openFind(terminal) },
     { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", run: openFindAll },

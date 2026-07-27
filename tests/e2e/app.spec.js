@@ -140,6 +140,40 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(value).toHaveText("");
   });
 
+  test("degrades the memory chip quietly when the bridge rejects memstats", async () => {
+    // Simulate an older bridge that predates on-demand memory stats: it answers
+    // the probe with a generic "Unsupported message type: memstats" error frame
+    // (which carries no id). That must mark the chip unavailable without flapping
+    // the bridge status readout to offline or logging a bridge error.
+    const result = await page.evaluate(() => {
+      const bridgeStatus = document.querySelector("#bridgeStatus");
+      const before = { text: bridgeStatus.textContent, tone: bridgeStatus.dataset.tone };
+      handleBridgeMessage({ type: "error", message: "Unsupported message type: memstats" });
+      return {
+        before,
+        unsupported: state.mem.unsupported,
+        unsupportedReason: state.mem.unsupportedReason,
+        timer: state.mem.timer,
+        bridgeText: bridgeStatus.textContent,
+        bridgeTone: bridgeStatus.dataset.tone
+      };
+    });
+
+    expect(result.unsupported).toBe(true);
+    expect(result.unsupportedReason).toBe("bridge");
+    expect(result.timer).toBeNull();
+    // The bridge status readout is untouched: no "offline" flap, no error text.
+    expect(result.bridgeText).toBe(result.before.text);
+    expect(result.bridgeTone).toBe(result.before.tone);
+    expect(result.bridgeText).not.toContain("Unsupported message type");
+
+    // Re-arm the chip so later shared-page tests see a working reading again.
+    await page.evaluate(() => {
+      state.mem.unsupported = false;
+      state.mem.unsupportedReason = null;
+    });
+  });
+
   test("toggles chrome and input synchronisation", async () => {
     await setCheck("#syncInput", true);
     await expect.poll(() => page.evaluate(() => document.querySelector("#syncInput").checked)).toBe(true);
@@ -286,6 +320,18 @@ test.describe("MultiTerm Workbench UI", () => {
 
     // Normal panes keep the sticky header that keeps their X reachable.
     await expect(firstPane.locator(".pane-bar")).toHaveCSS("position", "sticky");
+  });
+
+  test("keeps the editable terminal title compact", async () => {
+    const title = page.locator(".terminal-pane").first().locator(".pane-title");
+    await expect(title).toHaveCSS("max-width", "180px");
+
+    const widths = await title.evaluate((input) => ({
+      input: input.getBoundingClientRect().width,
+      wrapper: input.parentElement.getBoundingClientRect().width
+    }));
+    expect(widths.input).toBeLessThanOrEqual(180);
+    expect(widths.wrapper - widths.input).toBeGreaterThan(8);
   });
 
   test("shows the pid as a translucent pill at the bottom right of the pane", async () => {
@@ -616,6 +662,34 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.keyboard.press("Enter");
     await expect(page.locator("#paletteOverlay")).toBeHidden();
     await expect(page.locator(".terminal-pane")).toHaveCount(before + 2);
+  });
+
+  test("selects all output in the focused terminal with Ctrl+A", async () => {
+    const expected = await page.evaluate(async () => {
+      const terminal = state.terminals.get(state.activeId);
+      await new Promise((resolve) => terminal.term.write("\r\nctrl-a-selection-marker", resolve));
+      terminal.term.selectAll();
+      const selection = terminal.term.getSelection();
+      terminal.term.clearSelection();
+      terminal.term.focus();
+      return { id: terminal.id, selection };
+    });
+
+    expect(expected.selection).toContain("ctrl-a-selection-marker");
+    await page.keyboard.press("Control+a");
+
+    await expect.poll(() => page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      return {
+        activeId: state.activeId,
+        selection: terminal.term.getSelection()
+      };
+    }, expected.id)).toEqual({
+      activeId: expected.id,
+      selection: expected.selection
+    });
+
+    await page.evaluate((id) => state.terminals.get(id).term.clearSelection(), expected.id);
   });
 
   test("opens a pane context menu and deletes a workspace", async () => {
