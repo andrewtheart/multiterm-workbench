@@ -1175,6 +1175,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 client.Send("{\"type\":\"sessions\",\"sessions\":" + this.SessionsJson() + "}");
             }
+            else if (type == "memstats")
+            {
+                this.RequestMemStats(client);
+            }
             else
             {
                 client.Send("{\"type\":\"error\",\"message\":\"Unsupported message type: " + Json.Escape(type) + "\"}");
@@ -1679,6 +1683,122 @@ namespace MultiTerm.PowerShellBridge
             dialogThread.IsBackground = true;
             dialogThread.SetApartmentState(ApartmentState.STA);
             dialogThread.Start();
+        }
+
+        // Answers the status-bar memory chip. The Node bridge (server.js) shells out to
+        // Get-CimInstance and sums the working set of its process tree; here we are already
+        // Windows-only and in-process, so we walk the tree directly with a Toolhelp snapshot
+        // and read WorkingSet64 per pid. The reply shape mirrors server.js exactly so the
+        // shipped, Node-free build reads identically. This bridge only runs on Windows, so
+        // "supported" is always true (we never emit the "unsupported" shape server.js uses
+        // on other platforms).
+        private void RequestMemStats(BridgeClient client)
+        {
+            try
+            {
+                long app = this.ComputeAppMemory();
+                long systemTotal = 0;
+                long systemUsed = 0;
+                Native.MEMORYSTATUSEX status = new Native.MEMORYSTATUSEX();
+                status.dwLength = (uint)Marshal.SizeOf(typeof(Native.MEMORYSTATUSEX));
+                if (Native.GlobalMemoryStatusEx(ref status))
+                {
+                    systemTotal = (long)status.ullTotalPhys;
+                    systemUsed = (long)(status.ullTotalPhys - status.ullAvailPhys);
+                }
+                client.Send("{\"type\":\"memstats\",\"supported\":true,\"app\":" + app + ",\"systemUsed\":" + systemUsed + ",\"systemTotal\":" + systemTotal + "}");
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "memstats failed: " + error.Message);
+                client.Send("{\"type\":\"memstats\",\"supported\":true,\"error\":\"Could not read process memory.\"}");
+            }
+        }
+
+        // Sums the working set of the bridge process and every process it spawned. Terminal
+        // shells are normally children of the bridge already, but elevated hosts run as
+        // separate processes, so we also seed each live session pid as a root to stay honest.
+        private long ComputeAppMemory()
+        {
+            // One snapshot -> a parent-to-children map we can breadth-first walk from our roots.
+            Dictionary<int, List<int>> children = new Dictionary<int, List<int>>();
+            IntPtr snapshot = Native.CreateToolhelp32Snapshot(Native.TH32CS_SNAPPROCESS, 0);
+            if (snapshot != IntPtr.Zero && snapshot != new IntPtr(-1))
+            {
+                try
+                {
+                    Native.PROCESSENTRY32 entry = new Native.PROCESSENTRY32();
+                    entry.dwSize = (uint)Marshal.SizeOf(typeof(Native.PROCESSENTRY32));
+                    if (Native.Process32First(snapshot, ref entry))
+                    {
+                        do
+                        {
+                            int pid = (int)entry.th32ProcessID;
+                            int parent = (int)entry.th32ParentProcessID;
+                            List<int> list;
+                            if (!children.TryGetValue(parent, out list))
+                            {
+                                list = new List<int>();
+                                children[parent] = list;
+                            }
+                            list.Add(pid);
+                        }
+                        while (Native.Process32Next(snapshot, ref entry));
+                    }
+                }
+                finally
+                {
+                    Native.CloseHandle(snapshot);
+                }
+            }
+
+            HashSet<int> roots = new HashSet<int>();
+            roots.Add(Process.GetCurrentProcess().Id);
+            foreach (TerminalSession session in this.sessions.Values)
+            {
+                if (session.Pid > 0)
+                {
+                    roots.Add(session.Pid);
+                }
+            }
+
+            HashSet<int> seen = new HashSet<int>();
+            Queue<int> queue = new Queue<int>();
+            foreach (int root in roots)
+            {
+                queue.Enqueue(root);
+            }
+
+            long total = 0;
+            while (queue.Count > 0)
+            {
+                int pid = queue.Dequeue();
+                if (!seen.Add(pid))
+                {
+                    continue;
+                }
+                try
+                {
+                    using (Process proc = Process.GetProcessById(pid))
+                    {
+                        total += proc.WorkingSet64;
+                    }
+                }
+                catch
+                {
+                    // Process exited between the snapshot and now, or we cannot open it; skip.
+                }
+                List<int> kids;
+                if (children.TryGetValue(pid, out kids))
+                {
+                    foreach (int kid in kids)
+                    {
+                        queue.Enqueue(kid);
+                    }
+                }
+            }
+
+            return total;
         }
 
         private string WelcomeJson()
@@ -3152,6 +3272,53 @@ namespace MultiTerm.PowerShellBridge
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool TerminateProcess(IntPtr hProcess, uint uExitCode);
+
+        // Toolhelp process snapshot, used by memstats to walk the bridge's process tree.
+        public const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        public struct PROCESSENTRY32
+        {
+            public uint dwSize;
+            public uint cntUsage;
+            public uint th32ProcessID;
+            public IntPtr th32DefaultHeapID;
+            public uint th32ModuleID;
+            public uint cntThreads;
+            public uint th32ParentProcessID;
+            public int pcPriClassBase;
+            public uint dwFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szExeFile;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+
+        // Physical memory totals for the memstats "system" figures.
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MEMORYSTATUSEX
+        {
+            public uint dwLength;
+            public uint dwMemoryLoad;
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
     }
 }
 '@
