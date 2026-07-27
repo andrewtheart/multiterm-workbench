@@ -479,7 +479,8 @@ the GitHub release for you:
 ```
 
 Build-only mode treats the `package.json` version as the source of truth and
-verifies `installer\MultiTerm.iss` agrees; it never modifies files.
+verifies `package-lock.json`, `installer\MultiTerm.iss`, and `public\app.js` all
+agree; it never modifies files.
 
 `-Push` cuts a release end-to-end. It first stages and commits **every pending
 tracked and untracked change** as `chore: snapshot changes before v<version>`.
@@ -494,7 +495,7 @@ Publish options:
   of patch.
 - `-SetVersion 1.2.3` — release an explicit version instead of auto-incrementing.
 - `-NoVersionBump` — publish the current version as-is (combine with `-Force` to
-  re-upload the asset onto an existing release).
+  re-upload an existing release asset only when its tag targets the current commit).
 - `-NoGitCommit` — build but leave all changes uncommitted; for safety, this also
   skips the Git push and GitHub release.
 - `-NoGitPush` — create the local snapshot and release commits, but skip the Git
@@ -502,6 +503,9 @@ Publish options:
 - `-Draft` / `-Prerelease` — control the release type.
 - `-WhatIf` — preview every step (snapshot, version bump, build, release commit,
   push, and release) without changing anything.
+
+The conventional PowerShell spellings above and the double-dash aliases
+`--NoGitCommit` / `--NoGitPush` are both accepted.
 
 The resulting `installer\Output\MultiTerm-Setup-<version>.exe` performs a
 per-user install by default (no UAC prompt); users may elect a machine-wide
@@ -558,3 +562,12 @@ point the checker at a fork.
 - The status bar includes − / + controls for terminal font zoom (same as Ctrl+- and Ctrl+=).
 - Hover (or keyboard-focus) the **memory chip** at the far left of the status bar to expand a live reading of how much RAM MultiTerm and its terminals are using, alongside system totals. It refreshes about every 4 seconds while open and stops as soon as you move away, so the (fairly expensive) Windows process probe only runs when you are actually looking. The reading is Windows-only; elsewhere the chip reports `unavailable`. Set `MEMSTATS=1` on the bridge to restore the old always-on 10-second broadcast instead.
 - The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.
+
+## License
+
+MultiTerm Workbench is free software licensed under the
+[GNU General Public License version 3 or later](LICENSE).
+
+Bundled third-party components remain under their respective licenses. See
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) for component versions,
+copyright notices, license terms, and source links.

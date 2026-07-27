@@ -1,3 +1,21 @@
+/*
+ * MultiTerm Workbench
+ * Copyright (C) 2026 the MultiTerm Workbench author (github.com/andrewtheart)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 const { test, expect } = require("@playwright/test");
 const MCR = require("monocart-coverage-reports");
 const { version: PKG_VERSION } = require("../../package.json");
@@ -332,6 +350,24 @@ test.describe("MultiTerm Workbench UI", () => {
     }));
     expect(widths.input).toBeLessThanOrEqual(180);
     expect(widths.wrapper - widths.input).toBeGreaterThan(8);
+  });
+
+  test("saves the terminal title and exits edit mode when Enter is pressed", async () => {
+    const title = page.locator(".terminal-pane").first().locator(".pane-title");
+    const original = await title.inputValue();
+
+    await title.fill("  Build Logs  ");
+    await title.press("Enter");
+
+    await expect(title).toHaveValue("Build Logs");
+    await expect(title).not.toBeFocused();
+    await expect.poll(() => page.evaluate(() => {
+      const snapshot = JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]");
+      return snapshot[0]?.title;
+    })).toBe("Build Logs");
+
+    await title.fill(original);
+    await title.press("Enter");
   });
 
   test("shows the pid as a translucent pill at the bottom right of the pane", async () => {

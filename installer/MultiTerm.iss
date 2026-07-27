@@ -1,3 +1,19 @@
+; MultiTerm Workbench
+; Copyright (C) 2026 the MultiTerm Workbench author (github.com/andrewtheart)
+;
+; This program is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License, or
+; (at your option) any later version.
+;
+; This program is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+; GNU General Public License for more details.
+;
+; You should have received a copy of the GNU General Public License
+; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 ; Inno Setup script for MultiTerm Workbench
 ; Packages the self-contained PowerShell bridge (no Node.js runtime required).
 ; Build:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\MultiTerm.iss
@@ -43,7 +59,8 @@ SetupIconFile=MultiTerm.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-LicenseFile=
+LicenseFile={#RepoRoot}\LICENSE
+InfoAfterFile={#RepoRoot}\THIRD-PARTY-NOTICES.txt
 ; Windows 10 version 1809 (build 17763) is the minimum: MultiTerm's pseudo-terminals
 ; rely on the ConPTY APIs (CreatePseudoConsole) that were introduced in that build.
 MinVersion=10.0.17763
@@ -58,6 +75,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\public\*"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepoRoot}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "MultiTerm.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

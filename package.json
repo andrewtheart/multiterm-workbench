@@ -3,11 +3,13 @@
   "version": "0.1.28",
   "private": true,
   "description": "Local xterm.js multi-terminal workbench for PowerShell sessions.",
+  "license": "GPL-3.0-or-later",
   "type": "commonjs",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "server": "node server.js",
+    "benchmark:search-wasm": "node --expose-gc benchmarks/search-index-wasm/run.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

@@ -1,3 +1,21 @@
+/*
+ * MultiTerm Workbench
+ * Copyright (C) 2026 the MultiTerm Workbench author (github.com/andrewtheart)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // Chromium force-loses the OLDEST WebGL context once ~16 are live, and xterm's
 // WebGL addon leaves a pane with no renderer at all when its context dies - the
 // pane goes blank even though its buffer still holds the text. Past ~16 panes

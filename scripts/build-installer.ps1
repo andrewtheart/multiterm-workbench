@@ -1,5 +1,23 @@
 #Requires -Version 5.1
 <#
+ * MultiTerm Workbench
+ * Copyright (C) 2026 the MultiTerm Workbench author (github.com/andrewtheart)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#>
+
+<#
 .SYNOPSIS
     Builds the MultiTerm Workbench Windows installer and, optionally, publishes it
     as a GitHub release.
@@ -10,10 +28,10 @@
 
     Build only (no -Push):
         The version in package.json is treated as the source of truth and the
-        script verifies that installer\MultiTerm.iss (which derives the output
-        filename from it) and public\app.js (whose APP_VERSION the running app
-        reports and checks updates against) declare the same version. No files
-        are modified.
+        script verifies that package-lock.json, installer\MultiTerm.iss (which
+        derives the output filename from it), and public\app.js (whose APP_VERSION
+        the running app reports and checks updates against) declare the same
+        version. No files are modified.
 
     Publish (-Push):
         All pending working-tree changes are committed first. The version is then
@@ -54,8 +72,9 @@
     With -Push, mark the release as a prerelease.
 
 .PARAMETER Force
-    Build only: allow a package.json / MultiTerm.iss version mismatch.
-    Push + -NoVersionBump: overwrite an existing release asset (--clobber).
+    Build only: allow a version mismatch among the release metadata files.
+    Push + -NoVersionBump: overwrite an existing release asset only when its
+    tag targets the current commit (--clobber).
 
 .PARAMETER Tag
     Release tag to use. Defaults to "v<version>".
@@ -159,7 +178,7 @@ function Get-NextVersion {
 
 function Set-VersionInFile {
     param([string]$Path, [string]$Pattern, [string]$NewVersion)
-    $text = Get-Content -LiteralPath $Path -Raw
+    $text = [System.IO.File]::ReadAllText($Path)
     $updated = [regex]::new($Pattern).Replace($text, "`${1}$NewVersion`${3}", 1)
     if ($updated -eq $text) {
         throw "Failed to update version in $Path (pattern did not match or value unchanged)."
@@ -169,7 +188,7 @@ function Set-VersionInFile {
 
 function Set-PackageLockVersion {
     param([string]$Path, [string]$NewVersion)
-    $text = Get-Content -LiteralPath $Path -Raw
+    $text = [System.IO.File]::ReadAllText($Path)
     $patterns = @(
         '(?s)(^\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+("\s*,)',
         '(?s)("packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+("\s*,)'
@@ -215,12 +234,21 @@ if (($NoGitCommit -or $NoGitPush) -and -not $Push) {
 $CurrentVersion = (Get-Content -LiteralPath $PackageJsonPath -Raw | ConvertFrom-Json).version
 if ([string]::IsNullOrWhiteSpace($CurrentVersion)) { throw "package.json does not define a 'version'." }
 
-$IssText = Get-Content -LiteralPath $IssPath -Raw
+$PackageLockText = [System.IO.File]::ReadAllText($PackageLockPath)
+$PackageLockMatch = [regex]::Match($PackageLockText, '(?s)^\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*"([^"]+)"')
+$PackageLockRootMatch = [regex]::Match($PackageLockText, '(?s)"packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*"([^"]+)"')
+if (-not $PackageLockMatch.Success -or -not $PackageLockRootMatch.Success) {
+    throw "package-lock.json does not define both the top-level and root-package versions."
+}
+$PackageLockVersion = $PackageLockMatch.Groups[1].Value
+$PackageLockRootVersion = $PackageLockRootMatch.Groups[1].Value
+
+$IssText = [System.IO.File]::ReadAllText($IssPath)
 $IssMatch = [regex]::Match($IssText, '(?m)^\s*#define\s+MyAppVersion\s+"([^"]+)"')
 if (-not $IssMatch.Success) { throw "Could not find '#define MyAppVersion' in $IssPath" }
 $IssVersion = $IssMatch.Groups[1].Value
 
-$AppJsText = Get-Content -LiteralPath $AppJsPath -Raw
+$AppJsText = [System.IO.File]::ReadAllText($AppJsPath)
 $AppJsMatch = [regex]::Match($AppJsText, '(?m)^\s*const\s+APP_VERSION\s*=\s*"([^"]+)"')
 if (-not $AppJsMatch.Success) { throw "Could not find 'const APP_VERSION' in $AppJsPath" }
 $AppJsVersion = $AppJsMatch.Groups[1].Value
@@ -242,6 +270,8 @@ else {
     # .iss (output filename) and app.js (reported/checked version) to agree.
     $Version = $CurrentVersion
     $mismatches = @()
+    if ($PackageLockVersion -ne $Version) { $mismatches += "package-lock.json=$PackageLockVersion" }
+    if ($PackageLockRootVersion -ne $Version) { $mismatches += "package-lock.json root package=$PackageLockRootVersion" }
     if ($IssVersion -ne $Version) { $mismatches += "installer\MultiTerm.iss=$IssVersion" }
     if ($AppJsVersion -ne $Version) { $mismatches += "public\app.js=$AppJsVersion" }
     if ($mismatches.Count -gt 0) {
@@ -324,7 +354,12 @@ if ($Push) {
             Invoke-Native { git -C $RepoRoot commit -m "chore: snapshot changes before $Tag" } "git commit failed"
         }
         else {
-            Write-Step "[WhatIf] Would stage and commit all $($pendingChanges.Count) pending path(s) before $Tag."
+            if ($WhatIfPreference) {
+                Write-Step "[WhatIf] Would stage and commit all $($pendingChanges.Count) pending path(s) before $Tag."
+            }
+            else {
+                throw "Pending-change snapshot commit was declined; release cancelled."
+            }
         }
     }
     else {
@@ -343,7 +378,12 @@ if ($BumpVersion) {
         Write-Step "Version set to $Version in package.json, package-lock.json, installer\MultiTerm.iss, and public\app.js."
     }
     else {
-        Write-Step "[WhatIf] Would set version to $Version in package.json, package-lock.json, installer\MultiTerm.iss, and public\app.js."
+        if ($WhatIfPreference) {
+            Write-Step "[WhatIf] Would set version to $Version in package.json, package-lock.json, installer\MultiTerm.iss, and public\app.js."
+        }
+        else {
+            throw "Version update was declined; release cancelled."
+        }
     }
 }
 
@@ -358,7 +398,12 @@ if ($PSCmdlet.ShouldProcess($IssPath, "Compile installer with ISCC")) {
     Write-Step "Built: $OutputExe"
 }
 else {
-    Write-Step "[WhatIf] Would build: $OutputExe"
+    if ($WhatIfPreference) {
+        Write-Step "[WhatIf] Would build: $OutputExe"
+    }
+    else {
+        throw "Installer build was declined; release cancelled."
+    }
 }
 
 # --- Commit, push, and publish ---------------------------------------------------
@@ -379,7 +424,21 @@ if ($BumpVersion) {
         Invoke-Native { git -C $RepoRoot commit -m "chore(release): $Tag" } "git commit failed"
     }
     else {
-        Write-Step "[WhatIf] Would commit release version $Tag."
+        if ($WhatIfPreference) {
+            Write-Step "[WhatIf] Would commit release version $Tag."
+        }
+        else {
+            throw "Release-version commit was declined; release cancelled."
+        }
+    }
+}
+
+if (-not $WhatIfPreference) {
+    $postBuildStatus = Get-NativeOutput { git -C $RepoRoot status --porcelain=v1 --untracked-files=all }
+    if ($postBuildStatus.ExitCode -ne 0) { throw "git status failed after the release commit." }
+    $postBuildChanges = @($postBuildStatus.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
+    if ($postBuildChanges.Count -gt 0) {
+        throw "New pending changes appeared after the release commit; refusing to push or publish an artifact that differs from Git HEAD."
     }
 }
 
@@ -397,11 +456,27 @@ if ($PSCmdlet.ShouldProcess($RepoSlug, "Push branch '$branch'")) {
     $Target = ($head.Output | Select-Object -First 1).ToString().Trim()
 }
 else {
-    Write-Step "[WhatIf] Would push branch '$branch'."
+    if ($WhatIfPreference) {
+        Write-Step "[WhatIf] Would push branch '$branch'."
+    }
+    else {
+        throw "Git push was declined; release publication cancelled."
+    }
 }
 
 if ($PSCmdlet.ShouldProcess($Tag, "Create GitHub release and upload installer")) {
     if ($NoVersionBump -and $Force -and $releaseExists) {
+        $tagInfo = Get-NativeOutput { git -C $RepoRoot ls-remote --tags origin "refs/tags/$Tag" "refs/tags/$Tag^{}" }
+        if ($tagInfo.ExitCode -ne 0 -or -not $tagInfo.Output) {
+            throw "Could not resolve remote tag $Tag before replacing its release asset."
+        }
+        $tagLines = @($tagInfo.Output)
+        $tagLine = $tagLines | Where-Object { $_.ToString() -match '\^\{\}$' } | Select-Object -First 1
+        if (-not $tagLine) { $tagLine = $tagLines | Select-Object -First 1 }
+        $remoteTagTarget = ($tagLine.ToString() -split '\s+')[0]
+        if ($remoteTagTarget -ne $Target) {
+            throw "Remote tag $Tag targets $remoteTagTarget, not current commit $Target; refusing to replace the asset with a mismatched build."
+        }
         Write-Step "Uploading asset to existing release $Tag (--clobber)..."
         Invoke-Native { & $GhPath release upload $Tag $OutputExe --clobber --repo $RepoSlug } "gh release upload failed"
     }
@@ -416,5 +491,10 @@ if ($PSCmdlet.ShouldProcess($Tag, "Create GitHub release and upload installer"))
     Write-Step "Release $Tag published."
 }
 else {
-    Write-Step "[WhatIf] Would publish release $Tag with asset $([System.IO.Path]::GetFileName($OutputExe))."
+    if ($WhatIfPreference) {
+        Write-Step "[WhatIf] Would publish release $Tag with asset $([System.IO.Path]::GetFileName($OutputExe))."
+    }
+    else {
+        Write-Step "GitHub release publication was declined."
+    }
 }
