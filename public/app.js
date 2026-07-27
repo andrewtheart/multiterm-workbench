@@ -15,6 +15,7 @@ const defaultSettings = {
   headerHidden: false,
   highlightInputPrompts: true,
   layout: "auto",
+  minimizedScope: "page",
   minWidth: 420,
   notifyActivity: false,
   notifySilence: false,
@@ -1658,6 +1659,7 @@ function minimizeTerminal(id) {
   }
 
   updateMinimizedDock();
+  renderPager();
   updateTerminalActions();
   saveSessionSnapshot();
 }
@@ -1666,10 +1668,18 @@ function restoreTerminal(id) {
   const terminal = state.terminals.get(id);
   if (!terminal || !terminal.minimized) return;
 
+  // A minimized pane on another page is still is-page-hidden, so clearing
+  // is-minimized alone would leave it invisible. Bring its page forward first so a
+  // restore always puts the pane back on screen, whichever dock scope is active.
+  if (terminal.pageId !== state.activePageId) {
+    setActivePage(terminal.pageId, { focus: false });
+  }
+
   terminal.minimized = false;
   terminal.pane.classList.remove("is-minimized");
   log.info("terminal", `Terminal restored: ${terminal.titleInput.value}`, { id });
   updateMinimizedDock();
+  renderPager();
   updateTerminalActions();
   setActiveTerminal(id);
   applyManualLayout(terminal, ensureManualLayout(id));
@@ -1699,33 +1709,154 @@ function countVisibleTerminals() {
   return visible;
 }
 
+// The dock has two scopes (a persisted, user-flippable setting):
+//   "page"   – only the active page's minimized terminals (pages stay self-contained)
+//   "global" – every minimized terminal, wherever it lives (a cross-page tray)
+function minimizedScope() {
+  return state.settings.minimizedScope === "global" ? "global" : "page";
+}
+
+function setMinimizedScope(scope) {
+  const next = scope === "global" ? "global" : "page";
+  if (minimizedScope() === next) return;
+  state.settings.minimizedScope = next;
+  saveSettings();
+  updateMinimizedDock();
+  toast(next === "global" ? "Minimized: showing all pages" : "Minimized: showing this page only", "info", 1600);
+}
+
 function updateMinimizedDock() {
   const dock = elements.minimizedDock;
   if (!dock) return;
+  // Never clobber an in-progress rename; the input commits on blur.
+  if (dock.querySelector(".min-chip-rename")) return;
+
+  const scope = minimizedScope();
+  const allMinimized = [...state.terminals.values()].filter((terminal) => terminal.minimized);
+  const scoped = scope === "global"
+    ? allMinimized
+    : allMinimized.filter((terminal) => terminal.pageId === state.activePageId);
 
   dock.textContent = "";
-  const minimized = [...state.terminals.values()].filter((terminal) => terminal.minimized);
-  dock.hidden = minimized.length === 0;
+  dock.hidden = allMinimized.length === 0;
+  if (dock.hidden) return;
 
-  for (const terminal of minimized) {
+  // Leading scope toggle, so the control travels with the dock and is reachable even
+  // when this page has nothing parked but another page does.
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "min-dock-toggle";
+  const isGlobal = scope === "global";
+  toggle.dataset.scope = scope;
+  toggle.title = isGlobal
+    ? "Showing minimized terminals from all pages — click to show only this page"
+    : "Showing minimized terminals on this page — click to show all pages";
+  toggle.setAttribute("aria-label", toggle.title);
+  toggle.innerHTML = `<i data-lucide="${isGlobal ? "layers" : "app-window"}"></i><span class="min-dock-toggle-label"></span>`;
+  toggle.querySelector(".min-dock-toggle-label").textContent = isGlobal ? "All pages" : "This page";
+  toggle.addEventListener("click", () => setMinimizedScope(isGlobal ? "page" : "global"));
+  dock.append(toggle);
+
+  // In page scope, tell the user about terminals parked on other pages so they know
+  // to flip the toggle (or click the page tab's parked badge) to reach them.
+  if (scope === "page" && scoped.length < allMinimized.length) {
+    const remaining = allMinimized.length - scoped.length;
+    const hint = document.createElement("button");
+    hint.type = "button";
+    hint.className = "min-chip-hint";
+    hint.title = "Show minimized terminals from all pages";
+    hint.textContent = `+${remaining} on other page${remaining === 1 ? "" : "s"}`;
+    hint.addEventListener("click", () => setMinimizedScope("global"));
+    dock.append(hint);
+  }
+
+  for (const terminal of scoped) {
     const title = terminal.titleInput.value || "PowerShell";
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "min-chip";
     chip.dataset.id = terminal.id;
-    chip.title = `Restore ${title}`;
+    chip.title = `Restore ${title} (right-click for options)`;
     chip.setAttribute("aria-label", `Restore ${title}`);
     if (terminal.color) {
       chip.classList.add("has-color");
       chip.style.setProperty("--pane-accent", terminal.color);
     }
-    chip.innerHTML = '<span class="min-chip-dot" aria-hidden="true"></span><span class="min-chip-label"></span><i data-lucide="chevron-up"></i>';
+    chip.innerHTML = '<span class="min-chip-dot" aria-hidden="true"></span><span class="min-chip-label"></span><span class="min-chip-page" hidden></span><i data-lucide="chevron-up"></i>';
     chip.querySelector(".min-chip-label").textContent = title;
+
+    // In global scope the chips mix pages, so name each one's page to keep it legible.
+    if (scope === "global") {
+      const pageTag = chip.querySelector(".min-chip-page");
+      pageTag.textContent = pageName(terminal.pageId);
+      pageTag.hidden = false;
+    }
+
     chip.addEventListener("click", () => restoreTerminal(terminal.id));
+    chip.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showMinChipMenu(event.clientX, event.clientY, terminal, chip);
+    });
     dock.append(chip);
   }
 
   refreshIcons();
+}
+
+// Rename a terminal from its minimized chip, since its title input is off-screen
+// while parked. Mirrors the pane title's commit path so search stays in sync.
+function startMinChipRename(chip, terminal) {
+  const label = chip.querySelector(".min-chip-label");
+  if (!label || chip.querySelector(".min-chip-rename")) return;
+
+  const input = document.createElement("input");
+  input.className = "min-chip-rename";
+  input.type = "text";
+  input.value = terminal.titleInput.value;
+  input.spellcheck = false;
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const finish = (commit) => {
+    if (settled) return;
+    settled = true;
+    const name = input.value.trim() || "PowerShell";
+    // Drop the input before re-rendering so updateMinimizedDock's "rename in
+    // progress" guard doesn't skip its own commit re-render.
+    input.remove();
+    if (commit) {
+      terminal.titleInput.value = name;
+      refreshTerminalSearchText(terminal);
+      updateTerminalSearchVisibility(terminal);
+      saveSessionSnapshot();
+    }
+    updateMinimizedDock();
+  };
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+function showMinChipMenu(x, y, terminal, chip) {
+  renderContextMenu([
+    { label: "Restore", icon: "chevron-up", run: () => restoreTerminal(terminal.id) },
+    { label: "Rename\u2026", icon: "pencil", run: () => startMinChipRename(chip, terminal) },
+    { separator: true },
+    { label: "Close", hint: "Ctrl+Shift+W", icon: "x", danger: true, run: () => removeTerminal(terminal.id) }
+  ]);
+  showBuiltContextMenu(x, y);
 }
 
 function moveTerminal(id, direction) {
@@ -2287,6 +2418,7 @@ function applySettings() {
   }
   updateLayoutMetrics();
   updateStatusBar();
+  updateMinimizedDock();
   refreshComboboxes();
 }
 
@@ -4550,6 +4682,7 @@ function setActivePage(id, options = {}) {
   state.activePageId = id;
   applyPageVisibility();
   renderPager();
+  updateMinimizedDock();
   savePages();
 
   // Keep the active terminal on the page you are looking at.
@@ -4663,7 +4796,9 @@ function renderPager() {
 
   list.textContent = "";
   for (const page of state.pages) {
-    const count = terminalsOnPage(page.id).length;
+    const onPage = terminalsOnPage(page.id);
+    const count = onPage.length;
+    const parked = onPage.filter((terminal) => terminal.minimized).length;
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "pager-chip";
@@ -4672,7 +4807,7 @@ function renderPager() {
     const isActive = page.id === state.activePageId;
     chip.classList.toggle("is-active", isActive);
     chip.setAttribute("aria-selected", isActive ? "true" : "false");
-    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"} (double-click to rename)`;
+    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (double-click or right-click to rename)`;
 
     const label = document.createElement("span");
     label.className = "pager-name";
@@ -4683,6 +4818,18 @@ function renderPager() {
     badge.className = "pager-count";
     badge.textContent = String(count);
     chip.append(badge);
+
+    // A page can hold minimized terminals you cannot see from another page, so flag
+    // them on the tab. This is the "reach" affordance for the per-page dock scope.
+    if (parked) {
+      const park = document.createElement("span");
+      park.className = "pager-parked";
+      park.setAttribute("aria-label", `${parked} minimized`);
+      park.title = `${parked} minimized terminal${parked === 1 ? "" : "s"}`;
+      park.innerHTML = '<i data-lucide="minimize-2"></i><span class="pager-parked-count"></span>';
+      park.querySelector(".pager-parked-count").textContent = String(parked);
+      chip.append(park);
+    }
 
     if (state.pages.length > 1) {
       const close = document.createElement("span");
@@ -4697,6 +4844,7 @@ function renderPager() {
 
     list.append(chip);
   }
+  refreshIcons();
 }
 
 // Renames in place so the chip does not jump around while you type.
@@ -4752,6 +4900,24 @@ function bindPager() {
   list.addEventListener("dblclick", (event) => {
     const chip = event.target.closest(".pager-chip");
     if (chip) startPageRename(chip);
+  });
+
+  list.addEventListener("contextmenu", (event) => {
+    const chip = event.target.closest(".pager-chip");
+    if (!chip) return;
+    event.preventDefault();
+    const page = pageById(chip.dataset.pageId);
+    if (!page) return;
+    const items = [
+      { label: "Rename\u2026", icon: "pencil", run: () => startPageRename(chip) },
+      { label: "New page", icon: "plus", run: () => addPage() }
+    ];
+    if (state.pages.length > 1) {
+      items.push({ separator: true });
+      items.push({ label: `Close ${page.name}`, icon: "x", danger: true, run: () => removePage(page.id) });
+    }
+    renderContextMenu(items);
+    showBuiltContextMenu(event.clientX, event.clientY);
   });
 
   elements.pagerAdd?.addEventListener("click", () => addPage());
@@ -5451,9 +5617,9 @@ function bindContextMenu() {
       hideContextMenu();
     }
   });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !elements.contextMenu.hidden) hideContextMenu();
-  });
+  // Capture phase so menu navigation wins over xterm's own key handling while the
+  // menu is open, and so accelerator keys never fall through to the terminal.
+  window.addEventListener("keydown", onContextMenuKeydown, true);
   window.addEventListener("blur", hideContextMenu);
   window.addEventListener("resize", hideContextMenu);
   elements.host.addEventListener("scroll", hideContextMenu, true);
@@ -5630,8 +5796,65 @@ function buildPaneOverflowMenu(terminal) {
   ]);
 }
 
+// Keyboard activation state for the open menu. Every actionable row earns a
+// letter mnemonic (underlined in its label) and, for the first nine, a 1-9
+// badge; arrow keys move a highlight, Enter/Space runs it, and pressing a
+// mnemonic or badge digit runs that row outright.
+let ctxFocusables = [];
+let ctxKeyIndex = -1;
+const ctxByLetter = new Map();
+const ctxByNumber = new Map();
+
+// Picks a unique, memorable accelerator letter for a label: word initials first
+// (so "Find in all terminals" prefers F, then I, A, T), then any remaining
+// letter, skipping ones already claimed by earlier rows in the same menu.
+function assignAccelLetter(label, used) {
+  const lower = String(label).toLowerCase();
+  const positions = [];
+  const wordRe = /[a-z0-9]+/g;
+  let match;
+  while ((match = wordRe.exec(lower))) positions.push(match.index);
+  // Fall back to every remaining character so a short unique letter can still be
+  // found once all the word initials are taken.
+  for (let i = 0; i < lower.length; i += 1) positions.push(i);
+  for (const index of positions) {
+    const ch = lower[index];
+    if (ch < "a" || ch > "z") continue; // letters only; digits belong to badges
+    if (used.has(ch)) continue;
+    used.add(ch);
+    return { key: ch, index };
+  }
+  return null;
+}
+
+// Builds a label node, underlining the accelerator character in place so the
+// shortcut reads straight off the menu.
+function renderAccelLabel(text, index) {
+  const label = document.createElement("span");
+  label.className = "ctx-label";
+  if (index == null || index < 0 || index >= text.length) {
+    label.textContent = text;
+    return label;
+  }
+  label.append(document.createTextNode(text.slice(0, index)));
+  const key = document.createElement("u");
+  key.className = "ctx-key";
+  key.textContent = text[index];
+  label.append(key);
+  label.append(document.createTextNode(text.slice(index + 1)));
+  return label;
+}
+
 function renderContextMenu(items) {
   elements.contextMenu.innerHTML = "";
+  ctxFocusables = [];
+  ctxKeyIndex = -1;
+  ctxByLetter.clear();
+  ctxByNumber.clear();
+  elements.contextMenu.removeAttribute("aria-activedescendant");
+  const usedLetters = new Set();
+  let rowId = 0;
+
   for (const item of items) {
     if (item.separator) {
       const sep = document.createElement("div");
@@ -5682,29 +5905,148 @@ function renderContextMenu(items) {
       continue;
     }
 
-    const label = document.createElement("span");
-    label.textContent = item.label;
-    el.append(label);
+    // A plain row you can actually run is the only kind that earns an accelerator.
+    const actionable = Boolean(item.run) && !item.disabled && !item.info;
+    const accel = actionable ? assignAccelLetter(item.label, usedLetters) : null;
+    const number = actionable && ctxByNumber.size < 9 ? ctxByNumber.size + 1 : null;
+
+    el.append(renderAccelLabel(item.label, accel ? accel.index : -1));
 
     // Rows whose label cannot spell out the whole story (a path, say) carry the
     // detail as a tooltip rather than growing the menu.
     if (item.title) el.title = item.title;
 
-    if (item.hint) {
-      const hint = document.createElement("span");
-      hint.className = "ctx-hint";
-      hint.textContent = item.hint;
-      el.append(hint);
+    // The keyboard hint and the number badge share a right-aligned tail so they
+    // never collide with the label.
+    if (item.hint || number != null) {
+      const accessories = document.createElement("span");
+      accessories.className = "ctx-accessories";
+      if (item.hint) {
+        const hint = document.createElement("span");
+        hint.className = "ctx-hint";
+        hint.textContent = item.hint;
+        accessories.append(hint);
+      }
+      if (number != null) {
+        const badge = document.createElement("span");
+        badge.className = "ctx-accel-num";
+        badge.textContent = String(number);
+        badge.setAttribute("aria-hidden", "true");
+        accessories.append(badge);
+      }
+      el.append(accessories);
     }
 
-    if (!item.disabled && !item.info) {
+    if (actionable) {
+      el.id = `ctx-item-${rowId++}`;
       el.addEventListener("click", () => {
         hideContextMenu();
         item.run();
       });
+      // Keep the keyboard highlight in step with the pointer so the two input
+      // modes never disagree about which row is current.
+      el.addEventListener("pointerenter", () => setContextFocus(ctxFocusables.indexOf(el)));
+      ctxFocusables.push(el);
+      if (accel) {
+        el.dataset.accelKey = accel.key;
+        ctxByLetter.set(accel.key, el);
+      }
+      if (number != null) {
+        el.dataset.accelNum = String(number);
+        ctxByNumber.set(String(number), el);
+      }
     }
+
     elements.contextMenu.append(el);
   }
+}
+
+// Moves the keyboard highlight to a specific row, syncing the class, scroll
+// position and aria-activedescendant that a screen reader follows.
+function setContextFocus(index) {
+  if (ctxKeyIndex >= 0 && ctxFocusables[ctxKeyIndex]) {
+    ctxFocusables[ctxKeyIndex].classList.remove("is-key-focus");
+  }
+  ctxKeyIndex = index;
+  const el = ctxFocusables[index];
+  if (el) {
+    el.classList.add("is-key-focus");
+    el.scrollIntoView({ block: "nearest" });
+    elements.contextMenu.setAttribute("aria-activedescendant", el.id);
+  } else {
+    elements.contextMenu.removeAttribute("aria-activedescendant");
+  }
+}
+
+// Steps the highlight by delta, wrapping around, and seeds the first/last row
+// when nothing is highlighted yet so a single arrow press always lands.
+function moveContextFocus(delta) {
+  if (!ctxFocusables.length) return;
+  let next = ctxKeyIndex;
+  if (next < 0) next = delta > 0 ? 0 : ctxFocusables.length - 1;
+  else next = (next + delta + ctxFocusables.length) % ctxFocusables.length;
+  setContextFocus(next);
+}
+
+// While the menu owns the screen it also owns the keyboard: navigation keys move
+// the highlight, Enter/Space run the highlighted row, and any unmodified letter
+// or 1-9 digit fires its accelerator. Stray keys are swallowed so they never
+// leak into the terminal underneath.
+function onContextMenuKeydown(event) {
+  if (elements.contextMenu.hidden) return;
+  const key = event.key;
+  const stop = () => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  if (key === "Escape") {
+    hideContextMenu();
+    stop();
+    return;
+  }
+  if (key === "ArrowDown") {
+    moveContextFocus(1);
+    stop();
+    return;
+  }
+  if (key === "ArrowUp") {
+    moveContextFocus(-1);
+    stop();
+    return;
+  }
+  if (key === "Tab") {
+    moveContextFocus(event.shiftKey ? -1 : 1);
+    stop();
+    return;
+  }
+  if (key === "Home") {
+    setContextFocus(0);
+    stop();
+    return;
+  }
+  if (key === "End") {
+    setContextFocus(ctxFocusables.length - 1);
+    stop();
+    return;
+  }
+  if (key === "Enter" || key === " ") {
+    const el = ctxFocusables[ctxKeyIndex];
+    if (el) el.click();
+    // Swallow either way so a stray Enter never reaches the terminal while the
+    // menu is up.
+    stop();
+    return;
+  }
+
+  // Accelerators are single, unmodified key presses so app-wide chords still work.
+  if (event.ctrlKey || event.altKey || event.metaKey || key.length !== 1) return;
+  let target = null;
+  if (key >= "1" && key <= "9") target = ctxByNumber.get(key);
+  else if (/[a-z]/i.test(key)) target = ctxByLetter.get(key.toLowerCase());
+  if (target) target.click();
+  // Whether or not it matched, keep the keystroke from reaching the terminal.
+  stop();
 }
 
 function showContextMenu(x, y, terminal) {
@@ -5799,6 +6141,8 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } 
 function hideContextMenu() {
   if (!elements.contextMenu.hidden) {
     elements.contextMenu.hidden = true;
+    ctxKeyIndex = -1;
+    elements.contextMenu.removeAttribute("aria-activedescendant");
   }
   for (const button of elements.host.querySelectorAll('button[data-action="more"][aria-expanded="true"]')) {
     button.setAttribute("aria-expanded", "false");

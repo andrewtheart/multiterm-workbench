@@ -839,6 +839,90 @@ body.sidecar-hidden .control-panel {
   white-space: nowrap;
 }
 
+/* Scope toggle that leads the dock: "This page" vs "All pages". */
+.min-dock-toggle {
+  align-items: center;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 8px;
+}
+
+.min-dock-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.min-dock-toggle[data-scope="global"] {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.min-dock-toggle svg {
+  height: 13px;
+  width: 13px;
+}
+
+.min-dock-toggle-label {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Muted "N on other pages" nudge shown in per-page scope. */
+.min-chip-hint {
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+  font-size: 11px;
+  min-height: 22px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.min-chip-hint:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* Page tag on a chip when the dock mixes pages (global scope). */
+.min-chip-page {
+  background: rgb(255 255 255 / 0.09);
+  border-radius: 999px;
+  color: var(--muted);
+  flex: none;
+  font-size: 10px;
+  max-width: 12ch;
+  overflow: hidden;
+  padding: 2px 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.min-chip-page[hidden] {
+  display: none;
+}
+
+.min-chip-rename {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  min-height: 0;
+  padding: 1px 5px;
+  width: 12ch;
+}
+
 .status-hint {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -1221,6 +1305,28 @@ body.header-hidden .status-hint kbd,
 
 .pager-chip.is-active .pager-count {
   background: rgb(255 255 255 / 0.16);
+}
+
+/* Flags minimized terminals living on a page you may not be viewing. */
+.pager-parked {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  gap: 3px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.pager-parked svg {
+  height: 11px;
+  width: 11px;
+}
+
+.pager-chip.is-active .pager-parked {
+  color: var(--text);
+  opacity: 1;
 }
 
 /* Only offer the close affordance on the page you are pointing at, so the strip
@@ -2030,12 +2136,65 @@ body.header-hidden .status-hint kbd,
   color: var(--danger);
 }
 
+/* The keyboard highlight mirrors the pointer hover so both input modes point at
+   the same row; danger rows keep their red treatment when highlighted. */
+.ctx-item.is-key-focus {
+  background: var(--state-hover);
+}
+
+.ctx-item.danger.is-key-focus {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+
+.ctx-item.danger.is-key-focus svg {
+  color: var(--danger);
+}
+
+/* The underlined accelerator letter inside a label. */
+.ctx-key {
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+}
+
+/* Right-aligned tail holding the keyboard hint and/or the number badge. */
+.ctx-accessories {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  padding-left: 16px;
+}
+
+/* The 1-9 quick-jump badge shown on the first nine actionable rows. */
+.ctx-accel-num {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  height: 15px;
+  justify-content: center;
+  line-height: 1;
+  min-width: 15px;
+  padding: 0 3px;
+}
+
+.ctx-item.is-key-focus .ctx-accel-num,
+.ctx-item:hover .ctx-accel-num {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
 .ctx-hint {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  margin-left: auto;
-  padding-left: 16px;
 }
 
 /* A row whose parts act independently: the row highlight would imply a single
