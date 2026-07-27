@@ -800,6 +800,12 @@ body.sidecar-hidden .control-panel {
   opacity: 0.85;
 }
 
+.status-zoom {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+
 .status-btn {
   background: transparent;
   border: 1px solid transparent;
@@ -813,6 +819,12 @@ body.sidecar-hidden .control-panel {
 .status-btn svg {
   height: 14px;
   width: 14px;
+}
+
+.status-icon-btn {
+  justify-content: center;
+  min-width: 24px;
+  padding: 0;
 }
 
 .status-btn span {

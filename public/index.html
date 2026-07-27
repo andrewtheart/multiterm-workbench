@@ -394,6 +394,14 @@
         <div id="minimizedDock" class="minimized-dock" aria-label="Minimized terminals" hidden></div>
         <span class="status-spacer"></span>
         <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>T</kbd> new</span>
+        <div class="status-zoom" role="group" aria-label="Font zoom controls">
+          <button id="statusZoomOut" class="status-btn status-icon-btn" type="button" title="Decrease font size (Ctrl+-)" aria-label="Decrease font size">
+            <i data-lucide="minus"></i>
+          </button>
+          <button id="statusZoomIn" class="status-btn status-icon-btn" type="button" title="Increase font size (Ctrl++)" aria-label="Increase font size">
+            <i data-lucide="plus"></i>
+          </button>
+        </div>
         <button id="closeAllTerminals" class="status-btn status-danger" type="button" title="No terminal sessions to close" aria-label="No terminal sessions to close" disabled>
           <i data-lucide="trash-2"></i>
           <span>Close all</span>

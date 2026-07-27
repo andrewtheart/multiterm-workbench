@@ -77,6 +77,29 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "columns");
   });
 
+  test("status-bar font zoom buttons adjust font size", async () => {
+    await setNative("#fontSize", "14", "input");
+    await expect(page.locator("#fontSizeValue")).toHaveText("14px");
+
+    await page.locator("#statusZoomIn").click();
+    await expect(page.locator("#fontSizeValue")).toHaveText("15px");
+
+    await page.locator("#statusZoomOut").click();
+    await expect(page.locator("#fontSizeValue")).toHaveText("14px");
+  });
+
+  test("status-bar zoom buttons disable at font-size limits", async () => {
+    await setNative("#fontSize", "10", "input");
+    await expect(page.locator("#statusZoomOut")).toBeDisabled();
+
+    await setNative("#fontSize", "22", "input");
+    await expect(page.locator("#statusZoomIn")).toBeDisabled();
+
+    await setNative("#fontSize", "14", "input");
+    await expect(page.locator("#statusZoomOut")).toBeEnabled();
+    await expect(page.locator("#statusZoomIn")).toBeEnabled();
+  });
+
   test("toggles chrome and input synchronisation", async () => {
     await setCheck("#syncInput", true);
     await expect.poll(() => page.evaluate(() => document.querySelector("#syncInput").checked)).toBe(true);

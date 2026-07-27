@@ -146,4 +146,5 @@ on x86.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
 - Manual canvas panes can be dragged by their header and resized from the lower-right corner.
 - Any pane can be minimized to a chip in the status bar with its header's minimize (−) button; click the chip to restore the pane in place.
+- The status bar includes − / + controls for terminal font zoom (same as Ctrl+- and Ctrl+=).
 - The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.

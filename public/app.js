@@ -51,6 +51,8 @@ const STATUS_PILL_FAB_GAP = 8;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.22";
+const MIN_FONT_SIZE = 10;
+const MAX_FONT_SIZE = 22;
 
 // xterm reports focus changes back to the shell as data when the application
 // enables DECSET 1004 (which ConPTY does): ESC [ I on focus in, ESC [ O on
@@ -262,6 +264,8 @@ const elements = {
   statusMemText: document.querySelector("#statusMemText"),
   statusSessions: document.querySelector("#statusSessions"),
   statusShellText: document.querySelector("#statusShellText"),
+  statusZoomIn: document.querySelector("#statusZoomIn"),
+  statusZoomOut: document.querySelector("#statusZoomOut"),
   syncInput: document.querySelector("#syncInput"),
   terminalSearchInput: document.querySelector("#terminalSearchInput"),
   terminalTheme: document.querySelector("#terminalTheme"),
@@ -446,6 +450,8 @@ function bindControls() {
 
   elements.addTerminal.addEventListener("click", () => addTerminal({ reveal: true, runStartup: true }));
   elements.closeAllTerminals.addEventListener("click", closeAllTerminals);
+  elements.statusZoomOut.addEventListener("click", () => fontZoom(-1));
+  elements.statusZoomIn.addEventListener("click", () => fontZoom(1));
   elements.fitAll.addEventListener("click", fitAllTerminals);
   elements.resetLayout.addEventListener("click", resetLayout);
   elements.commandPalette.addEventListener("click", openPalette);
@@ -2257,6 +2263,22 @@ function updateStatusBar() {
   const online = state.socketReady;
   elements.statusConn.textContent = online ? "Connected" : "Disconnected";
   elements.statusConn.dataset.tone = online ? "online" : "offline";
+  updateFontZoomControls();
+}
+
+function updateFontZoomControls() {
+  const atMin = state.settings.fontSize <= MIN_FONT_SIZE;
+  const atMax = state.settings.fontSize >= MAX_FONT_SIZE;
+
+  elements.statusZoomOut.disabled = atMin;
+  elements.statusZoomIn.disabled = atMax;
+
+  const downLabel = atMin ? `Font size is already at minimum (${MIN_FONT_SIZE}px)` : "Decrease font size (Ctrl+-)";
+  const upLabel = atMax ? `Font size is already at maximum (${MAX_FONT_SIZE}px)` : "Increase font size (Ctrl++)";
+  elements.statusZoomOut.title = downLabel;
+  elements.statusZoomOut.setAttribute("aria-label", downLabel);
+  elements.statusZoomIn.title = upLabel;
+  elements.statusZoomIn.setAttribute("aria-label", upLabel);
 }
 
 function updateChromeToggles() {
@@ -2874,7 +2896,7 @@ function setLayoutMode(value) {
 }
 
 function fontZoom(delta) {
-  const next = Math.min(22, Math.max(10, state.settings.fontSize + delta));
+  const next = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, state.settings.fontSize + delta));
   if (next === state.settings.fontSize) return;
   state.settings.fontSize = next;
   elements.fontSize.value = next;
@@ -2883,8 +2905,9 @@ function fontZoom(delta) {
 }
 
 function resetFontZoom() {
-  state.settings.fontSize = defaultSettings.fontSize;
-  elements.fontSize.value = defaultSettings.fontSize;
+  const next = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, defaultSettings.fontSize));
+  state.settings.fontSize = next;
+  elements.fontSize.value = next;
   applySettings();
   saveSettings();
 }
