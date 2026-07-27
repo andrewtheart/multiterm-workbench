@@ -2822,6 +2822,14 @@ body.is-pane-dragging {
   min-width: 0;
   overflow: hidden;
   padding: 6px;
+  /* xterm's FitAddon sizes the terminal from getComputedStyle(parent).height,
+     but only subtracts the terminal element's own padding — never this host's.
+     With the global border-box, that computed height includes this 6px inset,
+     so the addon believes it has 12px more room than the content box actually
+     offers and lays out an extra row/column that overflow:hidden then clips
+     (the bottom line looked cut off). content-box makes the reported height and
+     width equal the true usable content area without changing the outer size. */
+  box-sizing: content-box;
 }
 
 .terminal-screen .xterm {
