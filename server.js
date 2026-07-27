@@ -296,6 +296,7 @@ module.exports = {
   stripAnsiForLog,
   revealPath,
   openPath,
+  pickScript,
   launchElevatedTerminal,
   launchElevatedHost,
   handleElevatedConnection,
@@ -490,6 +491,9 @@ function handleClientMessage(client, rawMessage) {
       break;
     case "openPath":
       openPath(client, message);
+      break;
+    case "pickScript":
+      pickScript(client, message);
       break;
     case "elevate":
       launchElevatedTerminal(client, message);
@@ -772,6 +776,71 @@ function revealPath(client, message) {
       client.send({ type: "revealError", message: error.message });
     }
   }
+}
+
+// Opens a native "choose a script" dialog on the user's desktop and reports the
+// chosen path back. The browser cannot do this: a file input never exposes a
+// real path, so the bridge has to own the dialog. Windows only — the picker is
+// a Win32 common dialog, driven from a short-lived STA PowerShell process
+// because Node has no way to show one.
+function pickScript(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const answer = (chosen) => client.send({ type: "scriptPicked", requestId, path: chosen || null });
+
+  if (process.platform !== "win32") {
+    answer(null);
+    return;
+  }
+
+  let initialDir = "";
+  try {
+    const candidate = path.resolve(String(message.cwd || "").trim() || process.cwd());
+    if (fs.statSync(candidate).isDirectory()) initialDir = candidate;
+  } catch {
+    initialDir = "";
+  }
+
+  // -STA is required: the shell-based file dialog cannot run on an MTA thread.
+  // The path is written to stdout on its own line so an empty result reads as a
+  // cancellation rather than a failure.
+  const script = [
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "$d = New-Object System.Windows.Forms.OpenFileDialog",
+    "$d.Title = 'Select a script to run'",
+    "$d.Filter = 'Scripts (*.ps1;*.bat;*.cmd)|*.ps1;*.bat;*.cmd|PowerShell (*.ps1)|*.ps1|Batch (*.bat;*.cmd)|*.bat;*.cmd|All files (*.*)|*.*'",
+    initialDir ? `$d.InitialDirectory = '${initialDir.replace(/'/g, "''")}'` : "",
+    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"
+  ]
+    .filter(Boolean)
+    .join("; ");
+
+  let child;
+  try {
+    child = childProcess.spawn(
+      "powershell.exe",
+      ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { windowsHide: true }
+    );
+  } catch (error) {
+    console.error("[bridge] Script picker failed to start:", error.message);
+    answer(null);
+    return;
+  }
+
+  let out = "";
+  let settled = false;
+  const settle = (chosen) => {
+    if (settled) return;
+    settled = true;
+    answer(chosen);
+  };
+
+  child.stdout.on("data", (chunk) => { out += chunk.toString(); });
+  child.on("error", (error) => {
+    console.error("[bridge] Script picker failed:", error.message);
+    settle(null);
+  });
+  child.on("close", () => settle(out.trim()));
 }
 
 // Opens a file with whatever the OS has associated with it, so a log can be read in

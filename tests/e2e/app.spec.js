@@ -338,31 +338,74 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect.poll(opacity).toBe(resting);
   });
 
-  test("keeps the pid pill clear of the floating log button", async () => {
+  test("docks the log toggle in the status bar beside Close all", async () => {
     const report = await page.evaluate(() => {
-      const fab = document.querySelector("#logToggle");
-      const f = fab.getBoundingClientRect();
-      return [...document.querySelectorAll(".terminal-pane")].map((pane) => {
-        const pill = pane.querySelector(".pane-status");
-        const b = pill.getBoundingClientRect();
-        return {
-          overlapsFab: b.right > f.left && b.left < f.right && b.bottom > f.top && b.top < f.bottom,
-          clipped: pill.scrollWidth > pill.clientWidth,
-          insetFromPaneRight: pane.getBoundingClientRect().right - b.right
-        };
-      });
+      const toggle = document.querySelector("#logToggle");
+      const closeAll = document.querySelector("#closeAllTerminals");
+      const t = toggle.getBoundingClientRect();
+      const c = closeAll.getBoundingClientRect();
+      return {
+        inStatusBar: toggle.closest(".status-bar") !== null,
+        // Immediately to the right of Close all, with nothing in between.
+        followsCloseAll: closeAll.nextElementSibling === toggle,
+        toRightOfCloseAll: t.left >= c.right,
+        sameRow: Math.abs(t.top - c.top) < 6,
+        position: getComputedStyle(toggle).position,
+        overlapsWorkbench: (() => {
+          const h = document.querySelector("#terminalHost").getBoundingClientRect();
+          return t.right > h.left && t.left < h.right && t.bottom > h.top && t.top < h.bottom;
+        })(),
+        pillInsets: [...document.querySelectorAll(".terminal-pane")].map((pane) => {
+          const b = pane.querySelector(".pane-status").getBoundingClientRect();
+          return Math.round(pane.getBoundingClientRect().right - b.right);
+        })
+      };
     });
 
-    expect(report.length).toBeGreaterThan(0);
-    for (const pane of report) {
-      // The FAB is fixed above the panes, so an overlapping pill would be
-      // painted over and unreadable.
-      expect(pane.overlapsFab).toBe(false);
-      expect(pane.clipped).toBe(false);
-      expect(pane.insetFromPaneRight).toBeGreaterThan(0);
-    }
-    // Only the pane under the FAB should be nudged; the rest stay flush right.
-    expect(Math.min(...report.map((p) => p.insetFromPaneRight))).toBeLessThan(24);
+    expect(report.inStatusBar).toBe(true);
+    expect(report.followsCloseAll).toBe(true);
+    expect(report.toRightOfCloseAll).toBe(true);
+    expect(report.sameRow).toBe(true);
+    // Docked in the bar, not floating over the workbench.
+    expect(report.position).not.toBe("fixed");
+    expect(report.overlapsWorkbench).toBe(false);
+    // Nothing hovers over the panes any more, so every pill sits flush right
+    // instead of one being nudged clear of a floating button.
+    expect(report.pillInsets.length).toBeGreaterThan(0);
+    for (const inset of report.pillInsets) expect(inset).toBeLessThan(24);
+    expect(new Set(report.pillInsets).size).toBe(1);
+  });
+
+  test("keeps the log toggle in place and flips its chevron when the panel opens", async () => {
+    const toggle = page.locator("#logToggle");
+    const panel = page.locator("#logPanel");
+
+    await expect(panel).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const closed = await toggle.boundingBox();
+
+    await toggle.click();
+    await expect(panel).toBeVisible();
+    // It used to hide itself when open; in the bar that would collapse a slot
+    // and shuffle its neighbours, so it stays put and turns into the closer.
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(toggle).toHaveAttribute("aria-label", "Hide logs");
+    const open = await toggle.boundingBox();
+    expect(Math.round(open.x)).toBe(Math.round(closed.x));
+    expect(Math.round(open.y)).toBe(Math.round(closed.y));
+
+    // The chevron points at the panel: up to summon it, down to dismiss it.
+    // Poll rather than sample once - the rotation is animated, so an immediate
+    // read catches it partway round.
+    const chevron = () => toggle.locator("svg").evaluate((el) => getComputedStyle(el).transform);
+    await expect.poll(chevron).toBe("matrix(-1, 0, 0, -1, 0, 0)");
+
+    await toggle.click();
+    await expect(panel).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toHaveAttribute("aria-label", "Show logs");
+    await expect.poll(chevron).toBe("none");
   });
 
   test("opens the About dialog and shows the version", async () => {
@@ -462,6 +505,25 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#updateOverlay")).toBeHidden();
 
     await page.unroute("https://api.github.com/repos/**");
+  });
+
+  test("renders the brand mark from the shipped app icon", async () => {
+    // The taskbar icon and the in-app brand mark must be the same artwork; the
+    // mark used to be an unrelated CSS gradient blob.
+    for (const selector of [".topbar .brand-mark", ".about-head .brand-mark"]) {
+      const image = await page
+        .locator(selector)
+        .evaluate((el) => getComputedStyle(el).backgroundImage);
+      expect(image).toContain("favicon.svg");
+    }
+    const reachable = await page.evaluate(async () => {
+      const res = await fetch("favicon.svg");
+      return { ok: res.ok, body: await res.text() };
+    });
+    expect(reachable.ok).toBe(true);
+    // Same two marks the .ico carries: the teal chevron and the amber cursor.
+    expect(reachable.body).toContain("#79d7bd");
+    expect(reachable.body).toContain("#f0b35a");
   });
 
   test("opens the keyboard shortcuts dialog", async () => {

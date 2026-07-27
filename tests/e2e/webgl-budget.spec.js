@@ -112,25 +112,30 @@ test.describe("WebGL renderer budget", () => {
   // that never received the WebGL addon must still paint. (A pane whose addon was
   // disposed would have no renderer at all and would show up blank.)
   test("every pane still renders, including the ones past the budget", async () => {
-    const blank = await page.evaluate(async () => {
-      const marker = `RENDERCHK${Date.now()}`;
-      for (const terminal of state.terminals.values()) terminal.term.write(`\r\n${marker}\r\n`);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+    // The marker is rewritten on every attempt rather than written once: the
+    // newest shells are still emitting their banner and prompt when the panes go
+    // "live", and that output overwrote a single up-front marker, which made this
+    // look like a rendering failure when nothing had failed to render.
+    const probe = () =>
+      page.evaluate(async () => {
+        const marker = `RENDERCHK${Date.now()}`;
+        for (const terminal of state.terminals.values()) terminal.term.write(`\r\n${marker}\r\n`);
+        await new Promise((resolve) => setTimeout(resolve, 600));
 
-      const unpainted = [];
-      for (const terminal of state.terminals.values()) {
-        const rows = terminal.pane.querySelector(".xterm-rows");
-        // A GL pane paints into its canvas, so presence of the canvas is the
-        // signal there. A DOM pane must have the text in .xterm-rows - that is
-        // exactly what a pane stripped of its renderer would fail.
-        const painted = terminal.webglAddon
-          ? terminal.pane.querySelectorAll("canvas").length > 0
-          : Boolean(rows) && rows.textContent.includes(marker);
-        if (!painted) unpainted.push(terminal.title || terminal.id);
-      }
-      return unpainted;
-    });
+        const unpainted = [];
+        for (const terminal of state.terminals.values()) {
+          const rows = terminal.pane.querySelector(".xterm-rows");
+          // A GL pane paints into its canvas, so presence of the canvas is the
+          // signal there. A DOM pane must have the text in .xterm-rows - that is
+          // exactly what a pane stripped of its renderer would fail.
+          const painted = terminal.webglAddon
+            ? terminal.pane.querySelectorAll("canvas").length > 0
+            : Boolean(rows) && rows.textContent.includes(marker);
+          if (!painted) unpainted.push(terminal.title || terminal.id);
+        }
+        return unpainted;
+      });
 
-    expect(blank).toEqual([]);
+    await expect.poll(probe, { timeout: 30000 }).toEqual([]);
   });
 });

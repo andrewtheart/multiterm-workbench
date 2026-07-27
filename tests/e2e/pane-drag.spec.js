@@ -50,6 +50,26 @@ test.describe("pane drag to rearrange", () => {
     await page.waitForTimeout(400);
   };
 
+  // closeAllTerminals only proves the *client* let go of its panes; the bridge
+  // drains its sessions a moment later. Any session still alive at reload time
+  // is reattached, so this spec has to wait for the bridge itself to reach zero
+  // or the reload brings back panes an earlier spec created.
+  const bridgeSessionCount = () =>
+    page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const probe = new WebSocket(`${protocol}//${window.location.host}/ws`);
+          probe.addEventListener("message", (event) => {
+            const message = JSON.parse(event.data);
+            if (message.type !== "welcome") return;
+            probe.close();
+            resolve(message.sessions.length);
+          });
+          probe.addEventListener("error", () => reject(new Error("probe socket failed")));
+        })
+    );
+
   test.beforeAll(async ({ browser }) => {
     // Enough room for four panes to sit in view at once. In a smaller window the
     // host scrolls and pane 0 can be above the fold, which no pointer drag can
@@ -68,6 +88,7 @@ test.describe("pane drag to rearrange", () => {
       await page.locator("#closeAllTerminals").click();
       await expect(page.locator(".terminal-pane")).toHaveCount(0);
     }
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(0);
     for (let i = 0; i < 4; i += 1) {
       await page.locator("#addTerminal").click();
       await expect(page.locator(".terminal-pane")).toHaveCount(i + 1);
