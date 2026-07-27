@@ -242,21 +242,36 @@ Build the installer (requires Inno Setup 6):
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\MultiTerm.iss
 ```
 
-Or use the helper script, which reads the version from `package.json`, checks it
-against `installer\MultiTerm.iss`, and finds `ISCC.exe` automatically:
+Or use the helper script, which finds `ISCC.exe` automatically and can also cut
+the GitHub release for you:
 
 ```powershell
-# build only
+# build the current version's installer only (no version change, no publish)
 .\scripts\build-installer.ps1
 
-# build, then publish it as GitHub release v<version> (requires the gh CLI)
+# bump the version, build, commit, push, and publish the release (needs the gh CLI)
 .\scripts\build-installer.ps1 -Push
 ```
 
-`-Push` uploads `MultiTerm-Setup-<version>.exe` to a new release tagged
-`v<version>` with auto-generated notes. Add `-Force` to (re)upload the asset when
-that release already exists, or `-Draft` / `-Prerelease` to control the release
-type. Pass `-WhatIf` to preview the steps without building or publishing.
+Build-only mode treats the `package.json` version as the source of truth and
+verifies `installer\MultiTerm.iss` agrees; it never modifies files.
+
+`-Push` cuts a release end-to-end: it **auto-increments the version** (patch by
+default) in both `package.json` and `installer\MultiTerm.iss`, builds
+`MultiTerm-Setup-<version>.exe`, commits the bump as `chore(release): v<version>`,
+pushes the current branch, and creates a GitHub release tagged `v<version>`
+(targeting that commit, with auto-generated notes and the installer attached).
+
+Publish options:
+
+- `-BumpPart minor` or `-BumpPart major` — increment a different segment instead
+  of patch.
+- `-SetVersion 1.2.3` — release an explicit version instead of auto-incrementing.
+- `-NoVersionBump` — publish the current version as-is (combine with `-Force` to
+  re-upload the asset onto an existing release).
+- `-Draft` / `-Prerelease` — control the release type.
+- `-WhatIf` — preview every step (version bump, build, commit, push, release)
+  without changing anything.
 
 The resulting `installer\Output\MultiTerm-Setup-<version>.exe` performs a
 per-user install by default (no UAC prompt); users may elect a machine-wide
