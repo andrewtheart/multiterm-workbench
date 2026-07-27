@@ -575,7 +575,11 @@ function createSession(client, options) {
     scheduleMemStats(1500);
   });
 
-  client.send({ type: "created", ...toSessionSummary(session) });
+  const created = { type: "created", ...toSessionSummary(session) };
+  client.send(created);
+  // External automation clients (for example Yagu's visible update downloader) create sessions over
+  // their own WebSocket. Notify every other client so the new terminal appears in the open workbench UI.
+  broadcast(created, client);
   scheduleMemStats(2000);
 }
 
@@ -1341,9 +1345,9 @@ function stopMemStats() {
   memSettleTimer = null;
 }
 
-function broadcast(message) {
+function broadcast(message, excludedClient = null) {
   for (const client of clients) {
-    client.send(message);
+    if (client !== excludedClient) client.send(message);
   }
 }
 

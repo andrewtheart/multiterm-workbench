@@ -43,6 +43,7 @@ describe("createSession", () => {
 
     expect(server.sessions.has("session01")).toBe(true);
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "session01", title: "Build" }));
+    expect(observer.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "session01", title: "Build" }));
 
     terminal.fire("data", "hello");
     expect(observer.send).toHaveBeenCalledWith(expect.objectContaining({ type: "output", id: "session01", data: "hello" }));
