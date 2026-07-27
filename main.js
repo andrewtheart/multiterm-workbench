@@ -1,6 +1,9 @@
 let { app, BrowserWindow, Menu, Tray, shell, dialog, ipcMain } = require("electron");
 const childProcess = require("node:child_process");
+const fs = require("node:fs");
 const http = require("node:http");
+const https = require("node:https");
+const os = require("node:os");
 const path = require("node:path");
 
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
@@ -233,6 +236,7 @@ async function onReady() {
   registerScriptPicker();
   registerCloseHandler();
   registerAdminIpc();
+  registerUpdateIpc();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -318,6 +322,265 @@ function relaunchAsAdmin() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Update checker
+//
+// MultiTerm ships as a GitHub release with a single Windows installer asset, so
+// the update flow is: read the latest release from the GitHub API, compare its
+// tag against the running version, then (on request) download the installer and
+// hand off to it. There is no auto-update framework here on purpose — the
+// installer is what actually replaces the app.
+// ---------------------------------------------------------------------------
+const UPDATE_REPO = process.env.MULTITERM_UPDATE_REPO || "andrewtheart/multiterm-workbench";
+const UPDATE_API_BASE = process.env.MULTITERM_UPDATE_API || "https://api.github.com";
+const LATEST_RELEASE_URL = `${UPDATE_API_BASE}/repos/${UPDATE_REPO}/releases/latest`;
+const RELEASE_PAGE_URL = `https://github.com/${UPDATE_REPO}/releases/latest`;
+const UPDATE_USER_AGENT = "MultiTerm-Workbench";
+const UPDATE_TIMEOUT_MS = 20000;
+const MAX_UPDATE_REDIRECTS = 5;
+
+// Numeric-segment version compare (1 = a is newer). Release tags are plain
+// `vMAJOR.MINOR.PATCH`, so a full semver parser would be dead weight; any
+// trailing pre-release digits simply sort after the release they follow.
+function compareVersions(a, b) {
+  const parse = (value) => String(value ?? "")
+    .trim()
+    .replace(/^v/i, "")
+    .split(/[.+-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
+  const left = parse(a);
+  const right = parse(b);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const l = left[i] ?? 0;
+    const r = right[i] ?? 0;
+    if (l !== r) return l > r ? 1 : -1;
+  }
+  return 0;
+}
+
+function getCurrentVersion() {
+  try {
+    if (app && typeof app.getVersion === "function") {
+      const version = app.getVersion();
+      if (version) return String(version);
+    }
+  } catch {
+    /* not running under Electron (tests) — fall back to package.json */
+  }
+  return require("./package.json").version;
+}
+
+// GET that follows GitHub's redirects (release assets live on a CDN) and
+// resolves with the still-unread response stream.
+function openHttpsStream(url, { accept } = {}, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    let request;
+    try {
+      request = https.get(url, {
+        headers: {
+          "User-Agent": UPDATE_USER_AGENT,
+          Accept: accept || "application/vnd.github+json"
+        }
+      }, (response) => {
+        const status = response.statusCode || 0;
+        const location = response.headers?.location;
+        if (status >= 300 && status < 400 && location) {
+          response.resume();
+          if (redirects >= MAX_UPDATE_REDIRECTS) {
+            reject(new Error("Too many redirects while contacting GitHub."));
+            return;
+          }
+          resolve(openHttpsStream(new URL(location, url).toString(), { accept }, redirects + 1));
+          return;
+        }
+        if (status !== 200) {
+          response.resume();
+          reject(new Error(`GitHub returned HTTP ${status}.`));
+          return;
+        }
+        resolve(response);
+      });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    request.on("error", reject);
+    request.setTimeout(UPDATE_TIMEOUT_MS, () => {
+      request.destroy(new Error("Timed out contacting GitHub."));
+    });
+  });
+}
+
+function readStream(stream) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    stream.setEncoding?.("utf8");
+    stream.on("data", (chunk) => { body += chunk; });
+    stream.on("error", reject);
+    stream.on("end", () => resolve(body));
+  });
+}
+
+// A release can carry portable zips and checksums alongside the installer, so
+// prefer the setup executable and fall back to any .exe.
+function pickInstallerAsset(assets) {
+  const list = Array.isArray(assets) ? assets : [];
+  const executables = list.filter((asset) => /\.exe$/i.test(asset?.name || "") && asset?.browser_download_url);
+  const installer = executables.find((asset) => /setup|install/i.test(asset.name)) || executables[0];
+  if (!installer) return null;
+  return {
+    name: installer.name,
+    url: installer.browser_download_url,
+    size: Number(installer.size) || 0
+  };
+}
+
+function normalizeRelease(data) {
+  const tag = String(data?.tag_name || "");
+  return {
+    tag,
+    version: tag.replace(/^v/i, ""),
+    name: data?.name || tag,
+    notes: typeof data?.body === "string" ? data.body : "",
+    url: data?.html_url || RELEASE_PAGE_URL,
+    publishedAt: data?.published_at || "",
+    asset: pickInstallerAsset(data?.assets)
+  };
+}
+
+async function fetchLatestRelease() {
+  const stream = await openHttpsStream(LATEST_RELEASE_URL);
+  const body = await readStream(stream);
+  return normalizeRelease(JSON.parse(body));
+}
+
+async function checkForUpdate() {
+  const release = await fetchLatestRelease();
+  const current = getCurrentVersion();
+  return {
+    ok: true,
+    current,
+    available: Boolean(release.version) && compareVersions(release.version, current) > 0,
+    release,
+    releasePage: RELEASE_PAGE_URL
+  };
+}
+
+// Streams the installer into the temp folder, reporting progress so the renderer
+// can show a determinate bar.
+function downloadUpdate(asset, onProgress) {
+  if (!asset || !asset.url) {
+    return Promise.reject(new Error("This release does not include a Windows installer."));
+  }
+  if (!/^https:\/\//i.test(asset.url)) {
+    return Promise.reject(new Error("Refusing to download an installer over an insecure URL."));
+  }
+
+  let tempDir;
+  try {
+    tempDir = app?.getPath ? app.getPath("temp") : os.tmpdir();
+  } catch {
+    tempDir = os.tmpdir();
+  }
+  const safeName = String(asset.name || "MultiTerm-Setup.exe").replace(/[^\w.-]+/g, "_");
+  const target = path.join(tempDir, safeName);
+
+  return openHttpsStream(asset.url, { accept: "application/octet-stream" }).then((response) => (
+    new Promise((resolve, reject) => {
+      const total = Number(response.headers?.["content-length"]) || Number(asset.size) || 0;
+      let received = 0;
+      const file = fs.createWriteStream(target);
+      const fail = (err) => {
+        try { file.destroy(); } catch { /* already closed */ }
+        fs.unlink(target, () => reject(err));
+      };
+      response.on("data", (chunk) => {
+        received += chunk.length;
+        if (typeof onProgress === "function") onProgress({ received, total });
+      });
+      response.on("error", fail);
+      file.on("error", fail);
+      file.on("finish", () => resolve(target));
+      response.pipe(file);
+    })
+  ));
+}
+
+// Hands off to the downloaded installer. Spawned detached so it survives the
+// app quitting out from under it (the installer replaces these very files).
+function runInstaller(filePath) {
+  if (!filePath) return false;
+  try {
+    const child = childProcess.spawn(filePath, [], { detached: true, stdio: "ignore" });
+    child.unref();
+    return true;
+  } catch {
+    try {
+      shell.openPath(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function sendUpdateProgress(payload) {
+  const wc = mainWindow?.webContents;
+  if (wc && typeof wc.send === "function" && !wc.isDestroyed?.()) {
+    wc.send("multiterm:update-progress", payload);
+  }
+}
+
+function registerUpdateIpc() {
+  if (!ipcMain || typeof ipcMain.handle !== "function") return;
+  for (const channel of ["multiterm:check-update", "multiterm:download-update", "multiterm:open-release"]) {
+    try { ipcMain.removeHandler(channel); } catch { /* no existing handler */ }
+  }
+
+  ipcMain.handle("multiterm:check-update", async () => {
+    try {
+      return await checkForUpdate();
+    } catch (err) {
+      return { ok: false, error: formatError(err), current: getCurrentVersion(), releasePage: RELEASE_PAGE_URL };
+    }
+  });
+
+  ipcMain.handle("multiterm:download-update", async (_event, asset) => {
+    let lastEmit = 0;
+    try {
+      const file = await downloadUpdate(asset, ({ received, total }) => {
+        // Throttle: a 100 MB installer would otherwise flood the renderer.
+        const now = Date.now();
+        if (total && received < total && now - lastEmit < 150) return;
+        lastEmit = now;
+        sendUpdateProgress({ received, total });
+      });
+      sendUpdateProgress({ received: 1, total: 1, done: true });
+      const started = runInstaller(file);
+      if (started) {
+        app.isQuiting = true;
+        setTimeout(() => app.quit(), 1200);
+        return { ok: true, path: file };
+      }
+      return { ok: false, path: file, error: "Downloaded, but the installer could not be launched." };
+    } catch (err) {
+      return { ok: false, error: formatError(err) };
+    }
+  });
+
+  ipcMain.handle("multiterm:open-release", async (_event, url) => {
+    const target = typeof url === "string" && /^https:\/\/github\.com\//i.test(url) ? url : RELEASE_PAGE_URL;
+    try {
+      await shell.openExternal(target);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function bootstrap() {
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
@@ -366,6 +629,15 @@ module.exports = {
   handleCloseResponse,
   registerCloseHandler,
   registerAdminIpc,
+  registerUpdateIpc,
+  compareVersions,
+  getCurrentVersion,
+  pickInstallerAsset,
+  normalizeRelease,
+  fetchLatestRelease,
+  checkForUpdate,
+  downloadUpdate,
+  runInstaller,
   ensureElevationChecked,
   relaunchAsAdmin,
   onReady,

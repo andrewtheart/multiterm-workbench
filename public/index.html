@@ -519,6 +519,12 @@
           <li><span>Version</span><span id="aboutVersionText">0.1.0</span></li>
         </ul>
         <p class="about-foot">A local xterm.js multi-terminal workbench for PowerShell sessions.</p>
+        <div class="about-actions">
+          <button id="aboutCheckUpdates" type="button" class="about-check">
+            <i data-lucide="refresh-cw"></i>
+            <span>Check for updates</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -554,6 +560,32 @@
         <div class="confirm-actions">
           <button id="closeConfirmQuit" type="button" class="confirm-cancel">Quit MultiTerm</button>
           <button id="closeConfirmTray" type="button" class="confirm-proceed">Minimize to tray</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="updateOverlay" class="palette-overlay" hidden>
+      <div class="palette update" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
+        <div class="update-head">
+          <i data-lucide="sparkles"></i>
+          <div class="update-title">
+            <h2 id="updateTitle">Update available</h2>
+            <p id="updateSubtitle">MultiTerm 0.0.0 is available.</p>
+          </div>
+          <button id="updateClose" class="icon-button" type="button" title="Close" aria-label="Close">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div id="updateNotes" class="update-notes" tabindex="0" role="document" aria-label="Release notes"></div>
+        <div id="updateProgress" class="update-progress" hidden>
+          <div class="update-progress-track"><div id="updateProgressBar" class="update-progress-bar"></div></div>
+          <p id="updateProgressText" class="update-progress-text">Downloading…</p>
+        </div>
+        <p id="updateError" class="update-error" hidden></p>
+        <div class="confirm-actions update-actions">
+          <a id="updateViewRelease" class="update-link" href="https://github.com/andrewtheart/multiterm-workbench/releases/latest" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+          <button id="updateLater" type="button" class="confirm-cancel">Later</button>
+          <button id="updateInstall" type="button" class="confirm-proceed">Download &amp; install</button>
         </div>
       </div>
     </div>
@@ -603,7 +635,10 @@
             <button type="button" data-action="minimize" title="Minimize to status bar" aria-label="Minimize terminal">
               <i data-lucide="minus"></i>
             </button>
-            <button type="button" data-action="focus" title="Focus" aria-label="Focus">
+            <button type="button" data-action="focus" title="Focus this terminal (focus rail layout)" aria-label="Focus this terminal">
+              <i data-lucide="focus"></i>
+            </button>
+            <button type="button" data-action="maximize" data-icon="maximize-2" title="Maximize (Ctrl+Shift+X)" aria-label="Maximize terminal" aria-pressed="false">
               <i data-lucide="maximize-2"></i>
             </button>
             <button type="button" data-action="duplicate" title="Duplicate" aria-label="Duplicate">

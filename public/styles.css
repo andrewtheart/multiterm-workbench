@@ -1442,8 +1442,177 @@ body.header-hidden .status-hint kbd,
   padding: 4px 22px 0;
 }
 
-/* ---------------- Confirm / warning dialog --------------- */
+.about-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 22px 18px;
+}
 
+.about-check {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12.5px;
+  font-weight: 620;
+  gap: 8px;
+  padding: 8px 14px;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.about-check:hover {
+  background: var(--state-hover);
+}
+
+.about-check i,
+.about-check svg {
+  height: 15px;
+  width: 15px;
+}
+
+/* ---------------- Update dialog --------------- */
+
+.palette.update {
+  display: flex;
+  flex-direction: column;
+  max-height: min(660px, 86vh);
+  padding: 20px 22px 18px;
+  width: min(620px, 94vw);
+}
+
+.update-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+}
+
+.update-head > i {
+  color: var(--primary);
+  flex: none;
+  height: 24px;
+  margin-top: 2px;
+  width: 24px;
+}
+
+.update-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-title h2 {
+  font-size: 17px;
+  font-weight: 680;
+  margin: 0;
+}
+
+.update-title p {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 3px 0 0;
+}
+
+.update-notes {
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.16));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 16px 0 0;
+  min-height: 120px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px;
+}
+
+.update-notes h3 {
+  font-size: 13.5px;
+  font-weight: 680;
+  margin: 14px 0 6px;
+}
+
+.update-notes h3:first-child {
+  margin-top: 0;
+}
+
+.update-notes p {
+  margin: 0 0 8px;
+}
+
+.update-notes ul {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.update-notes li {
+  margin: 0 0 4px;
+}
+
+.update-notes code {
+  background: var(--state-hover);
+  border-radius: var(--radius-xs);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+}
+
+.update-notes .update-notes-empty {
+  color: var(--muted);
+}
+
+.update-progress {
+  margin-top: 14px;
+}
+
+.update-progress-track {
+  background: var(--state-hover);
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.update-progress-bar {
+  background: var(--primary);
+  height: 100%;
+  transition: width var(--dur-fast, 120ms) linear;
+  width: 0;
+}
+
+.update-progress-text {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin: 6px 0 0;
+}
+
+.update-error {
+  color: var(--danger, #f14c4c);
+  font-size: 12.5px;
+  margin: 12px 0 0;
+}
+
+.update-actions {
+  align-items: center;
+  margin-top: 18px;
+}
+
+.update-link {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin-right: auto;
+  text-decoration: none;
+}
+
+.update-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* ---------------- Confirm / warning dialog --------------- */
 .palette.confirm {
   padding: 22px 22px 18px;
   width: min(460px, 92vw);
@@ -1521,6 +1690,7 @@ body.header-hidden .status-hint kbd,
 /* ---------------- Maximize / zoom pane --------------- */
 
 .terminal-host.has-zoom {
+  overflow: hidden;
   position: relative;
 }
 
@@ -1536,6 +1706,16 @@ body.header-hidden .status-hint kbd,
   min-height: 0;
   transform: none !important;
   z-index: 6;
+}
+
+/* The maximized pane is absolutely positioned inside a host that no longer
+   scrolls, so the sticky pane header (see `.terminal-host .terminal-pane >
+   .pane-bar`) has nothing useful to pin to. It still resolves an offset
+   against the host's scrollport and slides down over the terminal, clipping
+   the top of the first row. Put it back in normal flow while maximized. */
+.terminal-host.has-zoom .terminal-pane.is-zoomed > .pane-bar {
+  position: relative;
+  top: auto;
 }
 
 /* ---------------- Snippets --------------- */
@@ -2594,7 +2774,8 @@ body.is-pane-dragging {
   width: 30px;
 }
 
-.pane-actions button[data-action="more"] {
+.pane-actions button[data-action="find"],
+.pane-actions button[data-action="duplicate"] {
   display: none;
 }
 
@@ -2623,23 +2804,15 @@ body.is-pane-dragging {
 .terminal-host.compact .pane-actions button[data-action="clear"],
 .terminal-host.compact .pane-actions button[data-action="copy"],
 .terminal-host.compact .pane-actions button[data-action="color"],
-.terminal-host.compact .pane-actions button[data-action="find"],
-.terminal-host.compact .pane-actions button[data-action="restart"],
-.terminal-host.compact .pane-actions button[data-action="duplicate"] {
+.terminal-host.compact .pane-actions button[data-action="restart"] {
   display: none;
-}
-
-.terminal-host.compact .pane-actions button[data-action="more"],
-.terminal-pane.is-narrow .pane-actions button[data-action="more"] {
-  display: inline-flex;
 }
 
 /* Narrow panes keep the primary actions but move the secondary ones (which the
    overflow menu re-exposes) out of the header so the title keeps its space. */
 .terminal-pane.is-narrow .pane-actions button[data-action="move-left"],
 .terminal-pane.is-narrow .pane-actions button[data-action="move-right"],
-.terminal-pane.is-narrow .pane-actions button[data-action="color"],
-.terminal-pane.is-narrow .pane-actions button[data-action="duplicate"] {
+.terminal-pane.is-narrow .pane-actions button[data-action="color"] {
   display: none;
 }
 

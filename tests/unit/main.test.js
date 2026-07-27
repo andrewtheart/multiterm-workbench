@@ -1,5 +1,7 @@
 const { EventEmitter } = require("node:events");
+const fs = require("node:fs");
 const http = require("node:http");
+const https = require("node:https");
 const childProcess = require("node:child_process");
 const main = require("../../main.js");
 
@@ -710,3 +712,242 @@ describe("administrator elevation IPC", () => {
     expect(main.relaunchAsAdmin()).toBe(false);
   });
 });
+
+describe("update checker", () => {
+  function makeResponse({ status = 200, headers = {}, body } = {}) {
+    const response = new EventEmitter();
+    response.statusCode = status;
+    response.headers = headers;
+    response.resume = vi.fn();
+    response.setEncoding = vi.fn();
+    response.pipe = vi.fn();
+    // Only JSON responses replay themselves; download tests drive their own chunks.
+    if (typeof body === "string") {
+      response.__emit = () => {
+        response.emit("data", body);
+        response.emit("end");
+      };
+    }
+    return response;
+  }
+
+  // https.get(url, opts, cb) with a request object that supports error/timeout.
+  function stubHttps(responder) {
+    return vi.spyOn(https, "get").mockImplementation((url, _opts, callback) => {
+      const request = new EventEmitter();
+      request.setTimeout = vi.fn();
+      request.destroy = vi.fn();
+      const response = responder(url);
+      queueMicrotask(() => {
+        callback(response);
+        // Give the promise chain a turn to attach its stream listeners first.
+        if (response.__emit) setTimeout(response.__emit, 0);
+      });
+      return request;
+    });
+  }
+
+  const releaseBody = JSON.stringify({
+    tag_name: "v9.9.9",
+    name: "MultiTerm 9.9.9",
+    body: "## Fixes\n- something",
+    html_url: "https://github.com/andrewtheart/multiterm-workbench/releases/tag/v9.9.9",
+    published_at: "2026-01-01T00:00:00Z",
+    assets: [
+      { name: "notes.txt", browser_download_url: "https://example.com/notes.txt", size: 1 },
+      { name: "MultiTerm-Setup-9.9.9.exe", browser_download_url: "https://example.com/setup.exe", size: 4096 }
+    ]
+  });
+
+  describe("compareVersions", () => {
+    it("orders released versions numerically, not lexically", () => {
+      expect(main.compareVersions("0.1.10", "0.1.9")).toBe(1);
+      expect(main.compareVersions("v1.0.0", "1.0.0")).toBe(0);
+      expect(main.compareVersions("0.1.2", "0.2.0")).toBe(-1);
+      expect(main.compareVersions("1.2", "1.2.0")).toBe(0);
+    });
+
+    it("treats missing or unparsable versions as zero", () => {
+      expect(main.compareVersions("", "")).toBe(0);
+      expect(main.compareVersions("0.0.1", null)).toBe(1);
+      expect(main.compareVersions(undefined, "0.0.1")).toBe(-1);
+    });
+  });
+
+  describe("pickInstallerAsset", () => {
+    it("prefers the setup executable over other assets", () => {
+      const asset = main.pickInstallerAsset([
+        { name: "portable.zip", browser_download_url: "https://example.com/p.zip", size: 1 },
+        { name: "extra.exe", browser_download_url: "https://example.com/extra.exe", size: 2 },
+        { name: "MultiTerm-Setup-1.0.0.exe", browser_download_url: "https://example.com/setup.exe", size: 3 }
+      ]);
+      expect(asset).toEqual({ name: "MultiTerm-Setup-1.0.0.exe", url: "https://example.com/setup.exe", size: 3 });
+    });
+
+    it("falls back to any executable and returns null when there is none", () => {
+      expect(main.pickInstallerAsset([{ name: "tool.exe", browser_download_url: "https://example.com/t.exe" }]))
+        .toMatchObject({ name: "tool.exe", size: 0 });
+      expect(main.pickInstallerAsset([{ name: "readme.md", browser_download_url: "https://example.com/r.md" }])).toBeNull();
+      expect(main.pickInstallerAsset(null)).toBeNull();
+    });
+  });
+
+  describe("normalizeRelease", () => {
+    it("strips the leading v and defaults missing fields", () => {
+      const release = main.normalizeRelease({ tag_name: "v2.3.4" });
+      expect(release).toMatchObject({ tag: "v2.3.4", version: "2.3.4", name: "v2.3.4", notes: "", asset: null });
+      expect(release.url).toContain("/releases/latest");
+    });
+  });
+
+  describe("fetchLatestRelease / checkForUpdate", () => {
+    it("reads the latest release and reports an available update", async () => {
+      stubHttps(() => makeResponse({ body: releaseBody }));
+      electron.app.getVersion = vi.fn(() => "0.1.0");
+
+      const result = await main.checkForUpdate();
+      expect(result.ok).toBe(true);
+      expect(result.available).toBe(true);
+      expect(result.current).toBe("0.1.0");
+      expect(result.release.version).toBe("9.9.9");
+      expect(result.release.asset.url).toBe("https://example.com/setup.exe");
+    });
+
+    it("reports no update when the running version is already newest", async () => {
+      stubHttps(() => makeResponse({ body: releaseBody }));
+      electron.app.getVersion = vi.fn(() => "9.9.9");
+
+      const result = await main.checkForUpdate();
+      expect(result.available).toBe(false);
+    });
+
+    it("follows redirects and rejects on non-200 responses", async () => {
+      let call = 0;
+      stubHttps(() => {
+        call += 1;
+        return call === 1
+          ? makeResponse({ status: 302, headers: { location: "https://api.github.com/elsewhere" } })
+          : makeResponse({ body: releaseBody });
+      });
+      await expect(main.fetchLatestRelease()).resolves.toMatchObject({ version: "9.9.9" });
+
+      stubHttps(() => makeResponse({ status: 404 }));
+      await expect(main.fetchLatestRelease()).rejects.toThrow(/HTTP 404/);
+    });
+
+    it("falls back to package.json when Electron cannot report a version", () => {
+      electron.app.getVersion = vi.fn(() => { throw new Error("not ready"); });
+      expect(main.getCurrentVersion()).toBe(require("../../package.json").version);
+    });
+  });
+
+  describe("downloadUpdate", () => {
+    it("rejects assets that are missing or served over http", async () => {
+      await expect(main.downloadUpdate(null)).rejects.toThrow(/does not include a Windows installer/);
+      await expect(main.downloadUpdate({ url: "http://example.com/setup.exe" })).rejects.toThrow(/insecure/);
+    });
+
+    it("streams the installer to disk and reports progress", async () => {
+      const response = makeResponse({ headers: { "content-length": "10" } });
+      response.pipe = vi.fn();
+      stubHttps(() => response);
+
+      const file = new EventEmitter();
+      file.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+
+      const progress = [];
+      const pending = main.downloadUpdate(
+        { name: "MultiTerm Setup.exe", url: "https://example.com/setup.exe", size: 10 },
+        (payload) => progress.push(payload)
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      response.emit("data", Buffer.alloc(4));
+      file.emit("finish");
+
+      const target = await pending;
+      // The asset name is sanitized before it is used as a file name.
+      expect(target).toMatch(/MultiTerm_Setup\.exe$/);
+      expect(progress).toEqual([{ received: 4, total: 10 }]);
+    });
+
+    it("removes a partial download when the stream fails", async () => {
+      const response = makeResponse();
+      response.pipe = vi.fn();
+      stubHttps(() => response);
+
+      const file = new EventEmitter();
+      file.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+      const unlink = vi.spyOn(fs, "unlink").mockImplementation((_path, cb) => cb());
+
+      const pending = main.downloadUpdate({ name: "setup.exe", url: "https://example.com/setup.exe" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      response.emit("error", new Error("socket hang up"));
+
+      await expect(pending).rejects.toThrow(/socket hang up/);
+      expect(file.destroy).toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalled();
+    });
+  });
+
+  describe("runInstaller", () => {
+    it("spawns the installer detached so it outlives the app", () => {
+      const unref = vi.fn();
+      childProcess.spawn.mockImplementation(() => ({ unref }));
+      expect(main.runInstaller("C:/temp/setup.exe")).toBe(true);
+      expect(childProcess.spawn).toHaveBeenCalledWith("C:/temp/setup.exe", [], expect.objectContaining({ detached: true }));
+      expect(unref).toHaveBeenCalled();
+    });
+
+    it("falls back to the shell when spawning fails, and refuses an empty path", () => {
+      childProcess.spawn.mockImplementation(() => { throw new Error("EACCES"); });
+      electron.shell.openPath = vi.fn();
+      expect(main.runInstaller("C:/temp/setup.exe")).toBe(true);
+      expect(electron.shell.openPath).toHaveBeenCalledWith("C:/temp/setup.exe");
+      expect(main.runInstaller("")).toBe(false);
+    });
+  });
+
+  describe("registerUpdateIpc", () => {
+    function handlerFor(channel) {
+      const call = electron.ipcMain.handle.mock.calls.find(([name]) => name === channel);
+      return call && call[1];
+    }
+
+    it("returns a structured error instead of throwing when GitHub is unreachable", async () => {
+      stubHttps(() => makeResponse({ status: 500 }));
+      main.registerUpdateIpc();
+
+      const result = await handlerFor("multiterm:check-update")();
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/HTTP 500/);
+      expect(result.releasePage).toContain("/releases/latest");
+    });
+
+    it("reports a download failure without quitting the app", async () => {
+      main.registerUpdateIpc();
+      const result = await handlerFor("multiterm:download-update")({}, null);
+      expect(result).toMatchObject({ ok: false });
+      expect(electron.app.isQuiting).toBe(false);
+    });
+
+    it("only opens github.com URLs from the release-page handler", async () => {
+      main.registerUpdateIpc();
+      const open = handlerFor("multiterm:open-release");
+
+      await open({}, "https://github.com/andrewtheart/multiterm-workbench/releases/tag/v1.0.0");
+      expect(electron.shell.openExternal).toHaveBeenLastCalledWith("https://github.com/andrewtheart/multiterm-workbench/releases/tag/v1.0.0");
+
+      await open({}, "https://evil.example.com/pwn");
+      expect(electron.shell.openExternal).toHaveBeenLastCalledWith(expect.stringContaining("github.com/andrewtheart/multiterm-workbench"));
+    });
+
+    it("does nothing when ipcMain is unavailable", () => {
+      main.__setElectron({ ...electron, ipcMain: null });
+      expect(() => main.registerUpdateIpc()).not.toThrow();
+    });
+  });
+});
+

@@ -164,6 +164,7 @@ const elements = {
   addTerminal: document.querySelector("#addTerminal"),
   appTheme: document.querySelector("#appTheme"),
   aboutClose: document.querySelector("#aboutClose"),
+  aboutCheckUpdates: document.querySelector("#aboutCheckUpdates"),
   aboutOverlay: document.querySelector("#aboutOverlay"),
   aboutToggle: document.querySelector("#aboutToggle"),
   aboutVersion: document.querySelector("#aboutVersion"),
@@ -266,6 +267,18 @@ const elements = {
   statusShellText: document.querySelector("#statusShellText"),
   statusZoomIn: document.querySelector("#statusZoomIn"),
   statusZoomOut: document.querySelector("#statusZoomOut"),
+  updateClose: document.querySelector("#updateClose"),
+  updateError: document.querySelector("#updateError"),
+  updateInstall: document.querySelector("#updateInstall"),
+  updateLater: document.querySelector("#updateLater"),
+  updateNotes: document.querySelector("#updateNotes"),
+  updateOverlay: document.querySelector("#updateOverlay"),
+  updateProgress: document.querySelector("#updateProgress"),
+  updateProgressBar: document.querySelector("#updateProgressBar"),
+  updateProgressText: document.querySelector("#updateProgressText"),
+  updateSubtitle: document.querySelector("#updateSubtitle"),
+  updateTitle: document.querySelector("#updateTitle"),
+  updateViewRelease: document.querySelector("#updateViewRelease"),
   syncInput: document.querySelector("#syncInput"),
   terminalSearchInput: document.querySelector("#terminalSearchInput"),
   terminalTheme: document.querySelector("#terminalTheme"),
@@ -306,6 +319,7 @@ const state = {
   terminalPages: loadTerminalPages(),
   terminalSearch: "",
   terminals: new Map(),
+  update: { release: null, downloading: false, checking: false },
   workspaces: loadWorkspaces(),
   zoomedId: null
 };
@@ -390,6 +404,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindContextMenu();
   bindRightClickWarning();
   bindCloseConfirm();
+  bindUpdateDialog();
   bindGlobalShortcuts();
   bindFindAll();
   window.addEventListener("resize", noteWindowResizeDrag);
@@ -406,6 +421,7 @@ window.addEventListener("DOMContentLoaded", () => {
   whenIdle(() => {
     attachRipples();
     bindLogConsole();
+    maybeCheckForUpdatesOnStartup();
   });
   log.debug("app", "UI initialized", { theme: state.settings.appTheme, layout: state.settings.layout });
 });
@@ -464,6 +480,10 @@ function bindControls() {
   });
   elements.aboutToggle.addEventListener("click", openAbout);
   elements.aboutClose.addEventListener("click", closeAbout);
+  elements.aboutCheckUpdates?.addEventListener("click", () => {
+    closeAbout();
+    checkForUpdates({ manual: true });
+  });
   elements.aboutOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.aboutOverlay) closeAbout();
   });
@@ -1105,6 +1125,8 @@ function bindPaneControls(terminal) {
       openFind(terminal);
     } else if (action === "restart") {
       restartSession(terminal.id);
+    } else if (action === "maximize") {
+      toggleZoomPane(terminal.id);
     } else if (action === "more") {
       setActiveTerminal(terminal.id);
       showPaneOverflowMenu(button, terminal);
@@ -1614,6 +1636,12 @@ function minimizeTerminal(id) {
   log.info("terminal", `Terminal minimized: ${terminal.titleInput.value}`, { id });
   if (state.snap?.id === id) {
     clearSnapLayout(false);
+  }
+  // A maximized pane that gets minimized would otherwise leave the stage empty:
+  // every other pane stays hidden behind the zoom while this one is gone.
+  if (state.zoomedId === id) {
+    state.zoomedId = null;
+    applyZoom();
   }
 
   if (state.activeId === id) {
@@ -2957,6 +2985,7 @@ function getCommands() {
     { label: "Toggle layout panel", run: () => toggleChrome("sidecarHidden") },
     { label: "Keyboard shortcuts", hint: "Ctrl+/", run: openShortcuts },
     { label: "Help", run: openHelp },
+    { label: "Check for updates\u2026", run: () => checkForUpdates({ manual: true }) },
     { label: "About MultiTerm", run: openAbout },
     {
       label: `Toggle sync input (${state.settings.syncInput ? "on" : "off"})`,
@@ -3303,6 +3332,14 @@ function bindGlobalShortcuts() {
       if (event.key === "Escape") {
         event.preventDefault();
         closeShortcuts();
+      }
+      return;
+    }
+
+    if (elements.updateOverlay && !elements.updateOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dismissUpdateDialog();
       }
       return;
     }
@@ -3836,6 +3873,8 @@ function updateBroadcastEnterToggle() {
 function toggleZoomPane(id) {
   const targetId = id || state.activeId;
   if (!targetId || !state.terminals.has(targetId)) return;
+  // Minimized panes are hidden, so zooming one would blank the stage.
+  if (state.terminals.get(targetId).minimized) return;
   state.zoomedId = state.zoomedId === targetId ? null : targetId;
   applyZoom();
 }
@@ -3844,13 +3883,42 @@ function applyZoom() {
   const zoomed = state.zoomedId && state.terminals.has(state.zoomedId) ? state.zoomedId : null;
   state.zoomedId = zoomed;
   elements.host.classList.toggle("has-zoom", Boolean(zoomed));
+  let glyphChanged = false;
   for (const terminal of state.terminals.values()) {
     terminal.pane.classList.toggle("is-zoomed", terminal.id === zoomed);
+    if (updateMaximizeButton(terminal)) glyphChanged = true;
   }
+  if (glyphChanged) refreshIcons();
   if (zoomed) setActiveTerminal(zoomed);
   for (const terminal of state.terminals.values()) {
     scheduleFit(terminal);
   }
+}
+
+// The header button doubles as the restore control while a pane is maximized, so
+// its glyph and labels track the zoom state rather than staying "Maximize".
+// Returns whether the glyph placeholder was re-seeded (lucide must re-render).
+function updateMaximizeButton(terminal) {
+  const button = terminal.pane.querySelector('button[data-action="maximize"]');
+  if (!button) return false;
+
+  const isZoomed = state.zoomedId === terminal.id;
+  const label = isZoomed ? "Restore size (Ctrl+Shift+X)" : "Maximize (Ctrl+Shift+X)";
+  const icon = isZoomed ? "minimize-2" : "maximize-2";
+
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-pressed", isZoomed ? "true" : "false");
+
+  // lucide swaps the <i> for an <svg>, so seed a fresh placeholder when the glyph
+  // changes instead of trying to mutate the rendered svg in place.
+  if (button.dataset.icon === icon) return false;
+  button.dataset.icon = icon;
+  button.textContent = "";
+  const placeholder = document.createElement("i");
+  placeholder.setAttribute("data-lucide", icon);
+  button.append(placeholder);
+  return true;
 }
 
 /* ---------------- Working directory --------------- */
@@ -4870,6 +4938,350 @@ function closeAbout() {
   }, 150);
 }
 
+/* ---------------- Update checker --------------- */
+
+const UPDATE_REPO = "andrewtheart/multiterm-workbench";
+const UPDATE_RELEASE_PAGE = `https://github.com/${UPDATE_REPO}/releases/latest`;
+const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+// Automatic checks are throttled so launching the app repeatedly doesn't hammer
+// the GitHub API (and doesn't nag about a release the user already dismissed).
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+function loadUpdateMeta() {
+  try {
+    const value = JSON.parse(localStorage.getItem("multiterm.updateCheck") || "{}");
+    return value && typeof value === "object" ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveUpdateMeta(patch) {
+  try {
+    localStorage.setItem("multiterm.updateCheck", JSON.stringify({ ...loadUpdateMeta(), ...patch }));
+  } catch {
+    /* storage unavailable (private mode) — checking still works, just unthrottled */
+  }
+}
+
+// Numeric-segment compare; release tags are plain vMAJOR.MINOR.PATCH.
+function compareAppVersions(a, b) {
+  const parse = (value) => String(value ?? "")
+    .trim()
+    .replace(/^v/i, "")
+    .split(/[.+-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
+  const left = parse(a);
+  const right = parse(b);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const l = left[i] ?? 0;
+    const r = right[i] ?? 0;
+    if (l !== r) return l > r ? 1 : -1;
+  }
+  return 0;
+}
+
+function pickInstallerAsset(assets) {
+  const list = Array.isArray(assets) ? assets : [];
+  const executables = list.filter((asset) => /\.exe$/i.test(asset?.name || "") && asset?.browser_download_url);
+  const installer = executables.find((asset) => /setup|install/i.test(asset.name)) || executables[0];
+  if (!installer) return null;
+  return { name: installer.name, url: installer.browser_download_url, size: Number(installer.size) || 0 };
+}
+
+// Browser fallback (the PowerShell bridge runs MultiTerm as a plain web app, with
+// no Electron main process to ask). GitHub's API is CORS-enabled, so the *check*
+// works everywhere; only the download hand-off needs Electron.
+async function fetchLatestReleaseViaFetch() {
+  const response = await fetch(UPDATE_API_URL, { headers: { Accept: "application/vnd.github+json" } });
+  if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}.`);
+  const data = await response.json();
+  const tag = String(data?.tag_name || "");
+  return {
+    ok: true,
+    current: APP_VERSION,
+    release: {
+      tag,
+      version: tag.replace(/^v/i, ""),
+      name: data?.name || tag,
+      notes: typeof data?.body === "string" ? data.body : "",
+      url: data?.html_url || UPDATE_RELEASE_PAGE,
+      publishedAt: data?.published_at || "",
+      asset: pickInstallerAsset(data?.assets)
+    },
+    releasePage: UPDATE_RELEASE_PAGE,
+    available: Boolean(tag) && compareAppVersions(tag.replace(/^v/i, ""), APP_VERSION) > 0
+  };
+}
+
+async function requestLatestRelease() {
+  if (window.multiterm && typeof window.multiterm.checkForUpdate === "function") {
+    return window.multiterm.checkForUpdate();
+  }
+  return fetchLatestReleaseViaFetch();
+}
+
+async function checkForUpdates({ manual = false } = {}) {
+  if (state.update.checking) return;
+  state.update.checking = true;
+  if (manual) toast("Checking for updates\u2026", "info", 1600);
+
+  try {
+    const result = await requestLatestRelease();
+    saveUpdateMeta({ lastCheck: Date.now() });
+
+    if (!result || result.ok === false) {
+      const message = result?.error || "Could not reach GitHub.";
+      log.warn("app", `Update check failed: ${message}`);
+      if (manual) toast(`Update check failed: ${message}`, "error", 4000);
+      return;
+    }
+
+    const release = result.release || {};
+    if (!result.available) {
+      log.info("app", `Update check: already on the latest version (${APP_VERSION})`);
+      if (manual) toast(`MultiTerm ${APP_VERSION} is up to date.`, "success", 2600);
+      return;
+    }
+
+    log.info("app", `Update available: ${release.version}`, { current: result.current || APP_VERSION });
+    // An automatic check never re-opens a dialog the user already dismissed for
+    // this exact version; a manual check always shows it.
+    if (!manual && loadUpdateMeta().dismissedVersion === release.version) return;
+    openUpdateDialog(release);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log.warn("app", `Update check failed: ${message}`);
+    if (manual) toast(`Update check failed: ${message}`, "error", 4000);
+  } finally {
+    state.update.checking = false;
+  }
+}
+
+function maybeCheckForUpdatesOnStartup() {
+  const last = Number(loadUpdateMeta().lastCheck) || 0;
+  if (Date.now() - last < UPDATE_CHECK_INTERVAL_MS) return;
+  checkForUpdates({ manual: false });
+}
+
+function openUpdateDialog(release) {
+  if (!elements.updateOverlay) return;
+  closePalette();
+  state.update.release = release;
+
+  elements.updateSubtitle.textContent = `MultiTerm ${release.version} is available \u2014 you have ${APP_VERSION}.`;
+  elements.updateViewRelease.href = release.url || UPDATE_RELEASE_PAGE;
+  renderReleaseNotes(release.notes);
+
+  elements.updateError.hidden = true;
+  elements.updateError.textContent = "";
+  elements.updateProgress.hidden = true;
+  elements.updateProgressBar.style.width = "0%";
+  elements.updateInstall.disabled = false;
+  state.update.downloading = false;
+
+  // Without an Electron main process we cannot download and launch an installer,
+  // so the primary action becomes "open the release page".
+  const canInstall = Boolean(window.multiterm?.downloadUpdate) && Boolean(release.asset);
+  elements.updateInstall.textContent = canInstall ? "Download & install" : "Open download page";
+
+  elements.updateOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.updateOverlay.classList.add("is-open"));
+  refreshIcons();
+  elements.updateInstall.focus();
+}
+
+function closeUpdateDialog() {
+  if (!elements.updateOverlay) return;
+  elements.updateOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.updateOverlay.hidden = true;
+  }, 150);
+}
+
+function dismissUpdateDialog() {
+  // Downloading is a hand-off to the installer; don't let a stray Escape hide it.
+  if (state.update.downloading) return;
+  if (state.update.release?.version) saveUpdateMeta({ dismissedVersion: state.update.release.version });
+  closeUpdateDialog();
+}
+
+// Release bodies are attacker-controllable text from a network response, so they
+// are rendered by building DOM nodes from a tiny markdown subset. Nothing here
+// ever assigns innerHTML.
+function renderReleaseNotes(markdown) {
+  const host = elements.updateNotes;
+  host.textContent = "";
+
+  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  if (!lines.some((line) => line.trim())) {
+    const empty = document.createElement("p");
+    empty.className = "update-notes-empty";
+    empty.textContent = "This release has no notes.";
+    host.append(empty);
+    return;
+  }
+
+  let list = null;
+  let paragraph = null;
+  const flushParagraph = () => {
+    if (paragraph) host.append(paragraph);
+    paragraph = null;
+  };
+  const flushList = () => {
+    if (list) host.append(list);
+    list = null;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = /^#{1,6}\s+(.*)$/.exec(trimmed);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const node = document.createElement("h3");
+      appendInlineMarkdown(node, heading[1]);
+      host.append(node);
+      continue;
+    }
+
+    const bullet = /^[-*+]\s+(.*)$/.exec(trimmed);
+    if (bullet) {
+      flushParagraph();
+      if (!list) list = document.createElement("ul");
+      const item = document.createElement("li");
+      appendInlineMarkdown(item, bullet[1]);
+      list.append(item);
+      continue;
+    }
+
+    flushList();
+    if (!paragraph) paragraph = document.createElement("p");
+    else paragraph.append(document.createElement("br"));
+    appendInlineMarkdown(paragraph, trimmed);
+  }
+
+  flushParagraph();
+  flushList();
+}
+
+// Supports `code`, **bold** and bare URLs. Links become plain text with an href
+// only when they are https, so a release body can't smuggle in a javascript: URL.
+function appendInlineMarkdown(node, text) {
+  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*|(https?:\/\/[^\s)]+)/g;
+  let index = 0;
+  let match = pattern.exec(text);
+
+  while (match) {
+    if (match.index > index) node.append(document.createTextNode(text.slice(index, match.index)));
+    if (match[1] !== undefined) {
+      const code = document.createElement("code");
+      code.textContent = match[1];
+      node.append(code);
+    } else if (match[2] !== undefined) {
+      const strong = document.createElement("strong");
+      strong.textContent = match[2];
+      node.append(strong);
+    } else {
+      const url = match[3];
+      if (/^https:\/\//i.test(url)) {
+        const link = document.createElement("a");
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = url;
+        node.append(link);
+      } else {
+        node.append(document.createTextNode(url));
+      }
+    }
+    index = match.index + match[0].length;
+    match = pattern.exec(text);
+  }
+
+  if (index < text.length) node.append(document.createTextNode(text.slice(index)));
+}
+
+async function startUpdateDownload() {
+  const release = state.update.release;
+  if (!release || state.update.downloading) return;
+
+  const canInstall = Boolean(window.multiterm?.downloadUpdate) && Boolean(release.asset);
+  if (!canInstall) {
+    openReleasePage(release.url);
+    return;
+  }
+
+  state.update.downloading = true;
+  elements.updateInstall.disabled = true;
+  elements.updateLater.disabled = true;
+  elements.updateError.hidden = true;
+  elements.updateProgress.hidden = false;
+  elements.updateProgressBar.style.width = "0%";
+  elements.updateProgressText.textContent = `Downloading ${release.asset.name}\u2026`;
+
+  const result = await window.multiterm.downloadUpdate(release.asset);
+  if (result?.ok) {
+    elements.updateProgressText.textContent = "Starting the installer\u2014 MultiTerm will close.";
+    return;
+  }
+
+  state.update.downloading = false;
+  elements.updateInstall.disabled = false;
+  elements.updateLater.disabled = false;
+  elements.updateProgress.hidden = true;
+  elements.updateError.hidden = false;
+  elements.updateError.textContent = result?.error || "The update could not be downloaded.";
+  log.error("app", `Update download failed: ${elements.updateError.textContent}`);
+}
+
+function openReleasePage(url) {
+  const target = url || UPDATE_RELEASE_PAGE;
+  if (window.multiterm && typeof window.multiterm.openReleasePage === "function") {
+    window.multiterm.openReleasePage(target);
+  } else {
+    window.open(target, "_blank", "noopener");
+  }
+}
+
+function updateDownloadProgress({ received = 0, total = 0 } = {}) {
+  if (!state.update.downloading) return;
+  if (total > 0) {
+    const percent = Math.min(100, Math.round((received / total) * 100));
+    elements.updateProgressBar.style.width = `${percent}%`;
+    elements.updateProgressText.textContent = `Downloading\u2026 ${percent}% (${formatBytes(received)} of ${formatBytes(total)})`;
+  } else {
+    elements.updateProgressText.textContent = `Downloading\u2026 ${formatBytes(received)}`;
+  }
+}
+
+function bindUpdateDialog() {
+  if (!elements.updateOverlay) return;
+
+  elements.updateClose.addEventListener("click", dismissUpdateDialog);
+  elements.updateLater.addEventListener("click", dismissUpdateDialog);
+  elements.updateInstall.addEventListener("click", startUpdateDownload);
+  elements.updateViewRelease.addEventListener("click", (event) => {
+    event.preventDefault();
+    openReleasePage(state.update.release?.url);
+  });
+  elements.updateOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.updateOverlay) dismissUpdateDialog();
+  });
+
+  window.multiterm?.onUpdateProgress?.(updateDownloadProgress);
+}
+
 /* ---------------- Terminal context menu --------------- */
 
 function bindContextMenu() {
@@ -5000,20 +5412,31 @@ function buildContextMenu(terminal) {
 }
 
 function buildPaneOverflowMenu(terminal) {
+  // Move/colour live in the header unless the pane is too narrow (or the host is in
+  // compact mode) to show them; find and duplicate live in this menu permanently.
+  const collapsed = terminal.pane.classList.contains("is-narrow")
+    || elements.host.classList.contains("compact");
+  const collapsedItems = collapsed
+    ? [
+      {
+        label: "Move left",
+        icon: "arrow-left",
+        disabled: !terminal.pane.previousElementSibling,
+        run: () => moveTerminal(terminal.id, -1)
+      },
+      {
+        label: "Move right",
+        icon: "arrow-right",
+        disabled: !terminal.pane.nextElementSibling,
+        run: () => moveTerminal(terminal.id, 1)
+      },
+      { label: "Cycle label color", icon: "tag", run: () => cyclePaneColor(terminal) }
+    ]
+    : [];
+
   renderContextMenu([
-    {
-      label: "Move left",
-      icon: "arrow-left",
-      disabled: !terminal.pane.previousElementSibling,
-      run: () => moveTerminal(terminal.id, -1)
-    },
-    {
-      label: "Move right",
-      icon: "arrow-right",
-      disabled: !terminal.pane.nextElementSibling,
-      run: () => moveTerminal(terminal.id, 1)
-    },
-    { label: "Cycle label color", icon: "tag", run: () => cyclePaneColor(terminal) },
+    ...collapsedItems,
+    { label: "Find\u2026", hint: "Ctrl+F", icon: "search", run: () => openFind(terminal) },
     {
       label: "Duplicate",
       icon: "copy-plus",

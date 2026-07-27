@@ -132,6 +132,31 @@ web assets, with no native binaries), the setup runs on every architecture, and
 it installs into 64-bit `Program Files` on x64/ARM64 and 32-bit `Program Files`
 on x86.
 
+## Updates
+
+MultiTerm checks the [GitHub releases](https://github.com/andrewtheart/multiterm-workbench/releases)
+of this repository for a newer version. A background check runs at most once
+every six hours; a manual check is available from the **Check for updates**
+button in the About dialog or the **Check for updates…** command in the palette
+(`Ctrl+Shift+P`).
+
+When a newer release exists, MultiTerm shows that release's notes (rendered from
+the GitHub release body) with three choices:
+
+- **Download & install** — downloads the release's `MultiTerm-Setup-<version>.exe`
+  asset to the temp folder, launches it, and quits so the installer can replace
+  the app. Download progress is shown in the dialog.
+- **Later** — dismisses that specific version so background checks stop
+  mentioning it (a manual check always shows it again).
+- **View on GitHub** — opens the release page in the default browser.
+
+Downloading and launching the installer requires the Electron desktop app. When
+MultiTerm is served by the PowerShell bridge in a plain browser, the check and
+release notes still work but the primary action opens the download page instead.
+
+Set `MULTITERM_UPDATE_REPO=<owner>/<repo>` before launching the desktop app to
+point the checker at a fork.
+
 ## Notes
 
 - The UI is a single-page app in `public/`.
@@ -146,5 +171,8 @@ on x86.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
 - Manual canvas panes can be dragged by their header and resized from the lower-right corner.
 - Any pane can be minimized to a chip in the status bar with its header's minimize (−) button; click the chip to restore the pane in place.
+- Each pane header has a **maximize** button that overlays the pane across the whole terminal workspace (and turns into restore); `Ctrl+Shift+X` does the same for the active pane.
+- The **focus** button next to it promotes the pane in the focus-rail layout rather than maximizing it.
+- Every pane header carries a **hamburger (⋯) menu** holding *Find…* and *Duplicate*; when a pane gets too narrow, its move and label-colour actions collapse into the same menu.
 - The status bar includes − / + controls for terminal font zoom (same as Ctrl+- and Ctrl+=).
 - The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.

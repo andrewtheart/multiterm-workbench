@@ -136,7 +136,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
     await expect(firstPane).toHaveClass(/is-narrow/);
     await expect(overflow).toBeVisible();
-    for (const action of ["move-left", "move-right", "color", "duplicate"]) {
+    for (const action of ["move-left", "move-right", "color", "duplicate", "find"]) {
       await expect(firstPane.locator(`[data-action="${action}"]`)).toBeHidden();
     }
     // Primary actions stay in the header even when narrow.
@@ -150,6 +150,7 @@ test.describe("MultiTerm Workbench UI", () => {
       "Move left",
       "Move right",
       "Cycle label color",
+      "Find…Ctrl+F",
       "Duplicate"
     ]);
     await expect(menu.locator(".ctx-item", { hasText: "Move left" })).toHaveAttribute("aria-disabled", "true");
@@ -172,15 +173,79 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(beforeDuplicate + 1);
   });
 
-  test("restores pane actions to the header when panes get wide again", async () => {
+  test("keeps find and duplicate in the overflow menu when panes are wide", async () => {
     await setNative("#columnCount", "1", "input");
 
     const firstPane = page.locator(".terminal-pane").first();
     await expect(firstPane).not.toHaveClass(/is-narrow/);
-    await expect(firstPane.locator('[data-action="more"]')).toBeHidden();
-    for (const action of ["move-left", "move-right", "color", "duplicate"]) {
+    // The hamburger is always available; find/duplicate always live inside it.
+    await expect(firstPane.locator('[data-action="more"]')).toBeVisible();
+    for (const action of ["move-left", "move-right", "color"]) {
       await expect(firstPane.locator(`[data-action="${action}"]`)).toBeVisible();
     }
+    for (const action of ["find", "duplicate"]) {
+      await expect(firstPane.locator(`[data-action="${action}"]`)).toBeHidden();
+    }
+
+    await firstPane.locator('[data-action="more"]').click();
+    const menu = page.locator("#contextMenu");
+    await expect(menu.locator(".ctx-item")).toHaveText(["Find…Ctrl+F", "Duplicate"]);
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+  });
+
+  test("maximize button overlays the other panes and toggles back", async () => {
+    await setNative("#columnCount", "2", "input");
+    const panes = page.locator(".terminal-pane");
+    if ((await panes.count()) < 2) {
+      await page.locator("#addTerminal").click();
+    }
+
+    const firstPane = panes.first();
+    const firstId = await firstPane.getAttribute("data-id");
+    const otherPane = page.locator(`.terminal-pane:not([data-id="${firstId}"])`).first();
+    const maximize = firstPane.locator('[data-action="maximize"]');
+
+    await expect(maximize).toHaveAttribute("aria-pressed", "false");
+    await maximize.click();
+
+    await expect(page.locator("#terminalHost")).toHaveClass(/has-zoom/);
+    await expect(firstPane).toHaveClass(/is-zoomed/);
+    await expect(otherPane).toBeHidden();
+    await expect(maximize).toHaveAttribute("aria-pressed", "true");
+    await expect(maximize).toHaveAttribute("title", /Restore size/);
+
+    // The maximized pane fills the whole workspace viewport.
+    const fills = await firstPane.evaluate((pane) => {
+      const host = document.querySelector("#terminalHost");
+      const paneBox = pane.getBoundingClientRect();
+      const hostBox = host.getBoundingClientRect();
+      return Math.abs(paneBox.width - hostBox.width) < 2 && Math.abs(paneBox.height - hostBox.height) < 2;
+    });
+    expect(fills).toBe(true);
+
+    // The sticky pane header must drop back into normal flow while maximized:
+    // the absolutely positioned pane gives sticky a scrollport offset to resolve
+    // against, which slid the header down over the terminal and clipped row 0.
+    const header = await firstPane.evaluate((pane) => {
+      const bar = pane.querySelector(".pane-bar");
+      const screen = pane.querySelector(".terminal-screen");
+      return {
+        position: getComputedStyle(bar).position,
+        overlap: bar.getBoundingClientRect().bottom - screen.getBoundingClientRect().top,
+      };
+    });
+    expect(header.position).toBe("relative");
+    expect(Math.abs(header.overlap)).toBeLessThan(1);
+
+    await maximize.click();
+    await expect(page.locator("#terminalHost")).not.toHaveClass(/has-zoom/);
+    await expect(otherPane).toBeVisible();
+    await expect(maximize).toHaveAttribute("aria-pressed", "false");
+    await expect(maximize).toHaveAttribute("title", /Maximize/);
+
+    // Normal panes keep the sticky header that keeps their X reachable.
+    await expect(firstPane.locator(".pane-bar")).toHaveCSS("position", "sticky");
   });
 
   test("shows the pid as a translucent pill at the bottom right of the pane", async () => {
@@ -268,6 +333,95 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#aboutVersionText")).toContainText(PKG_VERSION);
     await page.locator("#aboutClose").click();
     await expect(page.locator("#aboutOverlay")).toBeHidden();
+  });
+
+  test("offers an update when GitHub reports a newer release", async () => {
+    // GitHub is stubbed at the network layer so the check runs end to end
+    // (fetch → compare → dialog) without depending on the real API.
+    const stubRelease = (body) => page.route("https://api.github.com/repos/**", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify(body)
+    }));
+
+    await stubRelease({
+      tag_name: "v999.0.0",
+      name: "MultiTerm 999.0.0",
+      body: "## Highlights\n- Real **maximize** button\n- `Ctrl+Shift+X` still works\n\nSee https://example.com/notes",
+      html_url: "https://github.com/andrewtheart/multiterm-workbench/releases/tag/v999.0.0",
+      assets: [{ name: "MultiTerm-Setup-999.0.0.exe", browser_download_url: "https://example.com/setup.exe", size: 1024 }]
+    });
+
+    await page.evaluate(() => checkForUpdates({ manual: true }));
+    const overlay = page.locator("#updateOverlay");
+    await expect(overlay).toBeVisible();
+    await expect(page.locator("#updateSubtitle")).toContainText(`MultiTerm 999.0.0 is available`);
+    await expect(page.locator("#updateSubtitle")).toContainText(PKG_VERSION);
+
+    // Release notes render as real DOM, not raw markdown.
+    await expect(page.locator("#updateNotes h3")).toHaveText("Highlights");
+    await expect(page.locator("#updateNotes li")).toHaveCount(2);
+    await expect(page.locator("#updateNotes strong")).toHaveText("maximize");
+    await expect(page.locator("#updateNotes code")).toHaveText("Ctrl+Shift+X");
+    await expect(page.locator("#updateNotes a")).toHaveAttribute("href", "https://example.com/notes");
+
+    // Without the Electron bridge the primary action degrades to the download page.
+    await expect(page.locator("#updateInstall")).toHaveText("Open download page");
+    await expect(page.locator("#updateViewRelease")).toHaveAttribute("href", /releases\/tag\/v999\.0\.0/);
+
+    await page.locator("#updateLater").click();
+    await expect(overlay).toBeHidden();
+    // "Later" is remembered so automatic checks stop nagging about this version.
+    const dismissed = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.updateCheck") || "{}").dismissedVersion);
+    expect(dismissed).toBe("999.0.0");
+  });
+
+  test("never renders release notes as HTML", async () => {
+    await page.route("https://api.github.com/repos/**", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({
+        tag_name: "v999.0.1",
+        body: "<img src=x onerror=\"window.__pwned = true\"> and [link](javascript:alert(1))",
+        assets: []
+      })
+    }));
+
+    await page.evaluate(() => checkForUpdates({ manual: true }));
+    await expect(page.locator("#updateOverlay")).toBeVisible();
+    await expect(page.locator("#updateNotes img")).toHaveCount(0);
+    await expect(page.locator("#updateNotes a")).toHaveCount(0);
+    await expect(page.locator("#updateNotes")).toContainText("<img src=x");
+    expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#updateOverlay")).toBeHidden();
+  });
+
+  test("reports being up to date and surfaces check failures", async () => {
+    await page.route("https://api.github.com/repos/**", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({ tag_name: `v${PKG_VERSION}`, body: "", assets: [] })
+    }));
+
+    await page.evaluate(() => checkForUpdates({ manual: true }));
+    await expect(page.locator(".toast").last()).toContainText("up to date");
+    await expect(page.locator("#updateOverlay")).toBeHidden();
+
+    await page.route("https://api.github.com/repos/**", (route) => route.fulfill({
+      status: 503,
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: "nope"
+    }));
+    await page.evaluate(() => checkForUpdates({ manual: true }));
+    await expect(page.locator(".toast").last()).toContainText("Update check failed");
+    await expect(page.locator("#updateOverlay")).toBeHidden();
+
+    await page.unroute("https://api.github.com/repos/**");
   });
 
   test("opens the keyboard shortcuts dialog", async () => {
