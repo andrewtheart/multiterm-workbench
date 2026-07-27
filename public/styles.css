@@ -706,6 +706,51 @@ body.sidecar-hidden .control-panel {
   width: 14px;
 }
 
+/* Reading memory costs a ~1s CIM query in the bridge, so the chip stays a bare
+   glyph until the pointer (or keyboard focus) lands on it, then slides the live
+   figure out beside it. Animating max-width keeps the rest of the status bar
+   from jumping, and the collapsed text stays in the DOM so the aria-live
+   region can announce the reading once it arrives. */
+.status-mem {
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: inherit;
+  cursor: default;
+  font: inherit;
+  margin: 0 -4px;
+  padding: 2px 4px;
+}
+
+.status-mem:hover,
+.status-mem:focus-visible {
+  color: var(--text);
+}
+
+.status-mem-value {
+  display: inline-block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 160ms ease, opacity 160ms ease;
+  white-space: nowrap;
+}
+
+.status-mem.is-open .status-mem-value {
+  max-width: 320px;
+  opacity: 1;
+}
+
+.status-mem.is-open .status-mem-value:not(:empty) {
+  margin-left: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-mem-value {
+    transition: none;
+  }
+}
+
 .status-dot {
   align-items: center;
   display: inline-flex;

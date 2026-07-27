@@ -66,11 +66,24 @@ function __resetTeardownSchedule() {
 function computeMemStatsDefault() {
   return process.env.MEMSTATS === "1" && process.platform === "win32";
 }
+
+// Each reading spawns a PowerShell CIM query (~1s), so the periodic push above
+// is deliberately opt-in. The status bar instead asks for a reading only while
+// the user is actually looking at it (hovering the memory chip), which must
+// work even when the background poll is off — including plain browser mode,
+// where nothing sets MEMSTATS. That on-demand path is gated on the platform
+// alone, since Win32_Process is the only supported source.
+function memStatsSupported() {
+  return process.platform === "win32";
+}
 let memStatsEnabled = computeMemStatsDefault();
 let memStatsInterval = null;
 let memSettleTimer = null;
 let memStatsInFlight = false;
 let lastMemStats = null;
+// Clients waiting on the in-flight reading, so a burst of hovers coalesces into
+// a single CIM query instead of one PowerShell process per request.
+let memStatsWaiters = [];
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -157,7 +170,7 @@ server.on("upgrade", (request, socket) => {
 
   if (memStatsEnabled) {
     if (lastMemStats) {
-      client.send({ type: "memstats", app: lastMemStats.appBytes, systemUsed: lastMemStats.systemUsed, systemTotal: lastMemStats.systemTotal });
+      client.send(memStatsFrame(lastMemStats));
     }
     scheduleMemStats(500);
   }
@@ -298,6 +311,11 @@ module.exports = {
   __setElevationServerFactory,
   computeMemStats,
   computeMemStatsDefault,
+  memStatsSupported,
+  memStatsFrame,
+  runMemStats,
+  broadcastMemStats,
+  requestMemStats,
   pushMemStats,
   scheduleMemStats,
   startMemStats,
@@ -478,6 +496,9 @@ function handleClientMessage(client, rawMessage) {
       break;
     case "list":
       client.send({ type: "sessions", sessions: [...sessions.values()].map(toSessionSummary) });
+      break;
+    case "memstats":
+      requestMemStats(client);
       break;
     default:
       client.send({ type: "error", message: `Unsupported message type: ${message.type}` });
@@ -1235,18 +1256,61 @@ function computeMemStats(callback) {
   );
 }
 
-function pushMemStats() {
-  if (!memStatsEnabled || memStatsInFlight || clients.size === 0) return;
+// One CIM query at a time: concurrent callers attach to the in-flight run
+// rather than spawning another PowerShell, so a burst of status-bar hovers
+// costs no more than a single reading. Waiters receive null when it fails.
+function runMemStats(callback) {
+  memStatsWaiters.push(callback);
+  if (memStatsInFlight) return;
   memStatsInFlight = true;
   computeMemStats((stats) => {
     memStatsInFlight = false;
-    if (!stats) {
-      return;
+    if (stats) lastMemStats = stats;
+    const waiters = memStatsWaiters;
+    memStatsWaiters = [];
+    for (const waiter of waiters) waiter(stats);
+  });
+}
+
+function memStatsFrame(stats) {
+  return {
+    type: "memstats",
+    supported: true,
+    app: stats.appBytes,
+    systemUsed: stats.systemUsed,
+    systemTotal: stats.systemTotal
+  };
+}
+
+function broadcastMemStats(stats) {
+  if (!stats) {
+    return;
+  } else {
+    broadcast(memStatsFrame(stats));
+  }
+}
+
+// The status bar asks for a reading only while its memory chip is hovered, so
+// this path must work even when the periodic push is disabled — including
+// browser mode, where nothing sets MEMSTATS. Unsupported platforms answer
+// immediately so the UI can say so instead of spinning forever.
+function requestMemStats(client) {
+  if (!memStatsSupported()) {
+    client.send({ type: "memstats", supported: false });
+    return;
+  }
+  runMemStats((stats) => {
+    if (stats) {
+      client.send(memStatsFrame(stats));
     } else {
-      lastMemStats = stats;
-      broadcast({ type: "memstats", app: stats.appBytes, systemUsed: stats.systemUsed, systemTotal: stats.systemTotal });
+      client.send({ type: "memstats", supported: true, error: "Could not read process memory." });
     }
   });
+}
+
+function pushMemStats() {
+  if (!memStatsEnabled || memStatsInFlight || clients.size === 0) return;
+  runMemStats(broadcastMemStats);
 }
 
 // Debounced update: terminal open/close events coalesce into a single refresh

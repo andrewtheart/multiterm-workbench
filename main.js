@@ -46,11 +46,16 @@ const MAX_RESTARTS = 5;
 // The bridge uses node-pty (a native module built for the system Node ABI),
 // so it runs under the system `node` executable rather than inside Electron's
 // runtime, whose Node ABI differs from the installed prebuilt binary.
+//
+// MEMSTATS is deliberately not set: each reading costs the bridge a ~1s
+// Win32_Process query, and the status bar now requests one on demand only
+// while its memory chip is hovered. Set MEMSTATS=1 to restore the old 10s
+// background broadcast.
 function startServer() {
   const nodeExe = process.platform === "win32" ? "node.exe" : "node";
   serverProcess = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
     cwd: __dirname,
-    env: { ...process.env, HOST, PORT: String(PORT), MEMSTATS: "1" },
+    env: { ...process.env, HOST, PORT: String(PORT) },
     stdio: ["ignore", "pipe", "pipe"]
   });
 

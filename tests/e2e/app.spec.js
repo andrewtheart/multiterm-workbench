@@ -100,6 +100,46 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#statusZoomIn")).toBeEnabled();
   });
 
+  test("status-bar memory readout stays collapsed until the chip is hovered", async () => {
+    const chip = page.locator("#statusMem");
+    const value = page.locator("#statusMemText");
+
+    // At rest the chip is glyph-only: no reading has been requested, so the
+    // bridge has not been asked to run its (expensive) process-memory probe.
+    await expect(chip).toHaveAttribute("aria-expanded", "false");
+    await expect(value).toHaveText("");
+    expect(await value.evaluate((el) => el.getBoundingClientRect().width)).toBeLessThan(1);
+
+    await chip.hover();
+    await expect(chip).toHaveAttribute("aria-expanded", "true");
+    await expect(chip).toHaveClass(/is-open/);
+    // The bridge answers with a real reading on Windows; elsewhere it reports
+    // that the probe is unavailable rather than leaving the chip spinning.
+    await expect(value).toHaveText(/^(\d[\d.]* [KMGB]+ \/ \d[\d.]* [KMGB]+ \(\d+\.\d%\)|unavailable)$/, { timeout: 15000 });
+    expect(await value.evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(10);
+
+    // Moving away collapses it again and stops the refresh loop.
+    await page.locator("#statusSessions").hover();
+    await expect(chip).toHaveAttribute("aria-expanded", "false");
+    await expect(value).toHaveText("");
+    // `state` is a top-level const in a classic script, so it is reachable by
+    // bare name in the page context but not as a window property.
+    expect(await page.evaluate(() => state.mem.timer)).toBeNull();
+  });
+
+  test("status-bar memory readout expands on keyboard focus too", async () => {
+    const chip = page.locator("#statusMem");
+    const value = page.locator("#statusMemText");
+
+    await chip.focus();
+    await expect(chip).toHaveAttribute("aria-expanded", "true");
+    await expect(value).not.toHaveText("");
+
+    await chip.blur();
+    await expect(chip).toHaveAttribute("aria-expanded", "false");
+    await expect(value).toHaveText("");
+  });
+
   test("toggles chrome and input synchronisation", async () => {
     await setCheck("#syncInput", true);
     await expect.poll(() => page.evaluate(() => document.querySelector("#syncInput").checked)).toBe(true);

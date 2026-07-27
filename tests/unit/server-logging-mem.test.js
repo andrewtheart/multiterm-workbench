@@ -348,6 +348,79 @@ describe("pushMemStats", () => {
   });
 });
 
+describe("requestMemStats (on-demand, hover-driven)", () => {
+  it("answers immediately with supported:false off Windows and never spawns a probe", () => {
+    const execFile = vi.spyOn(childProcess, "execFile");
+    setPlatform("darwin");
+    const client = fakeClient();
+    server.requestMemStats(client);
+    expect(client.send).toHaveBeenCalledWith({ type: "memstats", supported: false });
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("serves a reading even while the periodic push is disabled", () => {
+    setPlatform("win32");
+    server.__setMemStatsEnabled(false);
+    vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) =>
+      cb(null, JSON.stringify([{ ProcessId: process.pid, ParentProcessId: 0, WorkingSetSize: 4096 }])));
+
+    const client = fakeClient();
+    server.requestMemStats(client);
+    expect(client.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "memstats", supported: true, app: expect.any(Number) })
+    );
+  });
+
+  it("coalesces a burst of requests into a single probe and answers every waiter", () => {
+    setPlatform("win32");
+    let finish;
+    const execFile = vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) => { finish = cb; });
+
+    const clients = [fakeClient(), fakeClient(), fakeClient()];
+    for (const client of clients) server.requestMemStats(client);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    for (const client of clients) expect(client.send).not.toHaveBeenCalled();
+
+    finish(null, JSON.stringify([{ ProcessId: process.pid, ParentProcessId: 0, WorkingSetSize: 2048 }]));
+    for (const client of clients) {
+      expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "memstats", supported: true }));
+    }
+  });
+
+  it("reports a probe failure to the requester instead of leaving it waiting", () => {
+    setPlatform("win32");
+    vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) => cb(new Error("boom"), ""));
+    const client = fakeClient();
+    server.requestMemStats(client);
+    expect(client.send).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "memstats", supported: true, error: expect.any(String) })
+    );
+  });
+
+  it("is reachable through the client message dispatcher", () => {
+    setPlatform("linux");
+    const client = fakeClient();
+    server.handleClientMessage(client, JSON.stringify({ type: "memstats" }));
+    expect(client.send).toHaveBeenCalledWith({ type: "memstats", supported: false });
+  });
+
+  it("memStatsSupported tracks the platform", () => {
+    setPlatform("win32");
+    expect(server.memStatsSupported()).toBe(true);
+    setPlatform("linux");
+    expect(server.memStatsSupported()).toBe(false);
+  });
+
+  it("broadcastMemStats skips a failed reading", () => {
+    const client = fakeClient();
+    server.clients.add(client);
+    server.broadcastMemStats(null);
+    expect(client.send).not.toHaveBeenCalled();
+    server.broadcastMemStats({ appBytes: 1, systemUsed: 2, systemTotal: 3 });
+    expect(client.send).toHaveBeenCalledWith({ type: "memstats", supported: true, app: 1, systemUsed: 2, systemTotal: 3 });
+  });
+});
+
 describe("memory-stats timers", () => {
   it("scheduleMemStats is inert while disabled and arms a timer while enabled", () => {
     vi.useFakeTimers();

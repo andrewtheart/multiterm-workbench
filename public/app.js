@@ -306,6 +306,7 @@ const state = {
   appElevated: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
+  mem: { open: false, timer: null, requested: false, stats: null, unsupported: false },
   nextIndex: 1,
   pages: loadPages(),
   primaryId: null,
@@ -405,6 +406,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindRightClickWarning();
   bindCloseConfirm();
   bindUpdateDialog();
+  bindMemStatus();
   bindGlobalShortcuts();
   bindFindAll();
   window.addEventListener("resize", noteWindowResizeDrag);
@@ -2552,18 +2554,113 @@ function setBridgeStatus(text, tone) {
   elements.bridgeStatus.dataset.tone = tone;
 }
 
-// Rendering is trivial (text only); all process-memory work happens in the
-// bridge process, so this never touches the UI thread's perf budget.
-function updateMemStatus(stats) {
-  if (!elements.statusMemText) return;
-  const appBytes = Number(stats.app) || 0;
-  const usedBytes = Number(stats.systemUsed) || 0;
-  const totalBytes = Number(stats.systemTotal) || 0;
-  const pct = usedBytes > 0 ? (appBytes / usedBytes) * 100 : 0;
-  elements.statusMemText.textContent = `${formatBytes(appBytes)} / ${formatBytes(usedBytes)} (${pct.toFixed(1)}%)`;
-  if (elements.statusMem) {
-    elements.statusMem.title = `MultiTerm + terminals: ${formatBytes(appBytes)} \u2014 system memory in use: ${formatBytes(usedBytes)} of ${formatBytes(totalBytes)}`;
+// Every reading costs the bridge a ~1s Win32_Process query, so the status bar
+// asks for one only while the user is actually looking at the memory chip.
+// Hover (or keyboard focus) opens the readout and starts a slow refresh loop;
+// leaving collapses it and stops asking. Rendering is text-only and all the
+// process-walking happens in the bridge, so the UI thread is never blocked.
+const MEM_REFRESH_MS = 4000;
+
+function bindMemStatus() {
+  const chip = elements.statusMem;
+  if (!chip) return;
+  chip.addEventListener("pointerenter", openMemStatus);
+  chip.addEventListener("pointerleave", closeMemStatus);
+  chip.addEventListener("focus", openMemStatus);
+  chip.addEventListener("blur", closeMemStatus);
+  // Tapping is the touch equivalent of hovering; it also lets a click pin the
+  // reading open long enough to read it on a trackpad.
+  chip.addEventListener("click", (event) => {
+    event.preventDefault();
+    if (state.mem.open) requestMemStats();
+    else openMemStatus();
+  });
+}
+
+function openMemStatus() {
+  const chip = elements.statusMem;
+  if (!chip || state.mem.open) return;
+  state.mem.open = true;
+  chip.classList.add("is-open");
+  chip.setAttribute("aria-expanded", "true");
+  renderMemStatus();
+  requestMemStats();
+  clearInterval(state.mem.timer);
+  state.mem.timer = setInterval(requestMemStats, MEM_REFRESH_MS);
+}
+
+function closeMemStatus() {
+  const chip = elements.statusMem;
+  if (!chip) return;
+  state.mem.open = false;
+  chip.classList.remove("is-open");
+  chip.setAttribute("aria-expanded", "false");
+  clearInterval(state.mem.timer);
+  state.mem.timer = null;
+  // Blank the live region while collapsed so a screen reader doesn't re-read a
+  // stale figure, and so the collapsed chip has no width to animate from.
+  if (elements.statusMemText) elements.statusMemText.textContent = "";
+}
+
+function requestMemStats() {
+  if (state.mem.unsupported) return;
+  state.mem.requested = true;
+  if (!sendBridge({ type: "memstats" })) {
+    // Bridge is down/reconnecting: keep whatever we last showed rather than
+    // flashing an error, but make it clear nothing has arrived yet.
+    if (!state.mem.stats) setMemStatusText("bridge offline");
   }
+}
+
+function updateMemStatus(stats) {
+  if (stats && stats.supported === false) {
+    state.mem.unsupported = true;
+    state.mem.stats = null;
+    clearInterval(state.mem.timer);
+    state.mem.timer = null;
+    renderMemStatus();
+    return;
+  }
+  if (stats && stats.error) {
+    state.mem.stats = null;
+    renderMemStatus(stats.error);
+    return;
+  }
+  state.mem.stats = {
+    app: Number(stats.app) || 0,
+    systemUsed: Number(stats.systemUsed) || 0,
+    systemTotal: Number(stats.systemTotal) || 0
+  };
+  renderMemStatus();
+}
+
+function renderMemStatus(errorText) {
+  const chip = elements.statusMem;
+  if (!chip || !elements.statusMemText) return;
+
+  if (state.mem.unsupported) {
+    chip.title = "Memory usage is only available on Windows";
+    setMemStatusText("unavailable");
+    return;
+  }
+
+  const stats = state.mem.stats;
+  if (!stats) {
+    chip.title = "Memory used by MultiTerm and its terminals \u2014 hover to read live usage";
+    setMemStatusText(errorText || (state.mem.requested ? "reading\u2026" : ""));
+    return;
+  }
+
+  const pct = stats.systemUsed > 0 ? (stats.app / stats.systemUsed) * 100 : 0;
+  chip.title = `MultiTerm + terminals: ${formatBytes(stats.app)} \u2014 system memory in use: ${formatBytes(stats.systemUsed)} of ${formatBytes(stats.systemTotal)}`;
+  setMemStatusText(`${formatBytes(stats.app)} / ${formatBytes(stats.systemUsed)} (${pct.toFixed(1)}%)`);
+}
+
+// Only paint while expanded: the collapsed chip is glyph-only, and writing to
+// the aria-live region would otherwise announce readings nobody asked for.
+function setMemStatusText(text) {
+  if (!state.mem.open) return;
+  elements.statusMemText.textContent = text;
 }
 
 function formatBytes(bytes) {
