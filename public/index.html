@@ -406,13 +406,13 @@
           <i data-lucide="trash-2"></i>
           <span>Close all</span>
         </button>
+        <button id="logToggle" class="status-btn log-toggle" type="button" title="Show logs" aria-label="Show logs" aria-expanded="false" aria-controls="logPanel">
+          <i data-lucide="chevron-up"></i>
+          <span>Logs</span>
+          <span class="log-toggle-dot" id="logToggleDot" hidden></span>
+        </button>
       </footer>
     </div>
-
-    <button id="logToggle" class="log-fab" type="button" title="Show logs" aria-label="Show logs" aria-expanded="false">
-      <i data-lucide="chevron-up"></i>
-      <span class="log-fab-dot" id="logFabDot" hidden></span>
-    </button>
 
     <section id="logPanel" class="log-panel" aria-label="Application logs" hidden>
       <header class="log-panel-head">

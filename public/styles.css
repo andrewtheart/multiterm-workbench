@@ -479,11 +479,12 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
 }
 
 .brand-mark {
-  background: center / contain no-repeat url("favicon.svg");
+  background: url("favicon.svg") center / contain no-repeat;
   display: inline-block;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.35));
   flex: none;
-  height: 40px;
-  width: 40px;
+  height: 36px;
+  width: 36px;
 }
 
 .brand h1 {
@@ -906,45 +907,33 @@ body.header-hidden .status-hint kbd,
   width: 1px;
 }
 
-.log-fab {
-  align-items: center;
-  background: var(--surface-high);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  bottom: 42px;
-  box-shadow: var(--elev-3);
-  color: var(--text);
-  cursor: pointer;
-  display: inline-flex;
-  gap: 6px;
-  height: 34px;
-  justify-content: center;
-  padding: 0 12px;
-  position: fixed;
-  right: 16px;
-  transition: transform var(--dur-fast) var(--ease-standard), border-color var(--dur-fast) var(--ease-standard);
-  z-index: 45;
+.log-toggle {
+  position: relative;
 }
 
-.log-fab:hover {
+.log-toggle:hover:not(:disabled) {
   border-color: var(--primary);
   color: var(--primary);
-  transform: translateY(-1px);
 }
 
-.log-fab svg {
-  height: 16px;
-  width: 16px;
+/* The chevron points at the panel: up to summon it, down to dismiss it. */
+.log-toggle svg {
+  transition: transform var(--dur-fast) var(--ease-standard);
 }
 
-.log-fab-dot {
+.log-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.log-toggle-dot {
   background: var(--danger);
   border-radius: 50%;
-  height: 8px;
-  width: 8px;
+  height: 6px;
+  margin-left: 1px;
+  width: 6px;
 }
 
-.log-fab-dot[hidden] {
+.log-toggle-dot[hidden] {
   display: none;
 }
 
@@ -2782,7 +2771,7 @@ body.is-pane-dragging {
   overflow: hidden;
   padding: 4px 9px;
   position: absolute;
-  right: calc(12px + var(--pane-status-shift, 0px));
+  right: 12px;
   text-overflow: ellipsis;
   transition: opacity var(--dur-fast) var(--ease-standard);
   white-space: nowrap;
