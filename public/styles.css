@@ -479,12 +479,11 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
 }
 
 .brand-mark {
-  background: conic-gradient(from 210deg, var(--primary), #7ca8f6, var(--warn), var(--primary));
-  border-radius: 11px;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.10) inset, var(--elev-2);
+  background: center / contain no-repeat url("favicon.svg");
   display: inline-block;
-  height: 36px;
-  width: 36px;
+  flex: none;
+  height: 40px;
+  width: 40px;
 }
 
 .brand h1 {
@@ -1429,8 +1428,8 @@ body.header-hidden .status-hint kbd,
 }
 
 .about-head .brand-mark {
-  height: 44px;
-  width: 44px;
+  height: 48px;
+  width: 48px;
 }
 
 .about-title {

@@ -4,7 +4,127 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
 
 **⬇️ [Download MultiTerm Workbench v0.1.22](https://github.com/andrewtheart/multiterm-workbench/releases/tag/v0.1.22)** — Windows installer, from the [releases page](https://github.com/andrewtheart/multiterm-workbench/releases).
 
-![MultiTerm Workbench running ten PowerShell sessions in a 5-column grid, each executing a different command](docs/screenshot.png)
+## Why MultiTerm?
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <h3>🖥️ Multi-pane shell workspace</h3>
+      Run multiple local PowerShell terminals in one view with real PTY behavior, prompt editing, Ctrl+C, and resize handling.
+    </td>
+    <td align="center" width="33%">
+      <h3>⛶ Real maximize + focus rail</h3>
+      Maximize one pane to fill the terminal stage, or use focus rail to keep one primary pane large while others stay visible.
+    </td>
+    <td align="center" width="33%">
+      <h3>🧩 Many layout modes</h3>
+      Switch between auto fit, fixed rows/columns, strips, balanced grid, master layouts, bento, and manual canvas.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>🧲 Drag-to-snap and manual canvas</h3>
+      Drag panes to top, bottom, left, or right snap zones, or place and resize panes freely in manual mode.
+    </td>
+    <td align="center" width="33%">
+      <h3>📣 Broadcast + sync input</h3>
+      Send one command to all terminals (or a scope), and optionally mirror keyboard input across every pane.
+    </td>
+    <td align="center" width="33%">
+      <h3>🔎 Find in one pane or all panes</h3>
+      Search inside the active terminal or run a global find across every visible terminal output.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>☰ Always-on pane hamburger</h3>
+      Each pane keeps a menu with Find and Duplicate, plus overflowed actions when header space gets tight.
+    </td>
+    <td align="center" width="33%">
+      <h3>⌨️ Command palette + quick switch</h3>
+      Use keyboard-first command discovery and fast terminal switching without leaving the workbench.
+    </td>
+    <td align="center" width="33%">
+      <h3>🗂️ Snippets and workspaces</h3>
+      Save reusable commands and named workspace layouts, then restore sessions quickly when you return.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>⬆️ Built-in updater</h3>
+      Check GitHub releases, read release notes in-app, and launch the newest installer directly from the update dialog.
+    </td>
+    <td align="center" width="33%">
+      <h3>📜 Live diagnostics log console</h3>
+      Tail app and bridge logs in real time, filter levels, copy output, and catch reconnect/session lifecycle issues quickly.
+    </td>
+    <td align="center" width="33%">
+      <h3>🧠 On-demand memory readout</h3>
+      Hover the memory chip in the status bar for live app + system RAM usage, refreshed only while the chip is open.
+    </td>
+  </tr>
+</table>
+
+## Screenshot tour
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/workbench-grid.png" alt="MultiTerm in auto-fit grid mode with six active terminals">
+      <br><strong>Grid workbench:</strong> multiple live shells and controls in one view.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/maximized-pane.png" alt="A single terminal maximized to fill the workspace">
+      <br><strong>Real maximize:</strong> one pane overlays the full terminal stage.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/focus-rail-layout.png" alt="Focus rail layout with one large primary pane">
+      <br><strong>Focus rail:</strong> keep one large primary pane while others remain docked.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/pane-hamburger-menu.png" alt="Pane hamburger menu showing move, find, and duplicate actions">
+      <br><strong>Pane hamburger menu:</strong> Find and Duplicate are always available.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/broadcast-bar.png" alt="Broadcast command bar at the top of the workspace">
+      <br><strong>Broadcast bar:</strong> send one command to all terminals or a selected scope.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/find-all-terminals.png" alt="In-pane find bar highlighting matches, with the global terminal filter in the header">
+      <br><strong>Find &amp; filter:</strong> per-pane search with match highlighting, plus a global filter.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/command-palette.png" alt="Command palette filtering for update commands">
+      <br><strong>Command palette:</strong> keyboard-first command discovery and execution.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/update-dialog.png" alt="Update dialog with release notes and install action">
+      <br><strong>Updater dialog:</strong> release notes plus one-click download/install flow.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/log-console.png" alt="Log console panel showing live app and bridge events">
+      <br><strong>Log console:</strong> live diagnostics with level filters and quick export.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/snippets-workspaces.png" alt="Snippets and workspaces controls in the side panel">
+      <br><strong>Snippets + workspaces:</strong> reusable commands and saved layouts.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="100%" colspan="2">
+      <img src="docs/images/status-memory-hover.png" alt="Status bar memory chip expanded with app and system memory usage">
+      <br><strong>Status memory chip:</strong> hover to show live app/system memory usage.
+    </td>
+  </tr>
+</table>
 
 ## Requirements
 
