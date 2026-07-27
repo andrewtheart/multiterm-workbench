@@ -48,7 +48,7 @@ const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94
 const PANE_OVERFLOW_WIDTH = 600;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.26";
+const APP_VERSION = "0.1.27";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 
@@ -941,6 +941,7 @@ function addTerminal(options = {}) {
 
   const terminal = {
     color: options.color || session.color || null,
+    contextSelection: "",
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
     awaitingInput: false,
@@ -966,6 +967,8 @@ function addTerminal(options = {}) {
     runStartup: Boolean(options.runStartup),
     searchAddon,
     searchText: "",
+    selectionClearTimer: 0,
+    selectionSnapshot: "",
     webglAddon: null,
     webglLossTimes: [],
     webglRecoveryHandle: 0,
@@ -1002,6 +1005,7 @@ function addTerminal(options = {}) {
   if (isOnActivePage(terminal)) setActiveTerminal(id);
   refreshIcons();
   bindTerminalKeyHandling(terminal);
+  bindTerminalSelectionHandling(terminal);
   registerCwdTracking(terminal);
 
   term.onData((data) => {
@@ -1023,9 +1027,20 @@ function addTerminal(options = {}) {
   term.onBell(() => handleBell(terminal));
 
   term.onSelectionChange(() => {
-    if (!state.settings.copyOnSelect) return;
     const selection = term.getSelection();
+    window.clearTimeout(terminal.selectionClearTimer);
     if (selection) {
+      terminal.selectionSnapshot = selection;
+    } else {
+      // xterm clears a TUI selection immediately before dispatching the right
+      // pointer event. Defer clearing so that event can preserve the snapshot.
+      terminal.selectionClearTimer = window.setTimeout(() => {
+        terminal.selectionClearTimer = 0;
+        terminal.selectionSnapshot = "";
+      }, 0);
+    }
+
+    if (selection && state.settings.copyOnSelect) {
       navigator.clipboard.writeText(selection).catch(() => {});
     }
   });
@@ -1103,6 +1118,33 @@ function bindTerminalKeyHandling(terminal) {
       event.stopPropagation();
       sendBridge({ type: "input", id: terminal.id, data: event.shiftKey ? "\x1b[Z" : "\t" });
     }
+  }, true);
+}
+
+function bindTerminalSelectionHandling(terminal) {
+  const element = terminal.term.element;
+  if (!element) return;
+
+  element.addEventListener("pointerdown", (event) => {
+    if (event.button === 0) {
+      window.clearTimeout(terminal.selectionClearTimer);
+      terminal.selectionClearTimer = 0;
+      terminal.selectionSnapshot = "";
+      terminal.contextSelection = "";
+    } else if (event.button === 2) {
+      // Mouse-aware TUIs clear xterm's live selection before this event reaches
+      // us. The snapshot was captured when the selection drag ended.
+      window.clearTimeout(terminal.selectionClearTimer);
+      terminal.selectionClearTimer = 0;
+      terminal.contextSelection = terminal.term.getSelection() || terminal.selectionSnapshot;
+    }
+  }, true);
+
+  element.addEventListener("pointerup", (event) => {
+    if (event.button !== 0) return;
+    window.clearTimeout(terminal.selectionClearTimer);
+    terminal.selectionClearTimer = 0;
+    terminal.selectionSnapshot = terminal.term.getSelection();
   }, true);
 }
 
@@ -1619,6 +1661,7 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
+  window.clearTimeout(terminal.selectionClearTimer);
   window.clearTimeout(terminal.webglRecoveryHandle);
   terminal.webglRecoveryHandle = 0;
   if (terminal.outputFlushHandle) {
@@ -3115,11 +3158,11 @@ function terminalBufferText(term) {
   return lines.join("\n").replace(/\s+$/, "");
 }
 
-async function copyTerminalOutput(id) {
+async function copyTerminalOutput(id, selectionOverride) {
   const terminal = state.terminals.get(id);
   if (!terminal) return;
 
-  const selection = terminal.term.getSelection();
+  const selection = selectionOverride === undefined ? terminal.term.getSelection() : selectionOverride;
   const text = selection || terminalBufferText(terminal.term);
   if (!text) {
     toast("Nothing to copy", "info", 1800);
@@ -5631,11 +5674,15 @@ function bindContextMenu() {
     event.preventDefault();
     setActiveTerminal(terminal.id);
 
+    const selection = terminal.term.getSelection() || terminal.contextSelection;
+    terminal.contextSelection = "";
+    terminal.selectionSnapshot = "";
+
     const action = state.settings.rightClickAction;
     if (action === "paste" || action === "pasteRun") {
       handleRightClickPaste(terminal, action);
     } else {
-      showContextMenu(event.clientX, event.clientY, terminal);
+      showContextMenu(event.clientX, event.clientY, terminal, selection);
     }
   });
 
@@ -5705,8 +5752,8 @@ function logFileName(logPath) {
   return parts[parts.length - 1] || "log";
 }
 
-function buildContextMenu(terminal) {
-  const hasSelection = Boolean(terminal.term.getSelection());
+function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
+  const hasSelection = Boolean(selection);
   const isZoomed = state.zoomedId === terminal.id;
   const snippetItems = (state.settings.snippets || []).slice(0, 8).map((snippet) => ({
     label: snippet.name || snippet.command,
@@ -5715,7 +5762,7 @@ function buildContextMenu(terminal) {
   }));
 
   const items = [
-    { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id) },
+    { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
     { label: "Copy all output", icon: "copy", run: () => { terminal.term.clearSelection(); copyTerminalOutput(terminal.id); } },
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", run: () => pasteIntoTerminal(terminal.id) },
     { label: "Select all", hint: "Ctrl+A", icon: "text-select", run: () => terminal.term.selectAll() },
@@ -6079,8 +6126,8 @@ function onContextMenuKeydown(event) {
   stop();
 }
 
-function showContextMenu(x, y, terminal) {
-  buildContextMenu(terminal);
+function showContextMenu(x, y, terminal, selection) {
+  buildContextMenu(terminal, selection);
   showBuiltContextMenu(x, y);
 }
 
