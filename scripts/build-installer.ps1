@@ -16,12 +16,12 @@
         are modified.
 
     Publish (-Push):
-        The version is bumped automatically (patch by default) in package.json,
-        installer\MultiTerm.iss, and public\app.js, the installer is built for the
-        new version, the edited files are committed as
-        "chore(release): v<version>", the current branch is pushed, and a GitHub
-        release tagged v<version> is created via the gh CLI targeting that commit,
-        with the installer attached as an asset.
+        All pending working-tree changes are committed first. The version is then
+        bumped automatically (patch by default) in package.json, package-lock.json,
+        installer\MultiTerm.iss, and public\app.js; the installer is built; the
+        version files are committed as "chore(release): v<version>"; the current
+        branch is pushed; and a GitHub release tagged v<version> is created via the
+        gh CLI targeting that commit, with the installer attached as an asset.
 
 .PARAMETER Push
     Bump the version, build, commit, push the branch, and publish the release.
@@ -37,6 +37,15 @@
 .PARAMETER NoVersionBump
     With -Push, do NOT change the version; release the current package.json
     version as-is (useful with -Force to re-upload an asset).
+
+.PARAMETER NoGitCommit
+    With -Push, do not create either the pending-changes snapshot commit or the
+    release-version commit. The installer is built, then the script stops without
+    pushing or publishing because the artifact would not match a Git commit.
+
+.PARAMETER NoGitPush
+    With -Push, create the local snapshot/release commits but do not push the
+    branch or publish the GitHub release.
 
 .PARAMETER Draft
     With -Push, create the release as a draft.
@@ -71,21 +80,34 @@
     Release exactly 1.0.0.
 
 .EXAMPLE
+    .\scripts\build-installer.ps1 -Push -NoGitPush
+    Build and create both commits locally, but do not push or publish.
+
+.EXAMPLE
+    .\scripts\build-installer.ps1 -Push -NoGitCommit
+    Build the bumped installer but leave every change uncommitted and unpublished.
+
+.EXAMPLE
     .\scripts\build-installer.ps1 -Push -WhatIf
-    Show the version bump and every publish step without changing anything.
+    Show the pending-change commit, version bump, build, release commit, push, and
+    publish steps without changing anything.
 #>
-[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium', PositionalBinding = $false)]
 param(
     [switch]$Push,
     [ValidateSet('major', 'minor', 'patch')]
     [string]$BumpPart = 'patch',
     [string]$SetVersion,
     [switch]$NoVersionBump,
+    [switch]$NoGitCommit,
+    [switch]$NoGitPush,
     [switch]$Draft,
     [switch]$Prerelease,
     [switch]$Force,
     [string]$Tag,
-    [string]$IsccPath
+    [string]$IsccPath,
+    [Parameter(ValueFromRemainingArguments = $true, DontShow = $true)]
+    [string[]]$CompatibilityOptions
 )
 
 $ErrorActionPreference = 'Stop'
@@ -145,18 +167,48 @@ function Set-VersionInFile {
     [System.IO.File]::WriteAllText($Path, $updated)
 }
 
+function Set-PackageLockVersion {
+    param([string]$Path, [string]$NewVersion)
+    $text = Get-Content -LiteralPath $Path -Raw
+    $patterns = @(
+        '(?s)(^\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+("\s*,)',
+        '(?s)("packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+("\s*,)'
+    )
+    foreach ($pattern in $patterns) {
+        $updated = [regex]::new($pattern).Replace($text, "`${1}$NewVersion`${2}", 1)
+        if ($updated -eq $text) {
+            throw "Failed to update version in $Path (pattern did not match or value unchanged)."
+        }
+        $text = $updated
+    }
+    [System.IO.File]::WriteAllText($Path, $text)
+}
+
 # Repository root is the parent of the scripts\ folder that holds this file.
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $PackageJsonPath = Join-Path $RepoRoot 'package.json'
+$PackageLockPath = Join-Path $RepoRoot 'package-lock.json'
 $IssPath = Join-Path $RepoRoot 'installer\MultiTerm.iss'
 $AppJsPath = Join-Path $RepoRoot 'public\app.js'
 
 if (-not (Test-Path -LiteralPath $PackageJsonPath)) { throw "Cannot find package.json at $PackageJsonPath" }
+if (-not (Test-Path -LiteralPath $PackageLockPath)) { throw "Cannot find package-lock.json at $PackageLockPath" }
 if (-not (Test-Path -LiteralPath $IssPath)) { throw "Cannot find installer script at $IssPath" }
 if (-not (Test-Path -LiteralPath $AppJsPath)) { throw "Cannot find renderer at $AppJsPath" }
 
+foreach ($option in $CompatibilityOptions) {
+    switch ($option) {
+        '--NoGitCommit' { $NoGitCommit = $true }
+        '--NoGitPush' { $NoGitPush = $true }
+        default { throw "Unknown argument '$option'." }
+    }
+}
+
 if ($SetVersion -and $SetVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw "-SetVersion must be x.y.z (got '$SetVersion')."
+}
+if (($NoGitCommit -or $NoGitPush) -and -not $Push) {
+    throw "-NoGitCommit and -NoGitPush are only meaningful with -Push."
 }
 
 # --- Current version (package.json is the source of truth) ----------------------
@@ -225,40 +277,73 @@ Write-Step "Using Inno Setup: $IsccPath"
 # --- Push preflight (fail fast before touching files) ---------------------------
 $GhPath = $null
 $RepoSlug = $null
+$releaseExists = $false
+$branch = $null
+$CanPublish = $Push -and -not $NoGitCommit -and -not $NoGitPush
 if ($Push) {
-    $GhPath = Get-Command 'gh' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
-    if (-not $GhPath) {
-        throw "gh CLI not found but -Push was requested. Install GitHub CLI (https://cli.github.com/) or drop -Push."
-    }
-    if ((Get-NativeExit { & $GhPath auth status }) -ne 0) {
-        throw "gh is not authenticated. Run 'gh auth login' and retry."
-    }
-    $repo = Get-NativeOutput { & $GhPath repo view --json nameWithOwner -q .nameWithOwner }
-    if ($repo.ExitCode -ne 0 -or -not $repo.Output) { throw "Could not determine repository (gh repo view failed)." }
-    $RepoSlug = ($repo.Output | Select-Object -First 1).ToString().Trim()
-
-    # Guard against colliding with an existing release.
-    $releaseExists = (Get-NativeExit { & $GhPath release view $Tag --repo $RepoSlug }) -eq 0
-    if ($releaseExists -and -not ($NoVersionBump -and $Force)) {
-        throw "Release $Tag already exists. Pick a different version (bump/-SetVersion), or use -Push -NoVersionBump -Force to re-upload the asset."
-    }
-
     $branchInfo = Get-NativeOutput { git -C $RepoRoot rev-parse --abbrev-ref HEAD }
     if ($branchInfo.ExitCode -ne 0) { throw "Not a git repository or git unavailable." }
-    $branch = ($branchInfo.Output | Select-Object -First 1)
-    Write-Step "Publish target: $RepoSlug (branch '$branch')"
+    $branch = ($branchInfo.Output | Select-Object -First 1).ToString().Trim()
+
+    if ($CanPublish) {
+        $GhPath = Get-Command 'gh' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+        if (-not $GhPath) {
+            throw "gh CLI not found but -Push was requested. Install GitHub CLI (https://cli.github.com/) or use -NoGitPush."
+        }
+        if ((Get-NativeExit { & $GhPath auth status }) -ne 0) {
+            throw "gh is not authenticated. Run 'gh auth login' and retry."
+        }
+        $repo = Get-NativeOutput { & $GhPath repo view --json nameWithOwner -q .nameWithOwner }
+        if ($repo.ExitCode -ne 0 -or -not $repo.Output) { throw "Could not determine repository (gh repo view failed)." }
+        $RepoSlug = ($repo.Output | Select-Object -First 1).ToString().Trim()
+
+        $releaseExists = (Get-NativeExit { & $GhPath release view $Tag --repo $RepoSlug }) -eq 0
+        if ($releaseExists -and -not ($NoVersionBump -and $Force)) {
+            throw "Release $Tag already exists. Pick a different version (bump/-SetVersion), or use -Push -NoVersionBump -Force to re-upload the asset."
+        }
+        Write-Step "Publish target: $RepoSlug (branch '$branch')"
+    }
+    else {
+        Write-Step "Local release workflow on branch '$branch' (remote publication disabled)."
+    }
+}
+
+# --- Snapshot every pending change before changing release files ----------------
+if ($Push) {
+    $status = Get-NativeOutput { git -C $RepoRoot status --porcelain=v1 --untracked-files=all }
+    if ($status.ExitCode -ne 0) { throw "git status failed." }
+    $pendingChanges = @($status.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
+
+    if ($pendingChanges.Count -gt 0) {
+        if ($NoGitCommit) {
+            Write-Step "-NoGitCommit: leaving $($pendingChanges.Count) pending path(s) uncommitted."
+        }
+        elseif ($PSCmdlet.ShouldProcess($RepoRoot, "Commit all pending changes before $Tag")) {
+            Write-Step "Committing all pending changes before $Tag..."
+            Invoke-Native { git -C $RepoRoot add -A } "git add -A failed"
+            Invoke-Native { git -C $RepoRoot commit -m "chore: snapshot changes before $Tag" } "git commit failed"
+        }
+        else {
+            Write-Step "[WhatIf] Would stage and commit all $($pendingChanges.Count) pending path(s) before $Tag."
+        }
+    }
+    else {
+        Write-Step "No pending changes to snapshot before $Tag."
+    }
 }
 
 # --- Apply the version bump (gated) ---------------------------------------------
 if ($BumpVersion) {
-    if ($PSCmdlet.ShouldProcess("package.json, installer\MultiTerm.iss & public\app.js", "Set version to $Version")) {
+    $versionFiles = "package.json, package-lock.json, installer\MultiTerm.iss & public\app.js"
+    if ($PSCmdlet.ShouldProcess($versionFiles, "Set version to $Version")) {
         Set-VersionInFile -Path $PackageJsonPath -Pattern '("version"\s*:\s*")([^"]+)(")' -NewVersion $Version
+        Set-PackageLockVersion -Path $PackageLockPath -NewVersion $Version
         Set-VersionInFile -Path $IssPath -Pattern '(#define\s+MyAppVersion\s+")([^"]+)(")' -NewVersion $Version
         Set-VersionInFile -Path $AppJsPath -Pattern '(const\s+APP_VERSION\s*=\s*")([^"]+)(")' -NewVersion $Version
-        Write-Step "Version set to $Version in package.json, installer\MultiTerm.iss, and public\app.js."
+        Write-Step "Version set to $Version in package.json, package-lock.json, installer\MultiTerm.iss, and public\app.js."
     }
     else {
-        Write-Step "[WhatIf] Would set version to $Version in package.json, installer\MultiTerm.iss, and public\app.js."
+        Write-Step "[WhatIf] Would set version to $Version in package.json, package-lock.json, installer\MultiTerm.iss, and public\app.js."
     }
 }
 
@@ -276,28 +361,43 @@ else {
     Write-Step "[WhatIf] Would build: $OutputExe"
 }
 
-# --- Publish --------------------------------------------------------------------
+# --- Commit, push, and publish ---------------------------------------------------
 if (-not $Push) {
     Write-Step "Done (build only). Re-run with -Push to bump the version and publish a release."
     return
 }
 
-# Commit the version bump and push the branch so the tag can target that commit.
-$Target = $null
+if ($NoGitCommit) {
+    Write-Step "-NoGitCommit: build complete; skipped all commits, git push, and GitHub release publication."
+    return
+}
+
 if ($BumpVersion) {
-    if ($PSCmdlet.ShouldProcess($RepoSlug, "Commit '$Tag' bump and push branch")) {
-        Write-Step "Committing version bump..."
-        Invoke-Native { git -C $RepoRoot add -- package.json installer/MultiTerm.iss public/app.js } "git add failed"
+    if ($PSCmdlet.ShouldProcess($RepoRoot, "Commit release version $Tag")) {
+        Write-Step "Committing release version $Tag..."
+        Invoke-Native { git -C $RepoRoot add -- package.json package-lock.json installer/MultiTerm.iss public/app.js } "git add release files failed"
         Invoke-Native { git -C $RepoRoot commit -m "chore(release): $Tag" } "git commit failed"
-        Write-Step "Pushing branch..."
-        Invoke-Native { git -C $RepoRoot push origin HEAD } "git push failed"
-        $head = Get-NativeOutput { git -C $RepoRoot rev-parse HEAD }
-        if ($head.ExitCode -ne 0) { throw "git rev-parse HEAD failed." }
-        $Target = ($head.Output | Select-Object -First 1).ToString().Trim()
     }
     else {
-        Write-Step "[WhatIf] Would commit '$Tag' bump, push the branch, and target that commit."
+        Write-Step "[WhatIf] Would commit release version $Tag."
     }
+}
+
+if ($NoGitPush) {
+    Write-Step "-NoGitPush: local release commits are complete; skipped git push and GitHub release publication."
+    return
+}
+
+$Target = $null
+if ($PSCmdlet.ShouldProcess($RepoSlug, "Push branch '$branch'")) {
+    Write-Step "Pushing branch..."
+    Invoke-Native { git -C $RepoRoot push origin HEAD } "git push failed"
+    $head = Get-NativeOutput { git -C $RepoRoot rev-parse HEAD }
+    if ($head.ExitCode -ne 0) { throw "git rev-parse HEAD failed." }
+    $Target = ($head.Output | Select-Object -First 1).ToString().Trim()
+}
+else {
+    Write-Step "[WhatIf] Would push branch '$branch'."
 }
 
 if ($PSCmdlet.ShouldProcess($Tag, "Create GitHub release and upload installer")) {

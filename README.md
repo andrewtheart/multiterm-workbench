@@ -474,18 +474,19 @@ the GitHub release for you:
 # build the current version's installer only (no version change, no publish)
 .\scripts\build-installer.ps1
 
-# bump the version, build, commit, push, and publish the release (needs the gh CLI)
+# commit all pending changes, bump the version, build, push, and publish (needs gh)
 .\scripts\build-installer.ps1 -Push
 ```
 
 Build-only mode treats the `package.json` version as the source of truth and
 verifies `installer\MultiTerm.iss` agrees; it never modifies files.
 
-`-Push` cuts a release end-to-end: it **auto-increments the version** (patch by
-default) in both `package.json` and `installer\MultiTerm.iss`, builds
-`MultiTerm-Setup-<version>.exe`, commits the bump as `chore(release): v<version>`,
-pushes the current branch, and creates a GitHub release tagged `v<version>`
-(targeting that commit, with auto-generated notes and the installer attached).
+`-Push` cuts a release end-to-end. It first stages and commits **every pending
+tracked and untracked change** as `chore: snapshot changes before v<version>`.
+It then auto-increments the version (patch by default) in `package.json`,
+`package-lock.json`, `installer\MultiTerm.iss`, and `public\app.js`, builds the
+installer, commits those version files as `chore(release): v<version>`, pushes
+the current branch, and creates a GitHub release targeting the release commit.
 
 Publish options:
 
@@ -494,9 +495,13 @@ Publish options:
 - `-SetVersion 1.2.3` — release an explicit version instead of auto-incrementing.
 - `-NoVersionBump` — publish the current version as-is (combine with `-Force` to
   re-upload the asset onto an existing release).
+- `-NoGitCommit` — build but leave all changes uncommitted; for safety, this also
+  skips the Git push and GitHub release.
+- `-NoGitPush` — create the local snapshot and release commits, but skip the Git
+  push and GitHub release.
 - `-Draft` / `-Prerelease` — control the release type.
-- `-WhatIf` — preview every step (version bump, build, commit, push, release)
-  without changing anything.
+- `-WhatIf` — preview every step (snapshot, version bump, build, release commit,
+  push, and release) without changing anything.
 
 The resulting `installer\Output\MultiTerm-Setup-<version>.exe` performs a
 per-user install by default (no UAC prompt); users may elect a machine-wide

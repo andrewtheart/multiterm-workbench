@@ -125,6 +125,106 @@ test.describe("Surface context menu", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(start);
   });
 
+  test("positions a terminal menu before revealing it", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const screen = page.locator(".terminal-screen").first();
+    const box = await screen.boundingBox();
+    expect(box).not.toBeNull();
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+    await page.evaluate(() => {
+      const menu = document.querySelector("#contextMenu");
+      const getBoundingClientRect = menu.getBoundingClientRect;
+      window.__contextMenuMeasurement = null;
+      menu.getBoundingClientRect = function measureContextMenu() {
+        window.__contextMenuMeasurement = {
+          hidden: this.hidden,
+          visibility: getComputedStyle(this).visibility,
+          left: this.style.left,
+          top: this.style.top
+        };
+        this.getBoundingClientRect = getBoundingClientRect;
+        return getBoundingClientRect.call(this);
+      };
+    });
+
+    await page.mouse.click(point.x, point.y, { button: "right" });
+    const menu = page.locator("#contextMenu");
+    await expect(menu).toBeVisible();
+
+    const placement = await page.evaluate(() => {
+      const menu = document.querySelector("#contextMenu");
+      return {
+        measurement: window.__contextMenuMeasurement,
+        finalVisibility: getComputedStyle(menu).visibility,
+        finalLeft: Number.parseFloat(menu.style.left),
+        positioning: menu.classList.contains("is-positioning")
+      };
+    });
+
+    expect(placement.measurement).toEqual({
+      hidden: false,
+      visibility: "hidden",
+      left: "0px",
+      top: "0px"
+    });
+    expect(placement.finalVisibility).toBe("visible");
+    expect(placement.finalLeft).toBeGreaterThan(8);
+    expect(placement.positioning).toBe(false);
+
+    await page.mouse.click(4, 4);
+    await expect(menu).toBeHidden();
+  });
+
+  test("copies a TUI pointer selection after right-click clears the live selection", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const selected = await page.evaluate(async () => {
+      const terminal = state.terminals.get(state.activeId);
+      const marker = "tui-selection-marker";
+      await new Promise((resolve) => terminal.term.write(`\r\n${marker}`, resolve));
+      const buffer = terminal.term.buffer.active;
+      terminal.term.select(0, buffer.baseY + buffer.cursorY, marker.length);
+      const selection = terminal.term.getSelection();
+
+      // A left-button pointerup is how a real drag snapshots the completed
+      // selection. Mouse-aware TUIs then clear xterm's live selection before the
+      // right-button pointer event reaches MultiTerm.
+      terminal.term.element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
+      terminal.term.clearSelection();
+      terminal.term.element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 2 }));
+
+      window.__contextCopiedText = null;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text) => { window.__contextCopiedText = text; } }
+      });
+
+      terminal.screen.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        button: 2,
+        clientX: 500,
+        clientY: 300
+      }));
+      return selection;
+    });
+
+    expect(selected).toBe("tui-selection-marker");
+    const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
+    await expect(copy).toBeVisible();
+    await expect(copy).not.toHaveAttribute("aria-disabled", "true");
+    expect(await page.evaluate(() => state.terminals.get(state.activeId).selectionSnapshot)).toBe("");
+    await copy.click();
+    await expect.poll(() => page.evaluate(() => window.__contextCopiedText)).toBe(selected);
+
+    // The snapshot belongs only to that menu opening; without a fresh visible
+    // selection, a second right-click must not offer the old text again.
+    await page.locator(".terminal-pane.is-active .terminal-screen").click({ button: "right" });
+    await expect(copy).toHaveAttribute("aria-disabled", "true");
+  });
   test("still opens the terminal menu when the click lands on a pane", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");

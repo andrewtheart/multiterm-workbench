@@ -2095,6 +2095,10 @@ body.header-hidden .status-hint kbd,
   display: none;
 }
 
+.context-menu.is-positioning {
+  visibility: hidden;
+}
+
 .ctx-item {
   align-items: center;
   border-radius: var(--radius-sm);
