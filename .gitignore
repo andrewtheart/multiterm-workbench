@@ -22,6 +22,7 @@ test-results/
 playwright-report/
 .playwright/
 benchmarks/search-index-wasm/target/
+benchmarks/renderer-spike/target/
 blob-report/
 after-context-loss.png
 after-recovery.png

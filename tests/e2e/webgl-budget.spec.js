@@ -104,6 +104,36 @@ test.describe("WebGL renderer budget", () => {
     expect(counts.budget).toBeLessThan(16);
   });
 
+  test("leases a WebGL renderer to the active pane", async () => {
+    const initial = await page.evaluate(() => {
+      const active = state.terminals.get(state.activeId);
+      return {
+        activeId: active.id,
+        activeHasWebgl: Boolean(active.webglAddon),
+        withWebgl: [...state.terminals.values()].filter((terminal) => terminal.webglAddon).length
+      };
+    });
+    expect(initial.activeHasWebgl).toBe(true);
+    expect(initial.withWebgl).toBe(await page.evaluate(() => WEBGL_MAX_CONTEXTS));
+
+    const promoted = await page.evaluate(() => {
+      const candidate = [...state.terminals.values()].find((terminal) => !terminal.webglAddon);
+      if (!candidate) return null;
+      setActiveTerminal(candidate.id);
+      return {
+        activeId: state.activeId,
+        candidateId: candidate.id,
+        candidateHasWebgl: Boolean(candidate.webglAddon),
+        withWebgl: [...state.terminals.values()].filter((terminal) => terminal.webglAddon).length
+      };
+    });
+
+    expect(promoted).toBeTruthy();
+    expect(promoted.activeId).toBe(promoted.candidateId);
+    expect(promoted.candidateHasWebgl).toBe(true);
+    expect(promoted.withWebgl).toBe(await page.evaluate(() => WEBGL_MAX_CONTEXTS));
+  });
+
   // Headless Chromium renders through SwiftShader, which does not enforce the
   // same live-context cap as a real GPU, so over-subscription cannot actually be
   // provoked here - this passes trivially in CI. It is kept because it is the
@@ -126,9 +156,8 @@ test.describe("WebGL renderer budget", () => {
   });
 
   // PANE_COUNT is deliberately above the budget, so a few panes here are running
-  // on xterm's DOM renderer. That is the path this test really exercises: a pane
-  // that never received the WebGL addon must still paint. (A pane whose addon was
-  // disposed would have no renderer at all and would show up blank.)
+  // on xterm's built-in renderer. This also verifies that a pane demoted from
+  // WebGL by the lease handoff keeps painting through xterm's fallback renderer.
   test("every pane still renders, including the ones past the budget", async () => {
     // The marker is rewritten on every attempt rather than written once: the
     // newest shells are still emitting their banner and prompt when the panes go

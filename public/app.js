@@ -1004,7 +1004,6 @@ function addTerminal(options = {}) {
     scheduleFit(terminal);
   });
   state.terminals.set(id, terminal);
-  attachWebglRenderer(terminal);
   state.nextIndex += 1;
   updateTerminalActions();
   terminal.observer.observe(screen);
@@ -1018,6 +1017,7 @@ function addTerminal(options = {}) {
   // Panes for other pages are hidden immediately so a reattached session never
   // flashes onto the page you are looking at.
   pane.classList.toggle("is-page-hidden", terminal.pageId !== state.activePageId);
+  rebalanceWebglRenderers();
   renderPager();
   saveTerminalPages();
   if (isOnActivePage(terminal)) setActiveTerminal(id);
@@ -1642,6 +1642,7 @@ function removeTerminal(id) {
     if (next) setActiveTerminal(next);
   }
 
+  rebalanceWebglRenderers();
   applyZoom();
   saveManualLayouts();
   renderPager();
@@ -1722,6 +1723,7 @@ function minimizeTerminal(id) {
 
   terminal.minimized = true;
   terminal.pane.classList.add("is-minimized");
+  rebalanceWebglRenderers();
   log.info("terminal", `Terminal minimized: ${terminal.titleInput.value}`, { id });
   if (state.snap?.id === id) {
     clearSnapLayout(false);
@@ -1977,6 +1979,7 @@ function setActiveTerminal(id) {
       terminal.pane.classList.remove("has-activity");
     }
   }
+  rebalanceWebglRenderers();
   updateStatusBar();
 }
 
@@ -2041,20 +2044,15 @@ function refreshStatusPillTooltip(terminal) {
 }
 
 // Browsers cap simultaneous WebGL contexts per GPU process (16 by default in
-// Chrome/Electron) and force-lose the OLDEST context once you exceed it. That cap
-// is the hard constraint here, because xterm's WebGL addon does NOT fall back to
-// the DOM renderer when its context dies: disposing it removes the canvas and
-// leaves the pane with no renderer at all, so the pane goes blank while its
-// buffer still holds the text. Past ~16 panes that became a rolling eviction
-// cascade — every recovered pane evicted another one — which is the white,
-// flickering panes users reported.
+// Chrome/Electron) and force-lose the oldest context once the cap is exceeded.
+// Past ~16 panes that became a rolling eviction cascade, which is the white,
+// flickering behavior users reported.
 //
-// So we hand out a bounded number of contexts. Panes past the budget never get
-// the addon at all and therefore keep xterm's DOM renderer, which is slower under
-// heavy output but always correct. The budget sits below the stock cap so this
-// holds even in a plain browser tab; our launchers additionally raise the ceiling
-// with --max-active-webgl-contexts so terminal renderers never have to compete
-// with the app's other canvases.
+// Keep a bounded pool below that stock cap. xterm's built-in renderer can replace
+// an intentionally disposed WebGL addon, so the pool can follow the active and
+// visible panes rather than belonging forever to the first panes created.
+// Hardware-GPU measurements of a Copilot-style repaint stream showed WebGL using
+// about 39% less renderer task time than the built-in renderer.
 const WEBGL_MAX_CONTEXTS = 12;
 
 function liveWebglRendererCount() {
@@ -2065,15 +2063,72 @@ function liveWebglRendererCount() {
   return count;
 }
 
+function isWebglVisibleCandidate(terminal) {
+  const hidden = terminal.minimized
+    || terminal.pane.classList.contains("is-search-hidden")
+    || !isOnActivePage(terminal);
+  if (hidden) return false;
+  return !state.zoomedId || state.zoomedId === terminal.id;
+}
+
+function preferredWebglTerminals() {
+  const terminals = [...state.terminals.values()];
+  terminals.sort((left, right) => {
+    const leftVisible = isWebglVisibleCandidate(left);
+    const rightVisible = isWebglVisibleCandidate(right);
+    const leftRank = left.id === state.activeId && leftVisible ? 0 : leftVisible ? 1 : 2;
+    const rightRank = right.id === state.activeId && rightVisible ? 0 : rightVisible ? 1 : 2;
+    return leftRank - rightRank;
+  });
+  return terminals.slice(0, WEBGL_MAX_CONTEXTS);
+}
+
+function detachWebglRenderer(terminal) {
+  const addon = terminal.webglAddon;
+  if (!addon) return;
+  terminal.webglAddon = null;
+  try {
+    addon.dispose();
+  } catch {
+    /* context already gone */
+  }
+  const core = terminal.term._core;
+  if (core?._renderService && core._createRenderer) {
+    // addon-webgl 0.19 contains the same fallback, but disposal can still leave
+    // its disposed renderer registered. Restore the pinned core renderer explicitly.
+    core._renderService.setRenderer(core._createRenderer());
+    core._renderService.handleResize(terminal.term.cols, terminal.term.rows);
+  }
+  try {
+    terminal.term.refresh(0, terminal.term.rows - 1);
+  } catch {
+    /* renderer not ready yet; a later resize/fit will refresh */
+  }
+}
+
+function rebalanceWebglRenderers() {
+  if (!window.WebglAddon?.WebglAddon) return;
+  const preferred = new Set(preferredWebglTerminals());
+
+  // Release lower-priority contexts first so every subsequent attachment stays
+  // within the hard budget, even in a browser without our launcher flag.
+  for (const terminal of state.terminals.values()) {
+    if (terminal.webglAddon && !preferred.has(terminal)) {
+      detachWebglRenderer(terminal);
+    }
+  }
+  for (const terminal of preferred) {
+    if (!terminal.webglAddon) attachWebglRenderer(terminal);
+  }
+}
+
 // Attach the WebGL renderer to a terminal unless that would push us past the
 // context budget. Returning null is a normal outcome, not a failure: the pane
 // simply keeps xterm's DOM renderer. The other degradations land here too — addon
 // script missing (offline/headless), or GPU blocklisted so construction throws.
 //
-// Recovery after a genuine context loss is deliberately still allowed through:
-// the lost addon has already been cleared off the terminal so it no longer counts
-// against the budget, and a pane that lost its context has no renderer left at
-// all — it MUST get one back or it stays blank.
+// Recovery after a genuine context loss is still allowed through: the lost addon
+// has already been cleared, so it no longer counts against the budget.
 function attachWebglRenderer(terminal) {
   const WebglCtor = window.WebglAddon?.WebglAddon;
   if (!WebglCtor) return null;
@@ -2086,12 +2141,15 @@ function attachWebglRenderer(terminal) {
     return null;
   }
   webgl.onContextLoss(() => {
-    try {
-      webgl.dispose();
-    } catch {
-      /* already gone */
+    if (terminal.webglAddon === webgl) {
+      detachWebglRenderer(terminal);
+    } else {
+      try {
+        webgl.dispose();
+      } catch {
+        /* already gone */
+      }
     }
-    if (terminal.webglAddon === webgl) terminal.webglAddon = null;
     scheduleWebglRecovery(terminal);
   });
   try {
@@ -2103,12 +2161,8 @@ function attachWebglRenderer(terminal) {
   return webgl;
 }
 
-// Recreate the WebGL renderer shortly after a context loss so the pane resumes
-// drawing instead of staying blank/frozen. The context that was just lost frees
-// a slot, so re-creation almost always succeeds. If losses keep recurring in a
-// short window the GPU budget is genuinely exhausted, so we back off to a longer
-// delay — but never give up permanently, because there is no working DOM-renderer
-// fallback in this xterm build; a pane must get a live WebGL context back to render.
+// Recreate the WebGL renderer shortly after a context loss. If losses keep
+// recurring in a short window, back off before rebalancing the bounded pool.
 function scheduleWebglRecovery(terminal) {
   if (terminal.webglRecoveryHandle) return;
   const now = performance.now();
@@ -2119,7 +2173,7 @@ function scheduleWebglRecovery(terminal) {
   terminal.webglRecoveryHandle = window.setTimeout(() => {
     terminal.webglRecoveryHandle = 0;
     if (terminal.webglAddon || !state.terminals.has(terminal.id)) return;
-    attachWebglRenderer(terminal);
+    rebalanceWebglRenderers();
     try {
       terminal.term.refresh(0, terminal.term.rows - 1);
     } catch {
@@ -2348,6 +2402,7 @@ function applyTerminalSearch() {
   for (const terminal of state.terminals.values()) {
     updateTerminalSearchVisibility(terminal);
   }
+  rebalanceWebglRenderers();
 }
 
 function clearTerminalSearch() {
@@ -4206,6 +4261,7 @@ function applyZoom() {
   for (const terminal of state.terminals.values()) {
     scheduleFit(terminal);
   }
+  rebalanceWebglRenderers();
 }
 
 // The header button doubles as the restore control while a pane is maximized, so
@@ -4762,6 +4818,7 @@ function applyPageVisibility() {
     // fit once it is back in flow or it renders at the wrong dimensions.
     if (wasHidden && !hidden) scheduleFit(terminal);
   }
+  rebalanceWebglRenderers();
 }
 
 function setActivePage(id, options = {}) {

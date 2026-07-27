@@ -9,6 +9,8 @@
   "scripts": {
     "start": "electron .",
     "server": "node server.js",
+    "benchmark:renderer": "node benchmarks/renderer-spike/prepare.js && playwright test --config benchmarks/renderer-spike/playwright.config.js",
+    "benchmark:renderer:headed": "node benchmarks/renderer-spike/prepare.js && playwright test --config benchmarks/renderer-spike/playwright.config.js --headed",
     "benchmark:search-wasm": "node --expose-gc benchmarks/search-index-wasm/run.js",
     "test": "vitest run",
     "test:watch": "vitest",

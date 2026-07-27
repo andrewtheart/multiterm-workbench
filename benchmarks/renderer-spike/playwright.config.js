@@ -16,33 +16,28 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-'use strict';
+"use strict";
 
-const { defineConfig, devices } = require('@playwright/test');
+const { defineConfig, devices } = require("@playwright/test");
 
 module.exports = defineConfig({
   testDir: __dirname,
-  testMatch: ['bench.spec.js'],
+  testMatch: ["bench.spec.js"],
   fullyParallel: false,
   workers: 1,
-  // Each variant has 2 warm runs (WARM_RUNS × ~15 s per run) + prep time.
-  // 12 variants × 2 runs × 15 s ≈ 360 s + margin → 600 s total.
+  // Eight variants, each with one warm-up and three measured five-second runs.
   timeout: 600_000,
   expect: { timeout: 30_000 },
-  reporter: [['list']],
+  reporter: [["list"]],
   use: {
     headless: true,
-    // Disable hardware acceleration: force software rendering so all variants
-    // are measured on the same GPU/CPU surface.  Remove this flag if you want
-    // true hardware GPU numbers.
+    viewport: { width: 1280, height: 800 },
     launchOptions: {
       args: [
-        '--disable-gpu-vsync',
-        '--disable-frame-rate-limit',
-        '--no-first-run',
-        '--no-default-browser-check',
-      ],
-    },
+        "--no-first-run",
+        "--no-default-browser-check"
+      ]
+    }
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }]
 });

@@ -24,18 +24,19 @@
  * Run: node benchmarks/renderer-spike/prepare.js
  */
 
-'use strict';
+"use strict";
 
-const https = require('https');
-const http  = require('http');
-const fs    = require('fs');
-const path  = require('path');
-const { execFileSync, execSync } = require('child_process');
+const https = require("https");
+const http = require("http");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 
-const TARGET   = path.join(__dirname, 'target');
-const TARBALLS = path.join(TARGET, 'tarballs');
-const EXTRACT  = path.join(TARGET, 'extract');
-const ASSETS   = path.join(TARGET, 'assets');
+const TARGET = path.join(__dirname, "target");
+const TARBALLS = path.join(TARGET, "tarballs");
+const EXTRACT = path.join(TARGET, "extract");
+const ASSETS = path.join(TARGET, "assets");
 
 // ---------------------------------------------------------------------------
 // Packages to fetch
@@ -48,74 +49,50 @@ const ASSETS   = path.join(TARGET, 'assets');
 // ---------------------------------------------------------------------------
 const PACKAGES = [
   {
-    pkg: '@xterm/xterm', ver: '5.5.0',
-    tarFile: 'xterm-5.5.0.tgz',
-    tag: 'xterm55',
+    pkg: "@xterm/xterm", ver: "5.5.0",
+    tarFile: "xterm-5.5.0.tgz",
+    tag: "xterm-5.5.0",
     files: [
-      { from: 'lib/xterm.js',  to: 'xterm-5.5.0.js'  },
-      { from: 'css/xterm.css', to: 'xterm-5.5.0.css' },
-    ],
+      { from: "lib/xterm.js", to: "xterm-5.5.0.js" },
+      { from: "css/xterm.css", to: "xterm-5.5.0.css" }
+    ]
   },
   {
-    pkg: '@xterm/xterm', ver: '6.0.0',
-    tarFile: 'xterm-6.0.0.tgz',
-    tag: 'xterm60',
+    pkg: "@xterm/xterm", ver: "6.0.0",
+    tarFile: "xterm-6.0.0.tgz",
+    tag: "xterm-6.0.0",
     files: [
-      { from: 'lib/xterm.js',  to: 'xterm-6.0.0.js'  },
-      { from: 'css/xterm.css', to: 'xterm-6.0.0.css' },
-    ],
+      { from: "lib/xterm.js", to: "xterm-6.0.0.js" },
+      { from: "css/xterm.css", to: "xterm-6.0.0.css" }
+    ]
   },
   {
-    pkg: '@xterm/addon-webgl', ver: '0.18.0',
-    tarFile: 'addon-webgl-0.18.0.tgz',
-    tag: 'webgl5x',
+    pkg: "@xterm/addon-webgl", ver: "0.19.0",
+    tarFile: "addon-webgl-0.19.0.tgz",
+    tag: "addon-webgl-0.19.0",
     files: [
-      { from: 'lib/addon-webgl.js', to: 'addon-webgl-5x.js' },
-    ],
+      { from: "lib/addon-webgl.js", to: "addon-webgl-5x.js" }
+    ]
   },
   {
-    pkg: '@xterm/addon-webgl', ver: '0.19.0',
-    tarFile: 'addon-webgl-0.19.0.tgz',
-    tag: 'webgl6x',
+    pkg: "@xterm/addon-canvas", ver: "0.7.0",
+    tarFile: "addon-canvas-0.7.0.tgz",
+    tag: "addon-canvas-0.7.0",
     files: [
-      { from: 'lib/addon-webgl.js', to: 'addon-webgl-6x.js' },
-    ],
-  },
-  {
-    pkg: '@xterm/addon-canvas', ver: '0.7.0',
-    tarFile: 'addon-canvas-0.7.0.tgz',
-    tag: 'canvas5x',
-    files: [
-      { from: 'lib/addon-canvas.js', to: 'addon-canvas-5x.js' },
-    ],
-  },
-  {
-    pkg: '@xterm/addon-fit', ver: '0.10.0',
-    tarFile: 'addon-fit-0.10.0.tgz',
-    tag: 'fit5x',
-    files: [
-      { from: 'lib/addon-fit.js', to: 'addon-fit-5x.js' },
-    ],
-  },
-  {
-    pkg: '@xterm/addon-fit', ver: '0.11.0',
-    tarFile: 'addon-fit-0.11.0.tgz',
-    tag: 'fit6x',
-    files: [
-      { from: 'lib/addon-fit.js', to: 'addon-fit-6x.js' },
-    ],
-  },
+      { from: "lib/addon-canvas.js", to: "addon-canvas-5x.js" }
+    ]
+  }
 ];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function log(msg)  { process.stdout.write(`[prepare] ${msg}\n`); }
-function err(msg)  { process.stderr.write(`[prepare] ERROR: ${msg}\n`); }
+function log(msg) { process.stdout.write(`[prepare] ${msg}\n`); }
+function err(msg) { process.stderr.write(`[prepare] ERROR: ${msg}\n`); }
 
 function npmTarballUrl(pkg, ver) {
-  const [scope, name] = pkg.startsWith('@') ? pkg.slice(1).split('/') : [null, pkg];
+  const [scope, name] = pkg.startsWith("@") ? pkg.slice(1).split("/") : [null, pkg];
   const encodedPkg = scope ? `@${scope}%2F${name}` : name;
   const tarName = scope ? `${name}-${ver}.tgz` : `${pkg}-${ver}.tgz`;
   return `https://registry.npmjs.org/${encodedPkg}/-/${tarName}`;
@@ -126,25 +103,26 @@ function download(url, destPath) {
     const file = fs.createWriteStream(destPath);
 
     const handleRes = (res) => {
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        file.close();
-        const loc = res.headers.location;
-        const mod = loc.startsWith('https://') ? https : http;
-        mod.get(loc, handleRes).on('error', reject);
+      if ([301, 302, 307, 308].includes(res.statusCode)) {
+        file.destroy();
+        try { fs.unlinkSync(destPath); } catch {}
+        const location = new URL(res.headers.location, url).href;
+        download(location, destPath).then(resolve, reject);
         return;
       }
       if (res.statusCode !== 200) {
         file.destroy();
-        fs.unlinkSync(destPath);
+        try { fs.unlinkSync(destPath); } catch {}
         return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
       }
       res.pipe(file);
       file.on('finish', () => file.close(() => resolve(destPath)));
     };
 
-    https.get(url, handleRes).on('error', (e) => {
+    const transport = url.startsWith("https:") ? https : http;
+    transport.get(url, handleRes).on("error", (e) => {
       file.destroy();
-      try { fs.unlinkSync(destPath); } catch (_) {}
+      try { fs.unlinkSync(destPath); } catch {}
       reject(e);
     });
   });
@@ -153,17 +131,15 @@ function download(url, destPath) {
 function extract(tarPath, destDir) {
   fs.mkdirSync(destDir, { recursive: true });
   // Windows tar.exe: available since Win10 1803 and strips 'package/' prefix via --strip-components=1
-  execFileSync('tar', ['-xzf', tarPath, '-C', destDir, '--strip-components=1'], {
-    stdio: 'pipe',
+  execFileSync("tar", ["-xzf", tarPath, "-C", destDir, "--strip-components=1"], {
+    stdio: "pipe"
   });
 }
 
-function copyWithVersionComment(src, dest, pkg, ver) {
+function copyAsset(src, dest) {
   const original = fs.readFileSync(src);
-  const header = `/* Third-party: ${pkg}@${ver} — see THIRD-PARTY-NOTICES.txt */\n`;
-  // Write header + original content (no further modification).
-  // The comment identifies the source; it does NOT alter the third-party code.
-  fs.writeFileSync(dest, Buffer.concat([Buffer.from(header, 'utf8'), original]));
+  fs.writeFileSync(dest, original);
+  return crypto.createHash("sha256").update(original).digest("hex");
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +187,7 @@ async function main() {
 
     // -- Copy files to assets/ ---------------------------------------------
     for (const f of pkg.files) {
-      const srcFile  = path.join(extDir, f.from);
+      const srcFile = path.join(extDir, f.from);
       const destFile = path.join(ASSETS, f.to);
 
       if (!fs.existsSync(srcFile)) {
@@ -220,9 +196,9 @@ async function main() {
         process.exit(1);
       }
 
-      copyWithVersionComment(srcFile, destFile, pkg.pkg, pkg.ver);
+      const sha256 = copyAsset(srcFile, destFile);
       log(`  asset ready: ${f.to}`);
-      versions[f.to] = `${pkg.pkg}@${pkg.ver}`;
+      versions[f.to] = { package: `${pkg.pkg}@${pkg.ver}`, sha256 };
     }
   }
 
@@ -235,9 +211,9 @@ async function main() {
   fs.writeFileSync(
     path.join(ASSETS, 'versions.json'),
     JSON.stringify(manifest, null, 2),
-    'utf8',
+    "utf8"
   );
-  log('versions.json written');
+  log("versions.json written");
 
   // Final verification: make sure every expected asset exists.
   const expected = PACKAGES.flatMap(p => p.files.map(f => f.to));
@@ -248,7 +224,7 @@ async function main() {
   }
 
   log(`\nAll ${expected.length} assets ready in ${ASSETS}`);
-  log('Run: node node_modules/.bin/playwright test --config benchmarks/renderer-spike/playwright.config.js');
+  log("Run: npm run benchmark:renderer");
 }
 
 main().catch((e) => {
