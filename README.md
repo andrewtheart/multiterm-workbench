@@ -126,6 +126,231 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
   </tr>
 </table>
 
+## Performance
+
+MultiTerm is built to stay smooth with many live shells open at once. The work
+below is why a wall of panes streaming output still feels responsive.
+
+### GPU-accelerated rendering (WebGL)
+
+Each terminal renders through xterm's **WebGL addon**, which draws the grid on the
+GPU instead of the DOM — far faster under heavy output. The catch is that Chromium
+force-loses the *oldest* WebGL context once ~16 are live, and this xterm build's
+WebGL addon does **not** fall back to the DOM renderer when its context dies, so an
+evicted pane would go blank while its buffer still held the text. Past ~16 panes
+that turned into a rolling eviction cascade (every recovered pane evicted another),
+which showed up as white, flickering panes.
+
+So MultiTerm hands out a **bounded budget** of GPU contexts (`WEBGL_MAX_CONTEXTS = 12`).
+Panes beyond the budget simply keep xterm's DOM renderer — slower under heavy
+output but always correct — instead of fighting over contexts. The budget sits
+below Chromium's stock cap so it holds even in a plain browser tab, and both
+launchers additionally raise the ceiling with `--max-active-webgl-contexts=64` so
+terminal renderers never compete with the app's other canvases. Measured with 19
+panes open: **before**, 16 live contexts / 3 lost / panes blank; **after**, 12
+renderers / 0 lost / 0 blank.
+
+### Automatic GPU context-loss recovery
+
+If a context is genuinely lost (GPU reset, driver hiccup), the pane's renderer is
+recreated shortly after — normally ~300 ms, backing off to ~1.5 s if losses keep
+recurring in a short window — so a pane resumes drawing instead of staying frozen
+or blank.
+
+### Coalesced output — one write per frame
+
+Live shell output can arrive as hundreds of tiny WebSocket messages per second.
+Rather than paying the full write pipeline (xterm write + search bookkeeping +
+activity/prompt/notification scheduling + scroll) for every message, incoming
+chunks are queued and drained **once per animation frame**. That collapses N
+messages per frame into a single `term.write` and a single side-effect pass,
+keeping the UI responsive during noisy builds and log tails.
+
+### Coalesced fits and smarter resizing
+
+- **One fit per frame.** A single layout change can fire the `ResizeObserver`
+  (which watches both the pane and its screen) more than once; those are coalesced
+  into a single visual fit per animation frame.
+- **Deferred PTY resize during window drags.** Dragging the window fires the
+  observer dozens of times per second. The cheap visual fit still runs so panes
+  track the layout smoothly, but the actual PTY resize (WINCH) is held back and a
+  single settled size is forwarded once motion stops. The shell (PSReadLine) then
+  repaints its prompt exactly **once**, at the final width, instead of dozens of
+  times per second.
+- **Duplicate-resize dedupe.** Identical dimensions are never sent to the bridge
+  twice, so redundant resize traffic never reaches the shell.
+
+### Faster startup
+
+- **No Electron menu build.** The default application menu is disabled *before*
+  the app is ready, so Electron never spends time constructing a menu the
+  menu-less tool doesn't use.
+- **Defer non-visual work to idle.** Cosmetic and on-demand setup (click ripples,
+  the diagnostics log console binding) is deferred to a `requestIdleCallback`
+  window so it never competes with first paint, the bridge connection, or early
+  input. The first terminal becomes interactive sooner.
+
+### Cheaper background work
+
+- **On-demand memory readout.** The status-bar memory reading is genuinely
+  expensive (each sample spawns a ~1 s PowerShell CIM query), so it runs **only
+  while you're hovering the memory chip** rather than on an always-on timer. A
+  burst of hovers coalesces into a single in-flight query instead of one
+  PowerShell process per request. (Set `MEMSTATS=1` to opt back into the old
+  always-on 10-second broadcast.)
+- **Bounded scrollback.** Scrollback defaults to 20,000 lines (configurable, up to
+  1,000,000) to keep per-pane memory in check while still holding plenty of
+  history.
+- **Reflow-safe control clicks.** Activating a pane can reflow the whole layout
+  (e.g. focus-rail and master layouts promote the active pane). Re-activation is
+  skipped for clicks on pane controls so the layout doesn't shift the button out
+  from under the cursor mid-click — avoiding a wasted reflow and a missed click.
+
+## Architecture
+
+MultiTerm is a two-part system: a **front-end single-page app** (xterm.js in
+`public/`) and a **local-only bridge** process that actually owns the PowerShell
+sessions. This split exists because browser JavaScript cannot spawn or stream from
+local processes — so the bridge serves the page, accepts input over a WebSocket,
+and drives PTY-backed shells through Windows **ConPTY**.
+
+### Component topology
+
+```mermaid
+flowchart TB
+    subgraph host["Front-end host (one of two)"]
+        electron["Electron desktop<br/>main.js + preload.js<br/>(BrowserWindow, tray, updater)"]
+        browser["Plain browser<br/>(default browser window)"]
+    end
+
+    subgraph spa["Single-page app — public/app.js (xterm.js)"]
+        panes["Terminal panes<br/>xterm.js + WebGL / Fit / Search / WebLinks addons"]
+        clientstate["Client state + persistence<br/>localStorage: settings, layouts,<br/>pages, workspaces, last session"]
+    end
+
+    subgraph bridge["Local bridge — 127.0.0.1 only"]
+        direction TB
+        httpsrv["HTTP server<br/>static assets + /health"]
+        wssrv["WebSocket /ws<br/>JSON message protocol"]
+        sessions["Session registry (Map)<br/>id → PTY + metadata"]
+    end
+
+    subgraph shells["PowerShell processes"]
+        pty1["pwsh.exe / powershell.exe<br/>via ConPTY pseudo-console"]
+        elev["Elevated (admin) shell<br/>HIGH integrity"]
+    end
+
+    electron -->|"loadURL http://127.0.0.1:3177"| spa
+    browser -->|"opens bridge URL"| spa
+    electron -.->|"spawns node server.js"| bridge
+
+    panes <-->|"WebSocket JSON<br/>(input / resize ⇄ output / exited)"| wssrv
+    spa -->|"GET / (HTML, JS, CSS)"| httpsrv
+    wssrv --> sessions
+    sessions -->|"pty.spawn / write / resize"| pty1
+    pty1 -->|"onData → broadcast output"| wssrv
+
+    sessions -.->|"UAC + loopback relay"| elevhost["elevated-pty-host.js<br/>(owns elevated ConPTY)"]
+    elevhost --> elev
+```
+
+### The two interchangeable bridges
+
+The front-end speaks the same protocol to either bridge, so they are drop-in
+alternatives:
+
+| Bridge | File | PTY backend | Needs Node? | Launched by |
+| --- | --- | --- | --- | --- |
+| **Node bridge** | `server.js` | native `node-pty` (`@homebridge/node-pty-prebuilt-multiarch`) over ConPTY | Yes | Electron (`main.js` spawns `node server.js`) or `npm run server` |
+| **PowerShell bridge** | `Start-MultiTerm.ps1` | embedded C# calling ConPTY directly | No | `Start-MultiTerm.ps1` / the installer, opens your browser |
+
+Both serve the identical `public/` assets, expose the same HTTP + WebSocket
+surface, and bind to `127.0.0.1` only (remote access is off unless explicitly
+enabled). The Node bridge even hand-rolls its own RFC 6455 frame encode/decode so
+it has **zero runtime dependencies beyond `node-pty`**.
+
+### Session data flow
+
+Each terminal pane maps to one PTY-backed shell in the bridge's session registry.
+Input and output are decoupled: input is a targeted write, while output is
+**broadcast to every connected client**, so multiple windows/tabs stay in sync and
+sessions outlive any single page.
+
+```mermaid
+sequenceDiagram
+    participant UI as Pane (xterm.js)
+    participant WS as WebSocket /ws
+    participant BR as Bridge
+    participant PTY as ConPTY shell
+
+    UI->>WS: { type: "create", id, shell, cwd, cols, rows }
+    WS->>BR: handleClientMessage
+    BR->>PTY: pty.spawn(pwsh, { useConpty: true })
+    BR-->>UI: { type: "created", ...summary }
+
+    loop keystrokes
+        UI->>BR: { type: "input", id, data }
+        BR->>PTY: terminal.write(data)
+    end
+
+    loop shell output
+        PTY-->>BR: onData(chunk)
+        BR-->>UI: broadcast { type: "output", id, data }
+        Note over UI: chunks coalesced,<br/>one write per animation frame
+    end
+
+    UI->>BR: { type: "resize", id, cols, rows }
+    BR->>PTY: terminal.resize(cols, rows)
+
+    PTY-->>BR: onExit(code, signal)
+    BR-->>UI: broadcast { type: "exited", id, code }
+```
+
+**Client → bridge** messages: `create`, `input`, `resize`, `kill`, `killAll`,
+`logStart` / `logStop`, `reveal`, `openPath`, `pickScript`, `elevate`, `list`,
+`memstats`. **Bridge → client** messages: `welcome` (session catalog on connect),
+`created`, `output`, `exited`, `createFailed`, `sessions`, `memstats`, and
+`error`. On reconnect the bridge re-announces the sessions it kept alive via
+`welcome`, and the front-end re-adopts each pane instead of respawning it.
+
+> **Both bridges must stay in lock-step.** Every client → bridge message type is
+> implemented independently in `server.js` (Node) and the embedded C# of
+> `Start-MultiTerm.ps1` (PowerShell). Adding or changing a message means editing
+> both, or the bridge that lags behind answers `error: "Unsupported message type"`.
+
+### Front-end (single-page app)
+
+`public/app.js` owns all UI state in a single `state` object and renders each pane
+with an xterm.js `Terminal` plus the Fit, WebGL, Search, and WebLinks addons.
+User preferences and layout survive restarts through `localStorage` (settings,
+manual layouts, pages, per-terminal page assignment, workspaces, last session, and
+pane order). A WebSocket client with **exponential-backoff auto-reconnect** keeps
+the UI attached to the bridge; the rendering hot paths (coalesced output, coalesced
+fits, deferred resize) are described in [Performance](#performance) above.
+
+### Electron desktop shell
+
+In desktop mode, `main.js` spawns the Node bridge as a child process, waits for
+`/health`, then points a `BrowserWindow` at `http://127.0.0.1:3177/`. `preload.js`
+exposes a tiny, isolated `window.multiterm` IPC surface for the few things a page
+can't do itself: native script picker, tray/close handling, the GitHub-release
+updater, and relaunching the whole app elevated. The bridge is also **supervised**
+— if it dies unexpectedly it is respawned, with a crash-loop guard that surfaces an
+error instead of restarting forever.
+
+### Administrator terminals
+
+A UAC-elevated shell runs at **HIGH integrity**, which the medium-integrity bridge
+cannot attach a ConPTY across. So the bridge binds a loopback port, launches
+`elevated-pty-host.js` via UAC, and that helper owns the elevated shell's
+pseudo-console on the high side of the boundary and relays terminal frames back
+over the loopback socket. The helper is registered in the session map through a
+`node-pty`-compatible shim, so writes, resizes, kills, logging, and mem-stats all
+treat it like any other session. Security rests on two independent checks: a
+single-use token **and** PID verification that the loopback listener really is the
+bridge that spawned the helper — so a lower-integrity impostor can't drive the
+elevated session even if it learns the token.
+
 ## Requirements
 
 - **Windows 10 version 1809 (build 17763) or newer**, or Windows 11. This is the
