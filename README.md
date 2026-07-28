@@ -494,7 +494,8 @@ the GitHub release for you:
 # build the current version's installer only (no version change, no publish)
 .\scripts\build-installer.ps1
 
-# commit all pending changes, bump the version, build, push, and publish (needs gh)
+# commit all pending changes, bump, build, generate notes, push, and publish
+# (needs authenticated gh and GitHub Copilot CLIs)
 .\scripts\build-installer.ps1 -Push
 ```
 
@@ -508,6 +509,10 @@ It then auto-increments the version (patch by default) in `package.json`,
 `package-lock.json`, `installer\MultiTerm.iss`, and `public\app.js`, builds the
 installer, commits those version files as `chore(release): v<version>`, pushes
 the current branch, and creates a GitHub release targeting the release commit.
+Before pushing, the script invokes GitHub Copilot CLI in restricted,
+non-interactive mode to write release notes from the commits and diff since the
+previous release tag. Publishing aborts if Copilot is unavailable or cannot
+produce the notes; it does not fall back to generic GitHub-generated notes.
 
 Publish options:
 
