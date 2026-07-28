@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("../support/renderer-coverage");
 
 // The PID pill is the only place a session's identity surfaces, but a PID alone
 // does not tell you which of several similar shells you are looking at. Hovering

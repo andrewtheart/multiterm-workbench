@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 // Verifies every settings-panel control updates state AND produces its effect.
 test.describe.configure({ mode: "serial" });
@@ -28,6 +28,7 @@ test.describe("Settings panel verification", () => {
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({ baseURL: "http://127.0.0.1:3199" });
     page = await context.newPage();
+    await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     // Reset to exactly one fresh terminal so this file is independent of any
@@ -37,7 +38,10 @@ test.describe("Settings panel verification", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
   });
 
-  test.afterAll(async () => { await context.close(); });
+  test.afterAll(async () => {
+    await stopRendererCoverage(page, "settings-verify");
+    await context.close();
+  });
 
   // Set a native control's value + dispatch its bound event.
   const set = (selector, value, eventName) => page.evaluate(({ selector, value, eventName }) => {

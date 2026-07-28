@@ -27,7 +27,7 @@
 // budget allows and pin down the two properties that matter: we never
 // over-subscribe the GPU, and no pane is ever left blank.
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 test.describe.configure({ mode: "serial" });
 
@@ -60,6 +60,7 @@ test.describe("WebGL renderer budget", () => {
       viewport: { width: 1400, height: 900 }
     });
     page = await context.newPage();
+    await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
 
@@ -83,6 +84,7 @@ test.describe("WebGL renderer budget", () => {
   test.afterAll(async () => {
     await page.evaluate(() => closeAllTerminals());
     await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(0);
+    await stopRendererCoverage(page, "webgl-budget");
     await context.close();
   });
 

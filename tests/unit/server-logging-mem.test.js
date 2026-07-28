@@ -310,6 +310,19 @@ describe("pickScript", () => {
     expect(args[args.length - 1]).toContain("C:\\work");
   });
 
+  it("falls back to the process directory and omits a non-directory picker path", () => {
+    setPlatform("win32");
+    const statSync = vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => false });
+    const picker = fakePicker();
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(picker);
+
+    server.pickScript(fakeClient(), { requestId: "no-cwd" });
+
+    expect(statSync).toHaveBeenCalledWith(process.cwd());
+    const script = spawn.mock.calls[0][1].at(-1);
+    expect(script).not.toContain("InitialDirectory");
+  });
+
   it("returns the chosen path once the picker closes", () => {
     setPlatform("win32");
     vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });

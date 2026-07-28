@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 // Exhaustive verification of every command-palette option and every settings
 // control. Runs against `node server.js` (the browser build) on :3199, so
@@ -36,6 +36,7 @@ test.describe("Command palette + settings verification", () => {
       permissions: ["clipboard-read", "clipboard-write"]
     });
     page = await context.newPage();
+    await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     // Reset to exactly one fresh terminal so this file is independent of any
@@ -45,7 +46,10 @@ test.describe("Command palette + settings verification", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
   });
 
-  test.afterAll(async () => { await context.close(); });
+  test.afterAll(async () => {
+    await stopRendererCoverage(page, "palette-verify");
+    await context.close();
+  });
 
   // Run a palette command by exact label; returns whether it ran without throwing.
   const runCmd = (label) => page.evaluate((label) => {
@@ -121,7 +125,7 @@ test.describe("Command palette + settings verification", () => {
     expect(await size(), `${label} must not add a terminal`).toBe(before);
   });
 
-  test("opens the native script picker on an interactive Windows host", async () => {
+  test("opens the native script picker on an interactive Windows host @full", async () => {
     test.skip(
       !CAN_SHOW_NATIVE_FILE_DIALOG,
       "Requires a local interactive Windows desktop; native dialogs are unavailable in CI."

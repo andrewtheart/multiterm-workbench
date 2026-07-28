@@ -36,7 +36,7 @@
   } else {
     root.InputPromptDetector = api;
   }
-})(typeof self !== "undefined" ? self : this, function () {
+})(globalThis, function () {
   "use strict";
 
   // CSI / SGR escape sequences (colours, cursor moves, ...).

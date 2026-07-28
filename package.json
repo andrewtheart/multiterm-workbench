@@ -1,6 +1,6 @@
 {
   "name": "multiterm-workbench",
-  "version": "0.1.29",
+  "version": "0.1.30",
   "private": true,
   "description": "Local xterm.js multi-terminal workbench for PowerShell sessions.",
   "license": "GPL-3.0-or-later",
@@ -12,10 +12,14 @@
     "benchmark:renderer": "node benchmarks/renderer-spike/prepare.js && playwright test --config benchmarks/renderer-spike/playwright.config.js",
     "benchmark:renderer:headed": "node benchmarks/renderer-spike/prepare.js && playwright test --config benchmarks/renderer-spike/playwright.config.js --headed",
     "benchmark:search-wasm": "node --expose-gc benchmarks/search-index-wasm/run.js",
-    "test": "vitest run",
+    "test": "npm run test:iterative",
+    "test:unit": "vitest run",
+    "test:iterative": "npm run test:unit && npm run test:e2e",
+    "test:full": "npm run test:coverage && npm run test:e2e:full",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:full": "playwright test --config playwright.full.config.js"
   },
   "engines": {
     "node": ">=18"

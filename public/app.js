@@ -24,6 +24,7 @@ const defaultSettings = {
   columns: 2,
   compactChrome: false,
   copyOnSelect: false,
+  ctrlVPaste: true,
   cursorBlink: true,
   cursorStyle: "bar",
   focusWidth: 65,
@@ -32,12 +33,14 @@ const defaultSettings = {
   gap: 10,
   headerHidden: false,
   highlightInputPrompts: true,
+  keepSessionsOnClose: true,
   layout: "auto",
   minimizedScope: "page",
   minWidth: 420,
   notifyActivity: false,
   notifySilence: false,
   paneHeight: 320,
+  cleanCopilotClipboard: true,
   restoreSession: false,
   rightClickAction: "menu",
   rightClickAck: "",
@@ -66,7 +69,7 @@ const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94
 const PANE_OVERFLOW_WIDTH = 600;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.29";
+const APP_VERSION = "0.1.30";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 
@@ -204,7 +207,9 @@ const elements = {
   compactChrome: document.querySelector("#compactChrome"),
   contextMenu: document.querySelector("#contextMenu"),
   controlPanel: document.querySelector(".control-panel"),
+  cleanCopilotClipboard: document.querySelector("#cleanCopilotClipboard"),
   copyOnSelect: document.querySelector("#copyOnSelect"),
+  ctrlVPaste: document.querySelector("#ctrlVPaste"),
   cursorBlink: document.querySelector("#cursorBlink"),
   cursorStyle: document.querySelector("#cursorStyle"),
   cwdInput: document.querySelector("#cwdInput"),
@@ -221,6 +226,7 @@ const elements = {
   helpFrame: document.querySelector("#helpFrame"),
   highlightInputPrompts: document.querySelector("#highlightInputPrompts"),
   host: document.querySelector("#terminalHost"),
+  keepSessionsOnClose: document.querySelector("#keepSessionsOnClose"),
   layoutMode: document.querySelector("#layoutMode"),
   logClear: document.querySelector("#logClear"),
   logClose: document.querySelector("#logClose"),
@@ -450,6 +456,9 @@ window.addEventListener("beforeunload", () => {
   saveSettings();
   saveManualLayouts();
   saveSessionSnapshot();
+  if (!state.settings.keepSessionsOnClose) {
+    sendBridge({ type: "killAll" });
+  }
 });
 
 function bindControls() {
@@ -468,6 +477,9 @@ function bindControls() {
   elements.cursorBlink.checked = state.settings.cursorBlink;
   elements.compactChrome.checked = state.settings.compactChrome;
   elements.syncInput.checked = state.settings.syncInput;
+  elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
+  elements.cleanCopilotClipboard.checked = state.settings.cleanCopilotClipboard;
+  elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
@@ -555,6 +567,9 @@ function bindControls() {
   bindSetting(elements.cursorBlink, "cursorBlink", "change", (_, element) => element.checked);
   bindSetting(elements.compactChrome, "compactChrome", "change", (_, element) => element.checked);
   bindSetting(elements.syncInput, "syncInput", "change", (_, element) => element.checked);
+  bindSetting(elements.ctrlVPaste, "ctrlVPaste", "change", (_, element) => element.checked);
+  bindSetting(elements.cleanCopilotClipboard, "cleanCopilotClipboard", "change", (_, element) => element.checked);
+  bindSetting(elements.keepSessionsOnClose, "keepSessionsOnClose", "change", (_, element) => element.checked);
   bindSetting(elements.restoreSession, "restoreSession", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
   bindSetting(elements.highlightInputPrompts, "highlightInputPrompts", "change", (_, element) => element.checked);
@@ -610,8 +625,8 @@ function bindSetting(element, key, eventName, transform) {
   });
 }
 
-function connectBridge() {
-  if (window.location.protocol === "file:") {
+function connectBridge(locationProtocol = window.location.protocol) {
+  if (locationProtocol === "file:") {
     setBridgeStatus("Open via bridge", "offline");
     log.warn("bridge", "Opened from file:// protocol; bridge unavailable");
     return;
@@ -620,7 +635,7 @@ function connectBridge() {
   window.clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const protocol = locationProtocol === "https:" ? "wss:" : "ws:";
   const url = `${protocol}//${window.location.host}/ws`;
   const reconnecting = state.reconnectAttempts > 0;
   log.info("bridge", `${reconnecting ? "Reconnecting" : "Connecting"} to ${url}`);
@@ -705,13 +720,20 @@ function handleBridgeMessage(message) {
 
     if (Array.isArray(message.sessions) && message.sessions.length > 0) {
       const known = new Set();
+      const savedMetadata = new Map(
+        loadSessionSnapshot()
+          .filter((entry) => entry && entry.id)
+          .map((entry) => [entry.id, entry])
+      );
       for (const session of orderSessionsBySavedArrangement(message.sessions)) {
         known.add(session.id);
         const existing = state.terminals.get(session.id);
         if (existing) {
           reattachExistingSession(existing, session);
         } else {
-          addTerminal({ reattach: true, session });
+          const savedMeta = savedMetadata.get(session.id) || null;
+          const restored = addTerminal({ reattach: true, session, savedMeta });
+          if (savedMeta?.minimized && restored) minimizeTerminal(restored.id);
         }
       }
       // Any terminal we still hold that the bridge no longer lists must have
@@ -915,8 +937,9 @@ function addTerminal(options = {}) {
   }
 
   const session = options.session || {};
+  const savedMeta = options.savedMeta || null;
   const id = session.id || createId();
-  const title = session.title || options.title || `PowerShell ${state.nextIndex}`;
+  const title = savedMeta?.title || session.title || options.title || `PowerShell ${state.nextIndex}`;
   const pane = elements.paneTemplate.content.firstElementChild.cloneNode(true);
   const screen = pane.querySelector(".terminal-screen");
   const titleInput = pane.querySelector(".pane-title");
@@ -958,7 +981,7 @@ function addTerminal(options = {}) {
   term.open(screen);
 
   const terminal = {
-    color: options.color || session.color || null,
+    color: savedMeta?.color || options.color || session.color || null,
     contextSelection: "",
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
@@ -980,12 +1003,13 @@ function addTerminal(options = {}) {
     lastSentCols: 0,
     lastSentRows: 0,
     pid: session.pid,
-    pageId: resolvePageId(options.pageId || session.pageId, id),
+    pageId: resolvePageId(savedMeta?.pageId || options.pageId || session.pageId, id),
     remoteRequested: Boolean(options.reattach),
     runStartup: Boolean(options.runStartup),
     searchAddon,
     searchText: "",
     selectionClearTimer: 0,
+    selectionSnapshotPosition: null,
     selectionSnapshot: "",
     webglAddon: null,
     webglLossTimes: [],
@@ -1049,13 +1073,16 @@ function addTerminal(options = {}) {
     window.clearTimeout(terminal.selectionClearTimer);
     if (selection) {
       terminal.selectionSnapshot = selection;
+      terminal.selectionSnapshotPosition = term.getSelectionPosition();
     } else {
-      // xterm clears a TUI selection immediately before dispatching the right
-      // pointer event. Defer clearing so that event can preserve the snapshot.
+      // A mouse-aware TUI can clear xterm's selection between the right-button
+      // press and the contextmenu event. Keep the last selection long enough for
+      // that complete click sequence; opening the menu consumes it immediately.
       terminal.selectionClearTimer = window.setTimeout(() => {
         terminal.selectionClearTimer = 0;
         terminal.selectionSnapshot = "";
-      }, 0);
+        terminal.selectionSnapshotPosition = null;
+      }, 500);
     }
 
     if (selection && state.settings.copyOnSelect) {
@@ -1115,8 +1142,6 @@ function addTerminal(options = {}) {
 
 function bindTerminalKeyHandling(terminal) {
   terminal.term.element?.addEventListener("keydown", (event) => {
-    if (event.type !== "keydown") return;
-
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyA") {
       event.preventDefault();
       event.stopPropagation();
@@ -1128,6 +1153,15 @@ function bindTerminalKeyHandling(terminal) {
       event.preventDefault();
       event.stopPropagation();
       sendBridge({ type: "input", id: terminal.id, data: "\x03" });
+      return;
+    }
+
+    if (state.settings.ctrlVPaste
+        && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
+        && event.code === "KeyV") {
+      event.preventDefault();
+      event.stopPropagation();
+      pasteIntoTerminal(terminal.id);
       return;
     }
 
@@ -1143,19 +1177,52 @@ function bindTerminalSelectionHandling(terminal) {
   const element = terminal.term.element;
   if (!element) return;
 
+  const captureContextSelection = () => {
+    window.clearTimeout(terminal.selectionClearTimer);
+    terminal.selectionClearTimer = 0;
+    const liveSelection = terminal.term.getSelection();
+    terminal.contextSelection = liveSelection
+      || terminal.contextSelection
+      || terminal.selectionSnapshot;
+    if (!liveSelection && terminal.contextSelection && terminal.selectionSnapshotPosition) {
+      const { start, end } = terminal.selectionSnapshotPosition;
+      const length = ((end.y - start.y) * terminal.term.cols) + end.x - start.x;
+      if (length > 0) terminal.term.select(start.x, start.y, length);
+    }
+  };
+
   element.addEventListener("pointerdown", (event) => {
     if (event.button === 0) {
       window.clearTimeout(terminal.selectionClearTimer);
       terminal.selectionClearTimer = 0;
       terminal.selectionSnapshot = "";
+      terminal.selectionSnapshotPosition = null;
       terminal.contextSelection = "";
-    } else if (event.button === 2) {
-      // Mouse-aware TUIs clear xterm's live selection before this event reaches
-      // us. The snapshot was captured when the selection drag ended.
-      window.clearTimeout(terminal.selectionClearTimer);
-      terminal.selectionClearTimer = 0;
-      terminal.contextSelection = terminal.term.getSelection() || terminal.selectionSnapshot;
     }
+  }, true);
+
+  const isTerminalGesture = (event) => Boolean(event.target.closest(".xterm"));
+  const captureRightButton = (event) => {
+    if (event.button !== 2 || !isTerminalGesture(event)) return;
+    captureContextSelection();
+    // Bind on the pane, which is above xterm in the capture path. Stopping at
+    // xterm's own element is too late when its mouse protocol listener also runs
+    // in capture phase.
+    event.stopImmediatePropagation();
+  };
+
+  terminal.pane.addEventListener("pointerdown", captureRightButton, true);
+  terminal.pane.addEventListener("mousedown", captureRightButton, true);
+
+  // xterm installs its own contextmenu handler on this element. Handle the
+  // gesture from the pane capture boundary so xterm cannot move/select its
+  // hidden textarea (or let a mouse-aware TUI discard the selection) first.
+  terminal.pane.addEventListener("contextmenu", (event) => {
+    if (!isTerminalGesture(event)) return;
+    captureContextSelection();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openTerminalContextMenu(event, terminal);
   }, true);
 
   element.addEventListener("pointerup", (event) => {
@@ -1163,6 +1230,7 @@ function bindTerminalSelectionHandling(terminal) {
     window.clearTimeout(terminal.selectionClearTimer);
     terminal.selectionClearTimer = 0;
     terminal.selectionSnapshot = terminal.term.getSelection();
+    terminal.selectionSnapshotPosition = terminal.term.getSelectionPosition() || null;
   }, true);
 }
 
@@ -2228,7 +2296,7 @@ function handleOutputNotifications(terminal) {
   if (state.settings.notifyActivity && isBackground && !inStartupGrace) {
     if (!terminal.lastActivityNotify || now - terminal.lastActivityNotify > 8000) {
       terminal.lastActivityNotify = now;
-      notifyDesktop(`Activity in ${terminal.titleInput.value || "terminal"}`);
+      notifyDesktop(`Activity in ${terminal.titleInput.value || "terminal"}`, terminal);
     }
   }
 
@@ -2240,18 +2308,36 @@ function handleOutputNotifications(terminal) {
       if (!terminal.hadOutput) return;
       terminal.hadOutput = false;
       if (terminal.id !== state.activeId || document.hidden) {
-        notifyDesktop(`${terminal.titleInput.value || "Terminal"} is idle`);
+        notifyDesktop(`${terminal.titleInput.value || "Terminal"} is idle`, terminal);
       }
     }, seconds * 1000);
   }
 }
 
-function notifyDesktop(body) {
+function focusNotifiedTerminal(terminal) {
+  try {
+    window.multiterm?.focusWindow?.();
+  } catch { /* not running under Electron */ }
+  window.focus();
+  if (!terminal || !state.terminals.has(terminal.id)) return;
+  if (terminal.pageId !== state.activePageId) setActivePage(terminal.pageId, { focusTerm: false });
+  setActiveTerminal(terminal.id);
+  terminal.term.focus();
+}
+
+function notifyDesktop(body, terminal = null) {
   toast(body, "info", 2600);
   if (!("Notification" in window)) return;
   if (Notification.permission === "granted") {
     try {
-      new Notification("MultiTerm", { body });
+      const notification = new Notification("MultiTerm", {
+        body,
+        tag: terminal ? `multiterm-${terminal.id}` : undefined
+      });
+      notification.onclick = () => {
+        focusNotifiedTerminal(terminal);
+        notification.close?.();
+      };
     } catch {
       /* ignore */
     }
@@ -3674,6 +3760,18 @@ function bindQuickSwitch() {
 
 /* ---------------- Global keyboard shortcuts --------------- */
 
+function handleShortcutsOverlayKey(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeShortcuts();
+  }
+}
+
+function dismissUpdateDialogFromKey(event) {
+  event.preventDefault();
+  dismissUpdateDialog();
+}
+
 function bindGlobalShortcuts() {
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
@@ -3697,18 +3795,13 @@ function bindGlobalShortcuts() {
     }
 
     if (!elements.shortcutsOverlay.hidden) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeShortcuts();
-      }
+      handleShortcutsOverlayKey(event);
       return;
     }
 
     if (elements.updateOverlay && !elements.updateOverlay.hidden) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        dismissUpdateDialog();
-      }
+      if (event.key !== "Escape") return;
+      dismissUpdateDialogFromKey(event);
       return;
     }
 
@@ -4528,11 +4621,25 @@ function buildScriptCommand(terminal, scriptPath) {
 
 /* ---------------- Paste --------------- */
 
+// Copilot CLI's bordered output can put an ASCII pipe at the end of every copied
+// line. Only clean multi-line clipboard text when most non-empty lines carry the
+// border, which avoids changing ordinary shell commands such as `command |`.
+function normalizeClipboardText(text) {
+  if (!state.settings.cleanCopilotClipboard || typeof text !== "string") return text;
+  const lines = text.split(/\r\n|\n|\r/);
+  const content = lines.filter((line) => line.trim().length > 0);
+  if (content.length < 2) return text;
+  const bordered = content.filter((line) => /\|[ \t]*$/.test(line)).length;
+  if (bordered / content.length < 0.6) return text;
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  return lines.map((line) => line.replace(/[ \t]*\|[ \t]*$/, "")).join(newline);
+}
+
 async function pasteIntoTerminal(id) {
   if (!id || !state.terminals.has(id)) return;
   try {
-    const text = await navigator.clipboard.readText();
-    if (text) sendBridge({ type: "input", id, data: text });
+    const text = normalizeClipboardText(await navigator.clipboard.readText());
+    if (text) state.terminals.get(id).term.paste(text);
   } catch {
     toast("Clipboard unavailable", "error");
   }
@@ -4566,9 +4673,10 @@ function handleRightClickPaste(terminal, action) {
 async function performRightClickPaste(id, execute) {
   if (!id || !state.terminals.has(id)) return;
   try {
-    const text = await navigator.clipboard.readText();
+    const text = normalizeClipboardText(await navigator.clipboard.readText());
     if (!text) return;
-    sendBridge({ type: "input", id, data: execute ? `${text}\r` : text });
+    state.terminals.get(id).term.paste(text);
+    if (execute) sendBridge({ type: "input", id, data: "\r" });
   } catch {
     toast("Clipboard unavailable", "error");
   }
@@ -4676,6 +4784,9 @@ function cancelAppClose() {
 
 // Relays the decision to the Electron main process. No-op in a plain browser.
 function finishAppClose(action) {
+  if (action !== "cancel" && !state.settings.keepSessionsOnClose) {
+    closeAllTerminals();
+  }
   try {
     window.multiterm?.respondClose?.(action);
   } catch { /* not running under Electron */ }
@@ -5219,6 +5330,9 @@ function syncControlsFromSettings() {
   elements.cursorBlink.checked = state.settings.cursorBlink;
   elements.compactChrome.checked = state.settings.compactChrome;
   elements.syncInput.checked = state.settings.syncInput;
+  elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
+  elements.cleanCopilotClipboard.checked = state.settings.cleanCopilotClipboard;
+  elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
@@ -5263,15 +5377,8 @@ function handleBell(terminal) {
 
   const name = terminal.titleInput.value || "Terminal";
   if (terminal.id !== state.activeId || document.hidden) {
-    toast(`🔔 ${name}`, "info", 2600);
     markActivity(terminal, true);
-    if ("Notification" in window && Notification.permission === "granted") {
-      try {
-        new Notification("MultiTerm", { body: `Bell in ${name}` });
-      } catch {
-        /* ignore */
-      }
-    }
+    notifyDesktop(`Bell in ${name}`, terminal);
   }
 }
 
@@ -5279,6 +5386,7 @@ function handleBell(terminal) {
 
 function saveSessionSnapshot() {
   const snapshot = [...state.terminals.values()].map((terminal) => ({
+    id: terminal.id,
     title: terminal.titleInput.value,
     shell: terminal.shell,
     cwd: terminal.cwd,
@@ -5754,18 +5862,7 @@ function bindContextMenu() {
     if (!terminal) return;
 
     event.preventDefault();
-    setActiveTerminal(terminal.id);
-
-    const selection = terminal.term.getSelection() || terminal.contextSelection;
-    terminal.contextSelection = "";
-    terminal.selectionSnapshot = "";
-
-    const action = state.settings.rightClickAction;
-    if (action === "paste" || action === "pasteRun") {
-      handleRightClickPaste(terminal, action);
-    } else {
-      showContextMenu(event.clientX, event.clientY, terminal, selection);
-    }
+    openTerminalContextMenu(event, terminal);
   });
 
   document.addEventListener("pointerdown", (event) => {
@@ -5779,6 +5876,39 @@ function bindContextMenu() {
   window.addEventListener("blur", hideContextMenu);
   window.addEventListener("resize", hideContextMenu);
   elements.host.addEventListener("scroll", hideContextMenu, true);
+}
+
+function openTerminalContextMenu(event, terminal) {
+  setActiveTerminal(terminal.id);
+
+  const selection = terminal.term.getSelection()
+    || terminal.contextSelection
+    || terminal.selectionSnapshot;
+  const selectionPosition = terminal.term.getSelectionPosition()
+    || terminal.selectionSnapshotPosition;
+  terminal.contextSelection = "";
+  terminal.selectionSnapshot = "";
+  terminal.selectionSnapshotPosition = null;
+  window.clearTimeout(terminal.selectionClearTimer);
+  terminal.selectionClearTimer = 0;
+
+  const action = state.settings.rightClickAction;
+  if (action === "paste" || action === "pasteRun") {
+    handleRightClickPaste(terminal, action);
+  } else {
+    showContextMenu(event.clientX, event.clientY, terminal, selection);
+    // xterm's own right-click listener can clear the live highlight later in
+    // this same event dispatch even though the menu already captured its text.
+    // Restore it after propagation completes so the menu and highlight agree.
+    if (selection && selectionPosition) {
+      window.queueMicrotask(() => {
+        if (terminal.term.getSelection()) return;
+        const { start, end } = selectionPosition;
+        const length = ((end.y - start.y) * terminal.term.cols) + end.x - start.x;
+        if (length > 0) terminal.term.select(start.x, start.y, length);
+      });
+    }
+  }
 }
 
 // Offers the other pages plus a "new page" escape hatch, so a pane can always be
@@ -5856,6 +5986,21 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { separator: true },
     { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
+    {
+      input: true,
+      label: "Copilot model",
+      icon: "bot",
+      placeholder: "model name",
+      run: (value) => sendTerminalSlashCommand(terminal, "model", value)
+    },
+    {
+      input: true,
+      label: "Copilot CWD",
+      icon: "folder-input",
+      placeholder: terminal.cwd || "path",
+      value: terminal.cwd || "",
+      run: (value) => sendTerminalSlashCommand(terminal, "cwd", value)
+    },
     { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
     { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScript(terminal.id) },
     ...buildLoggingMenuItems(terminal),
@@ -5870,6 +6015,12 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   ];
 
   renderContextMenu(items);
+}
+
+function sendTerminalSlashCommand(terminal, command, rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!terminal || !value) return;
+  sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
 }
 
 // "Here" on the blank surface means the folder you were last working in, which
@@ -6030,6 +6181,39 @@ function renderContextMenu(items) {
     icon.setAttribute("data-lucide", item.icon);
     el.append(icon);
 
+    if (item.input) {
+      el.classList.add("ctx-input-row");
+      el.setAttribute("role", "presentation");
+      const field = document.createElement("label");
+      field.className = "ctx-command-field";
+      const caption = document.createElement("span");
+      caption.textContent = item.label;
+      const input = document.createElement("input");
+      input.className = "ctx-command-input";
+      input.type = "text";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.placeholder = item.placeholder || "";
+      input.value = item.value || "";
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter" && !event.isComposing) {
+          event.preventDefault();
+          const value = input.value.trim();
+          if (!value) return;
+          hideContextMenu();
+          item.run(value);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          hideContextMenu();
+        }
+      });
+      field.append(caption, input);
+      el.append(field);
+      elements.contextMenu.append(el);
+      continue;
+    }
+
     // A row can carry several independent actions (the logging row offers both the
     // log file and a stop control), in which case the row itself is not clickable
     // and each part handles its own activation.
@@ -6153,6 +6337,7 @@ function moveContextFocus(delta) {
 // leak into the terminal underneath.
 function onContextMenuKeydown(event) {
   if (elements.contextMenu.hidden) return;
+  if (event.target instanceof Element && event.target.closest(".ctx-command-input")) return;
   const key = event.key;
   const stop = () => {
     event.preventDefault();
@@ -6457,7 +6642,7 @@ function enhanceSelect(select) {
   const close = () => {
     if (!box.open) return;
     box.open = false;
-    if (openCombo === api) openCombo = null;
+    openCombo = null;
     wrap.classList.remove("is-open");
     input.setAttribute("aria-expanded", "false");
     list.hidden = true;

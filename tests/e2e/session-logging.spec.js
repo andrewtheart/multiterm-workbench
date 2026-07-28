@@ -21,7 +21,7 @@
 // file being written and offer opening it and stopping, as two separate actions
 // on one row.
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 test.describe.configure({ mode: "serial" });
 
@@ -36,6 +36,7 @@ test.describe("Session logging", () => {
       viewport: { width: 1400, height: 900 }
     });
     page = await context.newPage();
+    await startRendererCoverage(page);
     page.on("pageerror", (err) => errors.push(String(err.message || err)));
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -52,6 +53,7 @@ test.describe("Session logging", () => {
       const terminal = state.terminals.get(state.activeId);
       if (terminal && terminal.logging) toggleLogging(terminal);
     });
+    await stopRendererCoverage(page, "session-logging");
     await context.close();
   });
 

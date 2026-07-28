@@ -20,7 +20,7 @@
 // re-attaches the sessions the server kept alive — so the UI recovers on its
 // own instead of staying stuck offline until a manual page reload.
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 test.describe.configure({ mode: "serial" });
 
@@ -54,12 +54,14 @@ test.describe("Bridge auto-reconnect", () => {
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({ baseURL: "http://127.0.0.1:3199" });
     page = await context.newPage();
+    await startRendererCoverage(page);
     page.on("pageerror", (err) => pageErrors.push(String(err.message || err)));
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
   });
 
   test.afterAll(async () => {
+    await stopRendererCoverage(page, "bridge-reconnect");
     await context.close();
   });
 

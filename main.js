@@ -42,9 +42,12 @@ const PORT = Number(process.env.PORT || 3177);
 // ceiling keeps terminal renderers from competing with each other (and with the
 // app's other canvases) on machines running many panes. app.js still enforces its
 // own, lower budget, so this is headroom rather than something we depend on.
-if (app?.commandLine?.appendSwitch) {
-  app.commandLine.appendSwitch("max-active-webgl-contexts", "64");
+function configureChromiumCommandLine(targetApp = app) {
+  if (targetApp?.commandLine?.appendSwitch) {
+    targetApp.commandLine.appendSwitch("max-active-webgl-contexts", "64");
+  }
 }
+configureChromiumCommandLine();
 
 // Whether this process is already elevated (administrator). Cached after a
 // one-time check so "Restart as Administrator" can short-circuit.
@@ -237,9 +240,13 @@ function registerCloseHandler() {
   if (!ipcMain || typeof ipcMain.on !== "function") return;
   if (typeof ipcMain.removeAllListeners === "function") {
     ipcMain.removeAllListeners("multiterm:close-response");
+    ipcMain.removeAllListeners("multiterm:focus-window");
   }
   ipcMain.on("multiterm:close-response", (_event, action) => {
     handleCloseResponse(action);
+  });
+  ipcMain.on("multiterm:focus-window", () => {
+    showMainWindow();
   });
 }
 
@@ -452,12 +459,15 @@ function pickInstallerAsset(assets) {
   const list = Array.isArray(assets) ? assets : [];
   const executables = list.filter((asset) => /\.exe$/i.test(asset?.name || "") && asset?.browser_download_url);
   const installer = executables.find((asset) => /setup|install/i.test(asset.name)) || executables[0];
-  if (!installer) return null;
-  return {
-    name: installer.name,
-    url: installer.browser_download_url,
-    size: Number(installer.size) || 0
-  };
+  if (!installer) {
+    return null;
+  } else {
+    return {
+      name: installer.name,
+      url: installer.browser_download_url,
+      size: Number(installer.size) || 0
+    };
+  }
 }
 
 function normalizeRelease(data) {
@@ -503,7 +513,7 @@ function downloadUpdate(asset, onProgress) {
 
   let tempDir;
   try {
-    tempDir = app?.getPath ? app.getPath("temp") : os.tmpdir();
+    tempDir = app.getPath("temp");
   } catch {
     tempDir = os.tmpdir();
   }
@@ -534,17 +544,20 @@ function downloadUpdate(asset, onProgress) {
 // Hands off to the downloaded installer. Spawned detached so it survives the
 // app quitting out from under it (the installer replaces these very files).
 function runInstaller(filePath) {
-  if (!filePath) return false;
-  try {
-    const child = childProcess.spawn(filePath, [], { detached: true, stdio: "ignore" });
-    child.unref();
-    return true;
-  } catch {
+  if (!filePath) {
+    return false;
+  } else {
     try {
-      shell.openPath(filePath);
+      const child = childProcess.spawn(filePath, [], { detached: true, stdio: "ignore" });
+      child.unref();
       return true;
     } catch {
-      return false;
+      try {
+        shell.openPath(filePath);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 }
@@ -586,8 +599,9 @@ function registerUpdateIpc() {
         app.isQuiting = true;
         setTimeout(() => app.quit(), 1200);
         return { ok: true, path: file };
+      } else {
+        return { ok: false, path: file, error: "Downloaded, but the installer could not be launched." };
       }
-      return { ok: false, path: file, error: "Downloaded, but the installer could not be launched." };
     } catch (err) {
       return { ok: false, error: formatError(err) };
     }
@@ -609,6 +623,8 @@ function bootstrap() {
   if (!gotLock) {
     app.quit();
     return;
+  } else {
+    // Continue bootstrapping the sole application instance.
   }
 
   // Perf (Electron guideline #8): disable the default application menu *before*
@@ -618,8 +634,14 @@ function bootstrap() {
 
   app.on("second-instance", () => {
     if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      } else {
+        // The visible window only needs focus.
+      }
       mainWindow.focus();
+    } else {
+      // Readiness has not created the first window yet.
     }
   });
 
@@ -653,14 +675,18 @@ module.exports = {
   registerCloseHandler,
   registerAdminIpc,
   registerUpdateIpc,
+  configureChromiumCommandLine,
   compareVersions,
   getCurrentVersion,
   pickInstallerAsset,
   normalizeRelease,
+  openHttpsStream,
+  readStream,
   fetchLatestRelease,
   checkForUpdate,
   downloadUpdate,
   runInstaller,
+  sendUpdateProgress,
   ensureElevationChecked,
   relaunchAsAdmin,
   onReady,

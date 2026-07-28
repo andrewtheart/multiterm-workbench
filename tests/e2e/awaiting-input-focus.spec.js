@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("../support/renderer-coverage");
 
 // The awaiting-input treatment (keyboard pill + yellow border + glow) exists to
 // pull your eye towards a terminal you are *not* watching. On the pane you are

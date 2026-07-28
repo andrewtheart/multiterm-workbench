@@ -21,7 +21,7 @@
 // pager UI, what happens to terminals when a page is closed, that the split
 // survives a reload, and the Alt+Q quick switcher's key assignment and jumping.
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 test.describe.configure({ mode: "serial" });
 
@@ -36,6 +36,7 @@ test.describe("Pages and the quick switcher", () => {
       viewport: { width: 1400, height: 900 }
     });
     page = await context.newPage();
+    await startRendererCoverage(page);
     page.on("pageerror", (err) => errors.push(String(err.message || err)));
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -46,6 +47,7 @@ test.describe("Pages and the quick switcher", () => {
     // start from an empty one, so drain it rather than just closing the page.
     await page.evaluate(() => closeAllTerminals());
     await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(0);
+    await stopRendererCoverage(page, "pages");
     await context.close();
   });
 
@@ -185,11 +187,15 @@ test.describe("Pages and the quick switcher", () => {
   test("the page split and each terminal's page survive a reload", async () => {
     await reset(4);
     const target = await page.evaluate(() => addPage({ name: "Builds", activate: false }));
-    await page.evaluate(
-      (pid) => [...state.terminals.keys()].slice(0, 3).forEach((tid) => moveTerminalToPage(tid, pid)),
-      target
-    );
-    expect(await perPage()).toEqual(["Page 1=1", "Builds=3"]);
+    const renamedId = await page.evaluate((pid) => {
+      const terminals = [...state.terminals.values()];
+      terminals.slice(0, 3).forEach((terminal) => moveTerminalToPage(terminal.id, pid));
+      terminals[0].titleInput.value = "Custom build terminal";
+      terminals[0].titleInput.dispatchEvent(new Event("change", { bubbles: true }));
+      renamePage(pid, "Release builds");
+      return terminals[0].id;
+    }, target);
+    expect(await perPage()).toEqual(["Page 1=1", "Release builds=3"]);
 
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -200,8 +206,9 @@ test.describe("Pages and the quick switcher", () => {
       .poll(() => page.evaluate(() => state.pages.length), { timeout: 10000 })
       .toBe(2);
 
-    await expect.poll(perPage, { timeout: 15000 }).toEqual(["Page 1=1", "Builds=3"]);
+    await expect.poll(perPage, { timeout: 15000 }).toEqual(["Page 1=1", "Release builds=3"]);
     await expect(page.locator(".terminal-pane.is-page-hidden")).toHaveCount(3);
+    expect(await page.evaluate((id) => state.terminals.get(id)?.titleInput.value, renamedId)).toBe("Custom build terminal");
     // No orphaned ids left behind in the remembered map.
     expect(
       await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem("multiterm.terminalPages"))).length)

@@ -16,6 +16,9 @@ installer/Output/
 deploy/
 .github/prompts/deploy-to-azurestaticsite.prompt.md
 
+# Local plans
+plans/
+
 # Test & coverage artifacts
 coverage/
 test-results/

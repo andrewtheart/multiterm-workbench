@@ -27,7 +27,7 @@
 // observable DOM/state effect for each command, plus guard against any
 // uncaught JS error (pageerror) for every single command.
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 const { version: PKG_VERSION } = require("../../package.json");
 
 test.describe.configure({ mode: "serial" });
@@ -184,6 +184,7 @@ test.describe("Command palette — every option works", () => {
       permissions: ["clipboard-read", "clipboard-write"]
     });
     page = await context.newPage();
+    await startRendererCoverage(page);
     page.on("pageerror", (err) => pageErrors.push(String(err.message || err)));
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
@@ -194,6 +195,7 @@ test.describe("Command palette — every option works", () => {
   });
 
   test.afterAll(async () => {
+    await stopRendererCoverage(page, "palette-and-settings-commands");
     await context.close();
   });
 
@@ -729,6 +731,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
         permissions: ["clipboard-read", "clipboard-write", "notifications"]
       });
       page = await context.newPage();
+      await startRendererCoverage(page);
       page.on("pageerror", (err) => pageErrors.push(String(err.message || err)));
       await page.goto("/");
       await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -756,6 +759,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
       });
 
     test.afterAll(async () => {
+      await stopRendererCoverage(page, "palette-and-settings-controls");
       await context.close();
     });
 
@@ -1150,12 +1154,14 @@ test.describe("Close-to-tray confirmation modal", () => {
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({ baseURL: "http://127.0.0.1:3199" });
     page = await context.newPage();
+    await startRendererCoverage(page);
     page.on("pageerror", (err) => pageErrors.push(String(err.message || err)));
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
   });
 
   test.afterAll(async () => {
+    await stopRendererCoverage(page, "palette-and-settings-close");
     await context.close();
   });
 

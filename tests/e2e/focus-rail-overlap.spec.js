@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("../support/renderer-coverage");
 
 // Reproduces the reported overlay: in Focus rail, adding more panes than the
 // primary's row span pushed the overflow into column 1 underneath the primary,

@@ -20,6 +20,8 @@ const { defineConfig, devices } = require("@playwright/test");
 
 module.exports = defineConfig({
   testDir: "tests/e2e",
+  globalSetup: require.resolve("./tests/support/coverage-global-setup"),
+  grepInvert: /@full/,
   fullyParallel: false,
   workers: 1,
   timeout: 60000,

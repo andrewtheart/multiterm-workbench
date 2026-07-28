@@ -65,6 +65,26 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
   </tr>
 </table>
 
+## Testing
+
+The default test command runs the iterative suite: all unit/integration tests and
+all browser tests that do not open native Windows UI.
+
+```powershell
+npm test
+```
+
+For browser tests only, `npm run test:e2e` is also iterative and excludes tests
+tagged `@full`. Use the full suite only when native interaction is acceptable:
+
+```powershell
+npm run test:full
+```
+
+The full suite includes UAC/elevated-process scenarios and the native script
+browser, and enforces 100% backend and renderer coverage. It may display UAC and
+file-selection prompts on an interactive Windows desktop.
+
 ## Screenshot tour
 
 <table>

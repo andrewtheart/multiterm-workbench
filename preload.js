@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld("multiterm", {
   },
   // Reports the user's close decision: "tray", "quit", or "cancel".
   respondClose: (action) => ipcRenderer.send("multiterm:close-response", action),
+  // Restores and focuses the Electron window when a desktop notification is clicked.
+  focusWindow: () => ipcRenderer.send("multiterm:focus-window"),
 
   // Whether this MultiTerm process is running elevated (administrator).
   isElevated: () => ipcRenderer.invoke("multiterm:is-elevated"),

@@ -16,8 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
-const MCR = require("monocart-coverage-reports");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 const { version: PKG_VERSION } = require("../../package.json");
 
 // A single shared page collects JS coverage across all steps so the
@@ -45,22 +44,13 @@ test.describe("MultiTerm Workbench UI", () => {
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({ baseURL: "http://127.0.0.1:3199" });
     page = await context.newPage();
-    await page.coverage.startJSCoverage({ resetOnNavigation: false });
+    await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
   });
 
   test.afterAll(async () => {
-    const coverage = await page.coverage.stopJSCoverage();
-    const mcr = MCR({
-      name: "MultiTerm E2E Coverage",
-      outputDir: "coverage/e2e",
-      reports: ["console-summary", "v8", "lcovonly"],
-      entryFilter: (entry) => entry.url.endsWith("/app.js"),
-      sourceFilter: (sourcePath) => sourcePath.includes("app.js")
-    });
-    await mcr.add(coverage);
-    await mcr.generate();
+    await stopRendererCoverage(page, "app");
     await context.close();
   });
 

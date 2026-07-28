@@ -374,17 +374,17 @@ function serveStaticFile(rawPathname, response, headOnly) {
       });
       response.end(error.code === "ENOENT" ? "Not found" : "Server error");
       return;
-    }
-
-    response.writeHead(200, {
-      "Content-Type": mimeTypes.get(path.extname(filePath).toLowerCase()) || "application/octet-stream",
-      "Cache-Control": "no-store"
-    });
-
-    if (headOnly) {
-      response.end();
     } else {
-      response.end(content);
+      response.writeHead(200, {
+        "Content-Type": mimeTypes.get(path.extname(filePath).toLowerCase()) || "application/octet-stream",
+        "Cache-Control": "no-store"
+      });
+
+      if (headOnly) {
+        response.end();
+      } else {
+        response.end(content);
+      }
     }
   });
 }
@@ -813,7 +813,11 @@ function pickScript(client, message) {
   let initialDir = "";
   try {
     const candidate = path.resolve(String(message.cwd || "").trim() || process.cwd());
-    if (fs.statSync(candidate).isDirectory()) initialDir = candidate;
+    if (fs.statSync(candidate).isDirectory()) {
+      initialDir = candidate;
+    } else {
+      // File paths are not valid initial directories for the picker.
+    }
   } catch {
     initialDir = "";
   }
@@ -848,9 +852,12 @@ function pickScript(client, message) {
   let out = "";
   let settled = false;
   const settle = (chosen) => {
-    if (settled) return;
-    settled = true;
-    answer(chosen);
+    if (settled) {
+      return;
+    } else {
+      settled = true;
+      answer(chosen);
+    }
   };
 
   child.stdout.on("data", (chunk) => { out += chunk.toString(); });
@@ -1258,7 +1265,11 @@ function shutdown() {
   stopMemStats();
   closeSessions(true);
   server.close(() => {
-    if (sessions.size === 0) process.exit(0);
+    if (sessions.size === 0) {
+      process.exit(0);
+    } else {
+      // The drain timer exits after staggered session teardown completes.
+    }
   });
 
   // Sessions now close on a stagger, so poll until they have actually drained
@@ -1352,15 +1363,22 @@ function computeMemStats(callback) {
 // costs no more than a single reading. Waiters receive null when it fails.
 function runMemStats(callback) {
   memStatsWaiters.push(callback);
-  if (memStatsInFlight) return;
-  memStatsInFlight = true;
-  computeMemStats((stats) => {
-    memStatsInFlight = false;
-    if (stats) lastMemStats = stats;
-    const waiters = memStatsWaiters;
-    memStatsWaiters = [];
-    for (const waiter of waiters) waiter(stats);
-  });
+  if (memStatsInFlight) {
+    return;
+  } else {
+    memStatsInFlight = true;
+    computeMemStats((stats) => {
+      memStatsInFlight = false;
+      if (stats) {
+        lastMemStats = stats;
+      } else {
+        // Failed probes are delivered to waiters but are not cached.
+      }
+      const waiters = memStatsWaiters;
+      memStatsWaiters = [];
+      for (const waiter of waiters) waiter(stats);
+    });
+  }
 }
 
 function memStatsFrame(stats) {
@@ -1389,14 +1407,15 @@ function requestMemStats(client) {
   if (!memStatsSupported()) {
     client.send({ type: "memstats", supported: false });
     return;
+  } else {
+    runMemStats((stats) => {
+      if (stats) {
+        client.send(memStatsFrame(stats));
+      } else {
+        client.send({ type: "memstats", supported: true, error: "Could not read process memory." });
+      }
+    });
   }
-  runMemStats((stats) => {
-    if (stats) {
-      client.send(memStatsFrame(stats));
-    } else {
-      client.send({ type: "memstats", supported: true, error: "Could not read process memory." });
-    }
-  });
 }
 
 function pushMemStats() {

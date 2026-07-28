@@ -2246,6 +2246,44 @@ body.header-hidden .status-hint kbd,
   background: transparent;
 }
 
+.ctx-item.ctx-input-row {
+  cursor: default;
+  min-width: 310px;
+}
+
+.ctx-item.ctx-input-row:hover {
+  background: transparent;
+}
+
+.ctx-command-field {
+  align-items: center;
+  display: grid;
+  flex: 1 1 auto;
+  gap: 8px;
+  grid-template-columns: 88px minmax(120px, 1fr);
+  min-width: 0;
+}
+
+.ctx-command-field > span {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ctx-command-input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.ctx-command-input:focus {
+  border-color: var(--primary);
+  outline: 1px solid var(--primary);
+}
+
 .ctx-parts {
   min-width: 0;
   white-space: nowrap;

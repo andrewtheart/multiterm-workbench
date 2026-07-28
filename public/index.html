@@ -248,6 +248,16 @@
               <span>Sync input</span>
             </label>
 
+            <label class="toggle-row">
+              <input id="ctrlVPaste" type="checkbox">
+              <span>Ctrl+V pastes</span>
+            </label>
+
+            <label class="toggle-row">
+              <input id="cleanCopilotClipboard" type="checkbox">
+              <span>Clean Copilot copy borders</span>
+            </label>
+
             <label class="control-row">
               <span>Right-click</span>
               <select id="rightClickAction">
@@ -275,6 +285,10 @@
 
           <section class="control-section">
             <h2>Session</h2>
+            <label class="toggle-row">
+              <input id="keepSessionsOnClose" type="checkbox">
+              <span>Keep terminals when closed</span>
+            </label>
             <label class="toggle-row">
               <input id="restoreSession" type="checkbox">
               <span>Restore last session</span>
@@ -497,8 +511,8 @@
           <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
           <li><span>Maximize / restore pane</span><span class="kbd">Ctrl+Shift+X</span></li>
           <li><span>Select all terminal output</span><span class="kbd">Ctrl+A</span></li>
+          <li><span>Paste into terminal</span><span class="kbd">Ctrl+V / Ctrl+Shift+V</span></li>
           <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
-          <li><span>Paste into active</span><span class="kbd">Ctrl+Shift+V</span></li>
           <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
           <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+→ / ←</span></li>
           <li><span>Font zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>

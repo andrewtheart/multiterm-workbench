@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
+const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 // Rearranging panes by dragging their title bar. These cover two failure modes
 // that are easy to reintroduce and invisible without a real pointer:
@@ -97,6 +97,7 @@ test.describe("pane drag to rearrange", () => {
       viewport: { width: 1600, height: 1000 }
     });
     page = await context.newPage();
+    await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
 
@@ -122,6 +123,7 @@ test.describe("pane drag to rearrange", () => {
   });
 
   test.afterAll(async () => {
+    await stopRendererCoverage(page, "pane-drag");
     await context.close();
   });
 

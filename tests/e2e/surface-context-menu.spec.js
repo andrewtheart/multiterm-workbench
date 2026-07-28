@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("../support/renderer-coverage");
 
 // Right-clicking the empty area around the panes used to fall through to the
 // browser's own menu, which is useless here. It has to offer the same menu the
@@ -196,7 +196,7 @@ test.describe("Surface context menu", () => {
     await expect(menu).toBeHidden();
   });
 
-  test("copies a TUI pointer selection after right-click clears the live selection", async ({ page }) => {
+  test("preserves and copies a TUI selection when right-click opens the menu", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
 
@@ -209,11 +209,11 @@ test.describe("Surface context menu", () => {
       const selection = terminal.term.getSelection();
 
       // A left-button pointerup is how a real drag snapshots the completed
-      // selection. Mouse-aware TUIs then clear xterm's live selection before the
-      // right-button pointer event reaches MultiTerm.
+      // selection. Model a mouse-aware TUI trying to clear it on right mousedown;
+      // MultiTerm's capture handler must own that gesture before the TUI sees it.
       terminal.term.element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
-      terminal.term.clearSelection();
-      terminal.term.element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 2 }));
+      terminal.screen.addEventListener("mousedown", () => terminal.term.clearSelection(), { once: true });
+      terminal.screen.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 2 }));
 
       window.__contextCopiedText = null;
       Object.defineProperty(navigator, "clipboard", {
@@ -227,22 +227,86 @@ test.describe("Surface context menu", () => {
         clientX: 500,
         clientY: 300
       }));
-      return selection;
+      await Promise.resolve();
+      return {
+        selection,
+        liveSelection: terminal.term.getSelection()
+      };
     });
 
-    expect(selected).toBe("tui-selection-marker");
+    expect(selected).toEqual({
+      selection: "tui-selection-marker",
+      liveSelection: "tui-selection-marker"
+    });
     const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
     await expect(copy).toBeVisible();
     await expect(copy).not.toHaveAttribute("aria-disabled", "true");
     expect(await page.evaluate(() => state.terminals.get(state.activeId).selectionSnapshot)).toBe("");
     await copy.click();
-    await expect.poll(() => page.evaluate(() => window.__contextCopiedText)).toBe(selected);
+    await expect.poll(() => page.evaluate(() => window.__contextCopiedText)).toBe(selected.selection);
 
     // The snapshot belongs only to that menu opening; without a fresh visible
     // selection, a second right-click must not offer the old text again.
+    await page.evaluate(() => {
+      const terminal = state.terminals.get(state.activeId);
+      terminal.term.element.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      terminal.term.clearSelection();
+    });
     await page.locator(".terminal-pane.is-active .terminal-screen").click({ button: "right" });
     await expect(copy).toHaveAttribute("aria-disabled", "true");
   });
+
+  test("context-menu Paste uses xterm bracketed paste for TUI prompts", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const sent = await page.evaluate(async () => {
+      const terminal = state.terminals.get(state.activeId);
+      await new Promise((resolve) => terminal.term.write("\x1b[?2004h", resolve));
+
+      const originalSocket = state.socket;
+      const originalReady = state.socketReady;
+      const originalClipboard = navigator.clipboard;
+      const messages = [];
+      state.socket = {
+        readyState: WebSocket.OPEN,
+        send(payload) { messages.push(JSON.parse(payload)); }
+      };
+      state.socketReady = true;
+      state.settings.rightClickAction = "menu";
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText: async () => "copilot-paste-marker" }
+      });
+
+      terminal.screen.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        button: 2,
+        clientX: 500,
+        clientY: 300
+      }));
+      const paste = [...elements.contextMenu.querySelectorAll(".ctx-item")]
+        .find((item) => item.textContent.startsWith("Paste"));
+      paste.click();
+
+      for (let i = 0; i < 20 && messages.length === 0; i += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+
+      await new Promise((resolve) => terminal.term.write("\x1b[?2004l", resolve));
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+      state.socket = originalSocket;
+      state.socketReady = originalReady;
+      return messages;
+    });
+
+    expect(sent).toContainEqual({
+      type: "input",
+      id: expect.any(String),
+      data: "\x1b[200~copilot-paste-marker\x1b[201~"
+    });
+  });
+
   test("still opens the terminal menu when the click lands on a pane", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");

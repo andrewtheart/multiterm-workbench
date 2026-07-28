@@ -370,6 +370,20 @@ describe("tray + close-to-tray", () => {
     expect(electron.app.quit).not.toHaveBeenCalled();
   });
 
+  it("restores and focuses the window for notification clicks", async () => {
+    await bootReady();
+    const onCall = electron.ipcMain.on.mock.calls.find(([e]) => e === "multiterm:focus-window");
+    expect(onCall).toBeTruthy();
+    const win = main.getMainWindow();
+    win.isMinimized.mockReturnValue(true);
+
+    onCall[1]();
+
+    expect(win.restore).toHaveBeenCalled();
+    expect(win.show).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+  });
+
   it("destroys the tray on before-quit", () => {
     // Keep whenReady pending so bootstrap only registers handlers (no onReady).
     electron.app.whenReady.mockReturnValue(new Promise(() => {}));
@@ -379,6 +393,17 @@ describe("tray + close-to-tray", () => {
     const beforeQuit = handlerFor("before-quit");
     beforeQuit();
     expect(tray.destroy).toHaveBeenCalled();
+    expect(main.getTray()).toBeNull();
+  });
+
+  it("still clears the tray reference when native tray destruction throws", () => {
+    electron.app.whenReady.mockReturnValue(new Promise(() => {}));
+    main.createTray();
+    const tray = main.getTray();
+    tray.destroy.mockImplementation(() => { throw new Error("already destroyed"); });
+    main.bootstrap();
+
+    expect(() => handlerFor("before-quit")()).not.toThrow();
     expect(main.getTray()).toBeNull();
   });
 });
@@ -426,6 +451,19 @@ describe("formatError", () => {
 
   it("falls back to the value when there is no message", () => {
     expect(main.formatError("plain string failure")).toBe("plain string failure");
+  });
+});
+
+describe("Chromium command-line configuration", () => {
+  it("raises the WebGL context ceiling when Electron exposes appendSwitch", () => {
+    const appendSwitch = vi.fn();
+    main.configureChromiumCommandLine({ commandLine: { appendSwitch } });
+    expect(appendSwitch).toHaveBeenCalledWith("max-active-webgl-contexts", "64");
+  });
+
+  it("is harmless when command-line configuration is unavailable", () => {
+    expect(() => main.configureChromiumCommandLine({})).not.toThrow();
+    expect(() => main.configureChromiumCommandLine(null)).not.toThrow();
   });
 });
 
@@ -808,6 +846,13 @@ describe("update checker", () => {
       expect(main.pickInstallerAsset([{ name: "readme.md", browser_download_url: "https://example.com/r.md" }])).toBeNull();
       expect(main.pickInstallerAsset(null)).toBeNull();
     });
+
+    it("ignores malformed assets without names or download URLs", () => {
+      expect(main.pickInstallerAsset([
+        { browser_download_url: "https://example.com/unnamed" },
+        { name: "missing-url.exe" }
+      ])).toBeNull();
+    });
   });
 
   describe("normalizeRelease", () => {
@@ -815,6 +860,17 @@ describe("update checker", () => {
       const release = main.normalizeRelease({ tag_name: "v2.3.4" });
       expect(release).toMatchObject({ tag: "v2.3.4", version: "2.3.4", name: "v2.3.4", notes: "", asset: null });
       expect(release.url).toContain("/releases/latest");
+    });
+
+    it("normalizes a missing release payload", () => {
+      expect(main.normalizeRelease(null)).toMatchObject({
+        tag: "",
+        version: "",
+        name: "",
+        notes: "",
+        publishedAt: "",
+        asset: null
+      });
     });
   });
 
@@ -851,6 +907,37 @@ describe("update checker", () => {
 
       stubHttps(() => makeResponse({ status: 404 }));
       await expect(main.fetchLatestRelease()).rejects.toThrow(/HTTP 404/);
+    });
+
+    it("rejects redirect loops after the configured limit", async () => {
+      stubHttps(() => makeResponse({ status: 302, headers: { location: "/loop" } }));
+      await expect(main.fetchLatestRelease()).rejects.toThrow(/Too many redirects/);
+      expect(https.get).toHaveBeenCalledTimes(6);
+    });
+
+    it("propagates synchronous request setup failures", async () => {
+      vi.spyOn(https, "get").mockImplementation(() => { throw new Error("bad URL setup"); });
+      await expect(main.openHttpsStream("https://example.com")).rejects.toThrow("bad URL setup");
+    });
+
+    it("propagates request errors and destroys timed-out requests", async () => {
+      let request;
+      vi.spyOn(https, "get").mockImplementation(() => {
+        request = new EventEmitter();
+        request.setTimeout = vi.fn((_delay, callback) => { request.timeoutCallback = callback; });
+        request.destroy = vi.fn();
+        return request;
+      });
+
+      const failed = main.openHttpsStream("https://example.com/error");
+      request.emit("error", new Error("network down"));
+      await expect(failed).rejects.toThrow("network down");
+
+      const timedOut = main.openHttpsStream("https://example.com/slow");
+      request.timeoutCallback();
+      expect(request.destroy).toHaveBeenCalledWith(expect.objectContaining({ message: "Timed out contacting GitHub." }));
+      request.emit("error", new Error("Timed out contacting GitHub."));
+      await expect(timedOut).rejects.toThrow(/Timed out/);
     });
 
     it("falls back to package.json when Electron cannot report a version", () => {
@@ -890,6 +977,23 @@ describe("update checker", () => {
       expect(progress).toEqual([{ received: 4, total: 10 }]);
     });
 
+    it("uses Electron's temp folder, a default name, and tolerates no progress callback", async () => {
+      electron.app.getPath = vi.fn(() => "C:\\ElectronTemp");
+      const response = makeResponse();
+      stubHttps(() => response);
+      const file = new EventEmitter();
+      file.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+
+      const pending = main.downloadUpdate({ url: "https://example.com/setup.exe", size: 7 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      response.emit("data", Buffer.alloc(7));
+      file.emit("finish");
+
+      await expect(pending).resolves.toBe("C:\\ElectronTemp\\MultiTerm-Setup.exe");
+      expect(electron.app.getPath).toHaveBeenCalledWith("temp");
+    });
+
     it("removes a partial download when the stream fails", async () => {
       const response = makeResponse();
       response.pipe = vi.fn();
@@ -906,6 +1010,22 @@ describe("update checker", () => {
 
       await expect(pending).rejects.toThrow(/socket hang up/);
       expect(file.destroy).toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalled();
+    });
+
+    it("still removes a partial download when closing the file throws", async () => {
+      const response = makeResponse();
+      stubHttps(() => response);
+      const file = new EventEmitter();
+      file.destroy = vi.fn(() => { throw new Error("already closed"); });
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+      const unlink = vi.spyOn(fs, "unlink").mockImplementation((_path, cb) => cb());
+
+      const pending = main.downloadUpdate({ name: "setup.exe", url: "https://example.com/setup.exe" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      file.emit("error", new Error("disk full"));
+
+      await expect(pending).rejects.toThrow("disk full");
       expect(unlink).toHaveBeenCalled();
     });
   });
@@ -925,6 +1045,37 @@ describe("update checker", () => {
       expect(main.runInstaller("C:/temp/setup.exe")).toBe(true);
       expect(electron.shell.openPath).toHaveBeenCalledWith("C:/temp/setup.exe");
       expect(main.runInstaller("")).toBe(false);
+    });
+
+    it("returns false when both process launch mechanisms fail", () => {
+      childProcess.spawn.mockImplementation(() => { throw new Error("EACCES"); });
+      electron.shell.openPath = vi.fn(() => { throw new Error("no association"); });
+      expect(main.runInstaller("C:/temp/setup.exe")).toBe(false);
+      expect(electron.shell.openPath).toHaveBeenCalledWith("C:/temp/setup.exe");
+    });
+  });
+
+  describe("sendUpdateProgress", () => {
+    it("sends progress only to a live renderer", () => {
+      main.createWindow();
+      const win = main.getMainWindow();
+      main.sendUpdateProgress({ received: 5, total: 10 });
+      expect(win.webContents.send).toHaveBeenCalledWith(
+        "multiterm:update-progress",
+        { received: 5, total: 10 }
+      );
+
+      win.webContents.send.mockClear();
+      win.webContents.isDestroyed.mockReturnValue(true);
+      main.sendUpdateProgress({ received: 10, total: 10 });
+      expect(win.webContents.send).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op without a window or a send-capable webContents", () => {
+      expect(() => main.sendUpdateProgress({ received: 1, total: 1 })).not.toThrow();
+      main.createWindow();
+      main.getMainWindow().webContents.send = undefined;
+      expect(() => main.sendUpdateProgress({ received: 1, total: 1 })).not.toThrow();
     });
   });
 
@@ -951,6 +1102,68 @@ describe("update checker", () => {
       expect(electron.app.isQuiting).toBe(false);
     });
 
+    it("downloads, throttles progress, launches the installer, and quits after handoff", async () => {
+      vi.useFakeTimers();
+      main.createWindow();
+      electron.app.getPath = vi.fn(() => "C:\\temp");
+      const response = makeResponse({ headers: { "content-length": "10" } });
+      stubHttps(() => response);
+      const file = new EventEmitter();
+      file.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+      const unref = vi.fn();
+      childProcess.spawn.mockReturnValue({ unref });
+      vi.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValue(1100);
+      main.registerUpdateIpc();
+
+      const pending = handlerFor("multiterm:download-update")({}, {
+        name: "setup.exe",
+        url: "https://example.com/setup.exe",
+        size: 10
+      });
+      await vi.runAllTicks();
+      await Promise.resolve();
+      response.emit("data", Buffer.alloc(4));
+      response.emit("data", Buffer.alloc(2));
+      response.emit("data", Buffer.alloc(4));
+      file.emit("finish");
+
+      await expect(pending).resolves.toEqual({ ok: true, path: "C:\\temp\\setup.exe" });
+      expect(unref).toHaveBeenCalled();
+      expect(main.getMainWindow().webContents.send.mock.calls).toEqual(expect.arrayContaining([
+        ["multiterm:update-progress", { received: 4, total: 10 }],
+        ["multiterm:update-progress", { received: 10, total: 10 }],
+        ["multiterm:update-progress", { received: 1, total: 1, done: true }]
+      ]));
+      expect(electron.app.isQuiting).toBe(true);
+      vi.advanceTimersByTime(1200);
+      expect(electron.app.quit).toHaveBeenCalled();
+    });
+
+    it("reports a downloaded installer that cannot be launched", async () => {
+      const response = makeResponse();
+      stubHttps(() => response);
+      const file = new EventEmitter();
+      file.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+      childProcess.spawn.mockImplementation(() => { throw new Error("blocked"); });
+      electron.shell.openPath = vi.fn(() => { throw new Error("blocked"); });
+      main.registerUpdateIpc();
+
+      const pending = handlerFor("multiterm:download-update")({}, {
+        name: "setup.exe",
+        url: "https://example.com/setup.exe"
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      file.emit("finish");
+
+      await expect(pending).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining("could not be launched")
+      });
+      expect(electron.app.isQuiting).toBe(false);
+    });
+
     it("only opens github.com URLs from the release-page handler", async () => {
       main.registerUpdateIpc();
       const open = handlerFor("multiterm:open-release");
@@ -960,6 +1173,12 @@ describe("update checker", () => {
 
       await open({}, "https://evil.example.com/pwn");
       expect(electron.shell.openExternal).toHaveBeenLastCalledWith(expect.stringContaining("github.com/andrewtheart/multiterm-workbench"));
+    });
+
+    it("returns false when the release page cannot be opened", async () => {
+      electron.shell.openExternal.mockRejectedValue(new Error("no browser"));
+      main.registerUpdateIpc();
+      await expect(handlerFor("multiterm:open-release")({}, null)).resolves.toBe(false);
     });
 
     it("does nothing when ipcMain is unavailable", () => {
