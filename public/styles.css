@@ -2766,7 +2766,10 @@ body.is-pane-dragging {
 
 .terminal-host .terminal-pane > .pane-bar {
   position: sticky;
-  top: 0;
+  /* A sticky top of 0 resolves inside the host's padded content box, leaving a
+     stage-pad-high strip where the terminal body scrolls above its own header.
+     Offset that padding so a stuck first-row header seals the scrollport edge. */
+  top: calc(-1 * var(--stage-pad));
   z-index: 6;
   border-top-left-radius: calc(var(--radius) - 1px);
   border-top-right-radius: calc(var(--radius) - 1px);

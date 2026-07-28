@@ -330,6 +330,22 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(firstPane.locator(".pane-bar")).toHaveCSS("position", "sticky");
   });
 
+  test("new terminal restores a maximized viewport so the new pane is visible", async () => {
+    const panes = page.locator(".terminal-pane");
+    const before = await panes.count();
+    const firstPane = panes.first();
+
+    await firstPane.locator('[data-action="maximize"]').click();
+    await expect(page.locator("#terminalHost")).toHaveClass(/has-zoom/);
+
+    await page.locator("#addTerminal").click();
+
+    await expect(panes).toHaveCount(before + 1);
+    await expect(page.locator("#terminalHost")).not.toHaveClass(/has-zoom/);
+    await expect(panes.last()).toBeVisible();
+    await expect(panes.last()).toHaveClass(/is-active/);
+  });
+
   test("keeps the editable terminal title compact", async () => {
     const title = page.locator(".terminal-pane").first().locator(".pane-title");
     await expect(title).toHaveCSS("max-width", "180px");
@@ -871,7 +887,9 @@ test.describe("MultiTerm Workbench UI", () => {
       panes.sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
       const pane = panes[0]; // the right-most pane (worst-affected top-row pane)
       const btn = pane.querySelector('[data-action="close"]');
+      const bar = pane.querySelector(".pane-bar");
       const r = btn.getBoundingClientRect();
+      const barRect = bar.getBoundingClientRect();
       const cx = Math.round(r.left + r.width / 2);
       const cy = Math.round(r.top + r.height / 2);
       const at = document.elementFromPoint(cx, cy);
@@ -879,6 +897,7 @@ test.describe("MultiTerm Workbench UI", () => {
         overflows: host.scrollHeight > host.clientHeight,
         scrollTop: host.scrollTop,
         hostTop: Math.round(host.getBoundingClientRect().top),
+        headerTop: Math.round(barRect.top),
         buttonTop: Math.round(r.top),
         cx,
         cy,
@@ -889,9 +908,11 @@ test.describe("MultiTerm Workbench UI", () => {
     // The scenario must genuinely scroll the host, else it guards nothing.
     expect(probe.overflows).toBe(true);
     expect(probe.scrollTop).toBeGreaterThan(0);
-    // The sticky header pins the X below the host's top edge (clear of the topbar)
-    // and a real hit-test at the X's centre lands on the close button — not the
-    // topbar. Both assertions fail on the pre-fix (clipped) layout.
+    // The sticky header pins flush to the host's top edge. Leaving the host's
+    // stage padding above it exposes a detached strip of terminal output.
+    expect(Math.abs(probe.headerTop - probe.hostTop)).toBeLessThanOrEqual(1);
+    // Its X remains clear of the topbar, and a real hit-test at the X's centre
+    // lands on the close button — not the topbar.
     expect(probe.buttonTop).toBeGreaterThanOrEqual(probe.hostTop);
     expect(probe.hitsButton).toBe(true);
 

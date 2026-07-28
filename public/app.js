@@ -69,7 +69,7 @@ const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94
 const PANE_OVERFLOW_WIDTH = 600;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.31";
+const APP_VERSION = "0.1.32";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 
@@ -934,6 +934,13 @@ function markSessionLostWhileOffline(terminal) {
 function addTerminal(options = {}) {
   if (options.reveal) {
     clearTerminalSearch();
+    // A user-requested terminal must be visible immediately. A pane-level zoom
+    // hides every sibling, including a newly appended pane, so leave the
+    // transient maximized view before creating anything the user asked to see.
+    if (state.zoomedId) {
+      state.zoomedId = null;
+      applyZoom();
+    }
   }
 
   const session = options.session || {};
