@@ -235,6 +235,34 @@ $patchText
 "@
 }
 
+function Normalize-CopilotReleaseNotes {
+    param([string]$RawNotes)
+
+    $notes = $RawNotes.Trim()
+    $fence = [regex]::Match($notes, '(?s)^\s*```(?:markdown)?\s*(.*?)\s*```\s*$')
+    if ($fence.Success) { $notes = $fence.Groups[1].Value.Trim() }
+
+    # Copilot can emit tool-progress narration before the requested answer even
+    # with --silent (for example, "Let me scan the remainder..."). Keep only the
+    # requested Markdown document, beginning at its first required heading.
+    $firstHeading = [regex]::Match(
+        $notes,
+        "(?im)^##\s+What(?:'|\u2019)s\s+changed\s*$"
+    )
+    if ($firstHeading.Success) {
+        $notes = $notes.Substring($firstHeading.Index)
+        $notes = [regex]::new("(?im)^##\s+What(?:'|\u2019)s\s+changed\s*$").Replace(
+            $notes, "## What's changed", 1)
+    }
+
+    $installation = [regex]::Match($notes, '(?im)^##\s+Installation\s*$')
+    if ($installation.Success) {
+        $notes = [regex]::new('(?im)^##\s+Installation\s*$').Replace($notes, '## Installation', 1)
+    }
+
+    return $notes.Trim()
+}
+
 function New-CopilotReleaseNotes {
     param(
         [string]$RepositoryRoot,
@@ -268,14 +296,14 @@ modify any files.
         if ($result.ExitCode -ne 0) {
             throw "Copilot CLI failed to generate release notes (exit $($result.ExitCode))."
         }
-        $notes = (ConvertTo-NativeText $result.Output).Trim()
-        $fence = [regex]::Match($notes, '(?s)^\s*```(?:markdown)?\s*(.*?)\s*```\s*$')
-        if ($fence.Success) { $notes = $fence.Groups[1].Value.Trim() }
+        $notes = Normalize-CopilotReleaseNotes -RawNotes (ConvertTo-NativeText $result.Output)
         if ($notes.Length -lt 40) {
             throw "Copilot CLI returned empty or implausibly short release notes."
         }
         if ($notes -notmatch "^## What's changed(?:\r?\n)" -or $notes -notmatch '(?m)^## Installation\s*$') {
-            throw "Copilot CLI returned release notes with an unexpected Markdown structure."
+            $preview = [regex]::Replace($notes, '\s+', ' ')
+            if ($preview.Length -gt 240) { $preview = $preview.Substring(0, 240) + '...' }
+            throw "Copilot CLI returned release notes with an unexpected Markdown structure. Output began: $preview"
         }
         return $notes
     }
