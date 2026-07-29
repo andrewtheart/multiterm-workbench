@@ -422,10 +422,22 @@ To start the bridge without opening a browser:
 .\Start-MultiTerm.ps1 -NoBrowser
 ```
 
-Run from a terminal, the bridge keeps its console window and Ctrl+C stops it.
-Launched from a shortcut it creates its own console window, which is hidden
-once the app window is up. Add `-ShowConsole` to keep that window visible, and
-stop a bridge whose console is hidden with:
+Installed Start Menu and desktop shortcuts open a compact control console behind
+the MultiTerm app window. It has three columns: a shutdown warning, streaming
+bridge logs, and the active terminal list with each shell's process ID. Use the
+Up/Down arrows to select a terminal and Enter to request its graceful termination.
+Ctrl+Q stops the bridge and all sessions. Closing the control console also ends
+the bridge process, so all active MultiTerm terminals are terminated.
+
+To show the same dashboard when launching the script directly:
+
+```powershell
+.\Start-MultiTerm.ps1 -ConsoleDashboard
+```
+
+Without `-ConsoleDashboard`, direct script launches retain the plain bridge log
+console. Ctrl+C stops that bridge. A legacy hidden bridge can still be stopped
+with:
 
 ```powershell
 .\Start-MultiTerm.ps1 -Stop

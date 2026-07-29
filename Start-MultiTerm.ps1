@@ -22,6 +22,7 @@ param(
     [switch]$AllowRemote,
     [switch]$NoBrowser,
     [switch]$ShowConsole,
+    [switch]$ConsoleDashboard,
     [switch]$Stop,
     [string]$ElevatedHost = ""
 )
@@ -114,11 +115,11 @@ namespace MultiTerm.PowerShellBridge
 '@
 }
 
-# Once the app window is up the console behind it is just noise, so hide it.
-# Only when we own it: run from a terminal (including the VS Code one) the
-# console stays put, which is what you want while debugging.
+# Legacy shortcut launches hid their private console. New installer shortcuts pass
+# -ConsoleDashboard, which keeps the console visible and turns it into the compact
+# bridge dashboard. Existing terminal launches still retain the original behavior.
 $consoleHidden = $false
-if (-not $ShowConsole.IsPresent -and [MultiTerm.PowerShellBridge.ConsoleWindow]::OwnsConsole()) {
+if (-not $ShowConsole.IsPresent -and -not $ConsoleDashboard.IsPresent -and [MultiTerm.PowerShellBridge.ConsoleWindow]::OwnsConsole()) {
   [MultiTerm.PowerShellBridge.ConsoleWindow]::Hide()
   $consoleHidden = $true
 }
@@ -151,11 +152,338 @@ using System.Threading.Tasks;
 
 namespace MultiTerm.PowerShellBridge
 {
+    internal sealed class DashboardSessionInfo
+    {
+        public string Id;
+        public string Title;
+        public int Pid;
+        public string StartedAt;
+    }
+
+    internal sealed class DashboardLogEntry
+    {
+        public string Level;
+        public string Message;
+        public DateTime Time;
+    }
+
+    internal sealed class BridgeConsoleDashboard
+    {
+        private const int MaximumLogEntries = 250;
+        private readonly object sync = new object();
+        private readonly Func<List<DashboardSessionInfo>> getSessions;
+        private readonly Action<string> terminateSession;
+        private readonly Action stopBridge;
+        private readonly List<DashboardLogEntry> logs = new List<DashboardLogEntry>();
+        private Thread worker;
+        private volatile bool stopping;
+        private string selectedId;
+        private string lastFrame;
+        private int lastWidth;
+        private int lastHeight;
+
+        public BridgeConsoleDashboard(
+            Func<List<DashboardSessionInfo>> getSessions,
+            Action<string> terminateSession,
+            Action stopBridge)
+        {
+            this.getSessions = getSessions;
+            this.terminateSession = terminateSession;
+            this.stopBridge = stopBridge;
+        }
+
+        public bool Start()
+        {
+            if (Console.IsInputRedirected || Console.IsOutputRedirected)
+            {
+                return false;
+            }
+
+            try
+            {
+                Console.Title = "MultiTerm Control Console - closing this window stops all terminals";
+                Console.CursorVisible = false;
+                this.TryResize(122, 26);
+            }
+            catch
+            {
+                return false;
+            }
+
+            this.worker = new Thread(this.RunLoop);
+            this.worker.IsBackground = true;
+            this.worker.Name = "MultiTerm console dashboard";
+            this.worker.Start();
+            return true;
+        }
+
+        public void AddLog(string level, string message)
+        {
+            lock (this.sync)
+            {
+                this.logs.Add(new DashboardLogEntry
+                {
+                    Level = String.IsNullOrWhiteSpace(level) ? "info" : level,
+                    Message = message ?? String.Empty,
+                    Time = DateTime.Now
+                });
+                if (this.logs.Count > MaximumLogEntries)
+                {
+                    this.logs.RemoveRange(0, this.logs.Count - MaximumLogEntries);
+                }
+            }
+        }
+
+        public void Stop()
+        {
+            this.stopping = true;
+            try { Console.CursorVisible = true; } catch { }
+        }
+
+        private void RunLoop()
+        {
+            while (!this.stopping)
+            {
+                try
+                {
+                    this.HandleKeys();
+                    this.Render();
+                }
+                catch
+                {
+                    // A console can disappear while Windows is closing it. The bridge
+                    // shutdown path will still tear down every pseudo-terminal.
+                }
+                Thread.Sleep(125);
+            }
+        }
+
+        private void HandleKeys()
+        {
+            while (!this.stopping && Console.KeyAvailable)
+            {
+                ConsoleKeyInfo key = Console.ReadKey(true);
+                if (key.Key == ConsoleKey.UpArrow)
+                {
+                    this.MoveSelection(-1);
+                }
+                else if (key.Key == ConsoleKey.DownArrow)
+                {
+                    this.MoveSelection(1);
+                }
+                else if (key.Key == ConsoleKey.Enter)
+                {
+                    string id = this.selectedId;
+                    if (!String.IsNullOrEmpty(id))
+                    {
+                        this.terminateSession(id);
+                    }
+                }
+                else if (key.Key == ConsoleKey.Q && (key.Modifiers & ConsoleModifiers.Control) != 0)
+                {
+                    this.stopBridge();
+                    return;
+                }
+            }
+        }
+
+        private void MoveSelection(int direction)
+        {
+            List<DashboardSessionInfo> sessions = this.GetSortedSessions();
+            if (sessions.Count == 0)
+            {
+                this.selectedId = null;
+                return;
+            }
+
+            int selected = 0;
+            for (int index = 0; index < sessions.Count; index++)
+            {
+                if (String.Equals(sessions[index].Id, this.selectedId, StringComparison.Ordinal))
+                {
+                    selected = index;
+                    break;
+                }
+            }
+
+            selected = (selected + direction + sessions.Count) % sessions.Count;
+            this.selectedId = sessions[selected].Id;
+        }
+
+        private List<DashboardSessionInfo> GetSortedSessions()
+        {
+            List<DashboardSessionInfo> sessions = this.getSessions();
+            sessions.Sort(delegate(DashboardSessionInfo left, DashboardSessionInfo right)
+            {
+                int started = String.Compare(left.StartedAt, right.StartedAt, StringComparison.Ordinal);
+                return started != 0 ? started : String.Compare(left.Id, right.Id, StringComparison.Ordinal);
+            });
+            return sessions;
+        }
+
+        private void Render()
+        {
+            int reportedWidth = Console.WindowWidth;
+            int reportedHeight = Console.WindowHeight;
+            if (reportedWidth < 2 || reportedHeight < 2)
+            {
+                return;
+            }
+            int width = Math.Max(20, reportedWidth - 1);
+            int height = Math.Max(10, reportedHeight - 1);
+            if (width < 78 || height < 14)
+            {
+                Console.SetCursorPosition(0, 0);
+                Console.Write(this.Fit("MultiTerm dashboard needs at least 79 columns x 15 rows. Resize this window. Closing it stops all terminals.", width));
+                return;
+            }
+
+            if (width != this.lastWidth || height != this.lastHeight)
+            {
+                try { Console.Clear(); } catch { }
+                this.lastWidth = width;
+                this.lastHeight = height;
+            }
+
+            List<DashboardSessionInfo> sessions = this.GetSortedSessions();
+            this.EnsureSelection(sessions);
+            List<DashboardLogEntry> logSnapshot;
+            lock (this.sync)
+            {
+                logSnapshot = new List<DashboardLogEntry>(this.logs);
+            }
+
+            string frame = this.BuildFrame(width, height, sessions, logSnapshot);
+            if (String.Equals(frame, this.lastFrame, StringComparison.Ordinal))
+            {
+                return;
+            }
+            Console.SetCursorPosition(0, 0);
+            Console.Write(frame);
+            this.lastFrame = frame;
+        }
+
+        private void EnsureSelection(List<DashboardSessionInfo> sessions)
+        {
+            if (sessions.Count == 0)
+            {
+                this.selectedId = null;
+                return;
+            }
+
+            foreach (DashboardSessionInfo session in sessions)
+            {
+                if (String.Equals(session.Id, this.selectedId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+            this.selectedId = sessions[0].Id;
+        }
+
+        private string BuildFrame(
+            int width,
+            int height,
+            List<DashboardSessionInfo> sessions,
+            List<DashboardLogEntry> logEntries)
+        {
+            int contentWidth = width - 4;
+            int noticeWidth = Math.Min(27, Math.Max(19, contentWidth / 4));
+            int sessionWidth = Math.Min(39, Math.Max(25, contentWidth / 3));
+            int logWidth = contentWidth - noticeWidth - sessionWidth;
+            int bodyRows = height - 6;
+            string border = "+" + new String('-', noticeWidth) + "+" + new String('-', logWidth) + "+" + new String('-', sessionWidth) + "+";
+            List<string> lines = new List<string>();
+            lines.Add(border);
+            lines.Add(this.Row("NOTICE", "Logs (streaming)", "Terminals (select to terminate)", noticeWidth, logWidth, sessionWidth));
+            lines.Add(border);
+
+            string[] notice = new string[]
+            {
+                "Closing this console",
+                "will terminate ALL",
+                "active MultiTerm",
+                "terminal sessions.",
+                "",
+                "Up/Down: select",
+                "Enter: terminate",
+                "Ctrl+Q: stop all"
+            };
+
+            int firstLog = Math.Max(0, logEntries.Count - bodyRows);
+            for (int row = 0; row < bodyRows; row++)
+            {
+                string noticeLine = row < notice.Length ? notice[row] : String.Empty;
+                string logLine = String.Empty;
+                int logIndex = firstLog + row;
+                if (logIndex < logEntries.Count)
+                {
+                    DashboardLogEntry entry = logEntries[logIndex];
+                    logLine = "[" + entry.Time.ToString("HH:mm:ss") + "] [" + entry.Level.ToUpperInvariant() + "] " + entry.Message;
+                }
+
+                string sessionLine = String.Empty;
+                if (row < sessions.Count)
+                {
+                    DashboardSessionInfo session = sessions[row];
+                    string marker = String.Equals(session.Id, this.selectedId, StringComparison.Ordinal) ? "> " : "  ";
+                    string pid = session.Pid > 0 ? "pid " + session.Pid : "starting";
+                    sessionLine = marker + (row + 1) + ". " + session.Title + " (" + pid + ")";
+                }
+                else if (row == 0 && sessions.Count == 0)
+                {
+                    sessionLine = "  No active terminals";
+                }
+
+                lines.Add(this.Row(noticeLine, logLine, sessionLine, noticeWidth, logWidth, sessionWidth));
+            }
+
+            lines.Add(border);
+            string status = " " + sessions.Count + " active | Arrow keys select a terminal; Enter requests a graceful termination; Ctrl+Q stops MultiTerm";
+            lines.Add("|" + this.Fit(status, width - 2) + "|");
+            lines.Add(new String('-', width));
+            return String.Join(Environment.NewLine, lines.ToArray());
+        }
+
+        private string Row(string left, string middle, string right, int leftWidth, int middleWidth, int rightWidth)
+        {
+            return "|" + this.Fit(left, leftWidth) + "|" + this.Fit(middle, middleWidth) + "|" + this.Fit(right, rightWidth) + "|";
+        }
+
+        private string Fit(string value, int width)
+        {
+            value = value ?? String.Empty;
+            if (value.Length > width)
+            {
+                return width <= 3 ? value.Substring(0, width) : value.Substring(0, width - 3) + "...";
+            }
+            return value.PadRight(width);
+        }
+
+        private void TryResize(int requestedWidth, int requestedHeight)
+        {
+            try
+            {
+                int width = Math.Min(requestedWidth, Console.LargestWindowWidth);
+                int height = Math.Min(requestedHeight, Console.LargestWindowHeight);
+                Console.SetBufferSize(Math.Max(Console.BufferWidth, width), Math.Max(Console.BufferHeight, height));
+                Console.SetWindowSize(width, height);
+                Console.SetBufferSize(width, height);
+            }
+            catch
+            {
+                // Windows Terminal and redirected hosts may own sizing. Rendering adapts
+                // to the dimensions they provide instead of failing bridge startup.
+            }
+        }
+    }
+
     public sealed class BridgeServer
     {
         private readonly string host;
         private readonly int port;
         private readonly bool allowRemote;
+        private readonly bool consoleDashboardEnabled;
         private readonly bool openBrowser;
         private readonly string publicDir;
         // Stable AppUserModelID so the browser "--app" window is grouped and
@@ -177,6 +505,7 @@ namespace MultiTerm.PowerShellBridge
         };
 
         private HttpListener listener;
+        private BridgeConsoleDashboard consoleDashboard;
         private volatile bool stopping;
 
         // Absolute path of this script, set from PowerShell at startup. Administrator
@@ -184,13 +513,14 @@ namespace MultiTerm.PowerShellBridge
         // pseudo-console, so we need to know where we came from.
         public static string ScriptPath;
 
-        public BridgeServer(string host, int port, bool allowRemote, string publicDir, bool openBrowser)
+        public BridgeServer(string host, int port, bool allowRemote, string publicDir, bool openBrowser, bool consoleDashboardEnabled)
         {
             this.host = host;
             this.port = port;
             this.allowRemote = allowRemote;
             this.publicDir = Path.GetFullPath(publicDir);
             this.openBrowser = openBrowser;
+            this.consoleDashboardEnabled = consoleDashboardEnabled;
         }
 
         public string Url
@@ -235,9 +565,25 @@ namespace MultiTerm.PowerShellBridge
                 this.Stop(true);
             };
 
-            Console.WriteLine("MultiTerm PowerShell bridge running on " + this.Url);
-            Console.WriteLine("PowerShell sessions are available only to this local machine by default.");
-            Console.WriteLine("Press Ctrl+C to stop the bridge.");
+            if (this.consoleDashboardEnabled)
+            {
+                BridgeConsoleDashboard dashboard = new BridgeConsoleDashboard(
+                    this.DashboardSessions,
+                    delegate(string id)
+                    {
+                        this.Log("warn", "Control console requested termination for session " + id);
+                        this.KillSession(id);
+                    },
+                    delegate { this.Stop(true); });
+                if (dashboard.Start())
+                {
+                    this.consoleDashboard = dashboard;
+                }
+            }
+
+            this.Log("info", "MultiTerm PowerShell bridge running on " + this.Url);
+            this.Log("info", "PowerShell sessions are available only to this local machine by default.");
+            this.Log("info", this.consoleDashboard == null ? "Press Ctrl+C to stop the bridge." : "Control console ready. Use Up/Down and Enter to terminate a selected session.");
 
             if (this.openBrowser)
             {
@@ -276,6 +622,10 @@ namespace MultiTerm.PowerShellBridge
             }
 
             this.stopping = true;
+            if (this.consoleDashboard != null)
+            {
+                this.consoleDashboard.Stop();
+            }
             foreach (TerminalSession session in this.sessions.Values)
             {
                 if (graceful)
@@ -430,7 +780,7 @@ namespace MultiTerm.PowerShellBridge
             }
             catch (Exception error)
             {
-                Console.WriteLine("Could not open the app window automatically: " + error.Message);
+                this.Log("error", "Could not open the app window automatically: " + error.Message);
                 try
                 {
                     ProcessStartInfo fallback = new ProcessStartInfo(this.Url);
@@ -1264,11 +1614,26 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
+        private List<DashboardSessionInfo> DashboardSessions()
+        {
+            List<DashboardSessionInfo> result = new List<DashboardSessionInfo>();
+            foreach (TerminalSession session in this.sessions.Values)
+            {
+                result.Add(new DashboardSessionInfo
+                {
+                    Id = session.Id,
+                    Title = session.Title,
+                    Pid = session.Pid,
+                    StartedAt = session.StartedAt
+                });
+            }
+            return result;
+        }
+
         // --- Administrator terminals -------------------------------------------------
         //
         // An elevated shell runs at HIGH integrity, and this (medium-integrity) bridge
         // cannot attach a ConPTY across that boundary. Nor can it elevate directly:
-        // CreateProcessW has no elevation path at all, and the one that does --
         // ShellExecute "runas" -- cannot hand over a pseudo-console. So the elevated
         // shell's ConPTY is owned by a copy of THIS script re-launched elevated
         // (-ElevatedHost), which relays the terminal back over a loopback socket.
@@ -1853,7 +2218,14 @@ namespace MultiTerm.PowerShellBridge
         private void Log(string level, string message)
         {
             long epochMillis = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
-            Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] [" + level + "] " + message);
+            if (this.consoleDashboard != null)
+            {
+                this.consoleDashboard.AddLog(level, message);
+            }
+            else
+            {
+                Console.WriteLine("[" + DateTime.Now.ToString("HH:mm:ss.fff") + "] [" + level + "] " + message);
+            }
             this.Broadcast("{\"type\":\"log\",\"source\":\"server\",\"level\":" + Json.Quote(level) + ",\"time\":" + epochMillis + ",\"message\":" + Json.Quote(message) + "}");
         }
 
@@ -3374,7 +3746,13 @@ if ($ElevatedHost) {
 
 [MultiTerm.PowerShellBridge.BridgeServer]::ScriptPath = $PSCommandPath
 
-$bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new($HostName, $Port, $effectiveAllowRemote, $publicDir, -not $NoBrowser.IsPresent)
+$bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new(
+    $HostName,
+    $Port,
+    $effectiveAllowRemote,
+    $publicDir,
+    -not $NoBrowser.IsPresent,
+    $ConsoleDashboard.IsPresent)
 try {
   $bridge.Run()
 } catch {
@@ -3391,5 +3769,10 @@ try {
   }
   throw
 } finally {
-  $bridge.Stop($true)
+    if ($null -ne $bridge) {
+        $bridge.Stop($true)
+    }
+    if ($ConsoleDashboard.IsPresent) {
+        try { [Console]::CursorVisible = $true } catch { }
+    }
 }

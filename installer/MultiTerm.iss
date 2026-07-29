@@ -80,11 +80,11 @@ Source: "{#RepoRoot}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreve
 Source: "MultiTerm.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Comment: "Start the MultiTerm Workbench bridge and open it in its own app window"
+Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Comment: "Start MultiTerm with its compact bridge control console"
 Name: "{group}\Stop {#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\{#MyScriptFile}"" -Stop"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Comment: "Shut down the MultiTerm Workbench bridge and close every session"
 Name: "{group}\{#MyAppName} README"; Filename: "{app}\README.md"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Tasks: desktopicon
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\{#MyScriptFile}"""; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
