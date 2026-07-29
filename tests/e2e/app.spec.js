@@ -58,6 +58,8 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#bridgeStatus")).toHaveText(/Bridge connected/i);
     await expect(page.locator("#statusSessions")).toHaveText("1 session");
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+T)");
+    await expect(page.locator("#addTerminal")).toHaveAttribute("aria-keyshortcuts", "Control+T");
   });
 
   test("adds terminals and runs a command", async () => {
