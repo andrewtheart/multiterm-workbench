@@ -1856,6 +1856,40 @@ body.header-hidden .status-hint kbd,
   filter: brightness(1.06);
 }
 
+.palette.update-consent {
+  padding: 22px 22px 18px;
+  width: min(500px, 92vw);
+}
+
+.update-consent .confirm-head i {
+  color: var(--primary);
+}
+
+.update-consent-interval {
+  align-items: center;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+}
+
+.update-consent-interval input {
+  margin-left: auto;
+  text-align: right;
+  width: 76px;
+}
+
+.update-consent-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0 0 18px;
+}
+
 /* ---------------- Maximize / zoom pane --------------- */
 
 .terminal-host.has-zoom {
@@ -2677,7 +2711,7 @@ body.is-pane-dragging {
   border-radius: var(--radius);
   box-shadow: var(--elev-2);
   display: grid;
-  grid-template-rows: 40px minmax(0, 1fr);
+  grid-template-rows: 33px minmax(0, 1fr);
   min-height: 180px;
   min-width: 0;
   overflow: hidden;
@@ -2741,7 +2775,7 @@ body.is-pane-dragging {
   gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
-  padding: 0 8px 0 10px;
+  padding: 1px 8px 1px 10px;
 }
 
 .terminal-host .pane-bar {
@@ -3062,6 +3096,7 @@ body.is-pane-dragging {
   min-width: 0;
   overflow: hidden;
   padding: 6px;
+  position: relative;
   /* xterm's FitAddon sizes the terminal from getComputedStyle(parent).height,
      but only subtracts the terminal element's own padding — never this host's.
      With the global border-box, that computed height includes this 6px inset,
@@ -3072,12 +3107,40 @@ body.is-pane-dragging {
   box-sizing: content-box;
 }
 
+.terminal-zoom-indicator {
+  position: absolute;
+  right: 12px;
+  top: 10px;
+  z-index: 8;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 88%, transparent);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 32%);
+  color: var(--text);
+  font: 600 11px/1 var(--ui-font);
+  letter-spacing: 0.02em;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.terminal-zoom-indicator.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .terminal-screen .xterm {
   height: 100%;
 }
 
 .terminal-host.compact .terminal-pane {
   grid-template-rows: 32px minmax(0, 1fr);
+}
+
+.terminal-host.compact .pane-bar {
+  padding-block: 0;
 }
 
 .terminal-host.compact .pane-actions button[data-action="move-left"],

@@ -114,7 +114,7 @@ test.describe("Surface context menu", () => {
 
     // Anything that only means something for one terminal must not appear: there
     // is no terminal under the pointer to copy from, clear, restart or close.
-    for (const label of ["Copy all output", "Paste", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to"]) {
+    for (const label of ["Copy all output", "Paste", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to", "Launch Copilot CLI (YOLO)"]) {
       await expect(menu.locator(".ctx-item", { hasText: label })).toHaveCount(0);
     }
 

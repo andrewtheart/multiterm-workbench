@@ -167,6 +167,28 @@ test.describe("Settings panel verification", () => {
     await set("#startupCommand", "echo hi", "change");
     expect(await setting("startupCommand")).toBe("echo hi");
     await set("#startupCommand", "", "change");
+
+    await page.evaluate(() => {
+      window.__settingsOriginalUpdateRequest = requestLatestRelease;
+      // eslint-disable-next-line no-global-assign
+      requestLatestRelease = async () => ({ ok: true, current: APP_VERSION, available: false, release: {} });
+    });
+    await set("#autoUpdateChecks", true, "change");
+    await expect.poll(() => page.evaluate(() => loadAutomaticUpdatePreferences().enabled)).toBe(true);
+    await expect(page.locator("#updateCheckIntervalHours")).toBeEnabled();
+
+    await set("#updateCheckIntervalHours", "18", "change");
+    expect(await page.evaluate(() => loadAutomaticUpdatePreferences().intervalHours)).toBe(18);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.updateCheck")).intervalHours)).toBe(18);
+
+    await set("#autoUpdateChecks", false, "change");
+    expect(await page.evaluate(() => loadAutomaticUpdatePreferences().enabled)).toBe(false);
+    await expect(page.locator("#updateCheckIntervalHours")).toBeDisabled();
+    await page.evaluate(() => {
+      // eslint-disable-next-line no-global-assign
+      requestLatestRelease = window.__settingsOriginalUpdateRequest;
+      delete window.__settingsOriginalUpdateRequest;
+    });
   });
 
   test("broadcast Enter toggle", async () => {

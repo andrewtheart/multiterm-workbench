@@ -72,6 +72,7 @@ const PANE_OVERFLOW_WIDTH = 600;
 const APP_VERSION = "0.1.35";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
+const COPILOT_YOLO_COMMAND = "copilot --yolo";
 
 // xterm reports focus changes back to the shell as data when the application
 // enables DECSET 1004 (which ConPTY does): ESC [ I on focus in, ESC [ O on
@@ -188,6 +189,7 @@ const elements = {
   aboutToggle: document.querySelector("#aboutToggle"),
   aboutVersion: document.querySelector("#aboutVersion"),
   aboutVersionText: document.querySelector("#aboutVersionText"),
+  autoUpdateChecks: document.querySelector("#autoUpdateChecks"),
   bellNotify: document.querySelector("#bellNotify"),
   bridgeStatus: document.querySelector("#bridgeStatus"),
   findAllBar: document.querySelector("#findAllBar"),
@@ -290,7 +292,12 @@ const elements = {
   statusZoomIn: document.querySelector("#statusZoomIn"),
   statusZoomOut: document.querySelector("#statusZoomOut"),
   updateClose: document.querySelector("#updateClose"),
+  updateConsentDecline: document.querySelector("#updateConsentDecline"),
+  updateConsentEnable: document.querySelector("#updateConsentEnable"),
+  updateConsentInterval: document.querySelector("#updateConsentInterval"),
+  updateConsentOverlay: document.querySelector("#updateConsentOverlay"),
   updateError: document.querySelector("#updateError"),
+  updateCheckIntervalHours: document.querySelector("#updateCheckIntervalHours"),
   updateInstall: document.querySelector("#updateInstall"),
   updateLater: document.querySelector("#updateLater"),
   updateNotes: document.querySelector("#updateNotes"),
@@ -341,7 +348,7 @@ const state = {
   terminalPages: loadTerminalPages(),
   terminalSearch: "",
   terminals: new Map(),
-  update: { release: null, downloading: false, checking: false },
+  update: { release: null, downloading: false, checking: false, timer: null, scheduleGeneration: 0 },
   workspaces: loadWorkspaces(),
   zoomedId: null
 };
@@ -426,6 +433,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindContextMenu();
   bindRightClickWarning();
   bindCloseConfirm();
+  bindUpdateConsent();
   bindUpdateDialog();
   bindMemStatus();
   bindGlobalShortcuts();
@@ -444,13 +452,14 @@ window.addEventListener("DOMContentLoaded", () => {
   whenIdle(() => {
     attachRipples();
     bindLogConsole();
-    maybeCheckForUpdatesOnStartup();
+    initializeAutomaticUpdateChecks();
   });
   log.debug("app", "UI initialized", { theme: state.settings.appTheme, layout: state.settings.layout });
 });
 
 window.addEventListener("beforeunload", () => {
   state.bridgeClosingDown = true;
+  stopAutomaticUpdateChecks();
   window.clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
   saveSettings();
@@ -492,6 +501,7 @@ function bindControls() {
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
+  syncAutomaticUpdateControls();
 
   elements.addTerminal.addEventListener("click", () => addTerminal({ reveal: true, runStartup: true }));
   elements.closeAllTerminals.addEventListener("click", closeAllTerminals);
@@ -581,6 +591,32 @@ function bindControls() {
   bindSetting(elements.notifySilence, "notifySilence", "change", (_, element) => element.checked);
   bindSetting(elements.silenceSeconds, "silenceSeconds", "change", Number);
   bindSetting(elements.startupCommand, "startupCommand", "change", (value) => value);
+
+  elements.autoUpdateChecks.addEventListener("change", () => {
+    const enabled = elements.autoUpdateChecks.checked;
+    saveAutomaticUpdatePreferences({
+      configured: true,
+      enabled,
+      intervalHours: elements.updateCheckIntervalHours.value
+    });
+    syncAutomaticUpdateControls();
+    if (enabled) {
+      startAutomaticUpdateChecks({ checkNow: true });
+      toast("Automatic update checks enabled.", "success", 2200);
+    } else {
+      stopAutomaticUpdateChecks();
+      toast("Automatic update checks disabled.", "info", 2200);
+    }
+  });
+
+  elements.updateCheckIntervalHours.addEventListener("change", () => {
+    const preferences = saveAutomaticUpdatePreferences({
+      configured: true,
+      intervalHours: elements.updateCheckIntervalHours.value
+    });
+    syncAutomaticUpdateControls();
+    if (preferences.enabled) startAutomaticUpdateChecks({ checkNow: false });
+  });
 
   for (const notifyToggle of [elements.notifyActivity, elements.notifySilence]) {
     notifyToggle.addEventListener("change", () => {
@@ -747,7 +783,13 @@ function handleBridgeMessage(message) {
       const snapshot = state.settings.restoreSession ? loadSessionSnapshot() : null;
       if (snapshot && snapshot.length > 0) {
         for (const meta of snapshot) {
-          const restored = addTerminal({ title: meta.title, shell: meta.shell, cwd: meta.cwd, color: meta.color });
+          const restored = addTerminal({
+            title: meta.title,
+            shell: meta.shell,
+            cwd: meta.cwd,
+            color: meta.color,
+            fontSizeOverride: meta.fontSizeOverride
+          });
           if (meta.minimized && restored) minimizeTerminal(restored.id);
         }
       } else {
@@ -947,6 +989,10 @@ function addTerminal(options = {}) {
   const savedMeta = options.savedMeta || null;
   const id = session.id || createId();
   const title = savedMeta?.title || session.title || options.title || `PowerShell ${state.nextIndex}`;
+  const rawFontSizeOverride = savedMeta?.fontSizeOverride ?? options.fontSizeOverride;
+  const fontSizeOverride = Number.isFinite(Number(rawFontSizeOverride))
+    ? Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(Number(rawFontSizeOverride))))
+    : null;
   const pane = elements.paneTemplate.content.firstElementChild.cloneNode(true);
   const screen = pane.querySelector(".terminal-screen");
   const titleInput = pane.querySelector(".pane-title");
@@ -958,7 +1004,7 @@ function addTerminal(options = {}) {
     cursorBlink: state.settings.cursorBlink,
     cursorStyle: state.settings.cursorStyle,
     fontFamily: fontStacks[state.settings.fontFamily] || fontStacks["Cascadia Mono"],
-    fontSize: state.settings.fontSize,
+    fontSize: fontSizeOverride ?? state.settings.fontSize,
     scrollback: effectiveScrollback(),
     tabStopWidth: 4,
     theme: themes[state.settings.theme]
@@ -987,6 +1033,11 @@ function addTerminal(options = {}) {
   elements.host.append(pane);
   term.open(screen);
 
+  const fontZoomIndicator = document.createElement("span");
+  fontZoomIndicator.className = "terminal-zoom-indicator";
+  fontZoomIndicator.setAttribute("aria-hidden", "true");
+  screen.append(fontZoomIndicator);
+
   const terminal = {
     color: savedMeta?.color || options.color || session.color || null,
     contextSelection: "",
@@ -995,6 +1046,10 @@ function addTerminal(options = {}) {
     awaitingInput: false,
     elevated,
     fitAddon,
+    fontSizeOverride,
+    fontZoomIndicator,
+    fontZoomIndicatorTimer: 0,
+    fontZoomWheelDelta: 0,
     id,
     elevated: Boolean(options.elevated),
     logging: false,
@@ -1054,6 +1109,7 @@ function addTerminal(options = {}) {
   if (isOnActivePage(terminal)) setActiveTerminal(id);
   refreshIcons();
   bindTerminalKeyHandling(terminal);
+  bindTerminalFontZoom(terminal);
   bindTerminalSelectionHandling(terminal);
   registerCwdTracking(terminal);
 
@@ -1180,6 +1236,28 @@ function bindTerminalKeyHandling(terminal) {
   }, true);
 }
 
+// Ctrl+wheel is scoped by pointer position, so it can resize one terminal
+// without adding another header control or another row to the context menu.
+// Pixel deltas from touchpads are accumulated to avoid racing through many font
+// sizes during one gesture; a traditional mouse-wheel notch crosses the same
+// threshold in one event.
+function bindTerminalFontZoom(terminal) {
+  terminal.screen.addEventListener("wheel", (event) => {
+    if (!event.ctrlKey || event.altKey || event.metaKey || event.deltaY === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 40
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 120 : 1;
+    terminal.fontZoomWheelDelta += event.deltaY * scale;
+    if (Math.abs(terminal.fontZoomWheelDelta) < 80) return;
+
+    zoomTerminalFont(terminal.id, terminal.fontZoomWheelDelta < 0 ? 1 : -1);
+    terminal.fontZoomWheelDelta = 0;
+  }, { capture: true, passive: false });
+}
+
 function bindTerminalSelectionHandling(terminal) {
   const element = terminal.term.element;
   if (!element) return;
@@ -1296,7 +1374,12 @@ function bindPaneControls(terminal) {
     } else if (action === "minimize") {
       minimizeTerminal(terminal.id);
     } else if (action === "duplicate") {
-      addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` });
+      addTerminal({
+        reveal: true,
+        runStartup: true,
+        title: `${terminal.titleInput.value} copy`,
+        fontSizeOverride: terminal.fontSizeOverride
+      });
     } else if (action === "move-left") {
       moveTerminal(terminal.id, -1);
     } else if (action === "move-right") {
@@ -1763,6 +1846,7 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
   window.clearTimeout(terminal.selectionClearTimer);
+  window.clearTimeout(terminal.fontZoomIndicatorTimer);
   window.clearTimeout(terminal.webglRecoveryHandle);
   terminal.webglRecoveryHandle = 0;
   if (terminal.outputFlushHandle) {
@@ -2638,7 +2722,7 @@ function applySettings() {
 
   const fontFamily = fontStacks[state.settings.fontFamily] || fontStacks["Cascadia Mono"];
   for (const terminal of state.terminals.values()) {
-    terminal.term.options.fontSize = state.settings.fontSize;
+    terminal.term.options.fontSize = terminalFontSize(terminal);
     terminal.term.options.fontFamily = fontFamily;
     terminal.term.options.cursorStyle = state.settings.cursorStyle;
     terminal.term.options.cursorBlink = state.settings.cursorBlink;
@@ -2701,8 +2785,8 @@ function updateFontZoomControls() {
   elements.statusZoomOut.disabled = atMin;
   elements.statusZoomIn.disabled = atMax;
 
-  const downLabel = atMin ? `Font size is already at minimum (${MIN_FONT_SIZE}px)` : "Decrease font size (Ctrl+-)";
-  const upLabel = atMax ? `Font size is already at maximum (${MAX_FONT_SIZE}px)` : "Increase font size (Ctrl++)";
+  const downLabel = atMin ? `Default font size is already at minimum (${MIN_FONT_SIZE}px)` : "Decrease default terminal font size (Ctrl+-)";
+  const upLabel = atMax ? `Default font size is already at maximum (${MAX_FONT_SIZE}px)` : "Increase default terminal font size (Ctrl++)";
   elements.statusZoomOut.title = downLabel;
   elements.statusZoomOut.setAttribute("aria-label", downLabel);
   elements.statusZoomIn.title = upLabel;
@@ -3401,6 +3485,54 @@ function resetFontZoom() {
   saveSettings();
 }
 
+function terminalFontSize(terminal) {
+  return terminal.fontSizeOverride ?? state.settings.fontSize;
+}
+
+function showTerminalFontZoom(terminal, size, isDefault) {
+  window.clearTimeout(terminal.fontZoomIndicatorTimer);
+  terminal.fontZoomIndicator.textContent = isDefault ? `${size}px · default` : `${size}px`;
+  terminal.fontZoomIndicator.classList.add("is-visible");
+  terminal.fontZoomIndicatorTimer = window.setTimeout(() => {
+    terminal.fontZoomIndicator.classList.remove("is-visible");
+    terminal.fontZoomIndicatorTimer = 0;
+  }, 1100);
+}
+
+function setTerminalFontSize(terminal, requestedSize) {
+  if (!terminal) return;
+  const size = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(requestedSize)));
+  terminal.fontSizeOverride = size === state.settings.fontSize ? null : size;
+  terminal.term.options.fontSize = size;
+  scheduleFit(terminal);
+  saveSessionSnapshot();
+  showTerminalFontZoom(terminal, size, terminal.fontSizeOverride == null);
+}
+
+function zoomTerminalFont(id, delta) {
+  const terminal = state.terminals.get(id);
+  if (!terminal) return;
+  setTerminalFontSize(terminal, terminalFontSize(terminal) + delta);
+}
+
+function resetTerminalFontZoom(id) {
+  const terminal = state.terminals.get(id);
+  if (!terminal) return;
+  terminal.fontSizeOverride = null;
+  terminal.term.options.fontSize = state.settings.fontSize;
+  scheduleFit(terminal);
+  saveSessionSnapshot();
+  showTerminalFontZoom(terminal, state.settings.fontSize, true);
+}
+
+function zoomActiveTerminalFont(delta) {
+  if (state.activeId) zoomTerminalFont(state.activeId, delta);
+}
+
+function resetActiveTerminalFontZoom() {
+  if (state.activeId) resetTerminalFontZoom(state.activeId);
+}
+
 /* ---------------- Command palette --------------- */
 
 function getCommands() {
@@ -3422,6 +3554,9 @@ function getCommands() {
     { label: "Clear active terminal", hint: "Ctrl+Shift+L", run: clearActiveTerminal },
     { label: "Copy active output", hint: "Ctrl+Shift+C", run: copyActiveTerminal },
     { label: "Cycle active terminal color", run: () => state.activeId && cyclePaneColor(state.terminals.get(state.activeId)) },
+    { label: "Zoom in active terminal", hint: "Ctrl+Alt++", run: () => zoomActiveTerminalFont(1) },
+    { label: "Zoom out active terminal", hint: "Ctrl+Alt+-", run: () => zoomActiveTerminalFont(-1) },
+    { label: "Reset active terminal zoom", hint: "Ctrl+Alt+0", run: resetActiveTerminalFontZoom },
     { label: "Fit all terminals", run: fitAllTerminals },
     { label: "Reset layout", run: resetLayout },
     { label: "Broadcast command…", hint: "Ctrl+Shift+B", run: () => toggleBroadcast(true) },
@@ -3439,8 +3574,8 @@ function getCommands() {
     { label: "Next page", hint: "Ctrl+PageDown", run: () => cyclePage(1) },
     { label: "Previous page", hint: "Ctrl+PageUp", run: () => cyclePage(-1) },
     { label: "Close current page", run: () => removePage(state.activePageId) },
-    { label: "Increase font size", hint: "Ctrl++", run: () => fontZoom(1) },
-    { label: "Decrease font size", hint: "Ctrl+-", run: () => fontZoom(-1) },
+    { label: "Increase default terminal font size", hint: "Ctrl++", run: () => fontZoom(1) },
+    { label: "Decrease default terminal font size", hint: "Ctrl+-", run: () => fontZoom(-1) },
     { label: "Toggle app theme", run: toggleAppTheme },
     { label: "Toggle header", run: () => toggleChrome("headerHidden") },
     { label: "Toggle layout panel", run: () => toggleChrome("sidecarHidden") },
@@ -3783,6 +3918,14 @@ function bindGlobalShortcuts() {
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
 
+    if (elements.updateConsentOverlay && !elements.updateConsentOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        declineAutomaticUpdateChecks();
+      }
+      return;
+    }
+
     if ((event.ctrlKey && event.shiftKey && key === "p") || event.key === "F1") {
       event.preventDefault();
       palette.open ? closePalette() : openPalette();
@@ -3886,6 +4029,15 @@ function bindGlobalShortcuts() {
     } else if (event.ctrlKey && event.altKey && event.key === "ArrowLeft") {
       event.preventDefault();
       cycleTerminal(-1);
+    } else if (event.ctrlKey && event.altKey && event.code === "Equal") {
+      event.preventDefault();
+      zoomActiveTerminalFont(1);
+    } else if (event.ctrlKey && event.altKey && event.code === "Minus") {
+      event.preventDefault();
+      zoomActiveTerminalFont(-1);
+    } else if (event.ctrlKey && event.altKey && (event.code === "Digit0" || event.code === "Numpad0")) {
+      event.preventDefault();
+      resetActiveTerminalFontZoom();
     } else if (event.ctrlKey && !event.altKey && event.key === "PageDown") {
       event.preventDefault();
       cyclePage(1);
@@ -3898,13 +4050,13 @@ function bindGlobalShortcuts() {
         event.preventDefault();
         setActivePage(page.id);
       }
-    } else if (event.ctrlKey && (event.key === "=" || event.key === "+")) {
+    } else if (event.ctrlKey && !event.altKey && (event.key === "=" || event.key === "+")) {
       event.preventDefault();
       fontZoom(1);
-    } else if (event.ctrlKey && event.key === "-") {
+    } else if (event.ctrlKey && !event.altKey && event.key === "-") {
       event.preventDefault();
       fontZoom(-1);
-    } else if (event.ctrlKey && event.key === "0") {
+    } else if (event.ctrlKey && !event.altKey && event.key === "0") {
       event.preventDefault();
       resetFontZoom();
     }
@@ -3920,13 +4072,20 @@ function restartSession(id) {
   const meta = {
     title: terminal.titleInput.value,
     shell: terminal.shell,
-    cwd: terminal.cwd
+    cwd: terminal.cwd,
+    fontSizeOverride: terminal.fontSizeOverride
   };
   const anchor = terminal.pane.nextElementSibling;
 
   log.info("session", `Restarting session: ${meta.title}`, { id });
   removeTerminal(id);
-  const next = addTerminal({ reveal: true, title: meta.title, shell: meta.shell, cwd: meta.cwd });
+  const next = addTerminal({
+    reveal: true,
+    title: meta.title,
+    shell: meta.shell,
+    cwd: meta.cwd,
+    fontSizeOverride: meta.fontSizeOverride
+  });
   if (next && anchor && anchor.parentElement === elements.host) {
     elements.host.insertBefore(next.pane, anchor);
   }
@@ -5245,6 +5404,7 @@ function saveWorkspace(rawName) {
       shell: terminal.shell,
       cwd: terminal.cwd,
       color: terminal.color,
+      fontSizeOverride: terminal.fontSizeOverride,
       pageId: terminal.pageId
     }))
   };
@@ -5298,6 +5458,7 @@ function restoreWorkspace(name) {
       shell: meta.shell,
       cwd: meta.cwd,
       color: meta.color,
+      fontSizeOverride: meta.fontSizeOverride,
       pageId: meta.pageId
     });
   }
@@ -5352,6 +5513,7 @@ function syncControlsFromSettings() {
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
+  syncAutomaticUpdateControls();
   renderSnippets();
   updateBroadcastEnterToggle();
   refreshComboboxes();
@@ -5398,6 +5560,7 @@ function saveSessionSnapshot() {
     shell: terminal.shell,
     cwd: terminal.cwd,
     color: terminal.color,
+    fontSizeOverride: terminal.fontSizeOverride,
     minimized: terminal.minimized,
     pageId: terminal.pageId
   }));
@@ -5506,9 +5669,9 @@ function closeAbout() {
 const UPDATE_REPO = "andrewtheart/multiterm-workbench";
 const UPDATE_RELEASE_PAGE = `https://github.com/${UPDATE_REPO}/releases/latest`;
 const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
-// Automatic checks are throttled so launching the app repeatedly doesn't hammer
-// the GitHub API (and doesn't nag about a release the user already dismissed).
-const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const UPDATE_DEFAULT_INTERVAL_HOURS = 6;
+const UPDATE_MIN_INTERVAL_HOURS = 1;
+const UPDATE_MAX_INTERVAL_HOURS = 168;
 
 function loadUpdateMeta() {
   try {
@@ -5525,6 +5688,91 @@ function saveUpdateMeta(patch) {
   } catch {
     /* storage unavailable (private mode) — checking still works, just unthrottled */
   }
+}
+
+function normalizeUpdateIntervalHours(value) {
+  const hours = Math.round(Number(value));
+  if (!Number.isFinite(hours)) return UPDATE_DEFAULT_INTERVAL_HOURS;
+  return Math.min(UPDATE_MAX_INTERVAL_HOURS, Math.max(UPDATE_MIN_INTERVAL_HOURS, hours));
+}
+
+function loadAutomaticUpdatePreferences() {
+  const meta = loadUpdateMeta();
+  return {
+    configured: meta.automaticChecksConfigured === true,
+    enabled: meta.automaticChecksConfigured === true && meta.automaticChecksEnabled === true,
+    intervalHours: normalizeUpdateIntervalHours(meta.intervalHours)
+  };
+}
+
+function saveAutomaticUpdatePreferences({ configured, enabled, intervalHours } = {}) {
+  const current = loadAutomaticUpdatePreferences();
+  const next = {
+    configured: configured === undefined ? current.configured : Boolean(configured),
+    enabled: enabled === undefined ? current.enabled : Boolean(enabled),
+    intervalHours: intervalHours === undefined
+      ? current.intervalHours
+      : normalizeUpdateIntervalHours(intervalHours)
+  };
+  saveUpdateMeta({
+    automaticChecksConfigured: next.configured,
+    automaticChecksEnabled: next.enabled,
+    intervalHours: next.intervalHours
+  });
+  return next;
+}
+
+function syncAutomaticUpdateControls() {
+  const preferences = loadAutomaticUpdatePreferences();
+  elements.autoUpdateChecks.checked = preferences.enabled;
+  elements.updateCheckIntervalHours.value = String(preferences.intervalHours);
+  elements.updateCheckIntervalHours.disabled = !preferences.enabled;
+}
+
+function bindUpdateConsent() {
+  if (!elements.updateConsentOverlay) return;
+  elements.updateConsentEnable.addEventListener("click", acceptAutomaticUpdateChecks);
+  elements.updateConsentDecline.addEventListener("click", declineAutomaticUpdateChecks);
+}
+
+function openUpdateConsentDialog() {
+  if (!elements.updateConsentOverlay) return;
+  const preferences = loadAutomaticUpdatePreferences();
+  elements.updateConsentInterval.value = String(preferences.intervalHours);
+  elements.updateConsentOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.updateConsentOverlay.classList.add("is-open"));
+  refreshIcons();
+  elements.updateConsentInterval.focus();
+}
+
+function closeUpdateConsentDialog() {
+  if (!elements.updateConsentOverlay) return;
+  elements.updateConsentOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.updateConsentOverlay.hidden = true;
+  }, 150);
+}
+
+function acceptAutomaticUpdateChecks() {
+  saveAutomaticUpdatePreferences({
+    configured: true,
+    enabled: true,
+    intervalHours: elements.updateConsentInterval.value
+  });
+  syncAutomaticUpdateControls();
+  closeUpdateConsentDialog();
+  startAutomaticUpdateChecks({ checkNow: true });
+}
+
+function declineAutomaticUpdateChecks() {
+  saveAutomaticUpdatePreferences({
+    configured: true,
+    enabled: false,
+    intervalHours: elements.updateConsentInterval.value
+  });
+  syncAutomaticUpdateControls();
+  stopAutomaticUpdateChecks();
+  closeUpdateConsentDialog();
 }
 
 // Numeric-segment compare; release tags are plain vMAJOR.MINOR.PATCH.
@@ -5623,16 +5871,46 @@ async function checkForUpdates({ manual = false } = {}) {
   }
 }
 
-function maybeCheckForUpdatesOnStartup() {
-  // Under browser automation (Playwright/WebDriver) this unsolicited network probe
-  // can resolve mid-test and pop the update modal, whose overlay then swallows
-  // pointer events for every unrelated spec that follows. Automated runs exercise
-  // the update flow explicitly through checkForUpdates(); only the automatic
-  // startup probe is skipped here, leaving real launches untouched.
+function stopAutomaticUpdateChecks() {
+  state.update.scheduleGeneration += 1;
+  window.clearTimeout(state.update.timer);
+  state.update.timer = null;
+}
+
+function scheduleNextAutomaticUpdateCheck(generation = state.update.scheduleGeneration) {
+  if (generation !== state.update.scheduleGeneration) return;
+  const preferences = loadAutomaticUpdatePreferences();
+  if (!preferences.enabled) return;
+  const delay = preferences.intervalHours * 60 * 60 * 1000;
+  state.update.timer = window.setTimeout(async () => {
+    state.update.timer = null;
+    await checkForUpdates({ manual: false });
+    scheduleNextAutomaticUpdateCheck(generation);
+  }, delay);
+}
+
+function startAutomaticUpdateChecks({ checkNow = true } = {}) {
+  stopAutomaticUpdateChecks();
+  if (!loadAutomaticUpdatePreferences().enabled) return;
+  const generation = state.update.scheduleGeneration;
+  if (!checkNow) {
+    scheduleNextAutomaticUpdateCheck(generation);
+    return;
+  }
+  Promise.resolve(checkForUpdates({ manual: false }))
+    .finally(() => scheduleNextAutomaticUpdateCheck(generation));
+}
+
+function initializeAutomaticUpdateChecks() {
+  // Automated browser runs invoke this flow explicitly. Suppressing unsolicited
+  // first-run UI and network traffic keeps unrelated tests deterministic.
   if (navigator.webdriver) return;
-  const last = Number(loadUpdateMeta().lastCheck) || 0;
-  if (Date.now() - last < UPDATE_CHECK_INTERVAL_MS) return;
-  checkForUpdates({ manual: false });
+  const preferences = loadAutomaticUpdatePreferences();
+  if (!preferences.configured) {
+    openUpdateConsentDialog();
+    return;
+  }
+  if (preferences.enabled) startAutomaticUpdateChecks({ checkNow: true });
 }
 
 function openUpdateDialog(release) {
@@ -5994,6 +6272,12 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
     {
+      label: "Launch Copilot CLI (YOLO)",
+      icon: "bot",
+      title: "Starts the interactive Copilot CLI with all tool, path, and URL permissions",
+      run: () => launchCopilotCli(terminal)
+    },
+    {
       input: true,
       label: "Copilot model",
       icon: "bot",
@@ -6013,7 +6297,16 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     ...buildLoggingMenuItems(terminal),
     ...(snippetItems.length ? [{ separator: true }, ...snippetItems] : []),
     { separator: true },
-    { label: "Split (duplicate)", icon: "copy-plus", run: () => addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` }) },
+    {
+      label: "Split (duplicate)",
+      icon: "copy-plus",
+      run: () => addTerminal({
+        reveal: true,
+        runStartup: true,
+        title: `${terminal.titleInput.value} copy`,
+        fontSizeOverride: terminal.fontSizeOverride
+      })
+    },
     { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", run: () => restartSession(terminal.id) },
     { label: "Cycle color", icon: "tag", run: () => cyclePaneColor(terminal) },
     ...buildMoveToPageItems(terminal),
@@ -6028,6 +6321,13 @@ function sendTerminalSlashCommand(terminal, command, rawValue) {
   const value = String(rawValue || "").trim();
   if (!terminal || !value) return;
   sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
+}
+
+function launchCopilotCli(terminal) {
+  if (!terminal) return;
+  setAwaitingInput(terminal, false);
+  sendBridge({ type: "input", id: terminal.id, data: `${COPILOT_YOLO_COMMAND}\r` });
+  window.requestAnimationFrame(() => terminal.term.focus());
 }
 
 // "Here" on the blank surface means the folder you were last working in, which
@@ -6105,7 +6405,12 @@ function buildPaneOverflowMenu(terminal) {
     {
       label: "Duplicate",
       icon: "copy-plus",
-      run: () => addTerminal({ reveal: true, runStartup: true, title: `${terminal.titleInput.value} copy` })
+      run: () => addTerminal({
+        reveal: true,
+        runStartup: true,
+        title: `${terminal.titleInput.value} copy`,
+        fontSizeOverride: terminal.fontSizeOverride
+      })
     }
   ]);
 }

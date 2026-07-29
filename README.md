@@ -52,7 +52,7 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
   <tr>
     <td align="center" width="33%">
       <h3>⬆️ Built-in updater</h3>
-      Check GitHub releases, read release notes in-app, and launch the newest installer directly from the update dialog.
+      Opt in to update checks on first run, choose the recurring interval, read release notes in-app, and launch the newest installer directly from the update dialog.
     </td>
     <td align="center" width="33%">
       <h3>📜 Live diagnostics log console</h3>
@@ -584,7 +584,7 @@ point the checker at a fork.
 - Each pane header has a **maximize** button that overlays the pane across the whole terminal workspace (and turns into restore); `Ctrl+Shift+X` does the same for the active pane.
 - The **focus** button next to it promotes the pane in the focus-rail layout rather than maximizing it.
 - Every pane header carries a **hamburger (⋯) menu** holding *Find…* and *Duplicate*; when a pane gets too narrow, its move and label-colour actions collapse into the same menu.
-- The status bar includes − / + controls for terminal font zoom (same as Ctrl+- and Ctrl+=).
+- Hold Ctrl and use the mouse wheel over a pane to zoom only that terminal; Ctrl+Alt+= / - / 0 controls or resets the active terminal. The status bar − / + controls and Ctrl+- / Ctrl+= change the default inherited by terminals without an individual override.
 - Hover (or keyboard-focus) the **memory chip** at the far left of the status bar to expand a live reading of how much RAM MultiTerm and its terminals are using, alongside system totals. It refreshes about every 4 seconds while open and stops as soon as you move away, so the (fairly expensive) Windows process probe only runs when you are actually looking. The reading is Windows-only; elsewhere the chip reports `unavailable`. Set `MEMSTATS=1` on the bridge to restore the old always-on 10-second broadcast instead.
 - The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.
 

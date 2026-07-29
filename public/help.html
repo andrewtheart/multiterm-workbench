@@ -192,7 +192,7 @@
       <p>Click the <strong>minimize</strong> (&minus;) button in a pane&rsquo;s header to tuck it away to the status bar without closing the session. The pane hides and the others reflow; a chip appears at the bottom — click it to restore the pane right where it was.</p>
       <p>Click the <strong>maximize</strong> button to blow a single pane up so it overlays every other terminal and fills the whole workspace. The same button restores it, as does <span class="kbd">Ctrl+Shift+X</span>. The <strong>focus</strong> button beside it is different — it promotes the pane inside the <em>focus rail</em> layout instead of covering the others.</p>
       <p>Every pane header also has a <strong>hamburger</strong> (&hellip;) menu holding <strong>Find&hellip;</strong> and <strong>Duplicate</strong>. When a pane becomes too narrow for its full header, the move and label-colour actions collapse into that same menu.</p>
-      <p>Use the status bar <strong>&minus; / +</strong> buttons to zoom terminal font size out or in (same behavior as <span class="kbd">Ctrl+-</span> and <span class="kbd">Ctrl+=</span>).</p>
+      <p>Hold <span class="kbd">Ctrl</span> and use the mouse wheel over a terminal to zoom only that pane; a brief badge shows its font size. The active pane can also use <span class="kbd">Ctrl+Alt+=</span>, <span class="kbd">Ctrl+Alt+-</span>, and <span class="kbd">Ctrl+Alt+0</span> to reset. The status bar <strong>&minus; / +</strong> buttons and <span class="kbd">Ctrl+-</span> / <span class="kbd">Ctrl+=</span> change the default inherited by terminals without an individual override.</p>
       <p>Hover the <strong>memory chip</strong> at the far left of the status bar (or reach it with <span class="kbd">Tab</span>) to expand a live reading of the RAM MultiTerm and its terminals are using, next to the system totals. It refreshes roughly every 4 seconds while it is open and stops the moment you move away, so the underlying Windows process probe only runs while you are watching it. The reading is Windows-only — elsewhere the chip simply says <em>unavailable</em>.</p>
 
       <h2>Working across sessions</h2>
@@ -213,7 +213,8 @@
       </ul>
 
       <h2>Keeping MultiTerm up to date</h2>
-      <p>MultiTerm checks GitHub for a newer release in the background (at most a few times a day) and, when one exists, shows a dialog with that release&rsquo;s notes. You can also check on demand from the <strong>Check for updates</strong> button in the About dialog, or the <strong>Check for updates&hellip;</strong> entry in the command palette.</p>
+      <p>On first run, MultiTerm asks whether it may check GitHub for newer releases and lets you choose the recurring interval (6 hours by default). If enabled, it checks once whenever the app starts and again after each configured interval. Change or disable this at any time with <strong>Automatic update checks</strong> and <strong>Update interval</strong> in Session settings.</p>
+      <p>You can always check on demand from the <strong>Check for updates</strong> button in the About dialog or the <strong>Check for updates&hellip;</strong> entry in the command palette, even when automatic checks are disabled.</p>
       <p>Choosing <strong>Download &amp; install</strong> downloads the release&rsquo;s Windows installer, launches it, and closes MultiTerm so it can be replaced. <strong>Later</strong> dismisses that version so background checks stop mentioning it, and <strong>View on GitHub</strong> opens the release page in your browser. Running MultiTerm from the PowerShell bridge instead of the desktop app still shows the notes, but hands you off to the download page rather than installing.</p>
 
       <h2>Keyboard shortcuts</h2>
@@ -231,7 +232,9 @@
         <li><span>Paste into active</span><span class="kbd">Ctrl+Shift+V</span></li>
         <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
         <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+&rarr; / &larr;</span></li>
-        <li><span>Font zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
+        <li><span>Zoom terminal under pointer</span><span class="kbd">Ctrl+mouse wheel</span></li>
+        <li><span>Active terminal zoom in / out / reset</span><span class="kbd">Ctrl+Alt+= / - / 0</span></li>
+        <li><span>Default terminal zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
       </ul>
 
       <h2>Tips &amp; troubleshooting</h2>
@@ -241,7 +244,7 @@
       <ul>
         <li>To run on a different port, launch the bridge with a <code>PORT</code> value, e.g. <code>PORT=4000</code>.</li>
         <li>If a pane says the bridge is offline, the local bridge stopped — relaunch MultiTerm from the Start Menu or shortcut.</li>
-        <li>Right-click inside a pane for copy, paste, find, clear, split, and restart actions.</li>
+        <li>Right-click inside a pane for copy, paste, find, clear, split, restart, and <strong>Launch Copilot CLI (YOLO)</strong>. The Copilot action starts its interactive TUI with all tool, path, and URL permissions.</li>
       </ul>
 
       <h2>About</h2>

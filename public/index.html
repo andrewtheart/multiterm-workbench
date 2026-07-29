@@ -294,6 +294,14 @@
               <span>Restore last session</span>
             </label>
             <label class="toggle-row">
+              <input id="autoUpdateChecks" type="checkbox">
+              <span>Automatic update checks</span>
+            </label>
+            <label class="control-row">
+              <span>Update interval (h)</span>
+              <input id="updateCheckIntervalHours" type="number" min="1" max="168" step="1" inputmode="numeric">
+            </label>
+            <label class="toggle-row">
               <input id="bellNotify" type="checkbox">
               <span>Bell notifications</span>
             </label>
@@ -427,10 +435,10 @@
         <span class="status-spacer"></span>
         <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>T</kbd> new</span>
         <div class="status-zoom" role="group" aria-label="Font zoom controls">
-          <button id="statusZoomOut" class="status-btn status-icon-btn" type="button" title="Decrease font size (Ctrl+-)" aria-label="Decrease font size">
+          <button id="statusZoomOut" class="status-btn status-icon-btn" type="button" title="Decrease default terminal font size (Ctrl+-)" aria-label="Decrease default terminal font size">
             <i data-lucide="minus"></i>
           </button>
-          <button id="statusZoomIn" class="status-btn status-icon-btn" type="button" title="Increase font size (Ctrl++)" aria-label="Increase font size">
+          <button id="statusZoomIn" class="status-btn status-icon-btn" type="button" title="Increase default terminal font size (Ctrl++)" aria-label="Increase default terminal font size">
             <i data-lucide="plus"></i>
           </button>
         </div>
@@ -515,7 +523,9 @@
           <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
           <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
           <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+→ / ←</span></li>
-          <li><span>Font zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
+          <li><span>Zoom terminal under pointer</span><span class="kbd">Ctrl+mouse wheel</span></li>
+          <li><span>Active terminal zoom in / out / reset</span><span class="kbd">Ctrl+Alt+= / - / 0</span></li>
+          <li><span>Default terminal zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
         </ul>
       </div>
     </div>
@@ -597,6 +607,26 @@
       </div>
     </div>
 
+    <div id="updateConsentOverlay" class="palette-overlay" hidden>
+      <div class="palette update-consent" role="dialog" aria-modal="true" aria-labelledby="updateConsentTitle" aria-describedby="updateConsentText">
+        <div class="confirm-head">
+          <i data-lucide="refresh-cw"></i>
+          <h2 id="updateConsentTitle">Keep MultiTerm up to date?</h2>
+        </div>
+        <p id="updateConsentText" class="confirm-body">With your permission, MultiTerm will contact GitHub to check for a new release whenever the app starts, then repeat at the interval you choose. You can change this later in Session settings.</p>
+        <label class="update-consent-interval">
+          <span>Check again every</span>
+          <input id="updateConsentInterval" type="number" min="1" max="168" step="1" value="6" inputmode="numeric" aria-label="Update check interval in hours">
+          <span>hours</span>
+        </label>
+        <p class="update-consent-note">Only release information is requested. Updates are never downloaded or installed without asking.</p>
+        <div class="confirm-actions">
+          <button id="updateConsentDecline" type="button" class="confirm-cancel">No thanks</button>
+          <button id="updateConsentEnable" type="button" class="confirm-proceed">Enable update checks</button>
+        </div>
+      </div>
+    </div>
+
     <div id="updateOverlay" class="palette-overlay" hidden>
       <div class="palette update" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
         <div class="update-head">
@@ -654,7 +684,7 @@
               <i data-lucide="eraser"></i>
             </button>
             <button type="button" data-action="copy" title="Copy output" aria-label="Copy output">
-              <i data-lucide="clipboard-copy"></i>
+              <i data-lucide="copy"></i>
             </button>
             <button type="button" data-action="color" title="Cycle label color" aria-label="Cycle label color">
               <i data-lucide="tag"></i>

@@ -1314,7 +1314,7 @@ test.describe("Renderer coverage completion", () => {
       localStorage.setItem("multiterm.updateCheck", JSON.stringify({ dismissedVersion: "9.0.0", lastCheck: Date.now() }));
       window.multiterm = { checkForUpdate: async () => ({ ok: true, available: true, release: { version: "9.0.0" } }) };
       await checkForUpdates({ manual: false });
-      maybeCheckForUpdatesOnStartup();
+      initializeAutomaticUpdateChecks();
       withMissingElement("updateOverlay", () => openUpdateDialog({ version: "x", notes: "" }));
       withMissingElement("updateOverlay", closeUpdateDialog);
       withMissingElement("updateOverlay", bindUpdateDialog);
@@ -1806,10 +1806,12 @@ test.describe("Renderer coverage completion", () => {
       await checkForUpdates({ manual: false });
       const webdriverDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, "webdriver");
       Object.defineProperty(Navigator.prototype, "webdriver", { configurable: true, get: () => false });
-      saveUpdateMeta({ lastCheck: Date.now() });
-      maybeCheckForUpdatesOnStartup();
-      saveUpdateMeta({ lastCheck: 0 });
-      maybeCheckForUpdatesOnStartup();
+      saveAutomaticUpdatePreferences({ configured: true, enabled: false, intervalHours: 6 });
+      initializeAutomaticUpdateChecks();
+      saveAutomaticUpdatePreferences({ configured: true, enabled: true, intervalHours: 6 });
+      initializeAutomaticUpdateChecks();
+      await Promise.resolve();
+      stopAutomaticUpdateChecks();
       if (webdriverDescriptor) Object.defineProperty(Navigator.prototype, "webdriver", webdriverDescriptor);
       window.multiterm = oldMultiterm;
 

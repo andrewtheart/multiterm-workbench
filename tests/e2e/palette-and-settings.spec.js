@@ -66,6 +66,9 @@ const STATIC_LABELS = [
   "Clear active terminal",
   "Copy active output",
   "Cycle active terminal color",
+  "Zoom in active terminal",
+  "Zoom out active terminal",
+  "Reset active terminal zoom",
   "Fit all terminals",
   "Reset layout",
   "Broadcast command\u2026",
@@ -78,8 +81,8 @@ const STATIC_LABELS = [
   "Cycle broadcast scope",
   "Next terminal",
   "Previous terminal",
-  "Increase font size",
-  "Decrease font size",
+  "Increase default terminal font size",
+  "Decrease default terminal font size",
   "Toggle app theme",
   "Toggle header",
   "Toggle layout panel",
@@ -191,7 +194,7 @@ test.describe("Command palette — every option works", () => {
     });
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
-    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await resetTo(1);
   });
 
   test.afterAll(async () => {
@@ -277,10 +280,31 @@ test.describe("Command palette — every option works", () => {
       .poll(() => page.evaluate(() => document.documentElement.dataset.appTheme))
       .toBe(themeBefore);
 
+    const terminalZoom = await page.evaluate(() => {
+      const active = state.terminals.get(state.activeId);
+      const other = [...state.terminals.values()].find((terminal) => terminal.id !== active.id);
+      return {
+        activeId: active.id,
+        activeSize: terminalFontSize(active),
+        otherId: other?.id,
+        otherSize: other ? terminalFontSize(other) : null
+      };
+    });
+    await runCmd("Zoom in active terminal");
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), terminalZoom.activeId)).toBe(terminalZoom.activeSize + 1);
+    if (terminalZoom.otherId) {
+      expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), terminalZoom.otherId)).toBe(terminalZoom.otherSize);
+    }
+    await runCmd("Zoom out active terminal");
+    await runCmd("Zoom out active terminal");
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), terminalZoom.activeId)).toBe(terminalZoom.activeSize - 1);
+    await runCmd("Reset active terminal zoom");
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), terminalZoom.activeId)).toBe(terminalZoom.activeSize);
+
     const fontBefore = await page.evaluate(() => state.settings.fontSize);
-    await runCmd("Increase font size");
+    await runCmd("Increase default terminal font size");
     await expect(page.locator("#fontSizeValue")).toHaveText(`${fontBefore + 1}px`);
-    await runCmd("Decrease font size");
+    await runCmd("Decrease default terminal font size");
     await expect(page.locator("#fontSizeValue")).toHaveText(`${fontBefore}px`);
   });
 

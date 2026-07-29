@@ -78,7 +78,8 @@ test.describe("Command palette + settings verification", () => {
       "Cycle active terminal color", "Fit all terminals", "Reset layout", "Broadcast command\u2026",
       "Paste into active terminal", "Maximize / restore active pane", "Open active terminal folder",
       "New terminal in active folder", "Toggle logging for active terminal", "Cycle broadcast scope",
-      "Next terminal", "Previous terminal", "Increase font size", "Decrease font size",
+      "Next terminal", "Previous terminal", "Zoom in active terminal", "Zoom out active terminal",
+      "Reset active terminal zoom", "Increase default terminal font size", "Decrease default terminal font size",
       "Toggle app theme", "Toggle header", "Toggle layout panel", "Keyboard shortcuts",
       "Help", "About MultiTerm"
     ];
@@ -191,11 +192,20 @@ test.describe("Command palette + settings verification", () => {
     await runCmd("Toggle sync input (on)");
     expect(await page.evaluate(() => typeof state.settings.syncInput)).toBe("boolean");
 
-    // Font zoom
+    // Per-terminal font zoom
+    const activeId = await page.evaluate(() => state.activeId);
+    const terminalFont0 = await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), activeId);
+    await runCmd("Zoom in active terminal");
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), activeId)).toBe(terminalFont0 + 1);
+    await runCmd("Zoom out active terminal");
+    await runCmd("Reset active terminal zoom");
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), activeId)).toBe(terminalFont0);
+
+    // Global/default font zoom
     const fs0 = await page.evaluate(() => state.settings.fontSize);
-    await runCmd("Increase font size");
+    await runCmd("Increase default terminal font size");
     expect(await page.evaluate(() => state.settings.fontSize)).toBe(fs0 + 1);
-    await runCmd("Decrease font size");
+    await runCmd("Decrease default terminal font size");
     expect(await page.evaluate(() => state.settings.fontSize)).toBe(fs0);
 
     // Cycle color

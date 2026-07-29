@@ -98,6 +98,44 @@ test.describe("Enhancement milestone", () => {
     expect(frames.map((frame) => frame.data)).toEqual(["/model gpt-test\r", "/cwd D:\\work tree\r"]);
   });
 
+  test("Copilot YOLO context action launches the interactive CLI", async () => {
+    const result = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      const sent = [];
+      let focused = false;
+      const originalSend = state.socket.send;
+      const originalFocus = terminal.term.focus;
+      state.socket.send = (payload) => sent.push(JSON.parse(payload));
+      terminal.term.focus = () => { focused = true; };
+
+      showContextMenu(20, 20, terminal, "");
+      const item = [...document.querySelectorAll("#contextMenu .ctx-item")]
+        .find((row) => row.textContent.includes("Launch Copilot CLI (YOLO)"));
+      const title = item?.title || "";
+      item?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      terminal.term.focus = originalFocus;
+      state.socket.send = originalSend;
+      return {
+        focused,
+        hidden: elements.contextMenu.hidden,
+        title,
+        frames: sent.filter((frame) => frame.type === "input" && frame.id === terminal.id)
+      };
+    });
+
+    expect({ ...result, frames: undefined }).toEqual({
+      focused: true,
+      hidden: true,
+      title: "Starts the interactive Copilot CLI with all tool, path, and URL permissions",
+      frames: undefined
+    });
+    expect(result.frames).toEqual([
+      { type: "input", id: expect.any(String), data: "copilot --yolo\r" }
+    ]);
+  });
+
   test("disabling retention closes terminal sessions with the window", async () => {
     const result = await page.evaluate(() => {
       const frames = [];

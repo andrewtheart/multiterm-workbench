@@ -108,6 +108,88 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#statusZoomIn")).toBeEnabled();
   });
 
+  test("zooms an individual terminal without changing its siblings", async () => {
+    const ids = await page.evaluate(() => {
+      state.settings.fontSize = 14;
+      elements.fontSize.value = 14;
+      for (const terminal of state.terminals.values()) terminal.fontSizeOverride = null;
+      applySettings();
+      const terminals = [...state.terminals.values()];
+      return terminals.slice(0, 2).map((terminal) => terminal.id);
+    });
+    expect(ids).toHaveLength(2);
+
+    const dispatchWheel = (id, init) => page.evaluate(({ id, init }) => {
+      const terminal = state.terminals.get(id);
+      terminal.screen.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        ...init
+      }));
+    }, { id, init });
+
+    // Non-zoom gestures and a zero delta are ignored. Two line-mode events
+    // demonstrate touchpad accumulation before one zoom step is applied.
+    await dispatchWheel(ids[0], { deltaY: -120 });
+    await dispatchWheel(ids[0], { ctrlKey: true, altKey: true, deltaY: -120 });
+    await dispatchWheel(ids[0], { ctrlKey: true, metaKey: true, deltaY: -120 });
+    await dispatchWheel(ids[0], { ctrlKey: true, deltaY: 0 });
+    await dispatchWheel(ids[0], { ctrlKey: true, deltaMode: 1, deltaY: -1 });
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(14);
+    await dispatchWheel(ids[0], { ctrlKey: true, deltaMode: 1, deltaY: -1 });
+
+    await expect.poll(() => page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      return {
+        defaultSize: state.settings.fontSize,
+        size: terminalFontSize(terminal),
+        override: terminal.fontSizeOverride,
+        indicator: terminal.fontZoomIndicator.textContent,
+        visible: terminal.fontZoomIndicator.classList.contains("is-visible"),
+        saved: loadSessionSnapshot().find((entry) => entry.id === id)?.fontSizeOverride
+      };
+    }, ids[0])).toEqual({
+      defaultSize: 14,
+      size: 15,
+      override: 15,
+      indicator: "15px",
+      visible: true,
+      saved: 15
+    });
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[1])).toBe(14);
+
+    // Page- and pixel-mode wheel events follow the same one-step behavior.
+    await page.evaluate((id) => resetTerminalFontZoom(id), ids[0]);
+    await dispatchWheel(ids[0], { ctrlKey: true, deltaMode: 2, deltaY: -1 });
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(15);
+    await page.evaluate((id) => resetTerminalFontZoom(id), ids[0]);
+    await dispatchWheel(ids[0], { ctrlKey: true, deltaY: -40 });
+    await dispatchWheel(ids[0], { ctrlKey: true, deltaY: -40 });
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(15);
+
+    // The active-pane shortcuts provide a mouse-free path and Ctrl+Alt+0
+    // returns the pane to the current global/default size.
+    await page.evaluate((id) => {
+      resetTerminalFontZoom(id);
+      setActiveTerminal(id);
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true, cancelable: true, ctrlKey: true, altKey: true, code: "Equal", key: "="
+      }));
+    }, ids[0]);
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(15);
+    await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", {
+      bubbles: true, cancelable: true, ctrlKey: true, altKey: true, code: "Minus", key: "-"
+    })));
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(14);
+    await page.evaluate((id) => {
+      zoomTerminalFont(id, 1);
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true, cancelable: true, ctrlKey: true, altKey: true, code: "Numpad0", key: "0"
+      }));
+    }, ids[0]);
+    expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(14);
+  });
+
   test("status-bar memory readout stays collapsed until the chip is hovered", async () => {
     const chip = page.locator("#statusMem");
     const value = page.locator("#statusMemText");
@@ -347,15 +429,35 @@ test.describe("MultiTerm Workbench UI", () => {
   });
 
   test("keeps the editable terminal title compact", async () => {
-    const title = page.locator(".terminal-pane").first().locator(".pane-title");
+    const pane = page.locator(".terminal-pane").first();
+    const title = pane.locator(".pane-title");
     await expect(title).toHaveCSS("max-width", "180px");
 
-    const widths = await title.evaluate((input) => ({
-      input: input.getBoundingClientRect().width,
-      wrapper: input.parentElement.getBoundingClientRect().width
-    }));
-    expect(widths.input).toBeLessThanOrEqual(180);
-    expect(widths.wrapper - widths.input).toBeGreaterThan(8);
+    const measurements = await title.evaluate((input) => {
+      const bar = input.closest(".pane-bar");
+      const button = bar.querySelector('.pane-actions button[data-action="close"]');
+      const barStyle = getComputedStyle(bar);
+      return {
+        input: input.getBoundingClientRect().width,
+        wrapper: input.parentElement.getBoundingClientRect().width,
+        barHeight: bar.getBoundingClientRect().height,
+        buttonHeight: button.getBoundingClientRect().height,
+        paddingTop: barStyle.paddingTop,
+        paddingBottom: barStyle.paddingBottom
+      };
+    });
+    expect(measurements.input).toBeLessThanOrEqual(180);
+    expect(measurements.wrapper - measurements.input).toBeGreaterThan(8);
+    expect(measurements.barHeight).toBe(33);
+    expect(measurements.buttonHeight).toBe(30);
+    expect(measurements.paddingTop).toBe("1px");
+    expect(measurements.paddingBottom).toBe("1px");
+  });
+
+  test("uses the traditional copy glyph for the title-bar copy action", async () => {
+    const copy = page.locator('.terminal-pane').first().locator('[data-action="copy"]');
+    await expect(copy).toHaveAttribute("title", "Copy output");
+    await expect(copy.locator("svg")).toHaveAttribute("data-lucide", "copy");
   });
 
   test("saves the terminal title and exits edit mode when Enter is pressed", async () => {
@@ -504,6 +606,105 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#aboutVersionText")).toContainText(PKG_VERSION);
     await page.locator("#aboutClose").click();
     await expect(page.locator("#aboutOverlay")).toBeHidden();
+  });
+
+  test("offers opt-in automatic update checks with a configurable interval", async () => {
+    await page.evaluate(() => {
+      stopAutomaticUpdateChecks();
+      localStorage.removeItem("multiterm.updateCheck");
+      syncAutomaticUpdateControls();
+      window.__automaticUpdateCalls = 0;
+      window.__originalRequestLatestRelease = requestLatestRelease;
+      // eslint-disable-next-line no-global-assign
+      requestLatestRelease = async () => {
+        window.__automaticUpdateCalls += 1;
+        return { ok: true, current: APP_VERSION, available: false, release: {} };
+      };
+      openUpdateConsentDialog();
+    });
+
+    const consent = page.locator("#updateConsentOverlay");
+    await expect(consent).toBeVisible();
+    await expect(page.locator("#updateConsentText")).toContainText("whenever the app starts");
+    await expect(page.locator("#updateConsentInterval")).toHaveValue("6");
+    await expect(page.locator("#updateConsentEnable")).toHaveText("Enable update checks");
+
+    await page.locator("#updateConsentInterval").fill("12");
+    await page.locator("#updateConsentEnable").click();
+    await expect(consent).toBeHidden();
+    await expect.poll(() => page.evaluate(() => window.__automaticUpdateCalls)).toBe(1);
+
+    const enabled = await page.evaluate(() => {
+      const meta = JSON.parse(localStorage.getItem("multiterm.updateCheck") || "{}");
+      return {
+        configured: meta.automaticChecksConfigured,
+        enabled: meta.automaticChecksEnabled,
+        intervalHours: meta.intervalHours,
+        settingChecked: elements.autoUpdateChecks.checked,
+        intervalDisabled: elements.updateCheckIntervalHours.disabled,
+        timerScheduled: state.update.timer !== null
+      };
+    });
+    expect(enabled).toEqual({
+      configured: true,
+      enabled: true,
+      intervalHours: 12,
+      settingChecked: true,
+      intervalDisabled: false,
+      timerScheduled: true
+    });
+
+    // A fresh app start checks immediately even if a prior check just completed.
+    await page.evaluate(() => startAutomaticUpdateChecks({ checkNow: true }));
+    await expect.poll(() => page.evaluate(() => window.__automaticUpdateCalls)).toBe(2);
+
+    const scheduledDelay = await page.evaluate(() => {
+      stopAutomaticUpdateChecks();
+      const originalSetTimeout = window.setTimeout;
+      let delay = null;
+      window.setTimeout = (_callback, milliseconds) => {
+        delay = milliseconds;
+        return 987654;
+      };
+      startAutomaticUpdateChecks({ checkNow: false });
+      window.setTimeout = originalSetTimeout;
+      state.update.timer = null;
+      return delay;
+    });
+    expect(scheduledDelay).toBe(12 * 60 * 60 * 1000);
+
+    await page.evaluate(() => {
+      stopAutomaticUpdateChecks();
+      localStorage.removeItem("multiterm.updateCheck");
+      syncAutomaticUpdateControls();
+      openUpdateConsentDialog();
+    });
+    await expect(consent).toBeVisible();
+    await page.locator("#updateConsentInterval").fill("24");
+    await page.locator("#updateConsentDecline").click();
+    await expect(consent).toBeHidden();
+
+    const declined = await page.evaluate(() => {
+      const preferences = loadAutomaticUpdatePreferences();
+      // eslint-disable-next-line no-global-assign
+      requestLatestRelease = window.__originalRequestLatestRelease;
+      delete window.__originalRequestLatestRelease;
+      delete window.__automaticUpdateCalls;
+      return {
+        ...preferences,
+        settingChecked: elements.autoUpdateChecks.checked,
+        intervalDisabled: elements.updateCheckIntervalHours.disabled,
+        timer: state.update.timer
+      };
+    });
+    expect(declined).toEqual({
+      configured: true,
+      enabled: false,
+      intervalHours: 24,
+      settingChecked: false,
+      intervalDisabled: true,
+      timer: null
+    });
   });
 
   test("offers an update when GitHub reports a newer release", async () => {
