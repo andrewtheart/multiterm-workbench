@@ -77,7 +77,8 @@
 
           <label class="field search-field">
             <span>Search</span>
-            <input id="terminalSearchInput" type="search" spellcheck="false" autocomplete="off" placeholder="Filter terminal text">
+            <span id="terminalSearchCount" class="search-count" aria-live="polite"></span>
+            <input id="terminalSearchInput" type="search" spellcheck="false" autocomplete="off" placeholder="Search + filter panes" title="Highlights matches everywhere and hides panes with none. Enter / Shift+Enter walk matches, Escape clears.">
           </label>
 
           <div class="action-cluster">
@@ -552,7 +553,7 @@
           <li><span>Restart active terminal</span><span class="kbd">Ctrl+Shift+R</span></li>
           <li><span>Find in terminal</span><span class="kbd">Ctrl+F</span></li>
           <li><span>Find in all terminals</span><span class="kbd">Ctrl+Shift+F</span></li>
-          <li><span>Filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
+          <li><span>Search + filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
           <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
           <li><span>Maximize / restore pane</span><span class="kbd">Ctrl+Shift+X</span></li>
           <li><span>Select all terminal output</span><span class="kbd">Ctrl+A</span></li>

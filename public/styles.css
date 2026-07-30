@@ -552,6 +552,32 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   gap: 5px;
 }
 
+/* The match counter shares the label row so it never steals width from the
+   input itself. */
+.search-field {
+  grid-template-areas:
+    "label count"
+    "input input";
+  grid-template-columns: auto 1fr;
+}
+
+.search-field > span:first-child {
+  grid-area: label;
+}
+
+.search-field .search-count {
+  font-variant-numeric: tabular-nums;
+  grid-area: count;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-field input {
+  grid-area: input;
+}
+
 .field span,
 .control-row span,
 .toggle-row span {

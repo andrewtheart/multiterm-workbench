@@ -164,7 +164,7 @@ file-selection prompts on an interactive Windows desktop.
     </td>
     <td align="center" width="50%">
       <img src="docs/images/find-all-terminals.png" alt="In-pane find bar highlighting matches, with the global terminal filter in the header">
-      <br><strong>Find &amp; filter:</strong> per-pane search with match highlighting, plus a global filter.
+      <br><strong>Find &amp; filter:</strong> per-pane search with match highlighting, plus a header search that highlights and hides non-matching panes live.
     </td>
   </tr>
   <tr>
@@ -715,7 +715,7 @@ point the checker at a fork.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.
 - Pages keep related terminals in separate visual groups while their shell processes stay alive. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
 - The top-right **?** opens generated in-app help. `Ctrl+/` opens the compact shortcut reference; `Ctrl+Shift+P` or F1 opens the searchable command palette.
-- The top search box filters terminal panes by contained terminal text; non-matching panes stay hidden until matching output appears or the search is cleared.
+- The top search box runs the same buffer search as `Ctrl+Shift+F` — every match is highlighted in place and a counter shows the running total — and additionally hides panes with nothing to show. Panes reappear (already highlighted) the moment your evolving query matches them again, or when matching output arrives. Enter/Shift+Enter walk the matches, Escape clears the filter. A pane also survives the filter when its title, working directory, shell, or status matches. `Ctrl+Shift+E` focuses the box.
 - Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.
 - The bottom-left workspace buttons hide or restore the top header and layout sidecar for more terminal space.
 - The bottom-left trash button closes every terminal pane and tells the bridge to kill all running shell sessions.

@@ -328,6 +328,7 @@ const elements = {
   updateViewRelease: document.querySelector("#updateViewRelease"),
   syncInput: document.querySelector("#syncInput"),
   terminalSearchInput: document.querySelector("#terminalSearchInput"),
+  terminalSearchCount: document.querySelector("#terminalSearchCount"),
   terminalArtifactsBadge: document.querySelector("#terminalArtifactsBadge"),
   terminalArtifactsClose: document.querySelector("#terminalArtifactsClose"),
   terminalArtifactsOverlay: document.querySelector("#terminalArtifactsOverlay"),
@@ -363,7 +364,7 @@ const state = {
   activeId: null,
   activePageId: null,
   bridgeClosingDown: false,
-  findAll: { active: false, order: [], ti: 0, li: -1 },
+  findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false },
   appElevated: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
@@ -604,8 +605,19 @@ function bindControls() {
   elements.workspaceRestore.addEventListener("click", () => restoreWorkspace(elements.workspaceSelect.value));
   elements.workspaceDelete.addEventListener("click", () => deleteWorkspace(elements.workspaceSelect.value));
   elements.terminalSearchInput.addEventListener("input", () => {
-    state.terminalSearch = normalizeSearchText(elements.terminalSearchInput.value);
+    state.terminalSearch = elements.terminalSearchInput.value;
     applyTerminalSearch();
+  });
+  elements.terminalSearchInput.addEventListener("keydown", (event) => {
+    // Same navigation contract as the find bars: Enter walks the matches the
+    // filter left on screen, Escape drops the filter and restores every pane.
+    if (event.key === "Enter") {
+      event.preventDefault();
+      findAllNav(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      clearTerminalSearch();
+    }
   });
   elements.toggleHeader.addEventListener("click", () => toggleChrome("headerHidden"));
   elements.toggleSidecar.addEventListener("click", () => toggleChrome("sidecarHidden"));
@@ -2682,19 +2694,34 @@ function appendTerminalSearchText(terminal, text) {
 }
 
 function refreshTerminalSearchText(terminal) {
-  const metadata = [
+  terminal.searchText = `${normalizeSearchText(terminalMetadataText(terminal))}\n${terminal.searchText || ""}`.slice(-SEARCH_TEXT_CAP);
+}
+
+function terminalMetadataText(terminal) {
+  return [
     terminal.titleInput.value,
     terminal.cwd,
     terminal.shell,
     terminal.statusElement.textContent
   ].filter(Boolean).join("\n");
-  terminal.searchText = `${normalizeSearchText(metadata)}\n${terminal.searchText || ""}`.slice(-SEARCH_TEXT_CAP);
 }
 
-function applyTerminalSearch() {
-  for (const terminal of state.terminals.values()) {
-    updateTerminalSearchVisibility(terminal);
+function terminalMetadataMatches(terminal, query) {
+  return normalizeSearchText(terminalMetadataText(terminal)).includes(normalizeSearchText(query));
+}
+
+// The header search runs the very same buffer search as Ctrl+Shift+F, so every
+// match is highlighted where it sits. On top of that it hides panes with
+// nothing to show, and brings them straight back — already highlighted — as
+// soon as a keystroke makes them match again.
+function applyTerminalSearch(options = {}) {
+  if (state.terminalSearch) {
+    // All three search surfaces drive each terminal's single search addon, so
+    // the live filter takes the highlight session over from the find bars.
+    closeAnyFind({ restoreFocus: false });
+    closeFindAll({ restoreFocus: false });
   }
+  runSearchPass(state.terminalSearch, { filter: true, ...options });
   rebalanceWebglRenderers();
 }
 
@@ -2706,18 +2733,38 @@ function clearTerminalSearch() {
   applyTerminalSearch();
 }
 
+// Runs once per output frame, so it stays deliberately cheap: the rolling
+// transcript decides visibility immediately, and the authoritative buffer pass
+// (the one that repaints highlights) is deferred until a pane actually flips.
 function updateTerminalSearchVisibility(terminal) {
-  const query = state.terminalSearch;
-  const shouldHide = Boolean(query) && !terminal.searchText.includes(query);
-  const wasHidden = terminal.pane.classList.contains("is-search-hidden");
-  // Runs once per output frame; skip DOM work when nothing changed (the common
-  // case: no active filter, pane already visible).
-  if (shouldHide === wasHidden) return;
-  terminal.pane.classList.toggle("is-search-hidden", shouldHide);
-
-  if (wasHidden && !shouldHide) {
-    scheduleFit(terminal);
+  const query = normalizeSearchText(state.terminalSearch);
+  if (!query) {
+    setTerminalSearchHidden(terminal, false);
+    return;
   }
+  if (setTerminalSearchHidden(terminal, !terminal.searchText.includes(query))) {
+    scheduleTerminalSearchRefresh();
+  }
+}
+
+function setTerminalSearchHidden(terminal, hidden) {
+  const wasHidden = terminal.pane.classList.contains("is-search-hidden");
+  if (hidden === wasHidden) return false;
+  terminal.pane.classList.toggle("is-search-hidden", hidden);
+  if (!hidden) scheduleFit(terminal);
+  return true;
+}
+
+const TERMINAL_SEARCH_REFRESH_MS = 120;
+let terminalSearchRefreshHandle = 0;
+
+function scheduleTerminalSearchRefresh() {
+  if (terminalSearchRefreshHandle) return;
+  terminalSearchRefreshHandle = window.setTimeout(() => {
+    terminalSearchRefreshHandle = 0;
+    if (!state.terminalSearch) return;
+    applyTerminalSearch({ preserveNav: true });
+  }, TERMINAL_SEARCH_REFRESH_MS);
 }
 
 function normalizeSearchText(value) {
@@ -4399,8 +4446,9 @@ function bindPaneFind(terminal) {
       const current = results.resultIndex >= 0 ? results.resultIndex + 1 : 0;
       count.textContent = `${current}/${results.resultCount}`;
     }
-    if (state.findAll.active) {
+    if (state.findAll.active || state.findAll.filter) {
       terminal.pane.classList.toggle("has-find-match", (terminal.lastFindCount || 0) > 0);
+      if (state.findAll.filter && reconcileFilterVisibility(terminal)) scheduleTerminalSearchRefresh();
       refreshFindAllCount();
     }
   });
@@ -4436,6 +4484,7 @@ function bindPaneFind(terminal) {
 
 function openFind(terminal) {
   if (!terminal?.searchAddon || !terminal.findBar) return;
+  clearTerminalSearch();
   if (state.findAll.active) closeFindAll();
   setActiveTerminal(terminal.id);
   terminal.findBar.hidden = false;
@@ -4454,17 +4503,17 @@ function openFindActive() {
   if (state.activeId) openFind(state.terminals.get(state.activeId));
 }
 
-function closeFind(terminal) {
+function closeFind(terminal, { restoreFocus = true } = {}) {
   if (!terminal?.findBar) return;
   terminal.findBar.hidden = true;
   terminal.searchAddon?.clearDecorations();
-  terminal.term.focus();
+  if (restoreFocus) terminal.term.focus();
 }
 
-function closeAnyFind() {
+function closeAnyFind(options) {
   for (const terminal of state.terminals.values()) {
     if (terminal.findBar && !terminal.findBar.hidden) {
-      closeFind(terminal);
+      closeFind(terminal, options);
       return true;
     }
   }
@@ -4483,12 +4532,20 @@ function findNav(terminal, direction) {
 /* ---------------- Find across all terminals --------------- */
 
 function orderedTerminals() {
-  const result = [];
+  const seen = new Set();
+  const ordered = [];
   for (const pane of elements.host.querySelectorAll(".terminal-pane")) {
     const terminal = state.terminals.get(pane.dataset.id);
-    if (terminal && terminal.searchAddon) result.push(terminal);
+    if (!terminal) continue;
+    ordered.push(terminal);
+    seen.add(terminal.id);
   }
-  return result;
+  // Panes parked off-host (another page) still have buffers worth searching, so
+  // the filter can reveal them instead of silently skipping them.
+  for (const terminal of state.terminals.values()) {
+    if (!seen.has(terminal.id)) ordered.push(terminal);
+  }
+  return ordered;
 }
 
 function bindFindAll() {
@@ -4521,8 +4578,9 @@ function bindFindAll() {
 
 function openFindAll() {
   if (!elements.findAllBar) return;
-  // The per-pane find bar and find-all share each terminal's single search
-  // addon, so make them mutually exclusive.
+  // The per-pane find bar, find-all and the header filter share each terminal's
+  // single search addon, so make them mutually exclusive.
+  clearTerminalSearch();
   closeAnyFind();
   state.findAll.active = true;
   elements.findAllBar.hidden = false;
@@ -4537,7 +4595,7 @@ function openFindAll() {
   runFindAll(elements.findAllInput.value);
 }
 
-function closeFindAll() {
+function closeFindAll({ restoreFocus = true } = {}) {
   if (!state.findAll.active && elements.findAllBar?.hidden !== false) return;
   state.findAll.active = false;
   if (elements.findAllBar) elements.findAllBar.hidden = true;
@@ -4548,18 +4606,31 @@ function closeFindAll() {
   state.findAll.order = [];
   state.findAll.ti = 0;
   state.findAll.li = -1;
+  state.findAll.query = "";
+  state.findAll.filter = false;
   const active = state.activeId ? state.terminals.get(state.activeId) : null;
-  active?.term.focus();
+  if (restoreFocus) active?.term.focus();
 }
 
 function runFindAll(rawQuery) {
+  runSearchPass(rawQuery, { filter: false });
+}
+
+// Single highlight pass behind Ctrl+F's siblings: Ctrl+Shift+F calls it without
+// a filter, the header search calls it with one. `filter` is the only
+// difference — it hides panes that have nothing to show.
+function runSearchPass(rawQuery, { filter = false, preserveNav = false } = {}) {
   const query = rawQuery || "";
+  state.findAll.query = query;
+  state.findAll.filter = filter && Boolean(query);
+
   if (!query) {
     for (const terminal of state.terminals.values()) {
       terminal.searchAddon?.clearDecorations();
       terminal.lastFindCount = 0;
       terminal.lastFindIndex = -1;
       terminal.pane.classList.remove("has-find-match");
+      if (filter) setTerminalSearchHidden(terminal, false);
     }
     state.findAll.order = [];
     state.findAll.ti = 0;
@@ -4570,24 +4641,53 @@ function runFindAll(rawQuery) {
 
   const order = [];
   for (const terminal of orderedTerminals()) {
-    // Highlight every match in this pane without scrolling, then drop the
-    // active-match emphasis so nothing looks "current" until the user navigates.
-    terminal.searchAddon.findNext(query, { ...findDecorations, incremental: true, noScroll: true });
-    terminal.searchAddon.clearActiveDecoration();
-    const has = (terminal.lastFindCount || 0) > 0;
-    terminal.pane.classList.toggle("has-find-match", has);
-    if (has) order.push(terminal.id);
+    const matched = searchTerminalPane(terminal, query);
+    terminal.pane.classList.toggle("has-find-match", matched);
+    if (matched) order.push(terminal.id);
+    if (!filter) continue;
+
+    // A pane also survives the filter when its title/cwd/shell/status match,
+    // which is how the header search has always narrowed down to a terminal by
+    // name rather than by output.
+    setTerminalSearchHidden(terminal, !(matched || terminalMetadataMatches(terminal, query)));
   }
   state.findAll.order = order;
-  state.findAll.ti = 0;
-  state.findAll.li = -1;
+  // A refresh triggered by live output keeps the user's place in the match
+  // list; a new query always restarts from the top.
+  if (!preserveNav || state.findAll.ti >= order.length) {
+    state.findAll.ti = 0;
+    state.findAll.li = -1;
+  }
   refreshFindAllCount();
+}
+
+// Highlight every match in this pane without scrolling, then drop the
+// active-match emphasis so nothing looks "current" until the user navigates.
+// clearDecorations() first because the addon skips re-highlighting while the
+// search term is unchanged — which would report a stale count for a pane whose
+// buffer moved on, and would leave a just-revealed pane unpainted.
+function searchTerminalPane(terminal, query) {
+  if (!terminal.searchAddon) return false;
+  terminal.searchAddon.clearDecorations();
+  terminal.searchAddon.findNext(query, { ...findDecorations, incremental: true, noScroll: true });
+  terminal.searchAddon.clearActiveDecoration();
+  return (terminal.lastFindCount || 0) > 0;
+}
+
+// The search addon re-highlights itself ~200ms after new output lands, so its
+// result event is the authoritative moment to reconsider whether a filtered
+// pane still belongs on screen. Returns true when the visibility flipped.
+function reconcileFilterVisibility(terminal) {
+  const query = normalizeSearchText(state.findAll.query);
+  if (!query) return false;
+  const visible = (terminal.lastFindCount || 0) > 0 || terminalMetadataMatches(terminal, query);
+  return setTerminalSearchHidden(terminal, !visible);
 }
 
 function findAllNav(direction) {
   const order = state.findAll.order;
   if (!order.length) return;
-  const query = elements.findAllInput.value;
+  const query = state.findAll.query;
   if (!query) return;
 
   let ti = state.findAll.ti >= order.length ? 0 : state.findAll.ti;
@@ -4645,20 +4745,23 @@ function findAllNav(direction) {
 }
 
 function refreshFindAllCount() {
-  if (!elements.findAllCount) return;
+  const label = findAllCountLabel();
+  if (elements.findAllCount) elements.findAllCount.textContent = label;
+  // The header search only owns the counter while its filter is driving the
+  // highlight session, so the find bars never leave a stale count behind it.
+  if (elements.terminalSearchCount) {
+    elements.terminalSearchCount.textContent = state.findAll.filter ? label : "";
+  }
+}
+
+function findAllCountLabel() {
   const order = state.findAll.order;
   const panes = order.length;
   let total = 0;
   for (const id of order) total += state.terminals.get(id)?.lastFindCount || 0;
 
-  if (!elements.findAllInput.value) {
-    elements.findAllCount.textContent = "0/0";
-    return;
-  }
-  if (total === 0) {
-    elements.findAllCount.textContent = "No matches";
-    return;
-  }
+  if (!state.findAll.query) return "0/0";
+  if (total === 0) return "No matches";
 
   let pos = 0;
   if (state.findAll.li >= 0 && state.findAll.ti < panes) {
@@ -4669,7 +4772,7 @@ function refreshFindAllCount() {
   }
 
   const paneLabel = `${panes} pane${panes === 1 ? "" : "s"}`;
-  elements.findAllCount.textContent = pos > 0
+  return pos > 0
     ? `${pos}/${total} · ${paneLabel}`
     : `${total} · ${paneLabel}`;
 }

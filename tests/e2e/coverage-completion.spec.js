@@ -2950,4 +2950,109 @@ test.describe("Renderer coverage completion", () => {
     expect(result.covered).toBe(true);
     expect(result.remaining).toBe(0);
   });
+
+  test("covers header-search filter internals, off-host panes, and counter fallbacks", async () => {
+    const setup = await page.evaluate(async () => {
+      closeAllTerminals();
+      const alpha = addTerminal({ title: "Header search alpha" });
+      const beta = addTerminal({ title: "Header search beta" });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return { alpha: alpha.id, beta: beta.id };
+    });
+
+    const result = await page.evaluate(async ({ alpha: alphaId, beta: betaId }) => {
+      const alpha = state.terminals.get(alphaId);
+      const beta = state.terminals.get(betaId);
+      const originalQueueResize = window.queueResize;
+      // Hiding a pane reflows the layout, and the resulting pty WINCH makes the
+      // live shell repaint over the tokens written straight into the buffer.
+      window.queueResize = () => {};
+
+      const results = {};
+      alpha.term.write("\r\nCOVERTOKEN alpha line\r\n");
+      beta.term.write("\r\nplain beta line\r\n");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      // preserveNav keeps the caller's position when the pass is a refresh
+      // rather than a brand-new query.
+      state.findAll.query = "";
+      state.findAll.ti = 0;
+      state.findAll.li = 4;
+      runSearchPass("COVERTOKEN", { filter: false, preserveNav: true });
+      results.preservedNav = state.findAll.li;
+      results.preservedOrder = state.findAll.order.length;
+
+      // A pane without a search addon is skipped instead of throwing.
+      const savedAddon = beta.searchAddon;
+      beta.searchAddon = null;
+      results.addonlessMatched = searchTerminalPane(beta, "COVERTOKEN");
+      beta.searchAddon = savedAddon;
+
+      // Visibility reconciliation is a no-op once the query is gone.
+      const savedQuery = state.findAll.query;
+      state.findAll.query = "";
+      results.reconciledWithoutQuery = reconcileFilterVisibility(beta);
+      state.findAll.query = savedQuery;
+
+      // Panes parked off-host still take part in the ordered search sweep.
+      const parkedParent = beta.pane.parentNode;
+      const parkedNext = beta.pane.nextSibling;
+      beta.pane.remove();
+      results.offHostOrdered = orderedTerminals().map((terminal) => terminal.id);
+      parkedParent.insertBefore(beta.pane, parkedNext);
+
+      // The header counter is optional markup, so refreshes tolerate its absence.
+      const savedCount = elements.terminalSearchCount;
+      elements.terminalSearchCount = null;
+      refreshFindAllCount();
+      elements.terminalSearchCount = savedCount;
+      results.countSurvivedMissingElement = elements.terminalSearchCount.textContent;
+
+      // Shift+Enter in the header box walks the matches backwards.
+      elements.terminalSearchInput.value = "COVERTOKEN";
+      elements.terminalSearchInput.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const forward = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      elements.terminalSearchInput.dispatchEvent(forward);
+      const backward = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+      elements.terminalSearchInput.dispatchEvent(backward);
+      results.shiftEnterHandled = backward.defaultPrevented;
+      results.filterCount = elements.terminalSearchCount.textContent;
+
+      // A pane that starts matching mid-session schedules a debounced refresh
+      // that re-runs the pass while the query is still live.
+      beta.term.write("\r\nCOVERTOKEN arrives late\r\n");
+      beta.searchText = `${beta.searchText}covertoken`;
+      updateTerminalSearchVisibility(beta);
+      await new Promise((resolve) => setTimeout(resolve, 320));
+      results.refreshedOrder = state.findAll.order.length;
+      results.betaVisible = !beta.pane.classList.contains("is-search-hidden");
+
+      // The same debounce bails out when the query disappears before it fires.
+      alpha.searchText = "";
+      updateTerminalSearchVisibility(alpha);
+      state.terminalSearch = "";
+      await new Promise((resolve) => setTimeout(resolve, 260));
+
+      clearTerminalSearch();
+      window.queueResize = originalQueueResize;
+      return results;
+    }, setup);
+
+    expect(result.preservedNav).toBe(4);
+    expect(result.preservedOrder).toBeGreaterThan(0);
+    expect(result.addonlessMatched).toBe(false);
+    expect(result.reconciledWithoutQuery).toBe(false);
+    expect(result.offHostOrdered).toContain(setup.beta);
+    expect(result.countSurvivedMissingElement).toBe("");
+    expect(result.shiftEnterHandled).toBe(true);
+    expect(result.filterCount).not.toBe("");
+    expect(result.refreshedOrder).toBeGreaterThan(0);
+    expect(result.betaVisible).toBe(true);
+
+    await page.evaluate(() => {
+      state.settings.keepSessionsOnClose = true;
+      closeAllTerminals();
+    });
+  });
 });

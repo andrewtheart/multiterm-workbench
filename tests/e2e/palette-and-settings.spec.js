@@ -470,6 +470,93 @@ test.describe("Command palette — every option works", () => {
     await expect.poll(() => page.evaluate(() => state.findAll.active)).toBe(false);
   });
 
+  test("header search: live filtering, highlights, navigation, and hand-off", async () => {
+    await resetTo(3);
+    await settleTerminals();
+
+    // Deterministic, disjoint tokens: two panes share ALPHA, one is BETA only.
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const terms = [...state.terminals.values()];
+          const tokens = ["ALPHAONE", "ALPHATWO", "BETAONLY"];
+          let pending = terms.length;
+          terms.forEach((t, i) =>
+            t.term.write(`\r\nmarker ${tokens[i]} marker\r\n`, () => {
+              pending -= 1;
+              if (pending === 0) resolve();
+            })
+          );
+        })
+    );
+
+    const ids = await page.evaluate(() => [...state.terminals.keys()]);
+    const pane = (index) => page.locator(`.terminal-pane[data-id="${ids[index]}"]`);
+    const search = page.locator("#terminalSearchInput");
+
+    // Hiding a pane re-flows the others, and the resulting WINCH makes a live
+    // shell repaint over text written straight into the buffer. Hold the pty
+    // resize back so the seeded tokens stay put; the renderer still resizes and
+    // refits exactly as it does in production.
+    await page.evaluate(() => {
+      window.originalQueueResize = queueResize;
+      window.queueResize = () => {};
+    });
+
+    // Typing narrows the workbench: the two ALPHA panes stay, BETA disappears.
+    await search.fill("ALPHA");
+    await expect(pane(0)).toBeVisible();
+    await expect(pane(1)).toBeVisible();
+    await expect(pane(2)).toBeHidden();
+
+    // Survivors are searched exactly like Ctrl+Shift+F, so matches are
+    // highlighted in place rather than merely filtered.
+    await expect(page.locator(".terminal-pane.has-find-match")).toHaveCount(2);
+    await expect(pane(0).locator(".xterm-find-result-decoration").first()).toBeVisible();
+    await expect(page.locator("#terminalSearchCount")).toContainText("panes");
+
+    // Narrowing further hides a pane that no longer matches...
+    await search.fill("ALPHATWO");
+    await expect(pane(0)).toBeHidden();
+    await expect(pane(1)).toBeVisible();
+    await expect(page.locator(".terminal-pane.has-find-match")).toHaveCount(1);
+
+    // ...and widening again brings it straight back, highlighted.
+    await search.fill("ALPHA");
+    await expect(pane(0)).toBeVisible();
+    await expect(page.locator(".terminal-pane.has-find-match")).toHaveCount(2);
+    await expect(pane(0).locator(".xterm-find-result-decoration").first()).toBeVisible();
+
+    // Enter walks the matches the filter left on screen, same as find-all.
+    await search.press("Enter");
+    await expect(page.locator("#terminalSearchCount")).toContainText(/^1\//);
+    expect(await activeId()).toBe(await page.evaluate(() => state.findAll.order[state.findAll.ti]));
+
+    // Ctrl+Shift+F takes the shared search addon back: the filter is dropped and
+    // every pane returns, so the two searches never fight over one addon.
+    await page.keyboard.press("Control+Shift+f");
+    await expect(page.locator("#findAllBar")).toBeVisible();
+    await expect(search).toHaveValue("");
+    await expect(page.locator("#terminalSearchCount")).toHaveText("");
+    await expect(page.locator(".terminal-pane")).toHaveCount(3);
+    await expect(pane(2)).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    // Escape inside the header search clears the filter and every highlight.
+    await search.fill("BETAONLY");
+    await expect(pane(0)).toBeHidden();
+    await search.press("Escape");
+    await expect(search).toHaveValue("");
+    await expect(pane(0)).toBeVisible();
+    await expect(page.locator(".terminal-pane.has-find-match")).toHaveCount(0);
+    await expect(page.locator(".xterm-find-result-decoration")).toHaveCount(0);
+
+    await page.evaluate(() => {
+      window.queueResize = window.originalQueueResize;
+      delete window.originalQueueResize;
+    });
+  });
+
   test("active-terminal side-effect commands run without error", async () => {
     await resetTo(2);
 
