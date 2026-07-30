@@ -1187,7 +1187,6 @@ function addTerminal(options = {}) {
     runStartup: Boolean(options.runStartup),
     searchAddon,
     searchText: "",
-    selectionClearTimer: 0,
     selectionSnapshotPosition: null,
     selectionSnapshot: "",
     webglAddon: null,
@@ -1253,19 +1252,9 @@ function addTerminal(options = {}) {
 
   term.onSelectionChange(() => {
     const selection = term.getSelection();
-    window.clearTimeout(terminal.selectionClearTimer);
     if (selection) {
       terminal.selectionSnapshot = selection;
       terminal.selectionSnapshotPosition = term.getSelectionPosition();
-    } else {
-      // A mouse-aware TUI can clear xterm's selection between the right-button
-      // press and the contextmenu event. Keep the last selection long enough for
-      // that complete click sequence; opening the menu consumes it immediately.
-      terminal.selectionClearTimer = window.setTimeout(() => {
-        terminal.selectionClearTimer = 0;
-        terminal.selectionSnapshot = "";
-        terminal.selectionSnapshotPosition = null;
-      }, 500);
     }
 
     if (selection && state.settings.copyOnSelect) {
@@ -1385,8 +1374,6 @@ function bindTerminalSelectionHandling(terminal) {
   if (!element) return;
 
   const captureContextSelection = () => {
-    window.clearTimeout(terminal.selectionClearTimer);
-    terminal.selectionClearTimer = 0;
     const liveSelection = terminal.term.getSelection();
     terminal.contextSelection = liveSelection
       || terminal.contextSelection
@@ -1400,8 +1387,6 @@ function bindTerminalSelectionHandling(terminal) {
 
   element.addEventListener("pointerdown", (event) => {
     if (event.button === 0) {
-      window.clearTimeout(terminal.selectionClearTimer);
-      terminal.selectionClearTimer = 0;
       terminal.selectionSnapshot = "";
       terminal.selectionSnapshotPosition = null;
       terminal.contextSelection = "";
@@ -1434,10 +1419,11 @@ function bindTerminalSelectionHandling(terminal) {
 
   element.addEventListener("pointerup", (event) => {
     if (event.button !== 0) return;
-    window.clearTimeout(terminal.selectionClearTimer);
-    terminal.selectionClearTimer = 0;
-    terminal.selectionSnapshot = terminal.term.getSelection();
-    terminal.selectionSnapshotPosition = terminal.term.getSelectionPosition() || null;
+    const selection = terminal.term.getSelection();
+    if (selection) {
+      terminal.selectionSnapshot = selection;
+      terminal.selectionSnapshotPosition = terminal.term.getSelectionPosition() || null;
+    }
   }, true);
 }
 
@@ -1975,7 +1961,6 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
-  window.clearTimeout(terminal.selectionClearTimer);
   window.clearTimeout(terminal.fontZoomIndicatorTimer);
   window.clearTimeout(terminal.webglRecoveryHandle);
   terminal.webglRecoveryHandle = 0;
@@ -7444,8 +7429,6 @@ function openTerminalContextMenu(event, terminal) {
   terminal.contextSelection = "";
   terminal.selectionSnapshot = "";
   terminal.selectionSnapshotPosition = null;
-  window.clearTimeout(terminal.selectionClearTimer);
-  terminal.selectionClearTimer = 0;
 
   const action = state.settings.rightClickAction;
   if (action === "paste" || action === "pasteRun") {

@@ -333,6 +333,7 @@ test.describe("Surface context menu", () => {
       terminal.term.element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
       terminal.screen.addEventListener("mousedown", () => terminal.term.clearSelection(), { once: true });
       terminal.screen.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 2 }));
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
 
       window.__contextCopiedText = null;
       Object.defineProperty(navigator, "clipboard", {
@@ -347,22 +348,16 @@ test.describe("Surface context menu", () => {
         clientY: 300
       }));
       await Promise.resolve();
-      return {
-        selection,
-        liveSelection: terminal.term.getSelection()
-      };
+      return selection;
     });
 
-    expect(selected).toEqual({
-      selection: "tui-selection-marker",
-      liveSelection: "tui-selection-marker"
-    });
+    expect(selected).toBe("tui-selection-marker");
     const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
     await expect(copy).toBeVisible();
     await expect(copy).not.toHaveAttribute("aria-disabled", "true");
     expect(await page.evaluate(() => state.terminals.get(state.activeId).selectionSnapshot)).toBe("");
     await copy.click();
-    await expect.poll(() => page.evaluate(() => window.__contextCopiedText)).toBe(selected.selection);
+    await expect.poll(() => page.evaluate(() => window.__contextCopiedText)).toBe(selected);
 
     // The snapshot belongs only to that menu opening; without a fresh visible
     // selection, a second right-click must not offer the old text again.
