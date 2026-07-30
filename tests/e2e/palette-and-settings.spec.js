@@ -43,12 +43,19 @@ const LAYOUTS = [
   ["Balanced grid", "grid"],
   ["Master top", "master-top"],
   ["Master right", "master-right"],
+  ["Master bottom", "master-bottom"],
+  ["Master left", "master-left"],
+  ["Priority grid", "priority-grid"],
+  ["Compact matrix", "compact-matrix"],
+  ["Horizontal carousel", "carousel-horizontal"],
+  ["Vertical carousel", "carousel-vertical"],
+  ["Spotlight", "spotlight"],
   ["Bento grid", "bento"],
   ["Manual canvas", "manual"]
 ];
 
-// Every non-dynamic command label (the 35th, "Toggle sync input (…)", is
-// dynamic and handled separately). Used for the completeness assertion.
+// Every non-dynamic command label. "Toggle sync input (…)" is dynamic and
+// handled separately. Used for the completeness assertion.
 const STATIC_LABELS = [
   "New terminal",
   "New PowerShell 7 terminal",
@@ -72,6 +79,8 @@ const STATIC_LABELS = [
   "Fit all terminals",
   "Reset layout",
   "Broadcast command\u2026",
+  "Dequeue next command",
+  "Terminal notes & command queue\u2026",
   "Paste into active terminal",
   "Maximize / restore active pane",
   "Browse & run script in active terminal\u2026",
@@ -844,6 +853,138 @@ test.describe("Settings panel — every control has its expected effect", () => 
         await expect(page.locator(".control-panel")).toHaveAttribute("data-mode", value);
       }
       await setNative("#layoutMode", "auto", "change");
+    });
+
+    test("new layout modes apply distinct grid, primary-pane, and carousel contracts", async () => {
+      const contracts = await page.evaluate(() => {
+        const host = document.querySelector("#terminalHost");
+        const probe = document.createElement("div");
+        probe.className = "terminal-pane is-primary";
+        const secondary = document.createElement("div");
+        secondary.className = "terminal-pane";
+        host.append(probe, secondary);
+
+        const read = (layout) => {
+          setLayoutMode(layout);
+          const hostStyle = getComputedStyle(host);
+          const paneStyle = getComputedStyle(probe);
+          return {
+            display: hostStyle.display,
+            columns: hostStyle.gridTemplateColumns,
+            rows: hostStyle.gridTemplateRows,
+            snap: hostStyle.scrollSnapType,
+            primaryColumn: paneStyle.gridColumn,
+            primaryRow: paneStyle.gridRow,
+            flexBasis: paneStyle.flexBasis
+          };
+        };
+
+        const result = Object.fromEntries([
+          "master-left",
+          "master-bottom",
+          "priority-grid",
+          "compact-matrix",
+          "carousel-horizontal",
+          "carousel-vertical",
+          "spotlight"
+        ].map((layout) => [layout, read(layout)]));
+        probe.remove();
+        secondary.remove();
+        setLayoutMode("auto");
+        return result;
+      });
+
+      expect(contracts["master-left"].primaryColumn).toBe("1");
+      expect(contracts["master-left"].primaryRow).toContain("span");
+      expect(contracts["master-bottom"].primaryColumn).toBe("1 / -1");
+      expect(contracts["master-bottom"].primaryRow).toBe("2");
+      expect(contracts["priority-grid"].primaryColumn).toContain("span 2");
+      expect(contracts["priority-grid"].primaryRow).toContain("span 2");
+      expect(contracts["compact-matrix"].columns.split(" ").length).toBeGreaterThan(1);
+      expect(contracts["carousel-horizontal"]).toMatchObject({ display: "flex", snap: "x mandatory" });
+      expect(contracts["carousel-horizontal"].flexBasis).not.toBe("auto");
+      expect(contracts["carousel-vertical"]).toMatchObject({ display: "flex", snap: "y mandatory" });
+      expect(contracts.spotlight.primaryColumn).toBe("1 / -1");
+      expect(contracts.spotlight.primaryRow).toBe("1");
+    });
+
+    test("new grid and primary-pane layouts collapse cleanly on narrow screens", async () => {
+      await page.setViewportSize({ width: 800, height: 900 });
+      try {
+        const contracts = await page.evaluate(() => {
+          const host = document.querySelector("#terminalHost");
+          const probe = document.createElement("div");
+          probe.className = "terminal-pane is-primary";
+          const secondary = document.createElement("div");
+          secondary.className = "terminal-pane";
+          host.append(probe, secondary);
+          const result = {};
+          for (const layout of [
+            "master-left",
+            "master-bottom",
+            "priority-grid",
+            "compact-matrix",
+            "spotlight"
+          ]) {
+            setLayoutMode(layout);
+            const hostStyle = getComputedStyle(host);
+            const paneStyle = getComputedStyle(probe);
+            result[layout] = {
+              columns: hostStyle.gridTemplateColumns,
+              primaryColumn: paneStyle.gridColumn,
+              primaryRow: paneStyle.gridRow,
+              secondaryColumn: getComputedStyle(secondary).gridColumn,
+              secondaryRow: getComputedStyle(secondary).gridRow
+            };
+          }
+          probe.remove();
+          secondary.remove();
+          setLayoutMode("auto");
+          return result;
+        });
+
+        for (const contract of Object.values(contracts)) {
+          expect(contract.columns.split(" ")).toHaveLength(1);
+          expect(contract.primaryColumn).toBe("auto");
+          expect(contract.primaryRow).toBe("auto");
+          expect(contract.secondaryColumn).toBe("auto");
+          expect(contract.secondaryRow).toBe("auto");
+        }
+      } finally {
+        await page.setViewportSize({ width: 1280, height: 720 });
+      }
+    });
+
+    test("narrow-screen layout fallbacks preserve an active snap arrangement", async () => {
+      await page.setViewportSize({ width: 800, height: 900 });
+      try {
+        const contract = await page.evaluate(() => {
+          const host = document.querySelector("#terminalHost");
+          const snapped = document.createElement("div");
+          snapped.className = "terminal-pane is-primary is-snapped";
+          const rest = document.createElement("div");
+          rest.className = "terminal-pane is-snap-rest";
+          host.append(snapped, rest);
+          setLayoutMode("master-left");
+          host.dataset.snapEdge = "left";
+          const result = {
+            columns: getComputedStyle(host).gridTemplateColumns,
+            snappedColumn: getComputedStyle(snapped).gridColumn,
+            restColumn: getComputedStyle(rest).gridColumn
+          };
+          delete host.dataset.snapEdge;
+          snapped.remove();
+          rest.remove();
+          setLayoutMode("auto");
+          return result;
+        });
+
+        expect(contract.columns.split(" ")).toHaveLength(2);
+        expect(contract.snappedColumn).toBe("1");
+        expect(contract.restColumn).toBe("2");
+      } finally {
+        await page.setViewportSize({ width: 1280, height: 720 });
+      }
     });
 
     test("Layout sliders: each writes its CSS var and mirrors into its <output>", async () => {

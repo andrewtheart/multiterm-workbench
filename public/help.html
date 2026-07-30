@@ -176,8 +176,15 @@
         <li>Click <strong>Terminal</strong> (top-right) or press <span class="kbd">Ctrl+Shift+T</span> to open a new session.</li>
         <li>Pick the shell (PowerShell 7, Windows PowerShell, Command Prompt, or WSL) from the <strong>Shell</strong> dropdown before creating a session.</li>
         <li>Set a starting folder in the <strong>CWD</strong> box to launch new sessions there.</li>
+        <li>Use the <strong>link</strong> button beside Terminal, or run <strong>Attach WSL tmux session&hellip;</strong> from the command palette, to discover and attach a tmux session that is already running inside WSL.</li>
         <li>Type in any pane just like a normal terminal — <span class="kbd">Ctrl+C</span>, Tab completion, and PSReadLine editing are forwarded through a real pseudo-terminal.</li>
       </ul>
+
+      <h2>Attaching an existing WSL terminal</h2>
+      <p>MultiTerm can attach to a running <strong>tmux</strong> session inside any installed WSL distribution. The selector shows each session&rsquo;s distribution, window count, active pane PID and command, and whether another client is attached. Selecting a row opens another real tmux client in MultiTerm. Closing that pane detaches MultiTerm but leaves the tmux session and its programs running.</p>
+      <pre><code>tmux new -s work
+# Later, choose "Attach WSL tmux session…" in MultiTerm</code></pre>
+      <div class="help-note"><p>Ordinary Command Prompt, PowerShell, Windows Terminal, and non-tmux WSL processes cannot be moved into MultiTerm after launch. Windows ConPTY must own a process&rsquo;s input/output channels when the process is created; a PID or window title alone cannot provide those channels.</p></div>
 
       <h2>Arranging terminals</h2>
       <p>Use the <strong>layout controls</strong> panel on the left to change how panes are tiled:</p>
@@ -185,7 +192,10 @@
         <li><strong>Auto fit</strong> — panes size themselves to fill the workbench.</li>
         <li><strong>Fixed columns / rows</strong> — lock the grid to a set number of columns or rows.</li>
         <li><strong>Horizontal strip / Vertical stack</strong> — line panes up in a single row or column.</li>
+        <li><strong>Horizontal / Vertical carousel</strong> — page through large, scroll-snapping panes.</li>
         <li><strong>Focus rail</strong> — enlarge the active pane while keeping the rest reachable.</li>
+        <li><strong>Master layouts / Spotlight</strong> — anchor the primary pane on any edge or above a thumbnail rail.</li>
+        <li><strong>Priority grid / Compact matrix</strong> — emphasize the primary pane or pack many panes tightly.</li>
         <li><strong>Manual canvas</strong> — drag panes by their header and resize from the lower-right corner.</li>
       </ul>
       <p>Drag any terminal by its header to the top, bottom, left, or right edge to <strong>snap</strong> it there; the remaining panes reflow to fill the space.</p>
@@ -199,6 +209,8 @@
       <ul>
         <li><strong>Broadcast</strong> (<span class="kbd">Ctrl+Shift+B</span>) sends one command to every terminal, or to a chosen scope.</li>
         <li><strong>Sync input</strong> mirrors your typing into all panes at once — toggle it in the layout panel.</li>
+        <li>Open <strong>Terminal notes &amp; command queue</strong> from the notebook button in the header or a terminal pane. Notes stay with that process and move to <strong>Recovered notes</strong> when it exits.</li>
+        <li>Stage commands or long prompts in a terminal&rsquo;s queue. Click the queue icon in that pane or press <span class="kbd">Ctrl+Shift+Q</span> to dequeue the next item immediately; it is inserted without pressing Enter. The full queue still lets you choose any item, and items from ended processes move to the <strong>Unparented queue</strong>.</li>
         <li>The top <strong>Search</strong> box filters panes by their on-screen text; non-matching panes stay hidden until they match again or you clear the search.</li>
         <li>The bottom-left <strong>trash</strong> button closes every pane and asks the bridge to stop all running sessions.</li>
       </ul>
@@ -230,6 +242,7 @@
         <li><span>Select all terminal output</span><span class="kbd">Ctrl+A</span></li>
         <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
         <li><span>Paste into active</span><span class="kbd">Ctrl+Shift+V</span></li>
+        <li><span>Dequeue next command</span><span class="kbd">Ctrl+Shift+Q</span></li>
         <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
         <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+&rarr; / &larr;</span></li>
         <li><span>Zoom terminal under pointer</span><span class="kbd">Ctrl+mouse wheel</span></li>

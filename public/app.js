@@ -70,6 +70,7 @@ const PANE_OVERFLOW_WIDTH = 600;
 
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.40";
+const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 const COPILOT_YOLO_COMMAND = "copilot --yolo";
@@ -182,6 +183,7 @@ const themes = {
 
 const elements = {
   addTerminal: document.querySelector("#addTerminal"),
+  attachTmux: document.querySelector("#attachTmux"),
   appTheme: document.querySelector("#appTheme"),
   aboutClose: document.querySelector("#aboutClose"),
   aboutCheckUpdates: document.querySelector("#aboutCheckUpdates"),
@@ -206,6 +208,11 @@ const elements = {
   columnCount: document.querySelector("#columnCount"),
   columnCountValue: document.querySelector("#columnCountValue"),
   commandPalette: document.querySelector("#commandPalette"),
+  commandQueueAdd: document.querySelector("#commandQueueAdd"),
+  commandQueueEmpty: document.querySelector("#commandQueueEmpty"),
+  commandQueueHint: document.querySelector("#commandQueueHint"),
+  commandQueueInput: document.querySelector("#commandQueueInput"),
+  commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
   contextMenu: document.querySelector("#contextMenu"),
   controlPanel: document.querySelector(".control-panel"),
@@ -251,6 +258,11 @@ const elements = {
   quickSwitchInput: document.querySelector("#quickSwitchInput"),
   quickSwitchList: document.querySelector("#quickSwitchList"),
   quickSwitchOverlay: document.querySelector("#quickSwitchOverlay"),
+  tmuxAttachClose: document.querySelector("#tmuxAttachClose"),
+  tmuxAttachList: document.querySelector("#tmuxAttachList"),
+  tmuxAttachOverlay: document.querySelector("#tmuxAttachOverlay"),
+  tmuxAttachRefresh: document.querySelector("#tmuxAttachRefresh"),
+  tmuxAttachStatus: document.querySelector("#tmuxAttachStatus"),
   closeConfirmOverlay: document.querySelector("#closeConfirmOverlay"),
   closeConfirmRemember: document.querySelector("#closeConfirmRemember"),
   closeConfirmTray: document.querySelector("#closeConfirmTray"),
@@ -291,6 +303,12 @@ const elements = {
   statusShellText: document.querySelector("#statusShellText"),
   statusZoomIn: document.querySelector("#statusZoomIn"),
   statusZoomOut: document.querySelector("#statusZoomOut"),
+  statisticsBody: document.querySelector("#statisticsBody"),
+  statisticsClose: document.querySelector("#statisticsClose"),
+  statisticsOverlay: document.querySelector("#statisticsOverlay"),
+  statisticsRefresh: document.querySelector("#statisticsRefresh"),
+  statisticsSubtitle: document.querySelector("#statisticsSubtitle"),
+  statisticsTitle: document.querySelector("#statisticsTitle"),
   updateClose: document.querySelector("#updateClose"),
   updateConsentDecline: document.querySelector("#updateConsentDecline"),
   updateConsentEnable: document.querySelector("#updateConsentEnable"),
@@ -310,6 +328,16 @@ const elements = {
   updateViewRelease: document.querySelector("#updateViewRelease"),
   syncInput: document.querySelector("#syncInput"),
   terminalSearchInput: document.querySelector("#terminalSearchInput"),
+  terminalArtifactsBadge: document.querySelector("#terminalArtifactsBadge"),
+  terminalArtifactsClose: document.querySelector("#terminalArtifactsClose"),
+  terminalArtifactsOverlay: document.querySelector("#terminalArtifactsOverlay"),
+  terminalArtifactsSubtitle: document.querySelector("#terminalArtifactsSubtitle"),
+  terminalArtifactsTarget: document.querySelector("#terminalArtifactsTarget"),
+  terminalArtifactsToggle: document.querySelector("#terminalArtifactsToggle"),
+  terminalNotesIdentity: document.querySelector("#terminalNotesIdentity"),
+  terminalNotesInput: document.querySelector("#terminalNotesInput"),
+  terminalNotesSaved: document.querySelector("#terminalNotesSaved"),
+  terminalNotesSection: document.querySelector("#terminalNotesSection"),
   terminalTheme: document.querySelector("#terminalTheme"),
   themeToggle: document.querySelector("#themeToggle"),
   toastHost: document.querySelector("#toastHost"),
@@ -317,6 +345,10 @@ const elements = {
   toggleHeaderTop: document.querySelector("#toggleHeaderTop"),
   toggleSidecar: document.querySelector("#toggleSidecar"),
   toggleSidecarTop: document.querySelector("#toggleSidecarTop"),
+  recoveredNotesEmpty: document.querySelector("#recoveredNotesEmpty"),
+  recoveredNotesList: document.querySelector("#recoveredNotesList"),
+  unparentedQueueTarget: document.querySelector("#unparentedQueueTarget"),
+  unparentedTargetRow: document.querySelector("#unparentedTargetRow"),
   workspaceDelete: document.querySelector("#workspaceDelete"),
   workspaceName: document.querySelector("#workspaceName"),
   workspaceRestore: document.querySelector("#workspaceRestore"),
@@ -345,6 +377,9 @@ const state = {
   snap: null,
   socket: null,
   socketReady: false,
+  statistics: { terminalId: null, loading: false, requestGeneration: 0, returnFocus: null },
+  terminalArtifacts: loadTerminalArtifacts(),
+  terminalArtifactsHub: { returnFocus: null, savedTimer: 0 },
   terminalPages: loadTerminalPages(),
   terminalSearch: "",
   terminals: new Map(),
@@ -435,6 +470,8 @@ window.addEventListener("DOMContentLoaded", () => {
   bindCloseConfirm();
   bindUpdateConsent();
   bindUpdateDialog();
+  bindStatisticsDialog();
+  bindTerminalArtifactsHub();
   bindMemStatus();
   bindGlobalShortcuts();
   bindFindAll();
@@ -466,6 +503,7 @@ window.addEventListener("beforeunload", () => {
   saveManualLayouts();
   saveSessionSnapshot();
   if (!state.settings.keepSessionsOnClose) {
+    recoverAllTerminalArtifacts("application quit");
     sendBridge({ type: "killAll" });
   }
 });
@@ -504,12 +542,25 @@ function bindControls() {
   syncAutomaticUpdateControls();
 
   elements.addTerminal.addEventListener("click", () => addTerminal({ reveal: true, runStartup: true }));
+  elements.attachTmux.addEventListener("click", openTmuxAttach);
+  elements.tmuxAttachClose.addEventListener("click", closeTmuxAttach);
+  elements.tmuxAttachRefresh.addEventListener("click", refreshTmuxSessions);
+  elements.tmuxAttachOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.tmuxAttachOverlay) closeTmuxAttach();
+  });
+  elements.tmuxAttachOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeTmuxAttach();
+    }
+  });
   elements.closeAllTerminals.addEventListener("click", closeAllTerminals);
   elements.statusZoomOut.addEventListener("click", () => fontZoom(-1));
   elements.statusZoomIn.addEventListener("click", () => fontZoom(1));
   elements.fitAll.addEventListener("click", fitAllTerminals);
   elements.resetLayout.addEventListener("click", resetLayout);
   elements.commandPalette.addEventListener("click", openPalette);
+  elements.terminalArtifactsToggle.addEventListener("click", () => openTerminalArtifacts(state.activeId));
   elements.themeToggle.addEventListener("click", toggleAppTheme);
   elements.helpToggle.addEventListener("click", openShortcuts);
   elements.helpDocToggle.addEventListener("click", openHelp);
@@ -748,14 +799,32 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "statistics") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "tmuxSessions") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "openFolder") {
+    openFolderInNewTerminal(message.path);
+    return;
+  }
+
   if (message.type === "welcome") {
     log.info("bridge", "Received welcome", { cwd: message.cwd, sessions: Array.isArray(message.sessions) ? message.sessions.length : 0 });
+    const known = new Set();
+    const openFolders = Array.isArray(message.openFolders)
+      ? message.openFolders.filter((folder) => typeof folder === "string" && folder.trim())
+      : [];
     if (!elements.cwdInput.value) {
       elements.cwdInput.value = message.cwd || "";
     }
 
     if (Array.isArray(message.sessions) && message.sessions.length > 0) {
-      const known = new Set();
       const savedMetadata = new Map(
         loadSessionSnapshot()
           .filter((entry) => entry && entry.id)
@@ -779,7 +848,7 @@ function handleBridgeMessage(message) {
           markSessionLostWhileOffline(terminal);
         }
       }
-    } else if (state.terminals.size === 0) {
+    } else if (state.terminals.size === 0 && openFolders.length === 0) {
       const snapshot = state.settings.restoreSession ? loadSessionSnapshot() : null;
       if (snapshot && snapshot.length > 0) {
         for (const meta of snapshot) {
@@ -788,7 +857,8 @@ function handleBridgeMessage(message) {
             shell: meta.shell,
             cwd: meta.cwd,
             color: meta.color,
-            fontSizeOverride: meta.fontSizeOverride
+            fontSizeOverride: meta.fontSizeOverride,
+            tmux: meta.tmux
           });
           if (meta.minimized && restored) minimizeTerminal(restored.id);
         }
@@ -802,6 +872,11 @@ function handleBridgeMessage(message) {
       }
     }
 
+    for (const folder of openFolders) {
+      openFolderInNewTerminal(folder);
+    }
+    recoverStaleTerminalArtifacts(known);
+
     return;
   }
 
@@ -810,12 +885,14 @@ function handleBridgeMessage(message) {
     if (!terminal) return;
     terminal.cwd = message.cwd;
     terminal.pid = message.pid;
+    terminal.tmux = message.tmux || terminal.tmux;
     // The bridge stamps startedAt when it spawns the shell. Fall back to now if
     // an older bridge omits it — accurate to the round-trip, and better than
     // showing nothing.
     terminal.startedAt = message.startedAt || new Date().toISOString();
     terminal.remoteRequested = true;
     terminal.status = "live";
+    syncTerminalArtifacts(terminal);
     if (message.elevated) {
       terminal.elevated = true;
       terminal.pane.classList.add("is-admin");
@@ -915,6 +992,20 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "error" && /Unsupported message type:\s*statistics/i.test(message.message || "")) {
+    const terminalScope = Boolean(state.statistics.terminalId);
+    resolveBridgeRequestByType("statistics", {
+      type: "statistics",
+      scope: terminalScope ? "terminal" : "all",
+      requestedId: state.statistics.terminalId,
+      supported: false,
+      processError: "Statistics are unavailable in this installed bridge. Update or reinstall MultiTerm to enable them.",
+      sessions: [],
+      totals: {}
+    });
+    return;
+  }
+
   if (message.type === "exited") {
     const terminal = state.terminals.get(message.id);
     if (!terminal) return;
@@ -922,6 +1013,7 @@ function handleBridgeMessage(message) {
     terminal.logging = false;
     setTerminalStatus(terminal, "exited", "dead");
     setAwaitingInput(terminal, false);
+    orphanTerminalArtifacts(terminal, "process exited");
     log.info("session", `Session exited: ${terminal.titleInput.value}`, { id: message.id, code: message.code ?? message.signal ?? "closed" });
     writelnTerminal(terminal, "");
     writelnTerminal(terminal, `\x1b[31mSession exited (${message.code ?? message.signal ?? "closed"}).\x1b[0m`);
@@ -935,12 +1027,22 @@ function handleBridgeMessage(message) {
       log.error("session", `Session error: ${message.message || "unknown"}`, { id: message.id });
       writelnTerminal(terminal, `\x1b[31m${message.message}\x1b[0m`);
       setTerminalStatus(terminal, "error", "dead");
+      if (message.type === "createFailed") orphanTerminalArtifacts(terminal, "session failed to start");
       toast(message.message || "Session error", "error");
     } else {
       log.error("bridge", `Bridge error: ${message.message || "unknown"}`);
       setBridgeStatus(message.message || "Bridge error", "offline");
     }
   }
+}
+
+function openFolderInNewTerminal(folder) {
+  if (typeof folder !== "string" || !folder.trim()) return null;
+  return addTerminal({
+    reveal: true,
+    runStartup: true,
+    cwd: folder.trim()
+  });
 }
 
 // After an auto-reconnect the bridge re-announces sessions it kept alive. Mark
@@ -954,6 +1056,8 @@ function reattachExistingSession(terminal, session) {
   // The shell kept running across the drop, so its original launch time is still
   // the truth — take the bridge's copy rather than treating this as a new start.
   if (session.startedAt) terminal.startedAt = session.startedAt;
+  if (session.tmux) terminal.tmux = session.tmux;
+  syncTerminalArtifacts(terminal);
   setTerminalStatus(terminal, session.pid != null ? `pid ${session.pid}` : "live", "live");
   updateTerminalSearchVisibility(terminal);
   scheduleFit(terminal);
@@ -968,6 +1072,7 @@ function markSessionLostWhileOffline(terminal) {
   terminal.logging = false;
   setTerminalStatus(terminal, "exited", "dead");
   setAwaitingInput(terminal, false);
+  orphanTerminalArtifacts(terminal, "process ended while disconnected");
   writelnTerminal(terminal, "");
   writelnTerminal(terminal, "\x1b[31mSession ended while the bridge was disconnected.\x1b[0m");
   log.info("session", `Session lost while offline: ${terminal.titleInput.value}`, { id: terminal.id });
@@ -1082,7 +1187,8 @@ function addTerminal(options = {}) {
     status: options.reattach ? "live" : "starting",
     statusElement: status,
     term,
-    titleInput
+    titleInput,
+    tmux: options.tmux || session.tmux || null
   };
 
   terminal.observer = new ResizeObserver(() => {
@@ -1090,6 +1196,7 @@ function addTerminal(options = {}) {
     scheduleFit(terminal);
   });
   state.terminals.set(id, terminal);
+  syncTerminalArtifacts(terminal);
   state.nextIndex += 1;
   updateTerminalActions();
   terminal.observer.observe(screen);
@@ -1114,6 +1221,7 @@ function addTerminal(options = {}) {
   registerCwdTracking(terminal);
 
   term.onData((data) => {
+    if (!data) return;
     // Merely clicking away from a terminal blocked on a prompt would otherwise
     // clear its awaiting flag, erasing the indicator meant to call you back.
     const isUserInput = !FOCUS_REPORT_SEQUENCE.test(data);
@@ -1322,6 +1430,7 @@ function bindTerminalSelectionHandling(terminal) {
 function bindPaneControls(terminal) {
   terminal.titleInput.addEventListener("change", () => {
     terminal.titleInput.value = terminal.titleInput.value.trim() || "PowerShell";
+    if (state.terminalArtifacts.terminals[terminal.id]) syncTerminalArtifacts(terminal);
     refreshTerminalSearchText(terminal);
     updateTerminalSearchVisibility(terminal);
     saveSessionSnapshot();
@@ -1366,6 +1475,10 @@ function bindPaneControls(terminal) {
       openFind(terminal);
     } else if (action === "restart") {
       restartSession(terminal.id);
+    } else if (action === "dequeue") {
+      dequeueNextTerminalCommand(terminal);
+    } else if (action === "artifacts") {
+      openTerminalArtifacts(terminal.id);
     } else if (action === "maximize") {
       toggleZoomPane(terminal.id);
     } else if (action === "more") {
@@ -1768,7 +1881,8 @@ function requestSession(terminal) {
     rows: terminal.term.rows,
     shell: terminal.shell || elements.shellSelect.value,
     title: terminal.titleInput.value,
-    elevated: Boolean(terminal.elevated)
+    elevated: Boolean(terminal.elevated),
+    tmux: terminal.tmux
   });
 }
 
@@ -1784,6 +1898,7 @@ function removeTerminal(id) {
   }
 
   log.info("terminal", `Terminal closed: ${terminal.titleInput.value}`, { id });
+  orphanTerminalArtifacts(terminal, "terminal closed");
   disposeTerminal(terminal);
 
   if (state.primaryId === id) {
@@ -1822,6 +1937,7 @@ function closeAllTerminals() {
   log.info("terminal", `Closing all terminals (${state.terminals.size})`);
   const closedIds = [...state.terminals.keys()];
   for (const terminal of [...state.terminals.values()]) {
+    orphanTerminalArtifacts(terminal, "all terminals closed");
     disposeTerminal(terminal);
   }
 
@@ -2127,7 +2243,8 @@ function moveTerminal(id, direction) {
 function setActiveTerminal(id) {
   if (!state.terminals.has(id)) return;
   state.activeId = id;
-  if (!state.primaryId || !state.terminals.has(state.primaryId)) {
+  const primary = state.primaryId ? state.terminals.get(state.primaryId) : null;
+  if (!primary || !isOnActivePage(primary)) {
     setPrimaryTerminal(id);
   }
   for (const terminal of state.terminals.values()) {
@@ -2642,7 +2759,11 @@ function requestBridge(message, { timeout = 300000 } = {}) {
       resolve(value);
     };
 
-    pendingBridgeRequests.set(requestId, { settle, timer: window.setTimeout(() => settle(null), timeout) });
+    pendingBridgeRequests.set(requestId, {
+      settle,
+      timer: window.setTimeout(() => settle(null), timeout),
+      type: message.type
+    });
     if (!sendBridge({ ...message, requestId })) settle(null);
   });
 }
@@ -2654,6 +2775,15 @@ function resolveBridgeRequest(message, value) {
   if (!pending) return false;
   pending.settle(value);
   return true;
+}
+
+function resolveBridgeRequestByType(type, value) {
+  for (const pending of pendingBridgeRequests.values()) {
+    if (pending.type !== type) continue;
+    pending.settle(value);
+    return true;
+  }
+  return false;
 }
 
 // Windows UAC-elevated terminals can't be hosted inside a non-elevated MultiTerm pane
@@ -3542,6 +3672,7 @@ function getCommands() {
     { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell", title: "Windows PowerShell" }) },
     { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd", title: "Command Prompt" }) },
     { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl", title: "WSL" }) },
+    { label: "Attach WSL tmux session…", run: openTmuxAttach },
     { label: "New Administrator terminal", run: () => newAdminTerminal() },
     { label: "Restart as Administrator", run: restartAsAdmin },
     { label: "Close active terminal", hint: "Ctrl+Shift+W", run: () => state.activeId && removeTerminal(state.activeId) },
@@ -3560,6 +3691,8 @@ function getCommands() {
     { label: "Fit all terminals", run: fitAllTerminals },
     { label: "Reset layout", run: resetLayout },
     { label: "Broadcast command…", hint: "Ctrl+Shift+B", run: () => toggleBroadcast(true) },
+    { label: "Dequeue next command", hint: "Ctrl+Shift+Q", run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
+    { label: "Terminal notes & command queue…", run: () => openTerminalArtifacts(state.activeId) },
     { label: "Paste into active terminal", hint: "Ctrl+Shift+V", run: pasteIntoActive },
     { label: "Maximize / restore active pane", hint: "Ctrl+Shift+X", run: () => toggleZoomPane(state.activeId) },
     { label: "Browse & run script in active terminal\u2026", run: () => browseAndRunScript(state.activeId) },
@@ -3603,6 +3736,13 @@ function getCommands() {
     ["Balanced grid", "grid"],
     ["Master top", "master-top"],
     ["Master right", "master-right"],
+    ["Master bottom", "master-bottom"],
+    ["Master left", "master-left"],
+    ["Priority grid", "priority-grid"],
+    ["Compact matrix", "compact-matrix"],
+    ["Horizontal carousel", "carousel-horizontal"],
+    ["Vertical carousel", "carousel-vertical"],
+    ["Spotlight", "spotlight"],
     ["Bento grid", "bento"],
     ["Manual canvas", "manual"]
   ];
@@ -3737,6 +3877,103 @@ function runPaletteSelection() {
   if (command) {
     window.setTimeout(() => command.run(), 60);
   }
+}
+
+/* ---------------- WSL tmux attachment --------------- */
+
+let tmuxAttachGeneration = 0;
+let tmuxAttachCloseTimer = 0;
+
+function openTmuxAttach() {
+  closePalette();
+  window.clearTimeout(tmuxAttachCloseTimer);
+  tmuxAttachCloseTimer = 0;
+  elements.tmuxAttachOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.tmuxAttachOverlay.classList.add("is-open"));
+  elements.tmuxAttachRefresh.focus();
+  refreshTmuxSessions();
+}
+
+function closeTmuxAttach() {
+  tmuxAttachGeneration += 1;
+  window.clearTimeout(tmuxAttachCloseTimer);
+  elements.tmuxAttachOverlay.classList.remove("is-open");
+  tmuxAttachCloseTimer = window.setTimeout(() => {
+    tmuxAttachCloseTimer = 0;
+    elements.tmuxAttachOverlay.hidden = true;
+  }, 150);
+  if (state.activeId) state.terminals.get(state.activeId)?.term.focus();
+}
+
+async function refreshTmuxSessions() {
+  const generation = ++tmuxAttachGeneration;
+  elements.tmuxAttachRefresh.disabled = true;
+  elements.tmuxAttachStatus.textContent = "Looking for running tmux sessions…";
+  elements.tmuxAttachList.innerHTML = '<div class="tmux-attach-empty">Scanning WSL distributions…</div>';
+
+  const response = await requestBridge({ type: "listTmux" }, { timeout: 20000 });
+  if (generation !== tmuxAttachGeneration || elements.tmuxAttachOverlay.hidden) return;
+
+  elements.tmuxAttachRefresh.disabled = false;
+  const sessions = Array.isArray(response?.sessions) ? response.sessions : [];
+  renderTmuxSessions(sessions);
+  if (sessions.length > 0) {
+    const distroCount = new Set(sessions.map((entry) => entry.distro)).size;
+    elements.tmuxAttachStatus.textContent = `${sessions.length} session${sessions.length === 1 ? "" : "s"} across ${distroCount} WSL distribution${distroCount === 1 ? "" : "s"}`;
+  } else {
+    elements.tmuxAttachStatus.textContent = response?.message || "The local bridge did not return any tmux sessions.";
+  }
+  refreshIcons();
+}
+
+function renderTmuxSessions(sessions) {
+  elements.tmuxAttachList.innerHTML = "";
+  if (sessions.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "tmux-attach-empty";
+    empty.textContent = "No attachable tmux sessions found.";
+    elements.tmuxAttachList.append(empty);
+    return;
+  }
+
+  for (const candidate of sessions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tmux-session-card";
+    button.setAttribute("role", "listitem");
+    button.setAttribute("aria-label", `Attach ${candidate.session} in ${candidate.distro}`);
+
+    const main = document.createElement("span");
+    main.className = "tmux-session-main";
+    const title = document.createElement("span");
+    title.className = "tmux-session-title";
+    title.textContent = candidate.session;
+    const meta = document.createElement("span");
+    meta.className = "tmux-session-meta";
+    const pid = candidate.panePid ? ` · pane PID ${candidate.panePid}` : "";
+    const command = candidate.command ? ` · ${candidate.command}` : "";
+    meta.textContent = `${candidate.distro} · ${candidate.windows || 0} window${candidate.windows === 1 ? "" : "s"}${pid}${command}`;
+    main.append(title, meta);
+
+    const stateLabel = document.createElement("span");
+    stateLabel.className = "tmux-session-state";
+    stateLabel.textContent = candidate.attached ? "attached elsewhere" : "ready";
+    button.append(main, stateLabel);
+    button.addEventListener("click", () => attachTmuxSession(candidate));
+    elements.tmuxAttachList.append(button);
+  }
+}
+
+function attachTmuxSession(candidate) {
+  if (!candidate || typeof candidate.distro !== "string" || typeof candidate.session !== "string") return null;
+  closeTmuxAttach();
+  return addTerminal({
+    reveal: true,
+    runStartup: false,
+    shell: "wsl",
+    title: `${candidate.session} · ${candidate.distro}`,
+    tmux: { distro: candidate.distro, session: candidate.session }
+  });
 }
 
 /* ---------------- Terminal quick switcher (Alt+Q) --------------- */
@@ -3926,6 +4163,22 @@ function bindGlobalShortcuts() {
       return;
     }
 
+    if (elements.statisticsOverlay && !elements.statisticsOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeStatistics();
+      }
+      return;
+    }
+
+    if (elements.terminalArtifactsOverlay && !elements.terminalArtifactsOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeTerminalArtifacts();
+      }
+      return;
+    }
+
     if ((event.ctrlKey && event.shiftKey && key === "p") || event.key === "F1") {
       event.preventDefault();
       palette.open ? closePalette() : openPalette();
@@ -4023,6 +4276,10 @@ function bindGlobalShortcuts() {
         event.preventDefault();
         copyActiveTerminal();
       }
+    } else if (event.ctrlKey && event.shiftKey && key === "q") {
+      event.preventDefault();
+      event.stopPropagation();
+      dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null);
     } else if (event.ctrlKey && event.altKey && event.key === "ArrowRight") {
       event.preventDefault();
       cycleTerminal(1);
@@ -4073,7 +4330,8 @@ function restartSession(id) {
     title: terminal.titleInput.value,
     shell: terminal.shell,
     cwd: terminal.cwd,
-    fontSizeOverride: terminal.fontSizeOverride
+    fontSizeOverride: terminal.fontSizeOverride,
+    tmux: terminal.tmux
   };
   const anchor = terminal.pane.nextElementSibling;
 
@@ -4084,7 +4342,8 @@ function restartSession(id) {
     title: meta.title,
     shell: meta.shell,
     cwd: meta.cwd,
-    fontSizeOverride: meta.fontSizeOverride
+    fontSizeOverride: meta.fontSizeOverride,
+    tmux: meta.tmux
   });
   if (next && anchor && anchor.parentElement === elements.host) {
     elements.host.insertBefore(next.pane, anchor);
@@ -5562,7 +5821,8 @@ function saveSessionSnapshot() {
     color: terminal.color,
     fontSizeOverride: terminal.fontSizeOverride,
     minimized: terminal.minimized,
-    pageId: terminal.pageId
+    pageId: terminal.pageId,
+    tmux: terminal.tmux
   }));
   localStorage.setItem("multiterm.lastSession", JSON.stringify(snapshot));
   // The snapshot carries no ids, so it cannot restore an arrangement when the
@@ -5602,6 +5862,675 @@ function loadSessionSnapshot() {
   } catch {
     return [];
   }
+}
+
+/* ---------------- Terminal notes and command queue --------------- */
+
+const UNPARENTED_QUEUE_VALUE = "__unparented__";
+
+function emptyTerminalArtifacts() {
+  return {
+    version: 1,
+    terminals: {},
+    recoveredNotes: [],
+    unparentedQueue: []
+  };
+}
+
+function normalizeArtifactPid(value) {
+  const pid = Number(value);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function normalizeQueueItem(item, index, prefix) {
+  if (!item || typeof item !== "object") return null;
+  const command = typeof item.command === "string" ? item.command.trim() : "";
+  if (!command) return null;
+  return {
+    ...item,
+    id: typeof item.id === "string" && item.id ? item.id : `${prefix}-${index}-${Date.now()}`,
+    command,
+    createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString()
+  };
+}
+
+function loadTerminalArtifacts() {
+  const empty = emptyTerminalArtifacts();
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TERMINAL_ARTIFACTS_STORAGE_KEY) || "null");
+    if (!parsed || typeof parsed !== "object") return empty;
+
+    const terminals = {};
+    for (const [id, raw] of Object.entries(parsed.terminals || {})) {
+      if (!raw || typeof raw !== "object") continue;
+      terminals[id] = {
+        terminalId: id,
+        pid: normalizeArtifactPid(raw.pid),
+        startedAt: typeof raw.startedAt === "string" ? raw.startedAt : null,
+        title: typeof raw.title === "string" ? raw.title : "Terminal",
+        shell: typeof raw.shell === "string" ? raw.shell : "",
+        cwd: typeof raw.cwd === "string" ? raw.cwd : "",
+        notes: typeof raw.notes === "string" ? raw.notes : "",
+        notesUpdatedAt: typeof raw.notesUpdatedAt === "string" ? raw.notesUpdatedAt : null,
+        queue: (Array.isArray(raw.queue) ? raw.queue : [])
+          .map((item, index) => normalizeQueueItem(item, index, `queue-${id}`))
+          .filter(Boolean)
+      };
+    }
+
+    return {
+      version: 1,
+      terminals,
+      recoveredNotes: (Array.isArray(parsed.recoveredNotes) ? parsed.recoveredNotes : [])
+        .filter((entry) => entry && typeof entry === "object" && typeof entry.notes === "string")
+        .map((entry, index) => ({
+          ...entry,
+          id: typeof entry.id === "string" && entry.id ? entry.id : `recovered-${index}-${Date.now()}`,
+          pid: normalizeArtifactPid(entry.pid)
+        })),
+      unparentedQueue: (Array.isArray(parsed.unparentedQueue) ? parsed.unparentedQueue : [])
+        .map((item, index) => normalizeQueueItem(item, index, "unparented"))
+        .filter(Boolean)
+    };
+  } catch (error) {
+    console.warn("[MT:artifacts] Could not load terminal notes and queue", error);
+    return empty;
+  }
+}
+
+function saveTerminalArtifacts() {
+  localStorage.setItem(TERMINAL_ARTIFACTS_STORAGE_KEY, JSON.stringify(state.terminalArtifacts));
+  updateTerminalArtifactIndicators();
+}
+
+function terminalArtifactMetadata(terminal) {
+  return {
+    terminalId: terminal.id,
+    pid: normalizeArtifactPid(terminal.pid),
+    startedAt: terminal.startedAt || null,
+    title: terminal.titleInput.value || "Terminal",
+    shell: terminal.shell || "",
+    cwd: terminal.cwd || ""
+  };
+}
+
+function ensureTerminalArtifact(terminal) {
+  let record = state.terminalArtifacts.terminals[terminal.id];
+  if (!record) {
+    record = {
+      ...terminalArtifactMetadata(terminal),
+      notes: "",
+      notesUpdatedAt: null,
+      queue: []
+    };
+    state.terminalArtifacts.terminals[terminal.id] = record;
+  } else {
+    Object.assign(record, terminalArtifactMetadata(terminal));
+  }
+  return record;
+}
+
+function archiveArtifactRecord(record, reason) {
+  if (!record) return false;
+  const recoveredAt = new Date().toISOString();
+  const source = {
+    sourceTerminalId: record.terminalId,
+    pid: normalizeArtifactPid(record.pid),
+    startedAt: record.startedAt || null,
+    title: record.title || "Terminal",
+    shell: record.shell || "",
+    cwd: record.cwd || "",
+    recoveredAt,
+    reason
+  };
+  let changed = false;
+
+  if (String(record.notes || "").trim()) {
+    state.terminalArtifacts.recoveredNotes.unshift({
+      id: createId(),
+      notes: record.notes,
+      notesUpdatedAt: record.notesUpdatedAt || recoveredAt,
+      ...source
+    });
+    changed = true;
+  }
+
+  if (Array.isArray(record.queue) && record.queue.length > 0) {
+    state.terminalArtifacts.unparentedQueue.push(
+      ...record.queue.map((item) => ({ ...item, ...source, unparentedAt: recoveredAt }))
+    );
+    changed = true;
+  }
+  return changed;
+}
+
+function syncTerminalArtifacts(terminal) {
+  const record = state.terminalArtifacts.terminals[terminal.id];
+  if (!record) {
+    updateTerminalArtifactIndicators();
+    return;
+  }
+
+  const oldPid = normalizeArtifactPid(record.pid);
+  const nextPid = normalizeArtifactPid(terminal.pid);
+  if (oldPid && nextPid && oldPid !== nextPid) {
+    archiveArtifactRecord(record, "terminal ID was reused by a new process");
+    delete state.terminalArtifacts.terminals[terminal.id];
+    saveTerminalArtifacts();
+    return;
+  }
+
+  Object.assign(record, terminalArtifactMetadata(terminal));
+  saveTerminalArtifacts();
+}
+
+function orphanTerminalArtifacts(terminal, reason) {
+  const record = state.terminalArtifacts.terminals[terminal.id];
+  if (!record) {
+    updateTerminalArtifactIndicators();
+    return false;
+  }
+
+  Object.assign(record, terminalArtifactMetadata(terminal));
+  archiveArtifactRecord(record, reason);
+  delete state.terminalArtifacts.terminals[terminal.id];
+  saveTerminalArtifacts();
+  log.info("artifacts", `Recovered notes and queue from ${record.title}`, {
+    id: terminal.id,
+    pid: record.pid,
+    reason
+  });
+
+  if (elements.terminalArtifactsOverlay && !elements.terminalArtifactsOverlay.hidden) {
+    refreshTerminalArtifactTargets(UNPARENTED_QUEUE_VALUE);
+    renderTerminalArtifacts();
+  }
+  return true;
+}
+
+function recoverAllTerminalArtifacts(reason) {
+  let changed = false;
+  for (const record of Object.values(state.terminalArtifacts.terminals)) {
+    archiveArtifactRecord(record, reason);
+    delete state.terminalArtifacts.terminals[record.terminalId];
+    changed = true;
+  }
+  if (changed) saveTerminalArtifacts();
+}
+
+function recoverStaleTerminalArtifacts(liveSessionIds) {
+  let changed = false;
+  for (const [id, record] of Object.entries(state.terminalArtifacts.terminals)) {
+    if (liveSessionIds.has(id) || state.terminals.has(id)) continue;
+    archiveArtifactRecord(record, "terminal process is no longer available");
+    delete state.terminalArtifacts.terminals[id];
+    changed = true;
+  }
+  if (changed) saveTerminalArtifacts();
+}
+
+function artifactTerminalIsAvailable(terminal) {
+  return Boolean(terminal) && terminal.status !== "exited" && terminal.status !== "error";
+}
+
+function liveArtifactTerminals() {
+  return [...state.terminals.values()].filter(artifactTerminalIsAvailable);
+}
+
+function updateTerminalArtifactIndicators() {
+  const activeQueueCount = Object.values(state.terminalArtifacts.terminals)
+    .reduce((count, record) => count + record.queue.length, 0);
+  const pendingCount = activeQueueCount + state.terminalArtifacts.unparentedQueue.length;
+  const recoveredCount = state.terminalArtifacts.recoveredNotes.length;
+
+  if (elements.terminalArtifactsBadge) {
+    elements.terminalArtifactsBadge.hidden = pendingCount === 0;
+    elements.terminalArtifactsBadge.textContent = pendingCount > 99 ? "99+" : String(pendingCount);
+  }
+  if (elements.terminalArtifactsToggle) {
+    const label = `Terminal notes and command queue: ${pendingCount} queued, ${recoveredCount} recovered note${recoveredCount === 1 ? "" : "s"}`;
+    elements.terminalArtifactsToggle.title = label;
+    elements.terminalArtifactsToggle.setAttribute("aria-label", label);
+  }
+
+  for (const terminal of state.terminals.values()) {
+    const record = state.terminalArtifacts.terminals[terminal.id];
+    const queueCount = record?.queue.length || 0;
+    const hasNotes = Boolean(record?.notes.trim());
+    const button = terminal.pane.querySelector('[data-action="artifacts"]');
+    const badge = button?.querySelector(".pane-artifacts-badge");
+    const dequeueButton = terminal.pane.querySelector('[data-action="dequeue"]');
+    const dequeueBadge = dequeueButton?.querySelector(".pane-dequeue-badge");
+    if (!button || !badge) continue;
+    badge.hidden = queueCount === 0;
+    badge.textContent = queueCount > 9 ? "9+" : String(queueCount);
+    button.classList.toggle("has-artifacts", hasNotes || queueCount > 0);
+    const label = `Terminal notes and command queue${queueCount ? `, ${queueCount} queued` : ""}${hasNotes ? ", notes saved" : ""}`;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    if (dequeueButton && dequeueBadge) {
+      const nextCommand = record?.queue[0]?.command || "";
+      dequeueButton.hidden = queueCount === 0;
+      dequeueBadge.textContent = queueCount > 9 ? "9+" : String(queueCount);
+      const dequeueLabel = queueCount
+        ? `Insert next queued command without pressing Enter (${queueCount} queued): ${nextCommand}`
+        : "No commands queued";
+      dequeueButton.title = queueCount
+        ? `Insert next queued command without pressing Enter (Ctrl+Shift+Q)\n${nextCommand}`
+        : dequeueLabel;
+      dequeueButton.setAttribute("aria-label", dequeueLabel);
+    }
+  }
+}
+
+function refreshTerminalArtifactTargets(preferredId) {
+  const target = elements.terminalArtifactsTarget;
+  if (!target) return;
+  const terminals = liveArtifactTerminals();
+  const preferred = preferredId || target.value || state.activeId;
+  target.textContent = "";
+
+  for (const terminal of terminals) {
+    const option = document.createElement("option");
+    option.value = terminal.id;
+    option.textContent = `${terminal.titleInput.value || "Terminal"} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : "starting"}`;
+    target.append(option);
+  }
+
+  const unparented = document.createElement("option");
+  unparented.value = UNPARENTED_QUEUE_VALUE;
+  const count = state.terminalArtifacts.unparentedQueue.length;
+  unparented.textContent = `Unparented queue${count ? ` (${count})` : ""}`;
+  target.append(unparented);
+
+  target.value = [...target.options].some((option) => option.value === preferred)
+    ? preferred
+    : terminals[0]?.id || UNPARENTED_QUEUE_VALUE;
+}
+
+function refreshUnparentedQueueTargets(preferredId) {
+  const select = elements.unparentedQueueTarget;
+  if (!select) return;
+  const terminals = liveArtifactTerminals();
+  const preferred = preferredId || select.value || state.activeId;
+  select.textContent = "";
+
+  if (terminals.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No live terminals";
+    select.append(option);
+    select.disabled = true;
+    return;
+  }
+
+  select.disabled = false;
+  for (const terminal of terminals) {
+    const option = document.createElement("option");
+    option.value = terminal.id;
+    option.textContent = `${terminal.titleInput.value || "Terminal"} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : "starting"}`;
+    select.append(option);
+  }
+  select.value = terminals.some((terminal) => terminal.id === preferred) ? preferred : terminals[0].id;
+}
+
+function artifactTimeLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
+}
+
+function renderCommandQueue(items, source) {
+  elements.commandQueueList.textContent = "";
+  elements.commandQueueEmpty.hidden = items.length > 0;
+
+  for (const item of items) {
+    const card = document.createElement("article");
+    card.className = `command-queue-item${source === "unparented" ? " is-unparented" : ""}`;
+
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "command-queue-send";
+    send.dataset.queueSend = item.id;
+    send.title = "Insert into terminal without pressing Enter";
+
+    const command = document.createElement("span");
+    command.className = "command-queue-command";
+    command.textContent = item.command;
+    const meta = document.createElement("span");
+    meta.className = "command-queue-meta";
+    const sourcePid = source === "unparented" && item.pid ? `From PID ${item.pid} \u00b7 ` : "";
+    meta.textContent = `${sourcePid}${artifactTimeLabel(item.createdAt)} \u00b7 Insert without Enter`;
+    send.append(command, meta);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "command-queue-delete";
+    remove.dataset.queueDelete = item.id;
+    remove.title = "Remove queued command";
+    remove.setAttribute("aria-label", "Remove queued command");
+    const icon = document.createElement("i");
+    icon.dataset.lucide = "x";
+    remove.append(icon);
+
+    card.append(send, remove);
+    elements.commandQueueList.append(card);
+  }
+}
+
+function renderRecoveredNotes() {
+  const entries = state.terminalArtifacts.recoveredNotes;
+  elements.recoveredNotesList.textContent = "";
+  elements.recoveredNotesEmpty.hidden = entries.length > 0;
+
+  for (const entry of entries) {
+    const card = document.createElement("article");
+    card.className = "recovered-note";
+    card.dataset.recoveredId = entry.id;
+
+    const head = document.createElement("div");
+    head.className = "recovered-note-head";
+    const identity = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = entry.title || "Terminal";
+    const meta = document.createElement("span");
+    meta.textContent = [
+      entry.pid ? `PID ${entry.pid}` : null,
+      artifactTimeLabel(entry.recoveredAt),
+      entry.reason
+    ].filter(Boolean).join(" \u00b7 ");
+    identity.append(title, meta);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "recovered-note-delete";
+    remove.dataset.recoveredDelete = entry.id;
+    remove.title = "Delete recovered note";
+    remove.setAttribute("aria-label", `Delete recovered note for ${entry.title || "terminal"}`);
+    const icon = document.createElement("i");
+    icon.dataset.lucide = "trash-2";
+    remove.append(icon);
+    head.append(identity, remove);
+
+    const notes = document.createElement("textarea");
+    notes.className = "recovered-note-input";
+    notes.dataset.recoveredNotes = entry.id;
+    notes.rows = 4;
+    notes.value = entry.notes;
+    notes.setAttribute("aria-label", `Recovered notes for ${entry.title || "terminal"}`);
+
+    card.append(head, notes);
+    elements.recoveredNotesList.append(card);
+  }
+}
+
+function renderTerminalArtifacts() {
+  if (!elements.terminalArtifactsOverlay) return;
+  const selected = elements.terminalArtifactsTarget.value;
+  const terminal = selected === UNPARENTED_QUEUE_VALUE ? null : state.terminals.get(selected);
+  const liveTerminal = artifactTerminalIsAvailable(terminal) ? terminal : null;
+  const isUnparented = !liveTerminal;
+  let queue;
+
+  elements.terminalNotesSection.hidden = isUnparented;
+  elements.unparentedTargetRow.hidden = !isUnparented;
+  elements.terminalNotesSaved.textContent = "";
+
+  if (liveTerminal) {
+    const record = ensureTerminalArtifact(liveTerminal);
+    elements.terminalNotesInput.value = record.notes;
+    elements.terminalNotesIdentity.textContent = `${liveTerminal.titleInput.value || "Terminal"} \u00b7 ${liveTerminal.pid ? `PID ${liveTerminal.pid}` : "process starting"}`;
+    elements.terminalArtifactsSubtitle.textContent = "Notes and queued commands stay with this terminal process.";
+    elements.commandQueueHint.textContent = "Click a queued command to insert it into this terminal without pressing Enter.";
+    elements.commandQueueInput.placeholder = "Stage a command or prompt for this terminal\u2026";
+    queue = record.queue;
+  } else {
+    elements.terminalArtifactsSubtitle.textContent = "Commands from ended terminals stay usable in the unparented queue.";
+    elements.commandQueueHint.textContent = "Choose a live target, then click a command to insert it without pressing Enter.";
+    elements.commandQueueInput.placeholder = "Stage an unparented command or prompt\u2026";
+    refreshUnparentedQueueTargets();
+    queue = state.terminalArtifacts.unparentedQueue;
+  }
+
+  renderCommandQueue(queue, isUnparented ? "unparented" : "terminal");
+  renderRecoveredNotes();
+  updateTerminalArtifactIndicators();
+  refreshIcons();
+}
+
+function addCommandQueueItem() {
+  const raw = elements.commandQueueInput.value;
+  const command = String(raw || "").replace(/\s*[\r\n]+\s*/g, " ").trim();
+  if (!command) {
+    toast("Enter a command or prompt to queue.", "info", 1800);
+    elements.commandQueueInput.focus();
+    return;
+  }
+
+  const item = { id: createId(), command, createdAt: new Date().toISOString() };
+  const selected = elements.terminalArtifactsTarget.value;
+  const terminal = state.terminals.get(selected);
+  if (selected === UNPARENTED_QUEUE_VALUE || !artifactTerminalIsAvailable(terminal)) {
+    state.terminalArtifacts.unparentedQueue.push(item);
+  } else {
+    ensureTerminalArtifact(terminal).queue.push(item);
+  }
+
+  elements.commandQueueInput.value = "";
+  saveTerminalArtifacts();
+  refreshTerminalArtifactTargets(selected);
+  renderTerminalArtifacts();
+  elements.commandQueueInput.focus();
+}
+
+function selectedArtifactQueue() {
+  const selected = elements.terminalArtifactsTarget.value;
+  if (selected === UNPARENTED_QUEUE_VALUE) {
+    return { items: state.terminalArtifacts.unparentedQueue, terminal: null, source: "unparented" };
+  }
+  const terminal = state.terminals.get(selected);
+  const record = terminal ? state.terminalArtifacts.terminals[selected] : null;
+  return { items: record?.queue || [], terminal, source: "terminal" };
+}
+
+function removeCommandQueueItem(id) {
+  const selected = selectedArtifactQueue();
+  const index = selected.items.findIndex((item) => item.id === id);
+  if (index < 0) {
+    toast("That queued command is no longer available.", "info", 1800);
+    return;
+  }
+  selected.items.splice(index, 1);
+  saveTerminalArtifacts();
+  refreshTerminalArtifactTargets(elements.terminalArtifactsTarget.value);
+  renderTerminalArtifacts();
+}
+
+function focusTerminalAfterQueueInsert(terminal, { closeArtifacts = true } = {}) {
+  if (terminal.pageId !== state.activePageId) setActivePage(terminal.pageId, { focus: false });
+  if (terminal.minimized) restoreTerminal(terminal.id);
+  setActiveTerminal(terminal.id);
+  revealTerminal(terminal);
+  if (closeArtifacts) closeTerminalArtifacts({ restoreFocus: false });
+  window.requestAnimationFrame(() => terminal.term.focus());
+}
+
+function dequeueQueueItem({
+  items,
+  terminal,
+  id,
+  source = "terminal",
+  sourceTerminal = terminal,
+  closeArtifacts = true
+}) {
+  const index = items.findIndex((item) => item.id === id);
+  if (index < 0) {
+    toast("That queued command is no longer available.", "info", 1800);
+    return false;
+  }
+
+  if (!artifactTerminalIsAvailable(terminal)) {
+    if (source === "terminal" && sourceTerminal) {
+      orphanTerminalArtifacts(sourceTerminal, "terminal ended before queued command was inserted");
+    }
+    toast("Choose a live terminal before inserting this command.", "error", 2400);
+    if (closeArtifacts) renderTerminalArtifacts();
+    return false;
+  }
+  if (terminal.status !== "live") {
+    toast("That terminal is not ready yet; the command remains queued.", "info", 2200);
+    return false;
+  }
+  if (!sendBridge({ type: "input", id: terminal.id, data: items[index].command })) {
+    toast("Bridge unavailable; the command remains queued.", "error", 2400);
+    return false;
+  }
+
+  items.splice(index, 1);
+  saveTerminalArtifacts();
+  focusTerminalAfterQueueInsert(terminal, { closeArtifacts });
+  return true;
+}
+
+function dequeueCommand(id) {
+  const selected = selectedArtifactQueue();
+  const terminal = selected.source === "unparented"
+    ? state.terminals.get(elements.unparentedQueueTarget.value)
+    : selected.terminal;
+  return dequeueQueueItem({
+    items: selected.items,
+    terminal,
+    id,
+    source: selected.source,
+    sourceTerminal: selected.terminal,
+    closeArtifacts: true
+  });
+}
+
+function dequeueNextTerminalCommand(terminal) {
+  if (!terminal) {
+    toast("Select a terminal before dequeuing a command.", "info", 1800);
+    return false;
+  }
+  const queue = state.terminalArtifacts.terminals[terminal.id]?.queue || [];
+  const next = queue[0];
+  if (!next) {
+    toast("This terminal has no queued commands.", "info", 1800);
+    return false;
+  }
+  return dequeueQueueItem({
+    items: queue,
+    terminal,
+    id: next.id,
+    closeArtifacts: false
+  });
+}
+
+function openTerminalArtifacts(terminalId = null) {
+  if (!elements.terminalArtifactsOverlay) return;
+  closePalette();
+  hideContextMenu();
+  state.terminalArtifactsHub.returnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  const preferred = artifactTerminalIsAvailable(state.terminals.get(terminalId))
+    ? terminalId
+    : artifactTerminalIsAvailable(state.terminals.get(state.activeId))
+      ? state.activeId
+      : UNPARENTED_QUEUE_VALUE;
+  refreshTerminalArtifactTargets(preferred);
+  renderTerminalArtifacts();
+  elements.terminalArtifactsOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.terminalArtifactsOverlay.classList.add("is-open"));
+  elements.terminalArtifactsTarget.focus();
+}
+
+function closeTerminalArtifacts({ restoreFocus = true } = {}) {
+  if (!elements.terminalArtifactsOverlay) return;
+  const returnFocus = state.terminalArtifactsHub.returnFocus;
+  state.terminalArtifactsHub.returnFocus = null;
+  window.clearTimeout(state.terminalArtifactsHub.savedTimer);
+  state.terminalArtifactsHub.savedTimer = 0;
+  elements.terminalArtifactsOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.terminalArtifactsOverlay.hidden = true;
+    if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  }, 150);
+}
+
+function bindTerminalArtifactsHub() {
+  if (!elements.terminalArtifactsOverlay) return;
+  updateTerminalArtifactIndicators();
+  elements.terminalArtifactsClose.addEventListener("click", () => closeTerminalArtifacts());
+  elements.terminalArtifactsOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.terminalArtifactsOverlay) closeTerminalArtifacts();
+  });
+  elements.terminalArtifactsTarget.addEventListener("change", renderTerminalArtifacts);
+  elements.terminalNotesInput.addEventListener("input", () => {
+    const terminal = state.terminals.get(elements.terminalArtifactsTarget.value);
+    if (!artifactTerminalIsAvailable(terminal)) {
+      toast("This terminal is no longer available; its notes were recovered.", "info", 2200);
+      renderTerminalArtifacts();
+      return;
+    }
+    const record = ensureTerminalArtifact(terminal);
+    record.notes = elements.terminalNotesInput.value;
+    record.notesUpdatedAt = new Date().toISOString();
+    elements.terminalNotesSaved.textContent = "Saved";
+    window.clearTimeout(state.terminalArtifactsHub.savedTimer);
+    state.terminalArtifactsHub.savedTimer = window.setTimeout(() => {
+      elements.terminalNotesSaved.textContent = "";
+      state.terminalArtifactsHub.savedTimer = 0;
+    }, 1400);
+    saveTerminalArtifacts();
+  });
+  elements.commandQueueAdd.addEventListener("click", addCommandQueueItem);
+  elements.commandQueueInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.ctrlKey && !event.isComposing) {
+      event.preventDefault();
+      addCommandQueueItem();
+    }
+  });
+  elements.commandQueueList.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-queue-delete]");
+    if (remove) {
+      removeCommandQueueItem(remove.dataset.queueDelete);
+      return;
+    }
+    const send = event.target.closest("[data-queue-send]");
+    if (send) dequeueCommand(send.dataset.queueSend);
+  });
+  elements.recoveredNotesList.addEventListener("input", (event) => {
+    const input = event.target.closest("[data-recovered-notes]");
+    if (!input) return;
+    const entry = state.terminalArtifacts.recoveredNotes.find((item) => item.id === input.dataset.recoveredNotes);
+    if (!entry) {
+      toast("That recovered note is no longer available.", "info", 1800);
+      return;
+    }
+    entry.notes = input.value;
+    entry.notesUpdatedAt = new Date().toISOString();
+    saveTerminalArtifacts();
+  });
+  elements.recoveredNotesList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-recovered-delete]");
+    if (!button) return;
+    const index = state.terminalArtifacts.recoveredNotes.findIndex((item) => item.id === button.dataset.recoveredDelete);
+    if (index < 0) {
+      toast("That recovered note is no longer available.", "info", 1800);
+      return;
+    }
+    state.terminalArtifacts.recoveredNotes.splice(index, 1);
+    saveTerminalArtifacts();
+    renderRecoveredNotes();
+    refreshIcons();
+  });
 }
 
 /* ---------------- Shortcuts cheat sheet --------------- */
@@ -6129,6 +7058,226 @@ function bindUpdateDialog() {
   window.multiterm?.onUpdateProgress?.(updateDownloadProgress);
 }
 
+function formatStatisticCount(value) {
+  return Math.max(0, Number(value) || 0).toLocaleString();
+}
+
+function formatStatisticCpu(value) {
+  return value === null || value === undefined ? "Unavailable" : `${Math.max(0, Number(value) || 0).toFixed(1)}%`;
+}
+
+function formatStatisticMemory(value) {
+  return value === null || value === undefined ? "Unavailable" : formatBytes(value);
+}
+
+function createStatisticMetric(label, value, title) {
+  const metric = document.createElement("div");
+  metric.className = "statistics-metric";
+  if (title) metric.title = title;
+
+  const caption = document.createElement("span");
+  caption.className = "statistics-metric-label";
+  caption.textContent = label;
+  const result = document.createElement("span");
+  result.className = "statistics-metric-value";
+  result.textContent = value;
+  metric.append(caption, result);
+  return metric;
+}
+
+function buildStatisticsSummary(statistics) {
+  const summary = document.createElement("div");
+  summary.className = "statistics-summary";
+  summary.append(
+    createStatisticMetric("Keystrokes in", formatStatisticCount(statistics.keystrokesIn), "Character units sent into the terminal"),
+    createStatisticMetric("Keystrokes out", formatStatisticCount(statistics.keystrokesOut), "Character units received from the terminal"),
+    createStatisticMetric("Bridge bytes in", formatBytes(statistics.bytesIn), "UTF-8 terminal payload bytes sent through the bridge"),
+    createStatisticMetric("Bridge bytes out", formatBytes(statistics.bytesOut), "UTF-8 terminal payload bytes received through the bridge"),
+    createStatisticMetric("CPU now", formatStatisticCpu(statistics.cpuPercent), "Point-in-time use by the terminal process tree"),
+    createStatisticMetric("Memory now", formatStatisticMemory(statistics.memoryBytes), "Working set of the terminal process tree")
+  );
+  return summary;
+}
+
+function createStatisticsTable(sessions) {
+  const wrap = document.createElement("div");
+  wrap.className = "statistics-table-wrap";
+  const table = document.createElement("table");
+  table.className = "statistics-table";
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Terminal", "Keys in", "Keys out", "Bytes in", "Bytes out", "CPU", "Memory"]) {
+    const cell = document.createElement("th");
+    cell.scope = "col";
+    cell.textContent = label;
+    headRow.append(cell);
+  }
+  head.append(headRow);
+
+  const body = document.createElement("tbody");
+  for (const session of sessions) {
+    const row = document.createElement("tr");
+    const values = [
+      session.title || session.id || "Terminal",
+      formatStatisticCount(session.keystrokesIn),
+      formatStatisticCount(session.keystrokesOut),
+      formatBytes(session.bytesIn),
+      formatBytes(session.bytesOut),
+      formatStatisticCpu(session.cpuPercent),
+      formatStatisticMemory(session.memoryBytes)
+    ];
+    values.forEach((value, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      if (index === 0) cell.title = `${session.title || session.id || "Terminal"} (PID ${Number(session.pid) || 0})`;
+      row.append(cell);
+    });
+    body.append(row);
+  }
+  table.append(head, body);
+  wrap.append(table);
+  return wrap;
+}
+
+function renderStatistics(message) {
+  if (!elements.statisticsBody) return;
+  const sessions = (Array.isArray(message?.sessions) ? message.sessions : []).map((session) => {
+    const terminal = state.terminals.get(session.id);
+    return terminal ? { ...session, title: terminal.titleInput.value || session.title } : session;
+  });
+  const terminalScope = message?.scope === "terminal";
+  const sampled = message?.generatedAt ? new Date(message.generatedAt) : null;
+  const sampledText = sampled && !Number.isNaN(sampled.getTime())
+    ? sampled.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", second: "2-digit" })
+    : "just now";
+
+  elements.statisticsBody.textContent = "";
+  elements.statisticsTitle.textContent = terminalScope ? "Terminal statistics" : "All terminal statistics";
+
+  if (sessions.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = message?.processError ? "statistics-error" : "statistics-empty";
+    empty.textContent = message?.processError || (terminalScope ? "This terminal is no longer active." : "There are no active terminals.");
+    elements.statisticsBody.append(empty);
+    elements.statisticsSubtitle.textContent = terminalScope ? "No active session" : "0 active terminals";
+    return;
+  }
+
+  const totals = message?.totals || sessions.reduce((total, session) => ({
+    keystrokesIn: total.keystrokesIn + (Number(session.keystrokesIn) || 0),
+    keystrokesOut: total.keystrokesOut + (Number(session.keystrokesOut) || 0),
+    bytesIn: total.bytesIn + (Number(session.bytesIn) || 0),
+    bytesOut: total.bytesOut + (Number(session.bytesOut) || 0),
+    cpuPercent: total.cpuPercent + (Number(session.cpuPercent) || 0),
+    memoryBytes: total.memoryBytes + (Number(session.memoryBytes) || 0)
+  }), { keystrokesIn: 0, keystrokesOut: 0, bytesIn: 0, bytesOut: 0, cpuPercent: 0, memoryBytes: 0 });
+  const selected = terminalScope ? sessions[0] : totals;
+  elements.statisticsBody.append(buildStatisticsSummary(selected));
+
+  if (message?.processError) {
+    const warning = document.createElement("p");
+    warning.className = "statistics-warning";
+    warning.textContent = message.processError;
+    elements.statisticsBody.append(warning);
+  }
+  if (!terminalScope) elements.statisticsBody.append(createStatisticsTable(sessions));
+
+  if (terminalScope) {
+    const session = sessions[0];
+    elements.statisticsSubtitle.textContent = `${session.title || session.id || "Terminal"} \u00b7 PID ${Number(session.pid) || 0} \u00b7 sampled ${sampledText}`;
+  } else {
+    elements.statisticsSubtitle.textContent = `${sessions.length} active terminal${sessions.length === 1 ? "" : "s"} \u00b7 sampled ${sampledText}`;
+  }
+}
+
+function setStatisticsLoading(loading) {
+  state.statistics.loading = loading;
+  if (!elements.statisticsRefresh) return;
+  elements.statisticsRefresh.disabled = loading;
+  elements.statisticsRefresh.classList.toggle("is-loading", loading);
+  elements.statisticsRefresh.setAttribute("aria-busy", String(loading));
+}
+
+async function refreshStatistics() {
+  if (state.statistics.loading || !elements.statisticsBody) return;
+  const generation = ++state.statistics.requestGeneration;
+  setStatisticsLoading(true);
+  elements.statisticsBody.textContent = "";
+  const loading = document.createElement("div");
+  loading.className = "statistics-loading";
+  loading.textContent = "Sampling terminal process use\u2026";
+  elements.statisticsBody.append(loading);
+
+  const request = { type: "statistics" };
+  if (state.statistics.terminalId) request.id = state.statistics.terminalId;
+  const response = await requestBridge(request, { timeout: 12000 });
+  if (generation !== state.statistics.requestGeneration) return;
+  setStatisticsLoading(false);
+
+  if (response) {
+    renderStatistics(response);
+  } else {
+    elements.statisticsBody.textContent = "";
+    const error = document.createElement("div");
+    error.className = "statistics-error";
+    error.textContent = "Statistics could not be read from the bridge.";
+    elements.statisticsBody.append(error);
+  }
+}
+
+function openStatistics(terminalId = null) {
+  if (!elements.statisticsOverlay) return;
+  closePalette();
+  state.statistics.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  state.statistics.terminalId = terminalId || null;
+  state.statistics.requestGeneration += 1;
+  setStatisticsLoading(false);
+  elements.statisticsTitle.textContent = terminalId ? "Terminal statistics" : "All terminal statistics";
+  elements.statisticsSubtitle.textContent = "Current process use and bridge traffic";
+  elements.statisticsOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.statisticsOverlay.classList.add("is-open"));
+  refreshStatistics();
+  elements.statisticsClose.focus();
+}
+
+function closeStatistics() {
+  if (!elements.statisticsOverlay) return;
+  const returnFocus = state.statistics.returnFocus;
+  state.statistics.returnFocus = null;
+  state.statistics.requestGeneration += 1;
+  setStatisticsLoading(false);
+  elements.statisticsOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.statisticsOverlay.hidden = true;
+    if (returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true });
+  }, 150);
+}
+
+function bindStatisticsDialog() {
+  if (!elements.statisticsOverlay) return;
+  elements.statisticsClose.addEventListener("click", closeStatistics);
+  elements.statisticsRefresh.addEventListener("click", refreshStatistics);
+  elements.statisticsOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.statisticsOverlay) closeStatistics();
+  });
+  elements.statisticsOverlay.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const focusable = [elements.statisticsClose, elements.statisticsRefresh].filter((element) => !element.disabled);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      event.stopPropagation();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      event.stopPropagation();
+      first.focus();
+    }
+  });
+}
+
 /* ---------------- Terminal context menu --------------- */
 
 function bindContextMenu() {
@@ -6160,7 +7309,9 @@ function bindContextMenu() {
   window.addEventListener("keydown", onContextMenuKeydown, true);
   window.addEventListener("blur", hideContextMenu);
   window.addEventListener("resize", hideContextMenu);
-  elements.host.addEventListener("scroll", hideContextMenu, true);
+  elements.host.addEventListener("scroll", (event) => {
+    if (event.target === elements.host) hideContextMenu();
+  }, true);
 }
 
 function openTerminalContextMenu(event, terminal) {
@@ -6268,6 +7419,8 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", run: openFindAll },
     { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", run: () => clearTerminal(terminal.id) },
     { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", run: () => toggleZoomPane(terminal.id) },
+    { label: "Terminal statistics\u2026", icon: "activity", run: () => openStatistics(terminal.id) },
+    { label: "Notes & command queue\u2026", icon: "notebook-tabs", run: () => openTerminalArtifacts(terminal.id) },
     { separator: true },
     { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
@@ -6361,6 +7514,8 @@ function buildSurfaceContextMenu() {
     { separator: true },
     { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", disabled: !hasTerminals, run: openFindAll },
     { label: "Broadcast command\u2026", hint: "Ctrl+Shift+B", icon: "megaphone", disabled: !hasTerminals, run: () => toggleBroadcast(true) },
+    { label: "All terminal statistics\u2026", icon: "activity", disabled: !hasTerminals, run: () => openStatistics() },
+    { label: "Terminal notes & command queue\u2026", icon: "notebook-tabs", run: () => openTerminalArtifacts(state.activeId) },
     { label: "Command palette\u2026", hint: "Ctrl+Shift+P", icon: "command", run: openPalette },
     { separator: true },
     { label: "Open folder", icon: "folder-open", title: here || undefined, disabled: !here, run: () => revealPath(here) },

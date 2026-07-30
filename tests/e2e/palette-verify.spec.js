@@ -71,11 +71,12 @@ test.describe("Command palette + settings verification", () => {
     const labels = await page.evaluate(() => getCommands().map((c) => c.label));
     const required = [
       "New terminal", "New PowerShell 7 terminal", "New Windows PowerShell terminal",
-      "New Command Prompt terminal", "New WSL terminal", "New Administrator terminal",
+      "New Command Prompt terminal", "New WSL terminal", "Attach WSL tmux session…", "New Administrator terminal",
       "Restart as Administrator", "Close active terminal", "Minimize active terminal",
       "Restore all minimized terminals", "Close all terminals", "Restart active terminal",
       "Find in active terminal", "Clear active terminal", "Copy active output",
       "Cycle active terminal color", "Fit all terminals", "Reset layout", "Broadcast command\u2026",
+      "Dequeue next command", "Terminal notes & command queue\u2026",
       "Paste into active terminal", "Maximize / restore active pane", "Open active terminal folder",
       "New terminal in active folder", "Toggle logging for active terminal", "Cycle broadcast scope",
       "Next terminal", "Previous terminal", "Zoom in active terminal", "Zoom out active terminal",
@@ -144,6 +145,10 @@ test.describe("Command palette + settings verification", () => {
       ["Auto fit", "auto"], ["Fixed columns", "columns"], ["Fixed rows", "rows"],
       ["Horizontal strip", "horizontal"], ["Vertical stack", "vertical"], ["Focus rail", "focus"],
       ["Balanced grid", "grid"], ["Master top", "master-top"], ["Master right", "master-right"],
+      ["Master bottom", "master-bottom"], ["Master left", "master-left"],
+      ["Priority grid", "priority-grid"], ["Compact matrix", "compact-matrix"],
+      ["Horizontal carousel", "carousel-horizontal"], ["Vertical carousel", "carousel-vertical"],
+      ["Spotlight", "spotlight"],
       ["Bento grid", "bento"], ["Manual canvas", "manual"]
     ];
     for (const [name, value] of layouts) {

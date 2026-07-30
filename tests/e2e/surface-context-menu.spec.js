@@ -74,6 +74,9 @@ test.describe("Surface context menu", () => {
     // is the state a user hits long before they fill the grid.
     await setNative(page, "#layoutMode", "columns", "change");
     await setNative(page, "#columnCount", "6", "input");
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
 
     const point = await findBlankPoint(page);
     expect(point, "the layout must leave blank surface to right-click").not.toBeNull();
@@ -86,6 +89,58 @@ test.describe("Surface context menu", () => {
     await expect(menu.locator(".ctx-item", { hasText: "New page" }).first()).toBeVisible();
     return menu;
   };
+
+  const stubStatisticsReplies = (page) => page.evaluate(() => {
+    const socket = state.socket;
+    const originalSend = state.socket.send.bind(state.socket);
+    window.__statisticsRequests = [];
+    window.__restoreStatisticsSocket = () => {
+      if (state.socket === socket) state.socket.send = originalSend;
+    };
+    state.socket.send = (payload) => {
+      const request = JSON.parse(payload);
+      if (request.type !== "statistics") {
+        originalSend(payload);
+        return;
+      }
+
+      window.__statisticsRequests.push(request);
+      const terminals = request.id
+        ? [state.terminals.get(request.id)].filter(Boolean)
+        : [...state.terminals.values()];
+      const sessions = terminals.map((terminal, index) => ({
+        id: terminal.id,
+        title: "Bridge creation title",
+        pid: terminal.pid || 4000 + index,
+        keystrokesIn: 10 + index,
+        keystrokesOut: 20 + index,
+        bytesIn: 30 + index,
+        bytesOut: 40 + index,
+        cpuPercent: 1.5 + index,
+        memoryBytes: 64 * 1024 * 1024
+      }));
+      const totals = sessions.reduce((total, session) => ({
+        keystrokesIn: total.keystrokesIn + session.keystrokesIn,
+        keystrokesOut: total.keystrokesOut + session.keystrokesOut,
+        bytesIn: total.bytesIn + session.bytesIn,
+        bytesOut: total.bytesOut + session.bytesOut,
+        cpuPercent: total.cpuPercent + session.cpuPercent,
+        memoryBytes: total.memoryBytes + session.memoryBytes
+      }), { keystrokesIn: 0, keystrokesOut: 0, bytesIn: 0, bytesOut: 0, cpuPercent: 0, memoryBytes: 0 });
+
+      window.setTimeout(() => handleBridgeMessage({
+        type: "statistics",
+        requestId: request.requestId,
+        scope: request.id ? "terminal" : "all",
+        requestedId: request.id || null,
+        generatedAt: new Date().toISOString(),
+        supported: true,
+        processError: null,
+        sessions,
+        totals
+      }), 100);
+    };
+  });
 
   test("offers workspace-wide actions and none that need a specific terminal", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
@@ -104,6 +159,7 @@ test.describe("Surface context menu", () => {
       "New Command Prompt terminal",
       "Find in all terminals\u2026",
       "Broadcast command\u2026",
+      "All terminal statistics\u2026",
       "Open folder",
       "Reset layout",
       "New page",
@@ -124,6 +180,69 @@ test.describe("Surface context menu", () => {
 
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
+  });
+
+  test("opens all-terminal statistics from the blank surface", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await trimPanes(page, 1);
+    await stubStatisticsReplies(page);
+
+    const menu = await openSurfaceMenu(page);
+    await menu.locator(".ctx-item", { hasText: "All terminal statistics\u2026" }).click();
+
+    const overlay = page.locator("#statisticsOverlay");
+    await expect(overlay).toBeVisible();
+    await expect(page.locator("#statisticsTitle")).toHaveText("All terminal statistics");
+    await expect(page.locator(".statistics-metric-label")).toHaveText([
+      "Keystrokes in",
+      "Keystrokes out",
+      "Bridge bytes in",
+      "Bridge bytes out",
+      "CPU now",
+      "Memory now"
+    ]);
+    await expect.poll(() => page.locator(".statistics-table tbody tr").count()).toBeGreaterThan(0);
+    expect(await page.evaluate(() => window.__statisticsRequests.at(-1).id)).toBeUndefined();
+
+    await page.locator("#statisticsRefresh").click();
+    await expect(page.locator("#statisticsRefresh")).toBeDisabled();
+    await expect(page.locator("#statisticsRefresh")).toBeEnabled({ timeout: 15000 });
+    await page.keyboard.press("Escape");
+    await expect(overlay).toBeHidden();
+    await page.evaluate(() => window.__restoreStatisticsSocket());
+  });
+
+  test("degrades statistics cleanly when an installed bridge is too old", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const before = await page.locator("#bridgeStatus").textContent();
+    await page.evaluate(() => {
+      const originalSend = state.socket.send.bind(state.socket);
+      window.__restoreOldStatisticsBridge = () => { state.socket.send = originalSend; };
+      state.socket.send = (payload) => {
+        const request = JSON.parse(payload);
+        if (request.type === "statistics") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "error",
+            message: "Unsupported message type: statistics"
+          }), 20);
+          return;
+        }
+        originalSend(payload);
+      };
+      openStatistics();
+    });
+
+    await expect(page.locator("#statisticsOverlay")).toBeVisible();
+    await expect(page.locator(".statistics-error")).toContainText("Update or reinstall MultiTerm");
+    await expect(page.locator("#statisticsRefresh")).toBeEnabled();
+    await expect(page.locator("#bridgeStatus")).toHaveText(before);
+    expect(await page.evaluate(() => [...pendingBridgeRequests.values()].some((pending) => pending.type === "statistics"))).toBe(false);
+
+    await page.locator("#statisticsClose").click();
+    await page.evaluate(() => window.__restoreOldStatisticsBridge());
   });
 
   test("creates a terminal from the blank surface", async ({ page }) => {
@@ -318,10 +437,53 @@ test.describe("Surface context menu", () => {
     // surface one that replaced the fall-through.
     await expect(menu.locator(".ctx-item", { hasText: "Select all" }).first()).toBeVisible();
     await expect(menu.locator(".ctx-item", { hasText: "Copy all output" }).first()).toBeVisible();
+    await expect(menu.locator(".ctx-item", { hasText: "Terminal statistics\u2026" })).toBeVisible();
+
+    // Shell output scrolls xterm's nested viewport. It must not dismiss a menu
+    // the user is interacting with; only scrolling the workspace host should.
+    await page.evaluate(() => {
+      document.querySelector(".xterm-viewport").dispatchEvent(new Event("scroll"));
+    });
+    await expect(menu).toBeVisible();
 
     // Dismissed by clicking away rather than Escape: xterm swallows Escape while
     // the terminal has focus, which is unrelated to what this asserts.
     await page.mouse.click(4, 4);
     await expect(menu).toBeHidden();
+  });
+
+  test("opens statistics for the right-clicked terminal", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await stubStatisticsReplies(page);
+    await page.evaluate(() => {
+      const terminal = state.terminals.get(state.activeId);
+      terminal.titleInput.value = "Renamed terminal";
+    });
+
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.evaluate(() => { window.__statisticsReturnFocus = document.activeElement; });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Terminal statistics\u2026" }).click();
+
+    const overlay = page.locator("#statisticsOverlay");
+    await expect(overlay).toBeVisible();
+    await expect(page.locator("#statisticsTitle")).toHaveText("Terminal statistics");
+    await expect(page.locator("#statisticsSubtitle")).toContainText("Renamed terminal");
+    await expect(page.locator("#statisticsSubtitle")).toContainText("PID");
+    await expect(page.locator(".statistics-metric")).toHaveCount(6);
+    await expect(page.locator(".statistics-table")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__statisticsRequests.at(-1).id)).toBeTruthy();
+
+    await expect(page.locator("#statisticsRefresh")).toBeEnabled();
+    await expect(page.locator("#statisticsClose")).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.locator("#statisticsRefresh")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#statisticsClose")).toBeFocused();
+
+    await page.locator("#statisticsClose").click();
+    await expect(overlay).toBeHidden();
+    await expect.poll(() => page.evaluate(() => document.activeElement === window.__statisticsReturnFocus)).toBe(true);
+    await page.evaluate(() => window.__restoreStatisticsSocket());
   });
 });

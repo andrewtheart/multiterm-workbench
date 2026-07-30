@@ -42,6 +42,23 @@ test.describe("Enhancement milestone", () => {
     }
   });
 
+  test("opens an Explorer folder in a new terminal", async () => {
+    const result = await page.evaluate(() => {
+      const before = new Set(state.terminals.keys());
+      handleBridgeMessage({ type: "openFolder", path: "D:\\Explorer target" });
+      const created = [...state.terminals.values()].find((terminal) => !before.has(terminal.id));
+      const invalid = openFolderInNewTerminal("   ");
+      return {
+        count: state.terminals.size,
+        cwd: created?.cwd,
+        invalid,
+        visible: created ? !created.pane.classList.contains("is-page-hidden") : false
+      };
+    });
+
+    expect(result).toEqual({ count: 2, cwd: "D:\\Explorer target", invalid: null, visible: true });
+  });
+
   test("Ctrl+V pastes and cleans copied Copilot border pipes", async () => {
     const sent = await page.evaluate(async () => {
       const terminal = [...state.terminals.values()][0];

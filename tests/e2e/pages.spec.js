@@ -140,6 +140,26 @@ test.describe("Pages and the quick switcher", () => {
     expect(buffer).toContain(marker);
   });
 
+  test("switching pages promotes a visible terminal to primary", async () => {
+    await reset(2);
+    const result = await page.evaluate(() => {
+      const ids = [...state.terminals.keys()];
+      const secondPage = addPage({ name: "Second", activate: false });
+      moveTerminalToPage(ids[1], secondPage);
+      setActivePage(secondPage);
+      return {
+        activeId: state.activeId,
+        primaryId: state.primaryId,
+        movedId: ids[1],
+        visiblePrimaryId: document.querySelector(".terminal-pane.is-primary:not(.is-page-hidden)")?.dataset.id
+      };
+    });
+
+    expect(result.activeId).toBe(result.movedId);
+    expect(result.primaryId).toBe(result.movedId);
+    expect(result.visiblePrimaryId).toBe(result.movedId);
+  });
+
   test("moving a terminal to another page updates both counts", async () => {
     await reset(3);
     const target = await page.evaluate(() => addPage({ name: "Builds", activate: false }));

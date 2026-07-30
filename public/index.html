@@ -96,8 +96,15 @@
             <button id="commandPalette" class="icon-button" type="button" title="Command palette (Ctrl+Shift+P)" aria-label="Command palette">
               <i data-lucide="command"></i>
             </button>
+            <button id="terminalArtifactsToggle" class="icon-button artifact-toggle" type="button" title="Terminal notes and command queue" aria-label="Terminal notes and command queue">
+              <i data-lucide="notebook-tabs"></i>
+              <span id="terminalArtifactsBadge" class="artifact-toggle-badge" hidden>0</span>
+            </button>
             <button id="themeToggle" class="icon-button" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
               <i data-lucide="moon"></i>
+            </button>
+            <button id="attachTmux" class="icon-button" type="button" title="Attach WSL tmux session" aria-label="Attach WSL tmux session">
+              <i data-lucide="link"></i>
             </button>
             <button id="addTerminal" class="primary-action" type="button" title="New terminal (Ctrl+T)" aria-label="New terminal" aria-keyshortcuts="Control+T">
               <i data-lucide="plus"></i>
@@ -178,6 +185,13 @@
                 <option value="grid">Balanced grid</option>
                 <option value="master-top">Master top</option>
                 <option value="master-right">Master right</option>
+                <option value="master-bottom">Master bottom</option>
+                <option value="master-left">Master left</option>
+                <option value="priority-grid">Priority grid</option>
+                <option value="compact-matrix">Compact matrix</option>
+                <option value="carousel-horizontal">Horizontal carousel</option>
+                <option value="carousel-vertical">Vertical carousel</option>
+                <option value="spotlight">Spotlight</option>
                 <option value="bento">Bento grid</option>
                 <option value="manual">Manual canvas</option>
               </select>
@@ -495,6 +509,29 @@
       </div>
     </div>
 
+    <div id="tmuxAttachOverlay" class="palette-overlay" hidden>
+      <div class="palette tmux-attach" role="dialog" aria-modal="true" aria-labelledby="tmuxAttachTitle">
+        <div class="tmux-attach-head">
+          <div>
+            <h2 id="tmuxAttachTitle">Attach WSL tmux session</h2>
+            <p>Connects as another tmux client. The existing session and its current terminal stay running.</p>
+          </div>
+          <button id="tmuxAttachClose" class="icon-button" type="button" title="Close" aria-label="Close tmux session selector">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="tmux-attach-toolbar">
+          <span id="tmuxAttachStatus" role="status">Looking for running tmux sessions…</span>
+          <button id="tmuxAttachRefresh" class="secondary-action" type="button">
+            <i data-lucide="refresh-cw"></i>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div id="tmuxAttachList" class="tmux-attach-list" role="list"></div>
+        <p class="tmux-attach-note">Ordinary cmd, PowerShell, Windows Terminal, and non-tmux WSL processes cannot be attached after launch because ConPTY must own their I/O from process creation.</p>
+      </div>
+    </div>
+
     <div id="shortcutsOverlay" class="palette-overlay" hidden>
       <div class="palette shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
         <div class="shortcuts-head">
@@ -521,6 +558,7 @@
           <li><span>Select all terminal output</span><span class="kbd">Ctrl+A</span></li>
           <li><span>Paste into terminal</span><span class="kbd">Ctrl+V / Ctrl+Shift+V</span></li>
           <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
+          <li><span>Dequeue next command</span><span class="kbd">Ctrl+Shift+Q</span></li>
           <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
           <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+→ / ←</span></li>
           <li><span>Zoom terminal under pointer</span><span class="kbd">Ctrl+mouse wheel</span></li>
@@ -653,6 +691,95 @@
       </div>
     </div>
 
+    <div id="terminalArtifactsOverlay" class="palette-overlay" hidden>
+      <div class="palette terminal-artifacts" role="dialog" aria-modal="true" aria-labelledby="terminalArtifactsTitle" aria-describedby="terminalArtifactsSubtitle">
+        <div class="terminal-artifacts-head">
+          <i data-lucide="notebook-tabs"></i>
+          <div class="terminal-artifacts-title">
+            <h2 id="terminalArtifactsTitle">Terminal notes &amp; command queue</h2>
+            <p id="terminalArtifactsSubtitle">Keep context and stage commands without running them.</p>
+          </div>
+          <button id="terminalArtifactsClose" class="icon-button" type="button" title="Close" aria-label="Close terminal notes and command queue">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+
+        <label class="terminal-artifacts-target">
+          <span>Working with</span>
+          <select id="terminalArtifactsTarget" aria-label="Notes and queue target"></select>
+        </label>
+
+        <div class="terminal-artifacts-body">
+          <section id="terminalNotesSection" class="artifact-section terminal-notes-section">
+            <div class="artifact-section-head">
+              <div>
+                <h3>Notes</h3>
+                <p id="terminalNotesIdentity">Associated with this terminal process.</p>
+              </div>
+              <span id="terminalNotesSaved" class="artifact-saved" role="status" aria-live="polite"></span>
+            </div>
+            <textarea id="terminalNotesInput" class="terminal-notes-input" rows="5" spellcheck="true" placeholder="Add context, decisions, links, or reminders for this terminal…"></textarea>
+          </section>
+
+          <section class="artifact-section command-queue-section">
+            <div class="artifact-section-head">
+              <div>
+                <h3>Command queue</h3>
+                <p id="commandQueueHint">Click a queued command to insert it without pressing Enter.</p>
+              </div>
+            </div>
+            <div class="command-queue-composer">
+              <textarea id="commandQueueInput" rows="2" spellcheck="false" placeholder="Stage a command or prompt…"></textarea>
+              <button id="commandQueueAdd" type="button" class="command-queue-add">
+                <i data-lucide="plus"></i>
+                <span>Queue</span>
+              </button>
+            </div>
+            <label id="unparentedTargetRow" class="unparented-target" hidden>
+              <span>Insert unparented commands into</span>
+              <select id="unparentedQueueTarget" aria-label="Target terminal for unparented commands"></select>
+            </label>
+            <div id="commandQueueList" class="command-queue-list"></div>
+            <p id="commandQueueEmpty" class="artifact-empty">No queued commands.</p>
+          </section>
+
+          <section class="artifact-section recovered-notes-section">
+            <div class="artifact-section-head">
+              <div>
+                <h3>Recovered notes</h3>
+                <p>Notes are kept here after their terminal process exits.</p>
+              </div>
+            </div>
+            <div id="recoveredNotesList" class="recovered-notes-list"></div>
+            <p id="recoveredNotesEmpty" class="artifact-empty">No recovered notes.</p>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div id="statisticsOverlay" class="palette-overlay" hidden>
+      <div class="palette statistics" role="dialog" aria-modal="true" aria-labelledby="statisticsTitle" aria-describedby="statisticsSubtitle">
+        <div class="statistics-head">
+          <i data-lucide="activity"></i>
+          <div class="statistics-title">
+            <h2 id="statisticsTitle">Terminal statistics</h2>
+            <p id="statisticsSubtitle">Current process use and bridge traffic</p>
+          </div>
+          <button id="statisticsClose" class="icon-button" type="button" title="Close" aria-label="Close statistics">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div id="statisticsBody" class="statistics-body" aria-live="polite"></div>
+        <div class="statistics-actions">
+          <span class="statistics-note">CPU is sampled when refreshed. Traffic totals cover this bridge session.</span>
+          <button id="statisticsRefresh" type="button" class="statistics-refresh">
+            <i data-lucide="refresh-cw"></i>
+            <span>Refresh</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div id="contextMenu" class="context-menu" role="menu" hidden></div>
     <template id="paneTemplate">
       <article class="terminal-pane">
@@ -691,6 +818,14 @@
             </button>
             <button type="button" data-action="restart" title="Restart session" aria-label="Restart session">
               <i data-lucide="rotate-cw"></i>
+            </button>
+            <button type="button" data-action="dequeue" class="pane-dequeue" title="Insert next queued command without pressing Enter (Ctrl+Shift+Q)" aria-label="Insert next queued command without pressing Enter" aria-keyshortcuts="Control+Shift+Q" hidden>
+              <i data-lucide="send"></i>
+              <span class="pane-dequeue-badge">0</span>
+            </button>
+            <button type="button" data-action="artifacts" class="pane-artifacts" title="Terminal notes and command queue" aria-label="Terminal notes and command queue">
+              <i data-lucide="notebook-tabs"></i>
+              <span class="pane-artifacts-badge" hidden>0</span>
             </button>
             <button type="button" data-action="more" title="More terminal actions" aria-label="More terminal actions" aria-haspopup="menu" aria-expanded="false">
               <i data-lucide="menu"></i>
