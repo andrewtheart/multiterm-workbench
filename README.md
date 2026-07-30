@@ -18,7 +18,7 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
     </td>
     <td align="center" width="33%">
       <h3>🧩 Many layout modes</h3>
-      Switch between auto fit, fixed rows/columns, strips, balanced grid, master layouts, bento, and manual canvas.
+      Switch between auto fit, fixed rows/columns, strips, carousels, priority/compact grids, four master edges, spotlight, bento, and manual canvas.
     </td>
   </tr>
   <tr>
@@ -63,7 +63,32 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
       Hover the memory chip in the status bar for live app + system RAM usage, refreshed only while the chip is open.
     </td>
   </tr>
+  <tr>
+    <td align="center" width="100%" colspan="3">
+      <h3>📊 Per-terminal bridge and process statistics</h3>
+      Right-click a terminal for its keystrokes, bridge bytes, current CPU, and current memory, or right-click blank workspace for totals and a comparison of every active terminal.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="100%" colspan="3">
+      <h3>🔗 Attach running WSL tmux sessions</h3>
+      Discover tmux servers across installed WSL distributions and connect an existing session as another live MultiTerm client without restarting its shell or changing its current work.
+    </td>
+  </tr>
 </table>
+
+### Attaching an existing terminal
+
+Click the link button beside **Terminal**, or run **Attach WSL tmux session…** from the command
+palette. MultiTerm scans each WSL distribution for running tmux sessions and shows the distro,
+session name, window count, active pane PID/command, and whether another client is already attached.
+Selecting one starts a real `tmux attach-session` client in a MultiTerm pane. Closing the pane detaches
+that client; the tmux server and its programs keep running.
+
+Windows does not provide a supported way to move an already-running Command Prompt, PowerShell,
+Windows Terminal, or ordinary WSL process into a new ConPTY host. ConPTY's communication channels
+must be established before the hosted process is created. For a shell that may need later attachment,
+start it inside tmux first (for example, run `tmux new -s work` inside WSL).
 
 ## Testing
 
@@ -218,6 +243,10 @@ keeping the UI responsive during noisy builds and log tails.
   burst of hovers coalesces into a single in-flight query instead of one
   PowerShell process per request. (Set `MEMSTATS=1` to opt back into the old
   always-on 10-second broadcast.)
+- **On-demand terminal statistics.** Process-tree CPU and memory are sampled
+  only when the statistics dialog opens or its Refresh button is clicked.
+  Keystroke and UTF-8 bridge-payload byte counters are maintained in-process,
+  so they add negligible overhead while terminals are running.
 - **Bounded scrollback.** Scrollback defaults to 20,000 lines (configurable, up to
   1,000,000) to keep per-pane memory in check while still holding plenty of
   history.
@@ -328,9 +357,9 @@ sequenceDiagram
 
 **Client → bridge** messages: `create`, `input`, `resize`, `kill`, `killAll`,
 `logStart` / `logStop`, `reveal`, `openPath`, `pickScript`, `elevate`, `list`,
-`memstats`. **Bridge → client** messages: `welcome` (session catalog on connect),
-`created`, `output`, `exited`, `createFailed`, `sessions`, `memstats`, and
-`error`. On reconnect the bridge re-announces the sessions it kept alive via
+`memstats`, `statistics`. **Bridge → client** messages: `welcome` (session catalog
+on connect), `created`, `output`, `exited`, `createFailed`, `sessions`,
+`memstats`, `statistics`, and `error`. On reconnect the bridge re-announces the sessions it kept alive via
 `welcome`, and the front-end re-adopts each pane instead of respawning it.
 
 > **Both bridges must stay in lock-step.** Every client → bridge message type is
@@ -427,7 +456,8 @@ the MultiTerm app window. It has three columns: a shutdown warning, streaming
 bridge logs, and the active terminal list with each shell's process ID. Use the
 Up/Down arrows to select a terminal and Enter to request its graceful termination.
 Ctrl+Q stops the bridge and all sessions. Closing the control console also ends
-the bridge process, so all active MultiTerm terminals are terminated.
+that bridge process, so only the terminals in that MultiTerm instance are
+terminated. The console title and status line show the instance URL.
 
 To show the same dashboard when launching the script directly:
 
@@ -436,11 +466,19 @@ To show the same dashboard when launching the script directly:
 ```
 
 Without `-ConsoleDashboard`, direct script launches retain the plain bridge log
-console. Ctrl+C stops that bridge. A legacy hidden bridge can still be stopped
-with:
+console. Ctrl+C stops that bridge. To start another independent bridge, use
+`-NewInstance`; it atomically claims the next available port beginning at 3177:
+
+```powershell
+.\Start-MultiTerm.ps1 -ConsoleDashboard -NewInstance
+```
+
+Without an explicit port, `-Stop` stops all registered PowerShell bridge
+instances. Supplying a port targets only that instance:
 
 ```powershell
 .\Start-MultiTerm.ps1 -Stop
+.\Start-MultiTerm.ps1 -Stop -Port 3178
 ```
 
 ### Administrator terminals
@@ -477,8 +515,45 @@ An [Inno Setup](https://www.innosetup.com/) script packages the self-contained
 PowerShell bridge (no Node.js runtime required) into a Windows installer. It
 installs `Start-MultiTerm.ps1`, the `public/` assets, and Start Menu / optional
 desktop shortcuts that launch the bridge and open it in your browser. The
-bridge runs without a console window; a "Stop MultiTerm Workbench" Start Menu
-entry shuts it down and closes every session.
+license and third-party notices are both shown before installation begins.
+
+Each Start Menu, desktop, taskbar, or bare `multiterm` launch starts an
+independent instance. The first instance normally uses port 3177 and concurrent
+instances atomically claim the next available ports. Terminal processes,
+elevated helpers, browser profiles, web storage, and control consoles remain
+isolated by instance. The **Stop all MultiTerm Workbench instances** Start Menu
+entry shuts down every registered instance; `multiterm -Stop -Port <port>`
+remains available when only one instance should stop.
+
+When **machine-wide installation** is selected, Setup also offers **Add
+MultiTerm to the system PATH**. This installs a `multiterm` command and makes
+that command available to newly opened Command Prompt, PowerShell, and Windows
+Terminal sessions:
+
+```powershell
+multiterm
+multiterm -Stop
+multiterm -Stop -Port 3178
+multiterm -Port 4000
+```
+
+The installer removes only the PATH entry it added when the option is disabled
+during an upgrade or MultiTerm is uninstalled. An install directory that was
+already present in PATH is left untouched. The option is intentionally limited
+to machine-wide installs under Program Files so that Windows never searches a
+user-writable directory from the system PATH.
+
+Per-user setup also asks whether to add **Open in MultiTerm** to File Explorer.
+When selected, the command is installed for both folder items and folder
+backgrounds. It appears directly in the Windows 11 modern context menu and in
+the classic **Show more options** menu; invoking it creates a new terminal whose
+working directory is the selected folder in the most recently started live
+instance (or starts an instance if none exists). The integration is optional and is
+removed cleanly when disabled during an upgrade or when MultiTerm is uninstalled.
+Windows 11 asks for administrator approval to trust the package publisher
+certificate used by the modern menu extension; the app itself remains per-user.
+The Explorer integration is not offered for the optional machine-wide install
+because its AppX registration belongs to one Windows user profile.
 
 ### Download
 
@@ -493,14 +568,15 @@ machine-wide install from the setup dialog.
 
 ### Build it yourself
 
-Build the installer (requires Inno Setup 6):
+Build the installer with the helper script (requires Inno Setup 6, Visual Studio
+C++ build tools, and the Windows SDK):
 
 ```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\MultiTerm.iss
+.\scripts\build-installer.ps1
 ```
 
-Or use the helper script, which finds `ISCC.exe` automatically and can also cut
-the GitHub release for you:
+The helper builds and signs the x86, x64, and ARM64 `IExplorerCommand` packages,
+then finds `ISCC.exe` automatically. It can also cut the GitHub release for you:
 
 ```powershell
 # build the current version's installer only (no version change, no publish)
@@ -548,11 +624,11 @@ The resulting `installer\Output\MultiTerm-Setup-<version>.exe` performs a
 per-user install by default (no UAC prompt); users may elect a machine-wide
 install from the setup dialog.
 
-A single installer covers **x86, x64, and ARM64** — no separate per-architecture
-builds are needed. The payload is architecture-neutral (a PowerShell script plus
-web assets, with no native binaries), the setup runs on every architecture, and
-it installs into 64-bit `Program Files` on x64/ARM64 and 32-bit `Program Files`
-on x86.
+A single installer covers **x86, x64, and ARM64**. The terminal bridge and web
+assets remain architecture-neutral; the installer additionally carries a small
+native Explorer command for each architecture and chooses the matching signed
+package on Windows 11. Setup runs on every architecture and installs into 64-bit
+`Program Files` on x64/ARM64 and 32-bit `Program Files` on x86.
 
 ## Updates
 
@@ -587,7 +663,7 @@ point the checker at a fork.
 - Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.
 - The top search box filters terminal panes by contained terminal text; non-matching panes stay hidden until matching output appears or the search is cleared.
-- Layout modes include auto fit, fixed columns, fixed rows, horizontal strip, vertical stack, focus rail, and manual canvas.
+- Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.
 - The bottom-left workspace buttons hide or restore the top header and layout sidecar for more terminal space.
 - The bottom-left trash button closes every terminal pane and tells the bridge to kill all running PowerShell sessions.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
@@ -598,6 +674,8 @@ point the checker at a fork.
 - Every pane header carries a **hamburger (⋯) menu** holding *Find…* and *Duplicate*; when a pane gets too narrow, its move and label-colour actions collapse into the same menu.
 - Hold Ctrl and use the mouse wheel over a pane to zoom only that terminal; Ctrl+Alt+= / - / 0 controls or resets the active terminal. The status bar − / + controls and Ctrl+- / Ctrl+= change the default inherited by terminals without an individual override.
 - Hover (or keyboard-focus) the **memory chip** at the far left of the status bar to expand a live reading of how much RAM MultiTerm and its terminals are using, alongside system totals. It refreshes about every 4 seconds while open and stops as soon as you move away, so the (fairly expensive) Windows process probe only runs when you are actually looking. The reading is Windows-only; elsewhere the chip reports `unavailable`. Set `MEMSTATS=1` on the bridge to restore the old always-on 10-second broadcast instead.
+- Right-click inside a terminal and choose **Terminal statistics…** to inspect its cumulative input/output character units, UTF-8 payload bytes transferred through the bridge, and current CPU/memory for the shell's full process tree. Right-click blank workspace and choose **All terminal statistics…** for aggregate totals plus a per-terminal table. CPU is a point-in-time sample; use **Refresh** to sample it again.
+- Open **Terminal notes & command queue** from the notebook button in the header or any pane. Notes stay attached to that specific terminal process and move to **Recovered notes** when it exits. Each process also has a persistent queue for staging commands or long prompts. Use the pane's queue icon or `Ctrl+Shift+Q` to dequeue the next item immediately, or open the full manager to choose any item; either path inserts without pressing Enter. Queues from ended processes move to the reusable **Unparented queue**, where you can choose any live terminal as the destination.
 - The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.
 
 ## License
