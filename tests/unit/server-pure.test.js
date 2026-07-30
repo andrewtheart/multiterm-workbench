@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -27,9 +28,15 @@ function mockResponse() {
     headers: null,
     body: undefined,
     ended: false,
+    headersSent: false,
+    setHeader(name, value) {
+      if (!this.headers) this.headers = {};
+      this.headers[name] = value;
+    },
     writeHead(status, headers) {
       this.statusCode = status;
-      this.headers = headers || null;
+      this.headers = { ...(this.headers || {}), ...(headers || {}) };
+      this.headersSent = true;
       return this;
     },
     end(body) {
@@ -38,6 +45,22 @@ function mockResponse() {
       return this;
     }
   };
+}
+
+function mockRequest({
+  method = "GET",
+  url = "/api/update-preferences",
+  headers = { "x-multiterm-request": "Renderer" },
+  remoteAddress = "127.0.0.1"
+} = {}) {
+  const request = new EventEmitter();
+  request.method = method;
+  request.url = url;
+  request.headers = headers;
+  request.socket = { remoteAddress };
+  request.setEncoding = vi.fn();
+  request.resume = vi.fn();
+  return request;
 }
 
 function maskFrame(payload, opcode = 0x1, { forceLength } = {}) {
@@ -260,6 +283,8 @@ describe("persistent update preferences", () => {
   });
 
   it("rejects malformed preference data", () => {
+    expect(server.isLocalAddress("127.0.0.1")).toBe(true);
+    expect(server.isLocalAddress("203.0.113.5")).toBe(false);
     expect(() => server.normalizeUpdatePreferences(null)).toThrow("must be an object");
     expect(() => server.normalizeUpdatePreferences([])).toThrow("must be an object");
     expect(() => server.normalizeUpdatePreferences({
@@ -272,6 +297,194 @@ describe("persistent update preferences", () => {
       enabled: false,
       intervalHours: "never"
     })).toThrow("must be a number");
+  });
+
+  it("resolves override, Windows, and portable default paths", () => {
+    const originalOverride = process.env.MULTITERM_PREFERENCES_PATH;
+    const originalLocalData = process.env.LOCALAPPDATA;
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    try {
+      process.env.MULTITERM_PREFERENCES_PATH = path.join("relative", "preferences.json");
+      expect(server.getUpdatePreferencesPath()).toBe(path.resolve("relative", "preferences.json"));
+
+      delete process.env.MULTITERM_PREFERENCES_PATH;
+      process.env.LOCALAPPDATA = "C:\\LocalData";
+      expect(server.getUpdatePreferencesPath()).toBe(path.join("C:\\LocalData", "MultiTerm", "update-preferences.json"));
+
+      delete process.env.LOCALAPPDATA;
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+      expect(server.getUpdatePreferencesPath()).toContain(path.join("AppData", "Local", "MultiTerm"));
+
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      expect(server.getUpdatePreferencesPath()).toContain(path.join(".local", "share", "MultiTerm"));
+    } finally {
+      if (originalOverride === undefined) delete process.env.MULTITERM_PREFERENCES_PATH;
+      else process.env.MULTITERM_PREFERENCES_PATH = originalOverride;
+      if (originalLocalData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = originalLocalData;
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("surfaces read and atomic-write failures and cleans temporary files", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-preferences-errors-"));
+    const file = path.join(directory, "update-preferences.json");
+    try {
+      vi.spyOn(fs.promises, "readFile").mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }));
+      await expect(server.readUpdatePreferences(file)).rejects.toThrow("denied");
+
+      vi.spyOn(fs.promises, "rename").mockRejectedValueOnce(new Error("rename failed"));
+      await expect(server.writeUpdatePreferences({
+        configured: true,
+        enabled: true,
+        intervalHours: 6
+      }, file)).rejects.toThrow("rename failed");
+
+      vi.spyOn(fs.promises, "rename").mockRejectedValueOnce(new Error("rename failed again"));
+      vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(new Error("cleanup failed"));
+      await expect(server.writeUpdatePreferences({
+        configured: true,
+        enabled: false,
+        intervalHours: 6
+      }, file)).rejects.toThrow("rename failed again");
+    } finally {
+      vi.restoreAllMocks();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serves authenticated reads and writes through the HTTP route", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-preferences-api-"));
+    const file = path.join(directory, "update-preferences.json");
+    const originalOverride = process.env.MULTITERM_PREFERENCES_PATH;
+    process.env.MULTITERM_PREFERENCES_PATH = file;
+    try {
+      const getResponse = mockResponse();
+      server.server.emit("request", mockRequest(), getResponse);
+      await vi.waitFor(() => expect(getResponse.ended).toBe(true));
+      expect(JSON.parse(getResponse.body)).toEqual({ ok: true, preferences: null });
+
+      const postRequest = mockRequest({ method: "POST", headers: {
+        "x-multiterm-request": "Renderer",
+        "content-length": "57"
+      } });
+      const postResponse = mockResponse();
+      server.handleUpdatePreferencesRequest(postRequest, postResponse);
+      postRequest.emit("data", '{"configured":true,"enabled":true,"intervalHours":12}');
+      postRequest.emit("end");
+      await vi.waitFor(() => expect(postResponse.ended).toBe(true));
+      expect(JSON.parse(postResponse.body).preferences).toEqual({
+        configured: true,
+        enabled: true,
+        intervalHours: 12
+      });
+    } finally {
+      if (originalOverride === undefined) delete process.env.MULTITERM_PREFERENCES_PATH;
+      else process.env.MULTITERM_PREFERENCES_PATH = originalOverride;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unauthorized, unsupported, oversized, and malformed requests", async () => {
+    for (const request of [
+      mockRequest({ remoteAddress: "203.0.113.5" }),
+      mockRequest({ headers: {} })
+    ]) {
+      const response = mockResponse();
+      server.handleUpdatePreferencesRequest(request, response);
+      expect(response.statusCode).toBe(403);
+    }
+
+    const unsupported = mockRequest({ method: "DELETE" });
+    const unsupportedResponse = mockResponse();
+    server.handleUpdatePreferencesRequest(unsupported, unsupportedResponse);
+    expect(unsupportedResponse.statusCode).toBe(405);
+    expect(unsupportedResponse.headers.Allow).toBe("GET, POST");
+
+    const declaredLarge = mockRequest({ method: "POST", headers: {
+      "x-multiterm-request": "Renderer",
+      "content-length": String(server.updatePreferencesMaxSize + 1)
+    } });
+    const declaredLargeResponse = mockResponse();
+    server.handleUpdatePreferencesRequest(declaredLarge, declaredLargeResponse);
+    expect(declaredLarge.resume).toHaveBeenCalled();
+    expect(declaredLargeResponse.statusCode).toBe(413);
+
+    const streamedLarge = mockRequest({ method: "POST" });
+    const streamedLargeResponse = mockResponse();
+    server.handleUpdatePreferencesRequest(streamedLarge, streamedLargeResponse);
+    streamedLarge.emit("data", "x".repeat(server.updatePreferencesMaxSize + 1));
+    streamedLarge.emit("data", "ignored");
+    streamedLarge.emit("end");
+    expect(streamedLargeResponse.statusCode).toBe(413);
+
+    const malformed = mockRequest({ method: "POST" });
+    const malformedResponse = mockResponse();
+    server.handleUpdatePreferencesRequest(malformed, malformedResponse);
+    malformed.emit("data", "{");
+    malformed.emit("end");
+    expect(malformedResponse.statusCode).toBe(400);
+  });
+
+  it("reports request, validation, read, and write errors", async () => {
+    const requestError = mockRequest({ method: "POST" });
+    const requestErrorResponse = mockResponse();
+    server.handleUpdatePreferencesRequest(requestError, requestErrorResponse);
+    requestError.emit("error", new Error("request failed"));
+    expect(requestErrorResponse.statusCode).toBe(400);
+
+    const stringRequestError = mockRequest({ method: "POST" });
+    const stringRequestErrorResponse = mockResponse();
+    server.handleUpdatePreferencesRequest(stringRequestError, stringRequestErrorResponse);
+    stringRequestError.emit("error", "request failed");
+    expect(JSON.parse(stringRequestErrorResponse.body).error).toBe("request failed");
+
+    const alreadySent = mockRequest({ method: "POST" });
+    const alreadySentResponse = mockResponse();
+    alreadySentResponse.headersSent = true;
+    server.handleUpdatePreferencesRequest(alreadySent, alreadySentResponse);
+    alreadySent.emit("error", new Error("ignored"));
+    expect(alreadySentResponse.ended).toBe(false);
+
+    const invalid = mockRequest({ method: "POST" });
+    const invalidResponse = mockResponse();
+    server.handleUpdatePreferencesRequest(invalid, invalidResponse);
+    invalid.emit("data", '{"configured":"yes","enabled":true,"intervalHours":6}');
+    invalid.emit("end");
+    await vi.waitFor(() => expect(invalidResponse.ended).toBe(true));
+    expect(invalidResponse.statusCode).toBe(400);
+
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-preferences-api-errors-"));
+    const originalOverride = process.env.MULTITERM_PREFERENCES_PATH;
+    try {
+      vi.spyOn(fs.promises, "readFile").mockRejectedValueOnce("read failed");
+      const stringReadResponse = mockResponse();
+      server.handleUpdatePreferencesRequest(mockRequest(), stringReadResponse);
+      await vi.waitFor(() => expect(stringReadResponse.ended).toBe(true));
+      expect(JSON.parse(stringReadResponse.body).error).toBe("read failed");
+      vi.restoreAllMocks();
+
+      process.env.MULTITERM_PREFERENCES_PATH = directory;
+      const readResponse = mockResponse();
+      server.handleUpdatePreferencesRequest(mockRequest(), readResponse);
+      await vi.waitFor(() => expect(readResponse.ended).toBe(true));
+      expect(readResponse.statusCode).toBe(500);
+
+      const writeRequest = mockRequest({ method: "POST" });
+      const writeResponse = mockResponse();
+      vi.spyOn(fs.promises, "mkdir").mockRejectedValueOnce("write failed");
+      server.handleUpdatePreferencesRequest(writeRequest, writeResponse);
+      writeRequest.emit("data", '{"configured":true,"enabled":true,"intervalHours":6}');
+      writeRequest.emit("end");
+      await vi.waitFor(() => expect(writeResponse.ended).toBe(true));
+      expect(writeResponse.statusCode).toBe(500);
+      expect(JSON.parse(writeResponse.body).error).toBe("write failed");
+    } finally {
+      if (originalOverride === undefined) delete process.env.MULTITERM_PREFERENCES_PATH;
+      else process.env.MULTITERM_PREFERENCES_PATH = originalOverride;
+      vi.restoreAllMocks();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 

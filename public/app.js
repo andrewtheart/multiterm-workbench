@@ -6727,18 +6727,25 @@ async function saveAndPersistAutomaticUpdatePreferences(options) {
 
 async function hydrateAutomaticUpdatePreferences() {
   const local = loadAutomaticUpdatePreferences();
+  let persisted = null;
   try {
-    const persisted = await loadPersistedAutomaticUpdatePreferences();
-    if (persisted?.configured) {
-      return saveAutomaticUpdatePreferences(persisted);
-    }
-    if (local.configured) {
-      await persistAutomaticUpdatePreferences(local);
-    }
+    persisted = await loadPersistedAutomaticUpdatePreferences();
   } catch (error) {
     log.warn("app", "Could not load persistent update preferences", {
       error: String(error?.message || error)
     });
+  }
+  if (persisted?.configured) {
+    return saveAutomaticUpdatePreferences(persisted);
+  }
+  if (local.configured) {
+    try {
+      await persistAutomaticUpdatePreferences(local);
+    } catch (error) {
+      log.warn("app", "Could not persist existing update preferences", {
+        error: String(error?.message || error)
+      });
+    }
   }
   return local;
 }
@@ -6920,7 +6927,7 @@ function stopAutomaticUpdateChecks() {
 
 function scheduleNextAutomaticUpdateCheck(generation = state.update.scheduleGeneration) {
   if (generation !== state.update.scheduleGeneration) return;
-  const preferences = await hydrateAutomaticUpdatePreferences();
+  const preferences = loadAutomaticUpdatePreferences();
   if (!preferences.enabled) return;
   const delay = preferences.intervalHours * 60 * 60 * 1000;
   state.update.timer = window.setTimeout(async () => {
@@ -6942,11 +6949,11 @@ function startAutomaticUpdateChecks({ checkNow = true } = {}) {
     .finally(() => scheduleNextAutomaticUpdateCheck(generation));
 }
 
-function initializeAutomaticUpdateChecks() {
+async function initializeAutomaticUpdateChecks() {
   // Automated browser runs invoke this flow explicitly. Suppressing unsolicited
   // first-run UI and network traffic keeps unrelated tests deterministic.
   if (navigator.webdriver) return;
-  const preferences = loadAutomaticUpdatePreferences();
+  const preferences = await hydrateAutomaticUpdatePreferences();
   if (!preferences.configured) {
     openUpdateConsentDialog();
     return;

@@ -53,6 +53,19 @@ describe("PowerShell bridge control dashboard", () => {
     expect(installer).not.toMatch(/-WindowStyle Hidden[^\r\n]*-ConsoleDashboard/);
   });
 
+  it("waits for graceful shutdown before replacing installed files", () => {
+    expect(bridgeScript).toContain("[switch]$RequireStopped");
+    expect(bridgeScript).toContain("function Wait-MultiTermProcessExit");
+    expect(bridgeScript).toContain("function Wait-MultiTermEndpointExit");
+    expect(bridgeScript).toContain("Could not gracefully stop all MultiTerm instances");
+    expect(installer).toMatch(/Source: "\{#RepoRoot\}\\\{#MyScriptFile\}"; Flags: dontcopy/);
+    expect(installer).toContain("function PrepareToInstall(var NeedsRestart: Boolean): String;");
+    expect(installer).toContain("ExtractTemporaryFile('{#MyScriptFile}')");
+    expect(installer).toContain(`StopScript + '" -Stop -RequireStopped';`);
+    expect(installer).toContain("ewWaitUntilTerminated");
+    expect(installer).toContain("ResultCode <> 0");
+  });
+
   it("shows third-party notices before installation alongside the license", () => {
     expect(installer).toContain("LicenseFile={#RepoRoot}\\LICENSE");
     expect(installer).toContain("InfoBeforeFile={#RepoRoot}\\THIRD-PARTY-NOTICES.txt");
@@ -77,6 +90,8 @@ describe("PowerShell bridge control dashboard", () => {
     expect(bridgeScript).toContain('path == "/api/update-preferences"');
     expect(bridgeScript).toContain('"MultiTerm", "update-preferences.json"');
     expect(bridgeScript).toContain('new Mutex(false, "Local\\\\MultiTerm.UpdatePreferences")');
+    expect(bridgeScript).toContain("string loadedPreferences = this.LoadUpdatePreferences()");
+    expect(bridgeScript).not.toContain("string preferences = this.LoadUpdatePreferences()");
     expect(bridgeScript).toContain("SaveUpdatePreferences(preferences)");
   });
 

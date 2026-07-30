@@ -76,6 +76,9 @@ Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 
 
 [Files]
 Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
+; Setup extracts the current launcher before replacing files so upgrades can
+; gracefully stop every running instance, including instances from older installs.
+Source: "{#RepoRoot}\{#MyScriptFile}"; Flags: dontcopy
 Source: "cli\multiterm.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "cli\Manage-SystemPath.ps1"; DestDir: "{app}\CLI"; Flags: ignoreversion
 Source: "{#RepoRoot}\public\*"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -118,6 +121,44 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated; RunOnceId: "FinalizeMultiTermExplorerIntegration"
 
 [Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  StopScript: String;
+  StopArguments: String;
+begin
+  Result := '';
+  ExtractTemporaryFile('{#MyScriptFile}');
+  StopScript := ExpandConstant('{tmp}\{#MyScriptFile}');
+  StopArguments :=
+    '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    StopScript + '" -Stop -RequireStopped';
+
+  WizardForm.StatusLabel.Caption := 'Stopping running MultiTerm instances...';
+  Log('Gracefully stopping running MultiTerm instances before installation.');
+  if not Exec(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    StopArguments,
+    ExpandConstant('{tmp}'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then
+  begin
+    Result :=
+      'Setup could not start the MultiTerm shutdown helper. ' +
+      'Close MultiTerm and retry Setup.';
+    Log(Result);
+  end
+  else if ResultCode <> 0 then
+  begin
+    Result :=
+      'Setup could not gracefully stop all running MultiTerm instances. ' +
+      'Close MultiTerm and retry Setup.';
+    Log(Format('%s Shutdown helper exit code: %d.', [Result, ResultCode]));
+  end;
+end;
+
 function SystemPathIntegrationStateExists: Boolean;
 begin
   Result := FileExists(ExpandConstant('{app}\SystemPathInstalled.json'));

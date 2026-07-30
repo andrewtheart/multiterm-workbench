@@ -562,6 +562,10 @@ PowerShell bridge (no Node.js runtime required) into a Windows installer. It
 installs `Start-MultiTerm.ps1`, the `public/` assets, and Start Menu / optional
 desktop shortcuts that launch the bridge and open it in your browser. The
 license and third-party notices are both shown before installation begins.
+Before replacing files during an install or upgrade, Setup gracefully stops
+the current user's running MultiTerm instances and waits for them to exit. If
+an instance cannot stop within 15 seconds, Setup asks you to close it and retry
+instead of continuing over live files.
 
 Each Start Menu, desktop, taskbar, or bare `multiterm` launch starts an
 independent instance. The first instance normally uses port 3177 and concurrent

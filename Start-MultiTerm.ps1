@@ -25,6 +25,7 @@ param(
     [switch]$ConsoleDashboard,
     [switch]$NewInstance,
     [switch]$Stop,
+    [switch]$RequireStopped,
     [string]$ElevatedHost = "",
     [string]$OpenFolder = ""
 )
@@ -50,6 +51,10 @@ if (-not $HostName) {
 $instanceDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) "MultiTerm\Instances"
 
 function Get-RunningMultiTermInstances {
+  param(
+    [switch]$IncludeUnresponsive
+  )
+
   if (-not (Test-Path -LiteralPath $instanceDirectory -PathType Container)) {
     return @()
   }
@@ -57,10 +62,13 @@ function Get-RunningMultiTermInstances {
   $instances = @()
   foreach ($file in Get-ChildItem -LiteralPath $instanceDirectory -Filter "*.json" -File -ErrorAction SilentlyContinue) {
     $recordPid = 0
+    $record = $null
+    $recordOwnsProcess = $false
     try {
       $record = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
       $recordPort = [int]$record.port
       $recordPid = [int]$record.pid
+      $recordStartedAt = [DateTimeOffset]::Parse([string]$record.startedAt)
       $uri = [Uri]$record.url
       if (
         $recordPort -le 0 -or
@@ -70,6 +78,12 @@ function Get-RunningMultiTermInstances {
       ) {
         throw "Invalid instance record."
       }
+
+      $recordProcess = Get-Process -Id $recordPid -ErrorAction Stop
+      if ($recordProcess.StartTime.ToUniversalTime() -gt $recordStartedAt.UtcDateTime.AddSeconds(1)) {
+        throw "The registered process ID has been reused."
+      }
+      $recordOwnsProcess = $true
 
       $health = Invoke-RestMethod -Uri ([Uri]::new($uri, "health")) -Method Get -TimeoutSec 2
       if (
@@ -81,9 +95,14 @@ function Get-RunningMultiTermInstances {
       }
 
       $record | Add-Member -NotePropertyName StateFile -NotePropertyValue $file.FullName -Force
+      $record | Add-Member -NotePropertyName IsResponsive -NotePropertyValue $true -Force
       $instances += $record
     } catch {
-      if ($recordPid -le 0 -or $null -eq (Get-Process -Id $recordPid -ErrorAction SilentlyContinue)) {
+      if ($IncludeUnresponsive.IsPresent -and $recordOwnsProcess) {
+        $record | Add-Member -NotePropertyName StateFile -NotePropertyValue $file.FullName -Force
+        $record | Add-Member -NotePropertyName IsResponsive -NotePropertyValue $false -Force
+        $instances += $record
+      } elseif ($recordPid -le 0 -or $null -eq (Get-Process -Id $recordPid -ErrorAction SilentlyContinue)) {
         Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
       }
     }
@@ -106,6 +125,45 @@ function Stop-MultiTermEndpoint {
     -TimeoutSec 5 | Out-Null
 }
 
+function Wait-MultiTermProcessExit {
+  param(
+    [Parameter(Mandatory = $true)]
+    [int]$ProcessId,
+    [Parameter(Mandatory = $true)]
+    [DateTime]$Deadline
+  )
+
+  while ([DateTime]::UtcNow -lt $Deadline) {
+    if ($null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+      return $true
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  return $null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+function Wait-MultiTermEndpointExit {
+  param(
+    [Parameter(Mandatory = $true)]
+    [Uri]$BaseUri,
+    [Parameter(Mandatory = $true)]
+    [DateTime]$Deadline
+  )
+
+  while ([DateTime]::UtcNow -lt $Deadline) {
+    try {
+      $health = Invoke-RestMethod -Uri ([Uri]::new($BaseUri, "health")) -Method Get -TimeoutSec 1
+      if ($health.app -ne "MultiTerm Workbench") {
+        return $true
+      }
+    } catch {
+      return $true
+    }
+    Start-Sleep -Milliseconds 200
+  }
+  return $false
+}
+
 $resolvedOpenFolder = ""
 if ($OpenFolder) {
   try {
@@ -123,20 +181,32 @@ if ($OpenFolder) {
 # script with -Stop, which asks every registered bridge to shut down over loopback.
 # Supplying -Port keeps the old targeted behavior and stops only that endpoint.
 if ($Stop.IsPresent) {
+  $shutdownDeadline = [DateTime]::UtcNow.AddSeconds(15)
   if ($portWasSpecified) {
     $baseUri = [Uri]("http://{0}:{1}/" -f $HostName, $Port)
     try {
       Stop-MultiTermEndpoint -BaseUri $baseUri
+      if (-not (Wait-MultiTermEndpointExit -BaseUri $baseUri -Deadline $shutdownDeadline)) {
+        throw "MultiTerm did not finish shutting down within 15 seconds."
+      }
       Write-Host "Stopped the MultiTerm bridge on ${HostName}:${Port}."
     } catch {
+      if ($RequireStopped.IsPresent) {
+        throw "Could not gracefully stop MultiTerm on ${HostName}:${Port}: $($_.Exception.Message)"
+      }
       Write-Host "No MultiTerm bridge is running on ${HostName}:${Port}."
     }
     return
   }
 
-  $instances = @(Get-RunningMultiTermInstances)
+  $instances = @(Get-RunningMultiTermInstances -IncludeUnresponsive)
   $stopped = 0
+  $stopFailures = @()
   foreach ($instance in $instances) {
+    if (-not $instance.IsResponsive) {
+      Write-Warning "MultiTerm instance $($instance.url) is running but is not responding to shutdown requests."
+      continue
+    }
     try {
       Stop-MultiTermEndpoint -BaseUri ([Uri]$instance.url)
       $stopped += 1
@@ -149,11 +219,30 @@ if ($Stop.IsPresent) {
   # briefly during an upgrade, so also stop the legacy default endpoint when
   # no registered instance owns it.
   $registeredDefault = @($instances | Where-Object { [int]$_.port -eq $Port }).Count -gt 0
+  $legacyDefaultRequested = $false
   if (-not $registeredDefault) {
     try {
       Stop-MultiTermEndpoint -BaseUri ([Uri]("http://{0}:{1}/" -f $HostName, $Port))
+      $legacyDefaultRequested = $true
       $stopped += 1
     } catch { }
+  }
+
+  foreach ($instance in $instances) {
+    if (-not (Wait-MultiTermProcessExit -ProcessId ([int]$instance.pid) -Deadline $shutdownDeadline)) {
+      $stopFailures += "instance $($instance.url) (PID $($instance.pid)) did not exit within 15 seconds"
+    }
+  }
+  if (
+    $legacyDefaultRequested -and
+    -not (Wait-MultiTermEndpointExit `
+      -BaseUri ([Uri]("http://{0}:{1}/" -f $HostName, $Port)) `
+      -Deadline $shutdownDeadline)
+  ) {
+    $stopFailures += "legacy instance on ${HostName}:${Port} did not exit within 15 seconds"
+  }
+  if ($RequireStopped.IsPresent -and $stopFailures.Count -gt 0) {
+    throw "Could not gracefully stop all MultiTerm instances: $($stopFailures -join '; '). Close MultiTerm and retry Setup."
   }
 
   if ($stopped -eq 0) {
@@ -1012,6 +1101,11 @@ namespace MultiTerm.PowerShellBridge
 
         private static string UpdatePreferencesPath()
         {
+            string overridePath = Environment.GetEnvironmentVariable("MULTITERM_PREFERENCES_PATH");
+            if (!String.IsNullOrWhiteSpace(overridePath))
+            {
+                return Path.GetFullPath(overridePath);
+            }
             return Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "MultiTerm", "update-preferences.json");
@@ -1118,8 +1212,8 @@ namespace MultiTerm.PowerShellBridge
 
             if (context.Request.HttpMethod == "GET")
             {
-                string preferences = this.LoadUpdatePreferences();
-                string body = "{\"ok\":true,\"preferences\":" + (preferences ?? "null") + "}";
+                string loadedPreferences = this.LoadUpdatePreferences();
+                string body = "{\"ok\":true,\"preferences\":" + (loadedPreferences ?? "null") + "}";
                 this.SendText(context.Response, 200, body, "application/json; charset=utf-8");
                 return;
             }
