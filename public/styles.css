@@ -1617,6 +1617,14 @@ body.header-hidden .status-hint kbd,
 }
 
 /* Help dialog */
+.help-doc-toggle {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.help-doc-glyph {
+  font: 700 17px/1 "Segoe UI Variable", "Segoe UI", sans-serif;
+}
+
 .help-overlay {
   align-items: center;
   padding-top: 0;

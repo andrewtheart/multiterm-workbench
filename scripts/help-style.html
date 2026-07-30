@@ -1,0 +1,179 @@
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<meta name="color-scheme" content="light dark">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #111318;
+    --surface: #191c24;
+    --text: #e6e8ef;
+    --muted: #a9afbf;
+    --border: #333846;
+    --accent: #f0a45d;
+    --accent-soft: rgba(240, 164, 93, 0.14);
+    --code: #242936;
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f7f7f9;
+    --surface: #ffffff;
+    --text: #20232a;
+    --muted: #5b6372;
+    --border: #d9dde5;
+    --accent: #a65100;
+    --accent-soft: rgba(166, 81, 0, 0.1);
+    --code: #eef0f4;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    background: var(--bg);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 28px clamp(20px, 4vw, 48px) 56px;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.62 "Segoe UI Variable", "Segoe UI", sans-serif;
+  }
+
+  nav#TOC {
+    margin: 24px 0 32px;
+    padding: 18px 22px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+
+  nav#TOC::before {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    content: "Contents";
+  }
+
+  nav#TOC ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  h1, h2, h3 {
+    line-height: 1.25;
+    scroll-margin-top: 18px;
+  }
+
+  h1 {
+    margin: 0 0 12px;
+    font-size: clamp(2rem, 6vw, 3rem);
+  }
+
+  h2 {
+    margin-top: 42px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  h3 {
+    margin-top: 28px;
+  }
+
+  p, li {
+    color: var(--text);
+  }
+
+  a,
+  a:visited {
+    color: var(--accent);
+  }
+
+  code, kbd {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--code);
+    color: var(--text);
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 0.9em;
+  }
+
+  code {
+    padding: 0.1em 0.35em;
+  }
+
+  kbd {
+    display: inline-block;
+    padding: 0.08em 0.45em;
+    box-shadow: inset 0 -1px 0 var(--border);
+    white-space: nowrap;
+  }
+
+  pre {
+    overflow-x: auto;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--code);
+  }
+
+  pre code {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  table {
+    width: 100%;
+    margin: 18px 0;
+    border-collapse: collapse;
+    background: var(--surface);
+  }
+
+  th, td {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    background: var(--accent-soft);
+  }
+
+  blockquote {
+    margin: 18px 0;
+    padding: 2px 16px;
+    border-left: 4px solid var(--accent);
+    color: var(--muted);
+  }
+
+  @media (max-width: 680px) {
+    body {
+      padding: 20px 16px 40px;
+    }
+
+    table {
+      display: block;
+      overflow-x: auto;
+    }
+  }
+</style>
+<script>
+  (() => {
+    const requestedTheme = new URLSearchParams(window.location.search).get("theme");
+    const theme = requestedTheme === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = theme;
+  })();
+</script>

@@ -253,6 +253,14 @@ test.describe("Command palette — every option works", () => {
     await page.locator("#shortcutsClose").click();
     await expect(page.locator("#shortcutsOverlay")).toBeHidden();
 
+    await expect(page.locator("#helpDocToggle")).toContainText("?");
+    await page.locator("#helpDocToggle").click();
+    await expect(page.locator("#helpOverlay")).toBeVisible();
+    await expect(page.frameLocator("#helpFrame").getByRole("heading", { name: "MultiTerm Workbench Help", exact: true })).toBeVisible();
+    await expect(page.frameLocator("#helpFrame").getByRole("heading", { name: "Notes and command queues", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#helpOverlay")).toBeHidden();
+
     await runCmd("Help");
     await expect(page.locator("#helpOverlay")).toBeVisible();
     await page.locator("#helpDocClose").click();

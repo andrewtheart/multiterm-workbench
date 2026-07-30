@@ -504,6 +504,13 @@ if ($Push) {
     }
 }
 
+# Generate before the release snapshot so HELP.md and its packaged HTML are committed together.
+$HelpOutputPath = Join-Path $RepoRoot 'public\help.html'
+if ($PSCmdlet.ShouldProcess($HelpOutputPath, "Generate in-app help from HELP.md")) {
+    Write-Step "Generating in-app help..."
+    & (Join-Path $RepoRoot 'scripts\build-help.ps1')
+}
+
 # --- Snapshot every pending change before changing release files ----------------
 if ($Push) {
     $status = Get-NativeOutput { git -C $RepoRoot status --porcelain=v1 --untracked-files=all }

@@ -1,267 +1,760 @@
-<!doctype html>
-<!--
-  MultiTerm Workbench
-  Copyright (C) 2026 the MultiTerm Workbench author (github.com/andrewtheart)
-
-  This program is free software: you can redistribute it and/or modify
-  it under the terms of the GNU General Public License as published by
-  the Free Software Foundation, either version 3 of the License, or
-  (at your option) any later version.
-
-  This program is distributed in the hope that it will be useful,
-  but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-  GNU General Public License for more details.
-
-  You should have received a copy of the GNU General Public License
-  along with this program.  If not, see <https://www.gnu.org/licenses/>.
--->
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>MultiTerm Workbench — Help</title>
-    <link rel="stylesheet" href="styles.css">
-    <style>
-      html,
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>MultiTerm Workbench Help</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
       body {
-        background: var(--bg);
-        color: var(--text);
-        margin: 0;
-        height: 100%;
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      white-space: pre-wrap;
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+  <meta name="color-scheme" content="light dark">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #111318;
+      --surface: #191c24;
+      --text: #e6e8ef;
+      --muted: #a9afbf;
+      --border: #333846;
+      --accent: #f0a45d;
+      --accent-soft: rgba(240, 164, 93, 0.14);
+      --code: #242936;
+    }
+
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f7f7f9;
+      --surface: #ffffff;
+      --text: #20232a;
+      --muted: #5b6372;
+      --border: #d9dde5;
+      --accent: #a65100;
+      --accent-soft: rgba(166, 81, 0, 0.1);
+      --code: #eef0f4;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+      scroll-behavior: smooth;
+    }
+
+    body {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 28px clamp(20px, 4vw, 48px) 56px;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.62 "Segoe UI Variable", "Segoe UI", sans-serif;
+    }
+
+    nav#TOC {
+      margin: 24px 0 32px;
+      padding: 18px 22px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    nav#TOC::before {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      content: "Contents";
+    }
+
+    nav#TOC ul {
+      margin: 0;
+      padding-left: 20px;
+    }
+
+    h1, h2, h3 {
+      line-height: 1.25;
+      scroll-margin-top: 18px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 6vw, 3rem);
+    }
+
+    h2 {
+      margin-top: 42px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    h3 {
+      margin-top: 28px;
+    }
+
+    p, li {
+      color: var(--text);
+    }
+
+    a,
+    a:visited {
+      color: var(--accent);
+    }
+
+    code, kbd {
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: var(--code);
+      color: var(--text);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 0.9em;
+    }
+
+    code {
+      padding: 0.1em 0.35em;
+    }
+
+    kbd {
+      display: inline-block;
+      padding: 0.08em 0.45em;
+      box-shadow: inset 0 -1px 0 var(--border);
+      white-space: nowrap;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 16px;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: var(--code);
+    }
+
+    pre code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+    }
+
+    table {
+      width: 100%;
+      margin: 18px 0;
+      border-collapse: collapse;
+      background: var(--surface);
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--accent-soft);
+    }
+
+    blockquote {
+      margin: 18px 0;
+      padding: 2px 16px;
+      border-left: 4px solid var(--accent);
+      color: var(--muted);
+    }
+
+    @media (max-width: 680px) {
+      body {
+        padding: 20px 16px 40px;
       }
 
-      .help-doc {
-        box-sizing: border-box;
-        margin: 0 auto;
-        max-width: 820px;
-        padding: 32px 28px 64px;
+      table {
+        display: block;
+        overflow-x: auto;
       }
-
-      .help-doc h1 {
-        font-size: 24px;
-        font-weight: 700;
-        margin: 0 0 4px;
-      }
-
-      .help-lead {
-        color: var(--muted);
-        margin: 0 0 28px;
-      }
-
-      .help-doc h2 {
-        border-bottom: 1px solid var(--border);
-        font-size: 16px;
-        font-weight: 650;
-        margin: 32px 0 12px;
-        padding-bottom: 8px;
-      }
-
-      .help-doc h3 {
-        font-size: 14px;
-        font-weight: 620;
-        margin: 20px 0 8px;
-      }
-
-      .help-doc p,
-      .help-doc li {
-        color: var(--text);
-        font-size: 14px;
-        line-height: 1.6;
-      }
-
-      .help-doc ul {
-        margin: 8px 0;
-        padding-left: 22px;
-      }
-
-      .help-doc li {
-        margin: 4px 0;
-      }
-
-      .help-doc code {
-        background: var(--surface-high);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        font-family: "Cascadia Mono", "Consolas", monospace;
-        font-size: 12.5px;
-        padding: 1px 6px;
-      }
-
-      .help-doc pre {
-        background: var(--surface-raised);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        margin: 10px 0;
-        overflow: auto;
-        padding: 12px 14px;
-      }
-
-      .help-doc pre code {
-        background: none;
-        border: 0;
-        padding: 0;
-      }
-
-      .help-doc a {
-        color: var(--primary);
-        text-decoration: none;
-      }
-
-      .help-doc a:hover {
-        text-decoration: underline;
-      }
-
-      .kbd {
-        background: var(--surface-high);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        color: var(--muted);
-        display: inline-block;
-        font-size: 12px;
-        font-variant-numeric: tabular-nums;
-        padding: 2px 7px;
-        white-space: nowrap;
-      }
-
-      .shortcut-grid {
-        display: grid;
-        gap: 2px;
-        list-style: none;
-        margin: 8px 0;
-        padding: 0;
-      }
-
-      .shortcut-grid li {
-        align-items: center;
-        border-radius: var(--radius-sm);
-        display: flex;
-        gap: 12px;
-        justify-content: space-between;
-        padding: 8px 10px;
-      }
-
-      .shortcut-grid li:nth-child(odd) {
-        background: var(--state-hover, rgba(127, 127, 127, 0.06));
-      }
-
-      .help-note {
-        background: var(--primary-container);
-        border-radius: var(--radius-sm);
-        margin: 16px 0;
-        padding: 12px 14px;
-      }
-
-      .help-note p {
-        margin: 0;
-      }
-    </style>
-    <script>
-      // Match the theme the app is currently using (?theme=dark|light).
-      (function () {
-        const theme = new URLSearchParams(location.search).get("theme");
-        if (theme === "light" || theme === "dark") {
-          document.documentElement.dataset.appTheme = theme;
-        }
-      })();
-    </script>
-  </head>
-  <body>
-    <main class="help-doc">
-      <h1>MultiTerm Workbench — Help</h1>
-      <p class="help-lead">A local workbench for running and arranging many PowerShell sessions in one window.</p>
-
-      <h2>Getting started</h2>
-      <ul>
-        <li>Click <strong>Terminal</strong> (top-right) or press <span class="kbd">Ctrl+Shift+T</span> to open a new session.</li>
-        <li>Pick the shell (PowerShell 7, Windows PowerShell, Command Prompt, or WSL) from the <strong>Shell</strong> dropdown before creating a session.</li>
-        <li>Set a starting folder in the <strong>CWD</strong> box to launch new sessions there.</li>
-        <li>Use the <strong>link</strong> button beside Terminal, or run <strong>Attach WSL tmux session&hellip;</strong> from the command palette, to discover and attach a tmux session that is already running inside WSL.</li>
-        <li>Type in any pane just like a normal terminal — <span class="kbd">Ctrl+C</span>, Tab completion, and PSReadLine editing are forwarded through a real pseudo-terminal.</li>
-      </ul>
-
-      <h2>Attaching an existing WSL terminal</h2>
-      <p>MultiTerm can attach to a running <strong>tmux</strong> session inside any installed WSL distribution. The selector shows each session&rsquo;s distribution, window count, active pane PID and command, and whether another client is attached. Selecting a row opens another real tmux client in MultiTerm. Closing that pane detaches MultiTerm but leaves the tmux session and its programs running.</p>
-      <pre><code>tmux new -s work
-# Later, choose "Attach WSL tmux session…" in MultiTerm</code></pre>
-      <div class="help-note"><p>Ordinary Command Prompt, PowerShell, Windows Terminal, and non-tmux WSL processes cannot be moved into MultiTerm after launch. Windows ConPTY must own a process&rsquo;s input/output channels when the process is created; a PID or window title alone cannot provide those channels.</p></div>
-
-      <h2>Arranging terminals</h2>
-      <p>Use the <strong>layout controls</strong> panel on the left to change how panes are tiled:</p>
-      <ul>
-        <li><strong>Auto fit</strong> — panes size themselves to fill the workbench.</li>
-        <li><strong>Fixed columns / rows</strong> — lock the grid to a set number of columns or rows.</li>
-        <li><strong>Horizontal strip / Vertical stack</strong> — line panes up in a single row or column.</li>
-        <li><strong>Horizontal / Vertical carousel</strong> — page through large, scroll-snapping panes.</li>
-        <li><strong>Focus rail</strong> — enlarge the active pane while keeping the rest reachable.</li>
-        <li><strong>Master layouts / Spotlight</strong> — anchor the primary pane on any edge or above a thumbnail rail.</li>
-        <li><strong>Priority grid / Compact matrix</strong> — emphasize the primary pane or pack many panes tightly.</li>
-        <li><strong>Manual canvas</strong> — drag panes by their header and resize from the lower-right corner.</li>
-      </ul>
-      <p>Drag any terminal by its header to the top, bottom, left, or right edge to <strong>snap</strong> it there; the remaining panes reflow to fill the space.</p>
-      <p>Click the <strong>minimize</strong> (&minus;) button in a pane&rsquo;s header to tuck it away to the status bar without closing the session. The pane hides and the others reflow; a chip appears at the bottom — click it to restore the pane right where it was.</p>
-      <p>Click the <strong>maximize</strong> button to blow a single pane up so it overlays every other terminal and fills the whole workspace. The same button restores it, as does <span class="kbd">Ctrl+Shift+X</span>. The <strong>focus</strong> button beside it is different — it promotes the pane inside the <em>focus rail</em> layout instead of covering the others.</p>
-      <p>Every pane header also has a <strong>hamburger</strong> (&hellip;) menu holding <strong>Find&hellip;</strong> and <strong>Duplicate</strong>. When a pane becomes too narrow for its full header, the move and label-colour actions collapse into that same menu.</p>
-      <p>Hold <span class="kbd">Ctrl</span> and use the mouse wheel over a terminal to zoom only that pane; a brief badge shows its font size. The active pane can also use <span class="kbd">Ctrl+Alt+=</span>, <span class="kbd">Ctrl+Alt+-</span>, and <span class="kbd">Ctrl+Alt+0</span> to reset. The status bar <strong>&minus; / +</strong> buttons and <span class="kbd">Ctrl+-</span> / <span class="kbd">Ctrl+=</span> change the default inherited by terminals without an individual override.</p>
-      <p>Hover the <strong>memory chip</strong> at the far left of the status bar (or reach it with <span class="kbd">Tab</span>) to expand a live reading of the RAM MultiTerm and its terminals are using, next to the system totals. It refreshes roughly every 4 seconds while it is open and stops the moment you move away, so the underlying Windows process probe only runs while you are watching it. The reading is Windows-only — elsewhere the chip simply says <em>unavailable</em>.</p>
-
-      <h2>Working across sessions</h2>
-      <ul>
-        <li><strong>Broadcast</strong> (<span class="kbd">Ctrl+Shift+B</span>) sends one command to every terminal, or to a chosen scope.</li>
-        <li><strong>Sync input</strong> mirrors your typing into all panes at once — toggle it in the layout panel.</li>
-        <li>Open <strong>Terminal notes &amp; command queue</strong> from the notebook button in the header or a terminal pane. Notes stay with that process and move to <strong>Recovered notes</strong> when it exits.</li>
-        <li>Stage commands or long prompts in a terminal&rsquo;s queue. Click the queue icon in that pane or press <span class="kbd">Ctrl+Shift+Q</span> to dequeue the next item immediately; it is inserted without pressing Enter. The full queue still lets you choose any item, and items from ended processes move to the <strong>Unparented queue</strong>.</li>
-        <li>The top <strong>Search</strong> box filters panes by their on-screen text; non-matching panes stay hidden until they match again or you clear the search.</li>
-        <li>The bottom-left <strong>trash</strong> button closes every pane and asks the bridge to stop all running sessions.</li>
-      </ul>
-
-      <h2>Diagnostics &amp; logs</h2>
-      <p>Click the <strong>chevron</strong> in the bottom-right corner to open the <strong>log console</strong> — a live, tailed view of everything the app and the local bridge are doing (connections, session start/exit, broadcasts, workspace changes, and any errors). Use the <strong>minimum level</strong> selector to filter to warnings or errors, <strong>copy</strong> the visible log to the clipboard, or <strong>clear</strong> it. A dot on the chevron flags a new error while the console is closed.</p>
-
-      <h2>Workspaces &amp; sessions</h2>
-      <ul>
-        <li>Save the current set of panes and layout as a named <strong>workspace</strong>, then restore it later from the layout panel.</li>
-        <li>Enable <strong>Restore last session</strong> to reopen your terminals automatically the next time you launch MultiTerm.</li>
-      </ul>
-
-      <h2>Keeping MultiTerm up to date</h2>
-      <p>On first run, MultiTerm asks whether it may check GitHub for newer releases and lets you choose the recurring interval (6 hours by default). If enabled, it checks once whenever the app starts and again after each configured interval. Change or disable this at any time with <strong>Automatic update checks</strong> and <strong>Update interval</strong> in Session settings.</p>
-      <p>You can always check on demand from the <strong>Check for updates</strong> button in the About dialog or the <strong>Check for updates&hellip;</strong> entry in the command palette, even when automatic checks are disabled.</p>
-      <p>Choosing <strong>Download &amp; install</strong> downloads the release&rsquo;s Windows installer, launches it, and closes MultiTerm so it can be replaced. <strong>Later</strong> dismisses that version so background checks stop mentioning it, and <strong>View on GitHub</strong> opens the release page in your browser. Running MultiTerm from the PowerShell bridge instead of the desktop app still shows the notes, but hands you off to the download page rather than installing.</p>
-
-      <h2>Keyboard shortcuts</h2>
-      <ul class="shortcut-grid">
-        <li><span>Command palette</span><span class="kbd">Ctrl+Shift+P</span></li>
-        <li><span>Keyboard shortcuts</span><span class="kbd">Ctrl+/</span></li>
-        <li><span>New terminal</span><span class="kbd">Ctrl+T / Ctrl+Shift+T</span></li>
-        <li><span>Close active terminal</span><span class="kbd">Ctrl+Shift+W</span></li>
-        <li><span>Restart active terminal</span><span class="kbd">Ctrl+Shift+R</span></li>
-        <li><span>Find in terminal</span><span class="kbd">Ctrl+Shift+F</span></li>
-        <li><span>Filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
-        <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
-        <li><span>Select all terminal output</span><span class="kbd">Ctrl+A</span></li>
-        <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
-        <li><span>Paste into active</span><span class="kbd">Ctrl+Shift+V</span></li>
-        <li><span>Dequeue next command</span><span class="kbd">Ctrl+Shift+Q</span></li>
-        <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
-        <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+&rarr; / &larr;</span></li>
-        <li><span>Zoom terminal under pointer</span><span class="kbd">Ctrl+mouse wheel</span></li>
-        <li><span>Active terminal zoom in / out / reset</span><span class="kbd">Ctrl+Alt+= / - / 0</span></li>
-        <li><span>Default terminal zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
-      </ul>
-
-      <h2>Tips &amp; troubleshooting</h2>
-      <div class="help-note">
-        <p>MultiTerm runs a small local bridge that owns the real PowerShell processes. It listens only on <code>127.0.0.1</code>, so sessions are reachable from this machine alone.</p>
-      </div>
-      <ul>
-        <li>To run on a different port, launch the bridge with a <code>PORT</code> value, e.g. <code>PORT=4000</code>.</li>
-        <li>If a pane says the bridge is offline, the local bridge stopped — relaunch MultiTerm from the Start Menu or shortcut.</li>
-        <li>Right-click inside a pane for copy, paste, find, clear, split, restart, and <strong>Launch Copilot CLI (YOLO)</strong>. The Copilot action starts its interactive TUI with all tool, path, and URL permissions.</li>
-      </ul>
-
-      <h2>About</h2>
-      <p>MultiTerm Workbench is a local xterm.js multi-terminal workbench for PowerShell sessions. Project page: <a href="https://github.com/andrewtheart/multiterm-workbench" target="_blank" rel="noopener noreferrer">github.com/andrewtheart/multiterm-workbench</a>.</p>
-    </main>
-  </body>
+    }
+  </style>
+  <script>
+    (() => {
+      const requestedTheme = new URLSearchParams(window.location.search).get("theme");
+      const theme = requestedTheme === "light" ? "light" : "dark";
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+</head>
+<body>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#multiterm-workbench-help" id="toc-multiterm-workbench-help">MultiTerm Workbench Help</a>
+<ul>
+<li><a href="#getting-started" id="toc-getting-started">Getting started</a></li>
+<li><a href="#terminals" id="toc-terminals">Terminals</a>
+<ul>
+<li><a href="#supported-shells" id="toc-supported-shells">Supported shells</a></li>
+<li><a href="#common-pane-actions" id="toc-common-pane-actions">Common pane actions</a></li>
+<li><a href="#administrator-terminals" id="toc-administrator-terminals">Administrator terminals</a></li>
+<li><a href="#wsl-and-tmux" id="toc-wsl-and-tmux">WSL and tmux</a></li>
+</ul></li>
+<li><a href="#pages-and-workspaces" id="toc-pages-and-workspaces">Pages and workspaces</a></li>
+<li><a href="#layouts" id="toc-layouts">Layouts</a></li>
+<li><a href="#notes-and-command-queues" id="toc-notes-and-command-queues">Notes and command queues</a>
+<ul>
+<li><a href="#pid-bound-notes" id="toc-pid-bound-notes">PID-bound notes</a></li>
+<li><a href="#command-queues" id="toc-command-queues">Command queues</a></li>
+</ul></li>
+<li><a href="#search-broadcast-and-input" id="toc-search-broadcast-and-input">Search, broadcast, and input</a>
+<ul>
+<li><a href="#search" id="toc-search">Search</a></li>
+<li><a href="#broadcast" id="toc-broadcast">Broadcast</a></li>
+<li><a href="#clipboard-behavior" id="toc-clipboard-behavior">Clipboard behavior</a></li>
+</ul></li>
+<li><a href="#statistics-and-logging" id="toc-statistics-and-logging">Statistics and logging</a>
+<ul>
+<li><a href="#statistics" id="toc-statistics">Statistics</a></li>
+<li><a href="#logging" id="toc-logging">Logging</a></li>
+</ul></li>
+<li><a href="#notifications-tray-and-closing" id="toc-notifications-tray-and-closing">Notifications, tray, and closing</a></li>
+<li><a href="#windows-integration" id="toc-windows-integration">Windows integration</a>
+<ul>
+<li><a href="#file-explorer" id="toc-file-explorer">File Explorer</a></li>
+<li><a href="#command-line" id="toc-command-line">Command line</a></li>
+</ul></li>
+<li><a href="#settings" id="toc-settings">Settings</a></li>
+<li><a href="#keyboard-shortcuts" id="toc-keyboard-shortcuts">Keyboard shortcuts</a></li>
+<li><a href="#updates-and-version-information" id="toc-updates-and-version-information">Updates and version information</a></li>
+<li><a href="#troubleshooting" id="toc-troubleshooting">Troubleshooting</a>
+<ul>
+<li><a href="#a-terminal-does-not-start" id="toc-a-terminal-does-not-start">A terminal does not start</a></li>
+<li><a href="#the-app-disconnected" id="toc-the-app-disconnected">The app disconnected</a></li>
+<li><a href="#explorer-or-multiterm-is-missing" id="toc-explorer-or-multiterm-is-missing">Explorer or <code>multiterm</code> is missing</a></li>
+<li><a href="#layout-or-display-problems" id="toc-layout-or-display-problems">Layout or display problems</a></li>
+<li><a href="#getting-more-detail" id="toc-getting-more-detail">Getting more detail</a></li>
+</ul></li>
+<li><a href="#privacy-and-security" id="toc-privacy-and-security">Privacy and security</a></li>
+<li><a href="#more-information" id="toc-more-information">More information</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="multiterm-workbench-help">MultiTerm Workbench Help</h1>
+<p>MultiTerm Workbench is a Windows terminal workspace for running PowerShell 7, Windows PowerShell, Command Prompt, and WSL sessions side by side. Everything in this guide is available from the app's top-right <strong>?</strong> button.</p>
+<h2 id="getting-started">Getting started</h2>
+<ol type="1">
+<li>Choose a shell from the header.</li>
+<li>Optionally enter a name and working directory.</li>
+<li>Select <strong>Add terminal</strong> or press <kbd>Ctrl+T</kbd>.</li>
+<li>Click a pane to make it active, then type normally.</li>
+</ol>
+<p>Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>Ctrl+Shift+P</kbd> or <kbd>F1</kbd> to search the command palette.</p>
+<h2 id="terminals">Terminals</h2>
+<h3 id="supported-shells">Supported shells</h3>
+<ul>
+<li><strong>PowerShell 7</strong> (<code>pwsh</code>)</li>
+<li><strong>Windows PowerShell</strong> (<code>powershell.exe</code>)</li>
+<li><strong>Command Prompt</strong> (<code>cmd.exe</code>)</li>
+<li><strong>WSL</strong>, including attachment to existing tmux sessions</li>
+</ul>
+<p>Each terminal has its own shell process, PID, working directory, title, color label, scrollback, and optional log file.</p>
+<h3 id="common-pane-actions">Common pane actions</h3>
+<p>Right-click a pane or its title bar to:</p>
+<ul>
+<li>copy, paste, select, find, clear, or restart;</li>
+<li>open the current folder in File Explorer;</li>
+<li>create another terminal in the same folder;</li>
+<li>split by duplicating the shell and working directory;</li>
+<li>launch GitHub Copilot CLI;</li>
+<li>run a script, optionally in an Administrator terminal;</li>
+<li>start or stop logging;</li>
+<li>inspect statistics;</li>
+<li>open notes and the command queue;</li>
+<li>move the terminal to another page; or</li>
+<li>minimize, maximize, recolor, rename, or close the pane.</li>
+</ul>
+<p>Drag a pane by its title bar to reorder it. Layouts with a primary pane use the active terminal as the primary pane.</p>
+<h3 id="administrator-terminals">Administrator terminals</h3>
+<p>Use <strong>New Administrator terminal</strong> to elevate only a new terminal, or <strong>Restart as Administrator</strong> to relaunch the complete workspace elevated. Windows displays a UAC prompt before elevation.</p>
+<h3 id="wsl-and-tmux">WSL and tmux</h3>
+<p>Select <strong>WSL</strong> for a normal WSL shell. To reconnect to a persistent tmux session, use <strong>Attach WSL tmux session...</strong> from the command palette. MultiTerm discovers available distributions and tmux sessions, then opens the selected session in a terminal pane.</p>
+<p>WSL and tmux must already be installed and configured. MultiTerm does not install Linux distributions or tmux.</p>
+<h2 id="pages-and-workspaces">Pages and workspaces</h2>
+<p>Pages organize terminals into separate visual groups without ending their shell processes.</p>
+<ul>
+<li>Use the page bar or <kbd>Ctrl+PageUp</kbd>/<kbd>Ctrl+PageDown</kbd> to switch pages.</li>
+<li>Double-click a page name to rename it.</li>
+<li>Right-click a page for rename, move, create, and close actions.</li>
+<li>Move a terminal between pages from its context menu.</li>
+</ul>
+<p>Saved workspaces preserve pages, terminal definitions, shell choices, directories, titles, layout settings, and the active page. Session restore can recreate the previous workspace after a reload or restart.</p>
+<h2 id="layouts">Layouts</h2>
+<p>Open <strong>Settings</strong> and choose a layout under <strong>Layout</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Layout</th>
+<th>Best for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Auto fit</td>
+<td>Responsive panes with a configured minimum width</td>
+</tr>
+<tr>
+<td>Fixed columns / Fixed rows</td>
+<td>Predictable grid dimensions</td>
+</tr>
+<tr>
+<td>Horizontal strip / Vertical stack</td>
+<td>One-dimensional scanning</td>
+</tr>
+<tr>
+<td>Focus rail</td>
+<td>A large active pane with a compact rail</td>
+</tr>
+<tr>
+<td>Balanced grid</td>
+<td>Evenly sized panes</td>
+</tr>
+<tr>
+<td>Master top / right / bottom / left</td>
+<td>A primary pane with secondary panes on one edge</td>
+</tr>
+<tr>
+<td>Priority grid</td>
+<td>Larger early panes with compact secondary panes</td>
+</tr>
+<tr>
+<td>Compact matrix</td>
+<td>Many dense, evenly packed panes</td>
+</tr>
+<tr>
+<td>Horizontal / Vertical carousel</td>
+<td>Scrolling through panes in one direction</td>
+</tr>
+<tr>
+<td>Spotlight</td>
+<td>One dominant pane with a compact supporting strip</td>
+</tr>
+<tr>
+<td>Bento grid</td>
+<td>Mixed pane sizes in a dashboard-like grid</td>
+</tr>
+<tr>
+<td>Manual canvas</td>
+<td>Free positioning and resizing</td>
+</tr>
+</tbody>
+</table>
+<p>Use <strong>Fit all terminals</strong> after resizing the window or changing layouts. <strong>Reset layout</strong> clears layout-specific adjustments. <kbd>Ctrl+Shift+X</kbd> temporarily maximizes the active pane.</p>
+<h2 id="notes-and-command-queues">Notes and command queues</h2>
+<h3 id="pid-bound-notes">PID-bound notes</h3>
+<p>Open <strong>Notes &amp; command queue...</strong> from a terminal's context menu or the command palette. Notes are stored against the terminal PID so each live shell has its own working context.</p>
+<p>When a shell exits, its notes are retained in <strong>Recovered notes</strong> instead of being deleted. You can copy or remove recovered notes after reviewing them.</p>
+<h3 id="command-queues">Command queues</h3>
+<p>Build a list of commands or prompts without sending them immediately. Each live terminal has its own queue.</p>
+<ul>
+<li>Select a queued item to insert it into that terminal.</li>
+<li>Inserting a queued item does <strong>not</strong> send Enter, so you can review or edit it first.</li>
+<li>Use the pane's quick-dequeue control or press <kbd>Ctrl+Shift+Q</kbd> to insert the next queued item without reopening the dialog.</li>
+<li>Reorder or remove items from the queue manager.</li>
+</ul>
+<p>If a terminal exits while commands remain, its queue moves to <strong>Unparented queues</strong>. Unparented commands remain reusable and can be inserted into another live terminal.</p>
+<h2 id="search-broadcast-and-input">Search, broadcast, and input</h2>
+<h3 id="search">Search</h3>
+<ul>
+<li><kbd>Ctrl+F</kbd> searches the active terminal.</li>
+<li><kbd>Ctrl+Shift+F</kbd> searches all terminals.</li>
+<li>Use Enter/Shift+Enter to move between matches and Escape to close search.</li>
+</ul>
+<h3 id="broadcast">Broadcast</h3>
+<p>Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several terminals. Broadcast scope can target the current page or all pages. The <strong>Send Enter</strong> option controls whether the command runs immediately.</p>
+<h3 id="clipboard-behavior">Clipboard behavior</h3>
+<p>MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Configure these behaviors in Settings.</p>
+<h2 id="statistics-and-logging">Statistics and logging</h2>
+<h3 id="statistics">Statistics</h3>
+<p>Open <strong>Terminal statistics...</strong> from a pane or <strong>All terminal statistics...</strong> from the workspace context menu. Statistics include session identity, PID, shell, uptime, rows and columns, input/output totals, and process resource information when available.</p>
+<p>If an older installed bridge reports <code>Unsupported message type: statistics</code>, update MultiTerm so the UI and bridge versions match.</p>
+<h3 id="logging">Logging</h3>
+<p>Use <strong>Log to file...</strong> from a terminal context menu to capture output. Stop logging from the same menu, then use <strong>Reveal last log</strong> or <strong>Reveal log folder</strong> to locate the file.</p>
+<h2 id="notifications-tray-and-closing">Notifications, tray, and closing</h2>
+<p>Settings can notify you about terminal activity, inactivity, or the terminal bell. Browser notification permission may be required.</p>
+<p>In the installed desktop app, closing the window asks whether to:</p>
+<ul>
+<li>keep MultiTerm running in the system tray;</li>
+<li>quit the app; or</li>
+<li>cancel and return to the workspace.</li>
+</ul>
+<p>The <strong>Keep shell sessions alive when closing</strong> setting determines whether quitting ends terminal processes. Use the tray icon to show or quit MultiTerm later.</p>
+<h2 id="windows-integration">Windows integration</h2>
+<h3 id="file-explorer">File Explorer</h3>
+<p>The installer can add both:</p>
+<ul>
+<li>a classic <strong>Open in MultiTerm</strong> Explorer context-menu command; and</li>
+<li>a modern Windows 11 <strong>Open in MultiTerm</strong> entry.</li>
+</ul>
+<p>Explorer integration is optional and unchecked by default. Enable it explicitly on the installer's <strong>Select Additional Tasks</strong> page. Folder, folder-background, and drive invocations are supported. If MultiTerm is already running, Explorer forwards the folder to a live instance.</p>
+<h3 id="command-line">Command line</h3>
+<p>The installer can optionally add MultiTerm's protected installation directory to the system <code>PATH</code>. After opening a new shell, run:</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>multiterm</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>multiterm <span class="st">&quot;C:\src\my-project&quot;</span></span></code></pre></div>
+<p>Each normal installed, CLI, or taskbar launch requests an independent app instance with its own bridge port, browser profile, state record, and log. Multiple installed instances can therefore run concurrently.</p>
+<h2 id="settings">Settings</h2>
+<p>Settings cover:</p>
+<ul>
+<li>app and terminal color themes;</li>
+<li>terminal font, size, weight, cursor, opacity, and scrollback;</li>
+<li>layouts, gaps, dimensions, and minimized-terminal scope;</li>
+<li>startup commands and initial terminal count;</li>
+<li>clipboard, right-click, broadcast, and synchronized-input behavior;</li>
+<li>session persistence and restore;</li>
+<li>activity, inactivity, and bell notifications;</li>
+<li>update-check behavior; and</li>
+<li>header and layout-panel visibility.</li>
+</ul>
+<p>Changes are stored locally in the app's browser profile. Use <strong>Reset settings</strong> to return to defaults.</p>
+<h2 id="keyboard-shortcuts">Keyboard shortcuts</h2>
+<table>
+<thead>
+<tr>
+<th>Shortcut</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><kbd>Ctrl+T</kbd></td>
+<td>New terminal</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+W</kbd></td>
+<td>Close active terminal</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+R</kbd></td>
+<td>Restart active terminal</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+X</kbd></td>
+<td>Maximize or restore active pane</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+P</kbd> / <kbd>F1</kbd></td>
+<td>Command palette</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+Q</kbd></td>
+<td>Dequeue next command</td>
+</tr>
+<tr>
+<td><kbd>Alt+Q</kbd></td>
+<td>Quick terminal switcher</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+F</kbd></td>
+<td>Find in active terminal</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+F</kbd></td>
+<td>Find in all terminals</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+B</kbd></td>
+<td>Broadcast command</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+C</kbd></td>
+<td>Copy</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+V</kbd></td>
+<td>Paste</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+L</kbd></td>
+<td>Clear active terminal</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+PageUp</kbd> / <kbd>Ctrl+PageDown</kbd></td>
+<td>Previous or next page</td>
+</tr>
+<tr>
+<td><kbd>Ctrl++</kbd> / <kbd>Ctrl+-</kbd></td>
+<td>Change default terminal font size</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Alt++</kbd> / <kbd>Ctrl+Alt+-</kbd> / <kbd>Ctrl+Alt+0</kbd></td>
+<td>Change or reset active-pane zoom</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+/</kbd></td>
+<td>Keyboard-shortcut reference</td>
+</tr>
+<tr>
+<td><kbd>Escape</kbd></td>
+<td>Close the active dialog, menu, or search</td>
+</tr>
+</tbody>
+</table>
+<h2 id="updates-and-version-information">Updates and version information</h2>
+<p>Open <strong>About MultiTerm</strong> from the header or command palette to see the running version, check for updates, open the latest release, or download the current installer. Automatic checks use the configured interval and never install an update without confirmation.</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="a-terminal-does-not-start">A terminal does not start</h3>
+<ul>
+<li>Confirm the selected shell is installed and available.</li>
+<li>For PowerShell 7, verify <code>pwsh</code> runs from a normal terminal.</li>
+<li>For WSL, run <code>wsl --status</code> and confirm a distribution is installed.</li>
+<li>Try another working directory; inaccessible paths are rejected.</li>
+<li>Check <strong>Runtime logs</strong> for the bridge error.</li>
+</ul>
+<h3 id="the-app-disconnected">The app disconnected</h3>
+<p>The UI reconnects automatically when the local bridge restarts. If it remains disconnected, reopen MultiTerm and inspect the runtime logs. Source launches use the configured local bridge port; installed concurrent launches automatically claim available fallback ports.</p>
+<h3 id="explorer-or-multiterm-is-missing">Explorer or <code>multiterm</code> is missing</h3>
+<p>Run the installer again and select the corresponding optional task. Explorer integration is intentionally opt-in. PATH changes are visible only to shells opened after installation.</p>
+<h3 id="layout-or-display-problems">Layout or display problems</h3>
+<p>Use <strong>Fit all terminals</strong>, then <strong>Reset layout</strong>. If a manual layout is off-screen after a monitor change, switching to another layout and back also normalizes pane positions.</p>
+<h3 id="getting-more-detail">Getting more detail</h3>
+<p>Open <strong>Runtime logs</strong> from the status bar and choose the appropriate severity. Include the MultiTerm version, shell type, and relevant log messages when reporting an issue.</p>
+<h2 id="privacy-and-security">Privacy and security</h2>
+<p>MultiTerm serves its UI and terminal bridge on the local machine. Bridge requests use a per-run authentication token. Notes, queues, settings, and workspace metadata are stored locally. Terminal commands and output are not sent to a remote MultiTerm service.</p>
+<p>Treat copied commands, scripts, Administrator terminals, Explorer extensions, and third-party CLIs with the same care you would use in a standalone terminal.</p>
+<h2 id="more-information">More information</h2>
+<ul>
+<li><a href="https://github.com/andrewtheart/multiterm-workbench#readme">Project README</a></li>
+<li><a href="https://github.com/andrewtheart/multiterm-workbench/releases/latest">Latest release</a></li>
+<li><a href="https://github.com/andrewtheart/multiterm-workbench/issues">Issue tracker</a></li>
+<li><a href="https://www.gnu.org/licenses/gpl-3.0.html">GNU General Public License v3.0</a></li>
+</ul>
+</body>
 </html>

@@ -1,8 +1,9 @@
 # MultiTerm Workbench
 
-A local xterm.js workbench for running multiple PowerShell sessions from one browser page.
+A local Windows terminal workbench for running PowerShell 7, Windows PowerShell,
+Command Prompt, and WSL sessions side by side.
 
-**⬇️ [Download MultiTerm Workbench v0.1.25](https://github.com/andrewtheart/multiterm-workbench/releases/tag/v0.1.25)** — Windows installer, from the [releases page](https://github.com/andrewtheart/multiterm-workbench/releases).
+**⬇️ [Download the latest MultiTerm Workbench installer](https://github.com/andrewtheart/multiterm-workbench/releases/latest)** — or browse all [releases](https://github.com/andrewtheart/multiterm-workbench/releases).
 
 ## Why MultiTerm?
 
@@ -10,7 +11,7 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
   <tr>
     <td align="center" width="33%">
       <h3>🖥️ Multi-pane shell workspace</h3>
-      Run multiple local PowerShell terminals in one view with real PTY behavior, prompt editing, Ctrl+C, and resize handling.
+      Run PowerShell, Command Prompt, and WSL terminals in one view with real PTY behavior, prompt editing, Ctrl+C, and resize handling.
     </td>
     <td align="center" width="33%">
       <h3>⛶ Real maximize + focus rail</h3>
@@ -73,6 +74,22 @@ A local xterm.js workbench for running multiple PowerShell sessions from one bro
     <td align="center" width="100%" colspan="3">
       <h3>🔗 Attach running WSL tmux sessions</h3>
       Discover tmux servers across installed WSL distributions and connect an existing session as another live MultiTerm client without restarting its shell or changing its current work.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%" colspan="1">
+      <h3>📝 PID-bound notes + recovered notes</h3>
+      Keep context beside each terminal process. Notes from a process that exits remain available in Recovered notes.
+    </td>
+    <td align="center" width="50%" colspan="2">
+      <h3>📥 Per-terminal command queues</h3>
+      Stage commands or long prompts, then quick-dequeue into the active terminal without pressing Enter. Queues from ended processes remain reusable.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="100%" colspan="3">
+      <h3>❓ Built-in generated help</h3>
+      Open the top-right question-mark button for navigable, theme-aware guidance generated from the repository's canonical <code>HELP.md</code>.
     </td>
   </tr>
 </table>
@@ -284,8 +301,8 @@ flowchart TB
         sessions["Session registry (Map)<br/>id → PTY + metadata"]
     end
 
-    subgraph shells["PowerShell processes"]
-        pty1["pwsh.exe / powershell.exe<br/>via ConPTY pseudo-console"]
+    subgraph shells["Shell processes"]
+        pty1["pwsh / powershell / cmd / WSL<br/>via ConPTY pseudo-console"]
         elev["Elevated (admin) shell<br/>HIGH integrity"]
     end
 
@@ -334,7 +351,7 @@ sequenceDiagram
 
     UI->>WS: { type: "create", id, shell, cwd, cols, rows }
     WS->>BR: handleClientMessage
-    BR->>PTY: pty.spawn(pwsh, { useConpty: true })
+    BR->>PTY: pty.spawn(selected shell, { useConpty: true })
     BR-->>UI: { type: "created", ...summary }
 
     loop keystrokes
@@ -355,7 +372,7 @@ sequenceDiagram
     BR-->>UI: broadcast { type: "exited", id, code }
 ```
 
-**Client → bridge** messages: `create`, `input`, `resize`, `kill`, `killAll`,
+**Client → bridge** messages: `create`, `listTmux`, `input`, `resize`, `kill`, `killAll`,
 `logStart` / `logStop`, `reveal`, `openPath`, `pickScript`, `elevate`, `list`,
 `memstats`, `statistics`. **Bridge → client** messages: `welcome` (session catalog
 on connect), `created`, `output`, `exited`, `createFailed`, `sessions`,
@@ -372,8 +389,9 @@ on connect), `created`, `output`, `exited`, `createFailed`, `sessions`,
 `public/app.js` owns all UI state in a single `state` object and renders each pane
 with an xterm.js `Terminal` plus the Fit, WebGL, Search, and WebLinks addons.
 User preferences and layout survive restarts through `localStorage` (settings,
-manual layouts, pages, per-terminal page assignment, workspaces, last session, and
-pane order). A WebSocket client with **exponential-backoff auto-reconnect** keeps
+manual layouts, pages, per-terminal page assignment, workspaces, last session,
+pane order, PID-bound notes, recovered notes, and live/unparented command queues).
+A WebSocket client with **exponential-backoff auto-reconnect** keeps
 the UI attached to the bridge; the rendering hot paths (coalesced output, coalesced
 fits, deferred resize) are described in [Performance](#performance) above.
 
@@ -404,7 +422,7 @@ elevated session even if it learns the token.
 
 - **Windows 10 version 1809 (build 17763) or newer**, or Windows 11. This is the
   minimum required for the pseudo-terminal support (the ConPTY
-  `CreatePseudoConsole` APIs) that MultiTerm uses to run each PowerShell session.
+  `CreatePseudoConsole` APIs) that MultiTerm uses to run each shell session.
   The Windows installer enforces this and refuses to install on older builds.
 - **Windows PowerShell 5.1** (built into Windows 10/11) is enough for the
   self-contained bridge and the installer. **PowerShell 7 (`pwsh.exe`)** is used
@@ -413,6 +431,8 @@ elevated session even if it learns the token.
 - **Node.js** is only needed for the Electron desktop app (`npm start`) and the
   development Node bridge (`npm run server`) — not for `Start-MultiTerm.ps1` or
   the installed build.
+- **WSL** and **tmux** are optional and are only needed for WSL terminals and tmux
+  attachment. MultiTerm does not install distributions or Linux packages.
 
 ## Run
 
@@ -509,6 +529,25 @@ Open the URL printed by the bridge, usually:
 http://127.0.0.1:3177
 ```
 
+## In-app help
+
+Select the top-right **?** button to open complete, theme-aware help without
+leaving the workspace. The command palette's **Help** command opens the same
+modal; Escape, the close button, or the backdrop closes it.
+
+[`HELP.md`](HELP.md) is the canonical source. Pandoc generates the packaged
+[`public/help.html`](public/help.html):
+
+```powershell
+npm run build:help
+```
+
+`npm start`, `npm run server`, the test scripts, and
+`scripts\build-installer.ps1` run this generation step automatically. Source
+development therefore requires [Pandoc](https://pandoc.org/installing.html);
+the generated HTML is committed so the self-contained installed build has no
+Pandoc dependency.
+
 ## Windows installer
 
 An [Inno Setup](https://www.innosetup.com/) script packages the self-contained
@@ -544,8 +583,9 @@ to machine-wide installs under Program Files so that Windows never searches a
 user-writable directory from the system PATH.
 
 Per-user setup also asks whether to add **Open in MultiTerm** to File Explorer.
-When selected, the command is installed for both folder items and folder
-backgrounds. It appears directly in the Windows 11 modern context menu and in
+This task is unchecked by default, so no Explorer integration is registered
+without the user's explicit consent. When selected, the command is installed
+for both folder items and folder backgrounds. It appears directly in the Windows 11 modern context menu and in
 the classic **Show more options** menu; invoking it creates a new terminal whose
 working directory is the selected folder in the most recently started live
 instance (or starts an instance if none exists). The integration is optional and is
@@ -558,25 +598,24 @@ because its AppX registration belongs to one Windows user profile.
 ### Download
 
 Grab the latest per-user installer from the
-[releases page](https://github.com/andrewtheart/multiterm-workbench/releases/latest),
-or directly:
-
-- [MultiTerm-Setup-0.1.25.exe](https://github.com/andrewtheart/multiterm-workbench/releases/download/v0.1.25/MultiTerm-Setup-0.1.25.exe)
+[latest release](https://github.com/andrewtheart/multiterm-workbench/releases/latest).
+The release asset is named `MultiTerm-Setup-<version>.exe`.
 
 It performs a per-user install by default (no UAC prompt); you may elect a
 machine-wide install from the setup dialog.
 
 ### Build it yourself
 
-Build the installer with the helper script (requires Inno Setup 6, Visual Studio
-C++ build tools, and the Windows SDK):
+Build the installer with the helper script (requires Pandoc, Inno Setup 6,
+Visual Studio C++ build tools, and the Windows SDK):
 
 ```powershell
 .\scripts\build-installer.ps1
 ```
 
-The helper builds and signs the x86, x64, and ARM64 `IExplorerCommand` packages,
-then finds `ISCC.exe` automatically. It can also cut the GitHub release for you:
+The helper first regenerates `public\help.html`, then builds and signs the x86,
+x64, and ARM64 `IExplorerCommand` packages and finds `ISCC.exe` automatically.
+It can also cut the GitHub release for you:
 
 ```powershell
 # build the current version's installer only (no version change, no publish)
@@ -633,8 +672,8 @@ package on Windows 11. Setup runs on every architecture and installs into 64-bit
 ## Updates
 
 MultiTerm checks the [GitHub releases](https://github.com/andrewtheart/multiterm-workbench/releases)
-of this repository for a newer version. A background check runs at most once
-every six hours; a manual check is available from the **Check for updates**
+of this repository for a newer version. Background checks use the interval
+selected in Settings (six hours by default); a manual check is available from the **Check for updates**
 button in the About dialog or the **Check for updates…** command in the palette
 (`Ctrl+Shift+P`).
 
@@ -655,17 +694,19 @@ release notes still work but the primary action opens the download page instead.
 Set `MULTITERM_UPDATE_REPO=<owner>/<repo>` before launching the desktop app to
 point the checker at a fork.
 
-## Notes
+## Feature guide and operational notes
 
 - The UI is a single-page app in `public/`.
-- Browser-only HTML cannot start or stream from local PowerShell processes. `Start-MultiTerm.ps1` and `server.js` are local-only bridges that serve the page, accept WebSocket input, and own PTY-backed PowerShell child processes through Windows ConPTY.
+- Browser-only HTML cannot start or stream from local shell processes. `Start-MultiTerm.ps1` and `server.js` are local-only bridges that serve the page, accept WebSocket input, and own PTY-backed child processes through Windows ConPTY.
 - The bridge binds to `127.0.0.1` by default. Set `PORT=4000` to choose another port.
-- Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell.
+- Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell, Command Prompt, or WSL. Existing WSL tmux sessions can be discovered and attached from the header or command palette.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.
+- Pages keep related terminals in separate visual groups while their shell processes stay alive. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
+- The top-right **?** opens generated in-app help. `Ctrl+/` opens the compact shortcut reference; `Ctrl+Shift+P` or F1 opens the searchable command palette.
 - The top search box filters terminal panes by contained terminal text; non-matching panes stay hidden until matching output appears or the search is cleared.
 - Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.
 - The bottom-left workspace buttons hide or restore the top header and layout sidecar for more terminal space.
-- The bottom-left trash button closes every terminal pane and tells the bridge to kill all running PowerShell sessions.
+- The bottom-left trash button closes every terminal pane and tells the bridge to kill all running shell sessions.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
 - Manual canvas panes can be dragged by their header and resized from the lower-right corner.
 - Any pane can be minimized to a chip in the status bar with its header's minimize (−) button; click the chip to restore the pane in place.
