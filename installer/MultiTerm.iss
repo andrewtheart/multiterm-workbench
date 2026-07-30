@@ -30,6 +30,7 @@
 #define MyAppAUMID "MultiTerm.Workbench"
 ; Repository root, relative to this .iss file (which lives in installer\).
 #define RepoRoot ".."
+#include "explorer-integration\generated\ExplorerCertificateCommands.iss"
 
 [Setup]
 ; Unique application identifier (do not reuse for other products).
@@ -60,7 +61,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 LicenseFile={#RepoRoot}\LICENSE
-InfoAfterFile={#RepoRoot}\THIRD-PARTY-NOTICES.txt
+InfoBeforeFile={#RepoRoot}\THIRD-PARTY-NOTICES.txt
 ; Windows 10 version 1809 (build 17763) is the minimum: MultiTerm's pseudo-terminals
 ; rely on the ConPTY APIs (CreatePseudoConsole) that were introduced in that build.
 MinVersion=10.0.17763
@@ -70,21 +71,99 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "explorercontext"; Description: "Add 'Open in MultiTerm' to File Explorer folder context menus (optional; Windows 11 requires administrator approval)"; GroupDescription: "File Explorer integration (select to enable):"; Flags: unchecked; Check: not IsAdminInstallMode
+Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 'multiterm' command)"; GroupDescription: "Command-line integration (machine-wide Program Files installs only):"; Flags: unchecked; Check: IsProtectedSystemPathInstall
 
 [Files]
 Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "cli\multiterm.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "cli\Manage-SystemPath.ps1"; DestDir: "{app}\CLI"; Flags: ignoreversion
 Source: "{#RepoRoot}\public\*"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "MultiTerm.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "explorer-integration\Install-ExplorerIntegration.ps1"; DestDir: "{app}\Explorer"; Flags: ignoreversion
+Source: "explorer-integration\generated\MultiTermExplorer.cer"; DestDir: "{app}\Explorer"; Flags: ignoreversion
+Source: "explorer-integration\generated\packages\*.msix"; DestDir: "{app}\Explorer\Packages"; Flags: ignoreversion
+Source: "explorer-integration\generated\bin\x86\*.dll"; DestDir: "{app}\Explorer\x86"; Flags: ignoreversion
+Source: "explorer-integration\generated\bin\x86\*.exe"; DestDir: "{app}\Explorer\x86"; Flags: ignoreversion
+Source: "explorer-integration\generated\bin\x64\*.dll"; DestDir: "{app}\Explorer\x64"; Flags: ignoreversion
+Source: "explorer-integration\generated\bin\x64\*.exe"; DestDir: "{app}\Explorer\x64"; Flags: ignoreversion
+Source: "explorer-integration\generated\bin\arm64\*.dll"; DestDir: "{app}\Explorer\arm64"; Flags: ignoreversion
+Source: "explorer-integration\generated\bin\arm64\*.exe"; DestDir: "{app}\Explorer\arm64"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Comment: "Start MultiTerm with its compact bridge control console"
-Name: "{group}\Stop {#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\{#MyScriptFile}"" -Stop"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Comment: "Shut down the MultiTerm Workbench bridge and close every session"
+Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Comment: "Start a new MultiTerm instance with its compact bridge control console"
+Name: "{group}\Stop all {#MyAppName} instances"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\{#MyScriptFile}"" -Stop"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; Comment: "Shut down every MultiTerm Workbench instance and terminal session"
 Name: "{group}\{#MyAppName} README"; Filename: "{app}\README.md"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Tasks: desktopicon
 
 [Run]
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Install -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: systempath; Check: IsProtectedSystemPathInstall; StatusMsg: "Adding MultiTerm to the system PATH..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Uninstall -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveSystemPath; StatusMsg: "Removing MultiTerm from the system PATH..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateInstallCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: explorercontext; Check: not IsAdminInstallMode; MinVersion: 10.0.22000; StatusMsg: "Trusting the MultiTerm Explorer package..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"""; Flags: runhidden waituntilterminated runasoriginaluser; Tasks: explorercontext; Check: not IsAdminInstallMode; StatusMsg: "Adding MultiTerm to File Explorer..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: explorercontext; Check: ShouldRollbackExplorerCertificate; MinVersion: 10.0.22000; StatusMsg: "Rolling back the MultiTerm Explorer package certificate..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext'); StatusMsg: "Removing MultiTerm from File Explorer..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; StatusMsg: "Removing the MultiTerm Explorer package certificate..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext')
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Uninstall -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldUninstallSystemPath; RunOnceId: "RemoveMultiTermSystemPath"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveMultiTermExplorerIntegration"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; RunOnceId: "RemoveMultiTermExplorerCertificate"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated; RunOnceId: "FinalizeMultiTermExplorerIntegration"
+
+[Code]
+function SystemPathIntegrationStateExists: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\SystemPathInstalled.json'));
+end;
+
+function IsProtectedSystemPathInstall: Boolean;
+var
+  AppPath: String;
+  ProgramFilesPath: String;
+begin
+  AppPath := AddBackslash(Lowercase(ExpandConstant('{app}')));
+  ProgramFilesPath := AddBackslash(Lowercase(ExpandConstant('{autopf}')));
+  Result :=
+    IsAdminInstallMode and
+    (Pos(ProgramFilesPath, AppPath) = 1);
+end;
+
+function ShouldRemoveSystemPath: Boolean;
+begin
+  Result :=
+    IsProtectedSystemPathInstall and
+    SystemPathIntegrationStateExists and
+    (not WizardIsTaskSelected('systempath'));
+end;
+
+function ShouldUninstallSystemPath: Boolean;
+begin
+  Result :=
+    IsProtectedSystemPathInstall and
+    SystemPathIntegrationStateExists;
+end;
+
+function ExplorerIntegrationStateExists: Boolean;
+begin
+  Result := RegValueExists(
+    HKCU,
+    'Software\MultiTerm Workbench\ExplorerIntegration',
+    'CertificateThumbprint');
+end;
+
+function ShouldRollbackExplorerCertificate: Boolean;
+begin
+  Result := not ExplorerIntegrationStateExists;
+end;
+
+function ShouldRemoveExplorerCertificate: Boolean;
+begin
+  Result := ExplorerIntegrationStateExists;
+end;

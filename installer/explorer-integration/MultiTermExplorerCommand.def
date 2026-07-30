@@ -1,0 +1,4 @@
+LIBRARY MultiTermExplorerCommand
+EXPORTS
+    DllCanUnloadNow PRIVATE
+    DllGetClassObject PRIVATE

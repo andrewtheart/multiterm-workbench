@@ -555,6 +555,8 @@ if ($BumpVersion) {
 
 # --- Build ----------------------------------------------------------------------
 if ($PSCmdlet.ShouldProcess($IssPath, "Compile installer with ISCC")) {
+    Write-Step "Building File Explorer integration..."
+    & (Join-Path $RepoRoot 'installer\explorer-integration\build.ps1') -Version $Version
     Write-Step "Building installer..."
     & $IsccPath $IssPath
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE." }

@@ -17,16 +17,20 @@
 #>
 
 param(
-  [int]$Port = 0,
-  [string]$HostName = "",
+    [int]$Port = 0,
+    [string]$HostName = "",
     [switch]$AllowRemote,
     [switch]$NoBrowser,
     [switch]$ShowConsole,
     [switch]$ConsoleDashboard,
+    [switch]$NewInstance,
     [switch]$Stop,
-    [string]$ElevatedHost = ""
+    [string]$ElevatedHost = "",
+    [string]$OpenFolder = ""
 )
 
+$portWasSpecified = $PSBoundParameters.ContainsKey("Port") -or -not [string]::IsNullOrWhiteSpace($env:PORT)
+$useAutomaticPort = $NewInstance.IsPresent
 if ($Port -le 0) {
   if ($env:PORT) {
     $Port = [int]$env:PORT
@@ -43,18 +47,146 @@ if (-not $HostName) {
   }
 }
 
+$instanceDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) "MultiTerm\Instances"
+
+function Get-RunningMultiTermInstances {
+  if (-not (Test-Path -LiteralPath $instanceDirectory -PathType Container)) {
+    return @()
+  }
+
+  $instances = @()
+  foreach ($file in Get-ChildItem -LiteralPath $instanceDirectory -Filter "*.json" -File -ErrorAction SilentlyContinue) {
+    $recordPid = 0
+    try {
+      $record = Get-Content -LiteralPath $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+      $recordPort = [int]$record.port
+      $recordPid = [int]$record.pid
+      $uri = [Uri]$record.url
+      if (
+        $recordPort -le 0 -or
+        $recordPid -le 0 -or
+        -not $uri.IsLoopback -or
+        $uri.Port -ne $recordPort
+      ) {
+        throw "Invalid instance record."
+      }
+
+      $health = Invoke-RestMethod -Uri ([Uri]::new($uri, "health")) -Method Get -TimeoutSec 2
+      if (
+        $health.app -ne "MultiTerm Workbench" -or
+        [int]$health.pid -ne $recordPid -or
+        [int]$health.port -ne $recordPort
+      ) {
+        throw "Instance identity did not match."
+      }
+
+      $record | Add-Member -NotePropertyName StateFile -NotePropertyValue $file.FullName -Force
+      $instances += $record
+    } catch {
+      if ($recordPid -le 0 -or $null -eq (Get-Process -Id $recordPid -ErrorAction SilentlyContinue)) {
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+
+  return @($instances | Sort-Object -Property startedAt -Descending)
+}
+
+function Stop-MultiTermEndpoint {
+  param(
+    [Parameter(Mandatory = $true)]
+    [Uri]$BaseUri
+  )
+
+  Invoke-WebRequest `
+    -Uri ([Uri]::new($BaseUri, "shutdown")) `
+    -Method Post `
+    -Headers @{ "X-MultiTerm-Request" = "Launcher" } `
+    -UseBasicParsing `
+    -TimeoutSec 5 | Out-Null
+}
+
+$resolvedOpenFolder = ""
+if ($OpenFolder) {
+  try {
+    $resolvedOpenFolder = [IO.Path]::GetFullPath($OpenFolder)
+  } catch {
+    throw "The selected Explorer path is not a valid folder: $OpenFolder"
+  }
+  if (-not (Test-Path -LiteralPath $resolvedOpenFolder -PathType Container)) {
+    throw "The selected Explorer path is not a folder: $resolvedOpenFolder"
+  }
+}
+
 # The console window is hidden for installed launches, so Ctrl+C is no longer
 # available to stop the bridge. The Start Menu "Stop" shortcut re-runs this
-# script with -Stop, which asks a running bridge to shut down over loopback.
+# script with -Stop, which asks every registered bridge to shut down over loopback.
+# Supplying -Port keeps the old targeted behavior and stops only that endpoint.
 if ($Stop.IsPresent) {
-  $stopUrl = "http://{0}:{1}/shutdown" -f $HostName, $Port
-  try {
-    Invoke-WebRequest -Uri $stopUrl -Method Post -UseBasicParsing -TimeoutSec 5 | Out-Null
-    Write-Host "Stopped the MultiTerm bridge on ${HostName}:${Port}."
-  } catch {
-    Write-Host "No MultiTerm bridge is running on ${HostName}:${Port}."
+  if ($portWasSpecified) {
+    $baseUri = [Uri]("http://{0}:{1}/" -f $HostName, $Port)
+    try {
+      Stop-MultiTermEndpoint -BaseUri $baseUri
+      Write-Host "Stopped the MultiTerm bridge on ${HostName}:${Port}."
+    } catch {
+      Write-Host "No MultiTerm bridge is running on ${HostName}:${Port}."
+    }
+    return
   }
+
+  $instances = @(Get-RunningMultiTermInstances)
+  $stopped = 0
+  foreach ($instance in $instances) {
+    try {
+      Stop-MultiTermEndpoint -BaseUri ([Uri]$instance.url)
+      $stopped += 1
+    } catch {
+      Write-Warning "Could not stop MultiTerm instance $($instance.url): $($_.Exception.Message)"
+    }
+  }
+
+  # Older installed versions did not register instances. They can coexist
+  # briefly during an upgrade, so also stop the legacy default endpoint when
+  # no registered instance owns it.
+  $registeredDefault = @($instances | Where-Object { [int]$_.port -eq $Port }).Count -gt 0
+  if (-not $registeredDefault) {
+    try {
+      Stop-MultiTermEndpoint -BaseUri ([Uri]("http://{0}:{1}/" -f $HostName, $Port))
+      $stopped += 1
+    } catch { }
+  }
+
+  if ($stopped -eq 0) {
+    $stopMessage = "No MultiTerm bridges are running."
+  } else {
+    $suffix = if ($stopped -eq 1) { "" } else { "s" }
+    $stopMessage = "Stopped $stopped MultiTerm bridge instance$suffix."
+  }
+  Write-Host $stopMessage
   return
+}
+
+if ($resolvedOpenFolder -and -not $portWasSpecified -and -not $NewInstance.IsPresent) {
+  foreach ($instance in @(Get-RunningMultiTermInstances)) {
+    try {
+      $payload = @{ path = $resolvedOpenFolder } | ConvertTo-Json -Compress
+      Invoke-WebRequest `
+        -Uri ([Uri]::new([Uri]$instance.url, "open-folder")) `
+        -Method Post `
+        -Headers @{ "X-MultiTerm-Request" = "Explorer" } `
+        -ContentType "application/json" `
+        -Body ([Text.Encoding]::UTF8.GetBytes($payload)) `
+        -UseBasicParsing `
+        -TimeoutSec 5 | Out-Null
+      return
+    } catch {
+      Write-Warning "Could not forward the folder to MultiTerm instance $($instance.url): $($_.Exception.Message)"
+    }
+  }
+
+  # No bridge exists yet. Start one using the same collision-free path as an
+  # installed shortcut so Explorer still works when another app owns port 3177.
+  $useAutomaticPort = $true
 }
 
 if (-not ("MultiTerm.PowerShellBridge.ConsoleWindow" -as [type])) {
@@ -139,6 +271,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -170,6 +303,7 @@ namespace MultiTerm.PowerShellBridge
     internal sealed class BridgeConsoleDashboard
     {
         private const int MaximumLogEntries = 250;
+        private readonly string instanceUrl;
         private readonly object sync = new object();
         private readonly Func<List<DashboardSessionInfo>> getSessions;
         private readonly Action<string> terminateSession;
@@ -183,10 +317,12 @@ namespace MultiTerm.PowerShellBridge
         private int lastHeight;
 
         public BridgeConsoleDashboard(
+            string instanceUrl,
             Func<List<DashboardSessionInfo>> getSessions,
             Action<string> terminateSession,
             Action stopBridge)
         {
+            this.instanceUrl = instanceUrl;
             this.getSessions = getSessions;
             this.terminateSession = terminateSession;
             this.stopBridge = stopBridge;
@@ -201,7 +337,7 @@ namespace MultiTerm.PowerShellBridge
 
             try
             {
-                Console.Title = "MultiTerm Control Console - closing this window stops all terminals";
+                Console.Title = "MultiTerm Control Console - " + this.instanceUrl;
                 Console.CursorVisible = false;
                 this.TryResize(122, 26);
             }
@@ -334,7 +470,7 @@ namespace MultiTerm.PowerShellBridge
             if (width < 78 || height < 14)
             {
                 Console.SetCursorPosition(0, 0);
-                Console.Write(this.Fit("MultiTerm dashboard needs at least 79 columns x 15 rows. Resize this window. Closing it stops all terminals.", width));
+                Console.Write(this.Fit("MultiTerm dashboard needs at least 79 columns x 15 rows. Resize this window. Closing it stops this instance's terminals.", width));
                 return;
             }
 
@@ -401,13 +537,13 @@ namespace MultiTerm.PowerShellBridge
             string[] notice = new string[]
             {
                 "Closing this console",
-                "will terminate ALL",
-                "active MultiTerm",
-                "terminal sessions.",
+                "will terminate every",
+                "terminal session in",
+                "THIS INSTANCE.",
                 "",
                 "Up/Down: select",
                 "Enter: terminate",
-                "Ctrl+Q: stop all"
+                "Ctrl+Q: stop instance"
             };
 
             int firstLog = Math.Max(0, logEntries.Count - bodyRows);
@@ -439,7 +575,7 @@ namespace MultiTerm.PowerShellBridge
             }
 
             lines.Add(border);
-            string status = " " + sessions.Count + " active | Arrow keys select a terminal; Enter requests a graceful termination; Ctrl+Q stops MultiTerm";
+            string status = " " + this.instanceUrl + " | " + sessions.Count + " active | Arrow keys select; Enter terminates; Ctrl+Q stops this instance";
             lines.Add("|" + this.Fit(status, width - 2) + "|");
             lines.Add(new String('-', width));
             return String.Join(Environment.NewLine, lines.ToArray());
@@ -481,11 +617,16 @@ namespace MultiTerm.PowerShellBridge
     public sealed class BridgeServer
     {
         private readonly string host;
-        private readonly int port;
+        private int port;
+        private readonly bool autoPort;
+        private readonly int minimumAutoPort;
+        private readonly int maximumAutoPort;
         private readonly bool allowRemote;
         private readonly bool consoleDashboardEnabled;
         private readonly bool openBrowser;
         private readonly string publicDir;
+        private readonly object openFolderLock = new object();
+        private readonly ConcurrentQueue<string> pendingOpenFolders = new ConcurrentQueue<string>();
         // Stable AppUserModelID so the browser "--app" window is grouped and
         // pinned as MultiTerm (with the MultiTerm icon) instead of the host
         // browser (e.g. Microsoft Edge). Must match the installer shortcut.
@@ -506,6 +647,7 @@ namespace MultiTerm.PowerShellBridge
 
         private HttpListener listener;
         private BridgeConsoleDashboard consoleDashboard;
+        private string instanceFilePath;
         private volatile bool stopping;
 
         // Absolute path of this script, set from PowerShell at startup. Administrator
@@ -513,14 +655,22 @@ namespace MultiTerm.PowerShellBridge
         // pseudo-console, so we need to know where we came from.
         public static string ScriptPath;
 
-        public BridgeServer(string host, int port, bool allowRemote, string publicDir, bool openBrowser, bool consoleDashboardEnabled)
+        public BridgeServer(string host, int port, bool autoPort, bool allowRemote, string publicDir, bool openBrowser, bool consoleDashboardEnabled, string startupOpenFolder)
         {
             this.host = host;
             this.port = port;
+            this.autoPort = autoPort;
+            this.minimumAutoPort = port;
+            this.maximumAutoPort = Math.Min(UInt16.MaxValue, port + 1000);
             this.allowRemote = allowRemote;
             this.publicDir = Path.GetFullPath(publicDir);
             this.openBrowser = openBrowser;
             this.consoleDashboardEnabled = consoleDashboardEnabled;
+            string folder = this.NormalizeOpenFolder(startupOpenFolder);
+            if (folder != null)
+            {
+                this.pendingOpenFolders.Enqueue(folder);
+            }
         }
 
         public string Url
@@ -530,34 +680,65 @@ namespace MultiTerm.PowerShellBridge
 
         public void Run()
         {
-            this.listener = new HttpListener();
-            this.listener.Prefixes.Add(this.Url);
-            try
+            while (true)
             {
-                this.listener.Start();
-            }
-            catch (HttpListenerException)
-            {
-                // Another MultiTerm bridge already owns this address (for example,
-                // a window that is still open). Rather than crashing with a raw
-                // "conflicts with an existing registration" error, just reopen the
-                // app window pointing at the running instance and exit quietly.
-                Console.WriteLine("MultiTerm is already running on " + this.Url + ". Opening the existing instance.");
-                if (this.openBrowser)
+                this.listener = new HttpListener();
+                this.listener.Prefixes.Add(this.Url);
+                try
                 {
-                    // Branding runs on a background thread, and this path exits the
-                    // process moments later, which would kill that thread before it
-                    // ever found the window - leaving the taskbar showing the host
-                    // browser's icon. Wait for it to finish before returning.
-                    Thread brander = this.OpenBrowser();
-                    if (brander != null)
-                    {
-                        try { brander.Join(TimeSpan.FromSeconds(40)); }
-                        catch { }
-                    }
+                    this.listener.Start();
+                    break;
                 }
-                return;
+                catch (HttpListenerException listenError)
+                {
+                    try { this.listener.Close(); } catch { }
+
+                    // HttpListener owns the port atomically, so retrying here avoids the
+                    // race inherent in probing for a free port before bridge startup.
+                    if (this.autoPort && listenError.ErrorCode != 5 && this.port < this.maximumAutoPort)
+                    {
+                        this.port++;
+                        continue;
+                    }
+
+                    string startupFolder;
+                    bool connectedToMultiTerm;
+                    if (this.pendingOpenFolders.TryDequeue(out startupFolder))
+                    {
+                        connectedToMultiTerm = this.SendOpenFolderToExisting(startupFolder);
+                    }
+                    else
+                    {
+                        connectedToMultiTerm = this.IsExistingBridge();
+                    }
+                    if (!connectedToMultiTerm)
+                    {
+                        string message = this.autoPort
+                            ? "Could not find an available MultiTerm port from "
+                                + this.minimumAutoPort + " through " + this.maximumAutoPort + "."
+                            : "Port " + this.port + " is already in use by another application.";
+                        throw new InvalidOperationException(message, listenError);
+                    }
+
+                    Console.WriteLine("MultiTerm is already running on " + this.Url + ". Opening the existing instance.");
+                    if (this.openBrowser)
+                    {
+                        // Branding runs on a background thread, and this path exits the
+                        // process moments later, which would kill that thread before it
+                        // ever found the window - leaving the taskbar showing the host
+                        // browser's icon. Wait for it to finish before returning.
+                        Thread brander = this.OpenBrowser();
+                        if (brander != null)
+                        {
+                            try { brander.Join(TimeSpan.FromSeconds(40)); }
+                            catch { }
+                        }
+                    }
+                    return;
+                }
             }
+
+            this.RegisterInstance();
 
             Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs eventArgs)
             {
@@ -568,6 +749,7 @@ namespace MultiTerm.PowerShellBridge
             if (this.consoleDashboardEnabled)
             {
                 BridgeConsoleDashboard dashboard = new BridgeConsoleDashboard(
+                    this.Url,
                     this.DashboardSessions,
                     delegate(string id)
                     {
@@ -648,6 +830,58 @@ namespace MultiTerm.PowerShellBridge
                 try { this.listener.Stop(); } catch { }
                 try { this.listener.Close(); } catch { }
             }
+            this.UnregisterInstance();
+        }
+
+        private void RegisterInstance()
+        {
+            try
+            {
+                string directory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "MultiTerm", "Instances");
+                Directory.CreateDirectory(directory);
+
+                int processId = Process.GetCurrentProcess().Id;
+                string path = Path.Combine(directory, processId.ToString(CultureInfo.InvariantCulture) + ".json");
+                string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                string state = "{\"app\":\"MultiTerm Workbench\",\"pid\":" + processId
+                    + ",\"port\":" + this.port
+                    + ",\"url\":" + Json.Quote(this.Url)
+                    + ",\"startedAt\":" + Json.Quote(DateTime.UtcNow.ToString("o"))
+                    + ",\"scriptPath\":" + Json.Quote(ScriptPath) + "}";
+
+                File.WriteAllText(temporaryPath, state, new UTF8Encoding(false));
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+                File.Move(temporaryPath, path);
+                this.instanceFilePath = path;
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "Could not register this bridge instance: " + error.Message);
+            }
+        }
+
+        private void UnregisterInstance()
+        {
+            string path = this.instanceFilePath;
+            this.instanceFilePath = null;
+            if (String.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "Could not remove this bridge instance record: " + error.Message);
+            }
         }
 
         private void HandleContext(HttpListenerContext context)
@@ -675,7 +909,10 @@ namespace MultiTerm.PowerShellBridge
                         return;
                     }
 
-                    if (!context.Request.IsLocal)
+                    if (
+                        !context.Request.IsLocal ||
+                        context.Request.Headers["X-MultiTerm-Request"] != "Launcher"
+                    )
                     {
                         this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8");
                         return;
@@ -691,6 +928,50 @@ namespace MultiTerm.PowerShellBridge
                     return;
                 }
 
+                // File Explorer launches use a fresh PowerShell process. If a
+                // bridge is already running, that process forwards the selected
+                // folder here instead of attempting to own a second listener.
+                if (path == "/open-folder")
+                {
+                    if (context.Request.HttpMethod != "POST")
+                    {
+                        context.Response.Headers["Allow"] = "POST";
+                        this.SendText(context.Response, 405, "Method not allowed", "text/plain; charset=utf-8");
+                        return;
+                    }
+                    if (!context.Request.IsLocal || context.Request.Headers["X-MultiTerm-Request"] != "Explorer")
+                    {
+                        this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8");
+                        return;
+                    }
+                    if (context.Request.ContentLength64 < 0 || context.Request.ContentLength64 > 32768)
+                    {
+                        this.SendText(context.Response, 413, "Request too large", "text/plain; charset=utf-8");
+                        return;
+                    }
+
+                    string body;
+                    using (StreamReader reader = new StreamReader(context.Request.InputStream, new UTF8Encoding(false)))
+                    {
+                        body = reader.ReadToEnd();
+                    }
+                    string folder = null;
+                    try
+                    {
+                        folder = this.NormalizeOpenFolder(Json.Get(Json.ParseFlatObject(body), "path"));
+                    }
+                    catch { }
+                    if (folder == null)
+                    {
+                        this.SendText(context.Response, 400, "Invalid folder", "text/plain; charset=utf-8");
+                        return;
+                    }
+
+                    this.DispatchOpenFolder(folder);
+                    this.SendText(context.Response, 200, "{\"ok\":true}", "application/json; charset=utf-8");
+                    return;
+                }
+
                 if (context.Request.HttpMethod != "GET" && context.Request.HttpMethod != "HEAD")
                 {
                     context.Response.Headers["Allow"] = "GET, HEAD";
@@ -700,7 +981,10 @@ namespace MultiTerm.PowerShellBridge
 
                 if (path == "/health")
                 {
-                    string body = "{\"ok\":true,\"sessions\":" + this.sessions.Count + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + "}";
+                    string body = "{\"ok\":true,\"app\":\"MultiTerm Workbench\",\"pid\":"
+                        + Process.GetCurrentProcess().Id + ",\"port\":" + this.port
+                        + ",\"sessions\":" + this.sessions.Count
+                        + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + "}";
                     this.SendText(context.Response, 200, body, "application/json; charset=utf-8");
                     return;
                 }
@@ -730,9 +1014,15 @@ namespace MultiTerm.PowerShellBridge
                 string browser = this.FindAppModeBrowser();
                 if (browser != null)
                 {
-                    string dataDir = Path.Combine(
+                    string profileRoot = Path.Combine(
                         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                         "MultiTerm", "AppShell");
+                    // Keep port 3177 on the historic profile path so existing settings,
+                    // notes, and queues survive upgrades. Additional simultaneous
+                    // instances use dedicated profiles and cannot contend for its lock.
+                    string dataDir = this.port == 3177
+                        ? profileRoot
+                        : Path.Combine(profileRoot, "Instances", this.port.ToString(CultureInfo.InvariantCulture));
                     try { Directory.CreateDirectory(dataDir); }
                     catch { }
 
@@ -791,6 +1081,95 @@ namespace MultiTerm.PowerShellBridge
             }
 
             return null;
+        }
+
+        private string NormalizeOpenFolder(string value)
+        {
+            if (String.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+            try
+            {
+                string folder = Path.GetFullPath(value);
+                return Directory.Exists(folder) ? folder : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void DispatchOpenFolder(string folder)
+        {
+            string message = "{\"type\":\"openFolder\",\"path\":" + Json.Quote(folder) + "}";
+            lock (this.openFolderLock)
+            {
+                foreach (BridgeClient client in this.clients.Values)
+                {
+                    if (client.Send(message))
+                    {
+                        return;
+                    }
+                }
+                this.pendingOpenFolders.Enqueue(folder);
+            }
+        }
+
+        private bool IsExistingBridge()
+        {
+            try
+            {
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(this.Url + "health");
+                request.Method = "GET";
+                request.Timeout = 5000;
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                {
+                    return response.StatusCode == HttpStatusCode.OK
+                        && reader.ReadToEnd().Contains("\"app\":\"MultiTerm Workbench\"");
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool SendOpenFolderToExisting(string folder)
+        {
+            try
+            {
+                if (!this.IsExistingBridge())
+                {
+                    return false;
+                }
+
+                byte[] payload = Encoding.UTF8.GetBytes("{\"path\":" + Json.Quote(folder) + "}");
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(this.Url + "open-folder");
+                request.Method = "POST";
+                request.ContentType = "application/json";
+                request.Headers["X-MultiTerm-Request"] = "Explorer";
+                request.ContentLength = payload.Length;
+                request.Timeout = 5000;
+                using (Stream stream = request.GetRequestStream())
+                {
+                    stream.Write(payload, 0, payload.Length);
+                }
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    if (response.StatusCode != HttpStatusCode.OK)
+                    {
+                        throw new InvalidOperationException("The running bridge rejected the folder request.");
+                    }
+                }
+                return true;
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine("Could not send the selected folder to the running MultiTerm instance: " + error.Message);
+                return false;
+            }
         }
 
         private string FindAppModeBrowser()
@@ -928,7 +1307,8 @@ namespace MultiTerm.PowerShellBridge
                     return null;
                 }
 
-                return "\"" + powershell + "\" -NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + "\"";
+                return "\"" + powershell + "\" -NoProfile -ExecutionPolicy Bypass -File \""
+                    + scriptPath + "\" -ConsoleDashboard -NewInstance";
             }
             catch
             {
@@ -1414,8 +1794,19 @@ namespace MultiTerm.PowerShellBridge
             }
 
             BridgeClient client = new BridgeClient(Guid.NewGuid().ToString("N"), webSocketContext.WebSocket);
-            this.clients[client.Id] = client;
-            client.Send(this.WelcomeJson());
+            lock (this.openFolderLock)
+            {
+                this.clients[client.Id] = client;
+                int pendingFolderCount;
+                if (client.Send(this.WelcomeJson(out pendingFolderCount)))
+                {
+                    string ignoredFolder;
+                    for (int index = 0; index < pendingFolderCount; index++)
+                    {
+                        this.pendingOpenFolders.TryDequeue(out ignoredFolder);
+                    }
+                }
+            }
             this.Log("info", "Client connected: " + client.Id + " (" + (remoteAddress == null ? "local" : remoteAddress.ToString()) + "); " + this.clients.Count + " active");
 
             try
@@ -1546,6 +1937,10 @@ namespace MultiTerm.PowerShellBridge
             else if (type == "memstats")
             {
                 this.RequestMemStats(client);
+            }
+            else if (type == "statistics")
+            {
+                this.RequestStatistics(client, message);
             }
             else
             {
@@ -2098,6 +2493,235 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
+        // Point-in-time statistics for a single terminal (id supplied) or every live
+        // terminal (blank surface). CPU is sampled across a short interval and normalized
+        // across logical processors, matching Task Manager's 0-100% convention. Each
+        // terminal includes its complete descendant process tree.
+        private void RequestStatistics(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string requestedId = Json.Get(message, "id");
+            List<TerminalSession> selected = new List<TerminalSession>();
+            if (!String.IsNullOrEmpty(requestedId))
+            {
+                TerminalSession one;
+                if (this.sessions.TryGetValue(requestedId, out one))
+                {
+                    selected.Add(one);
+                }
+            }
+            else
+            {
+                selected.AddRange(this.sessions.Values);
+            }
+
+            Task.Run(delegate
+            {
+                try
+                {
+                    Stopwatch sample = Stopwatch.StartNew();
+                    Dictionary<int, List<int>> firstTree = this.CaptureProcessChildren();
+                    Dictionary<string, Dictionary<int, TimeSpan>> firstCpu = new Dictionary<string, Dictionary<int, TimeSpan>>();
+                    foreach (TerminalSession session in selected)
+                    {
+                        firstCpu[session.Id] = this.CaptureProcessCpu(session.Pid, firstTree);
+                    }
+
+                    Thread.Sleep(250);
+                    Dictionary<int, List<int>> secondTree = this.CaptureProcessChildren();
+                    Dictionary<string, Dictionary<int, TimeSpan>> secondCpu = new Dictionary<string, Dictionary<int, TimeSpan>>();
+                    foreach (TerminalSession session in selected)
+                    {
+                        secondCpu[session.Id] = this.CaptureProcessCpu(session.Pid, secondTree);
+                    }
+                    sample.Stop();
+
+                    StringBuilder entries = new StringBuilder();
+                    long totalKeysIn = 0;
+                    long totalKeysOut = 0;
+                    long totalBytesIn = 0;
+                    long totalBytesOut = 0;
+                    long totalMemory = 0;
+                    double totalCpu = 0;
+                    bool first = true;
+                    foreach (TerminalSession session in selected)
+                    {
+                        TerminalSession current;
+                        if (!this.sessions.TryGetValue(session.Id, out current) || !Object.ReferenceEquals(current, session))
+                        {
+                            continue;
+                        }
+
+                        TimeSpan cpuDelta = this.SumProcessCpuDelta(firstCpu[session.Id], secondCpu[session.Id]);
+                        double cpu = cpuDelta.TotalMilliseconds
+                            / Math.Max(1, sample.Elapsed.TotalMilliseconds * Environment.ProcessorCount) * 100.0;
+                        cpu = Math.Min(100, Math.Round(cpu, 1));
+                        long memory = this.SumProcessMemory(session.Pid, secondTree);
+                        long keysIn = session.KeystrokesIn;
+                        long keysOut = session.KeystrokesOut;
+                        long bytesIn = session.BytesIn;
+                        long bytesOut = session.BytesOut;
+
+                        if (!first) entries.Append(',');
+                        first = false;
+                        entries.Append(session.StatisticsJson(cpu, memory, keysIn, keysOut, bytesIn, bytesOut));
+                        totalKeysIn += keysIn;
+                        totalKeysOut += keysOut;
+                        totalBytesIn += bytesIn;
+                        totalBytesOut += bytesOut;
+                        totalMemory += memory;
+                        totalCpu += cpu;
+                    }
+
+                    string scope = String.IsNullOrEmpty(requestedId) ? "all" : "terminal";
+                    string requested = String.IsNullOrEmpty(requestedId) ? "null" : Json.Quote(requestedId);
+                    string totals = "{\"keystrokesIn\":" + totalKeysIn
+                        + ",\"keystrokesOut\":" + totalKeysOut
+                        + ",\"bytesIn\":" + totalBytesIn
+                        + ",\"bytesOut\":" + totalBytesOut
+                        + ",\"cpuPercent\":" + Math.Min(100, Math.Round(totalCpu, 1)).ToString("0.0", CultureInfo.InvariantCulture)
+                        + ",\"memoryBytes\":" + totalMemory + "}";
+                    client.Send("{\"type\":\"statistics\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"scope\":" + Json.Quote(scope)
+                        + ",\"requestedId\":" + requested
+                        + ",\"generatedAt\":" + Json.Quote(DateTime.UtcNow.ToString("o"))
+                        + ",\"supported\":true,\"processError\":null,\"sessions\":[" + entries + "],\"totals\":" + totals + "}");
+                }
+                catch (Exception error)
+                {
+                    this.Log("warn", "statistics failed: " + error.Message);
+                    StringBuilder entries = new StringBuilder();
+                    long totalKeysIn = 0;
+                    long totalKeysOut = 0;
+                    long totalBytesIn = 0;
+                    long totalBytesOut = 0;
+                    bool first = true;
+                    foreach (TerminalSession session in selected)
+                    {
+                        TerminalSession current;
+                        if (!this.sessions.TryGetValue(session.Id, out current) || !Object.ReferenceEquals(current, session)) continue;
+                        long keysIn = session.KeystrokesIn;
+                        long keysOut = session.KeystrokesOut;
+                        long bytesIn = session.BytesIn;
+                        long bytesOut = session.BytesOut;
+                        if (!first) entries.Append(',');
+                        first = false;
+                        entries.Append(session.StatisticsJson(null, null, keysIn, keysOut, bytesIn, bytesOut));
+                        totalKeysIn += keysIn;
+                        totalKeysOut += keysOut;
+                        totalBytesIn += bytesIn;
+                        totalBytesOut += bytesOut;
+                    }
+                    string totals = "{\"keystrokesIn\":" + totalKeysIn
+                        + ",\"keystrokesOut\":" + totalKeysOut
+                        + ",\"bytesIn\":" + totalBytesIn
+                        + ",\"bytesOut\":" + totalBytesOut
+                        + ",\"cpuPercent\":null,\"memoryBytes\":null}";
+                    client.Send("{\"type\":\"statistics\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"scope\":" + Json.Quote(String.IsNullOrEmpty(requestedId) ? "all" : "terminal")
+                        + ",\"requestedId\":" + (String.IsNullOrEmpty(requestedId) ? "null" : Json.Quote(requestedId))
+                        + ",\"generatedAt\":" + Json.Quote(DateTime.UtcNow.ToString("o"))
+                        + ",\"supported\":false,\"processError\":\"Could not sample process statistics.\",\"sessions\":[" + entries + "],\"totals\":" + totals + "}");
+                }
+            });
+        }
+
+        private Dictionary<int, List<int>> CaptureProcessChildren()
+        {
+            Dictionary<int, List<int>> children = new Dictionary<int, List<int>>();
+            IntPtr snapshot = Native.CreateToolhelp32Snapshot(Native.TH32CS_SNAPPROCESS, 0);
+            if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+            {
+                return children;
+            }
+            try
+            {
+                Native.PROCESSENTRY32 entry = new Native.PROCESSENTRY32();
+                entry.dwSize = (uint)Marshal.SizeOf(typeof(Native.PROCESSENTRY32));
+                if (Native.Process32First(snapshot, ref entry))
+                {
+                    do
+                    {
+                        int parent = (int)entry.th32ParentProcessID;
+                        List<int> list;
+                        if (!children.TryGetValue(parent, out list))
+                        {
+                            list = new List<int>();
+                            children[parent] = list;
+                        }
+                        list.Add((int)entry.th32ProcessID);
+                    }
+                    while (Native.Process32Next(snapshot, ref entry));
+                }
+            }
+            finally
+            {
+                Native.CloseHandle(snapshot);
+            }
+            return children;
+        }
+
+        private List<int> ProcessTreePids(int rootPid, Dictionary<int, List<int>> children)
+        {
+            List<int> result = new List<int>();
+            HashSet<int> seen = new HashSet<int>();
+            Queue<int> queue = new Queue<int>();
+            if (rootPid > 0) queue.Enqueue(rootPid);
+            while (queue.Count > 0)
+            {
+                int pid = queue.Dequeue();
+                if (!seen.Add(pid)) continue;
+                result.Add(pid);
+                List<int> kids;
+                if (children.TryGetValue(pid, out kids))
+                {
+                    foreach (int child in kids) queue.Enqueue(child);
+                }
+            }
+            return result;
+        }
+
+        private Dictionary<int, TimeSpan> CaptureProcessCpu(int rootPid, Dictionary<int, List<int>> children)
+        {
+            Dictionary<int, TimeSpan> totals = new Dictionary<int, TimeSpan>();
+            foreach (int pid in this.ProcessTreePids(rootPid, children))
+            {
+                try
+                {
+                    using (Process process = Process.GetProcessById(pid)) totals[pid] = process.TotalProcessorTime;
+                }
+                catch { }
+            }
+            return totals;
+        }
+
+        private TimeSpan SumProcessCpuDelta(Dictionary<int, TimeSpan> before, Dictionary<int, TimeSpan> after)
+        {
+            TimeSpan total = TimeSpan.Zero;
+            foreach (KeyValuePair<int, TimeSpan> item in after)
+            {
+                TimeSpan previous;
+                if (!before.TryGetValue(item.Key, out previous)) continue;
+                TimeSpan delta = item.Value - previous;
+                if (delta > TimeSpan.Zero) total += delta;
+            }
+            return total;
+        }
+
+        private long SumProcessMemory(int rootPid, Dictionary<int, List<int>> children)
+        {
+            long total = 0;
+            foreach (int pid in this.ProcessTreePids(rootPid, children))
+            {
+                try
+                {
+                    using (Process process = Process.GetProcessById(pid)) total += process.WorkingSet64;
+                }
+                catch { }
+            }
+            return total;
+        }
+
         // Sums the working set of the bridge process and every process it spawned. Terminal
         // shells are normally children of the bridge already, but elevated hosts run as
         // separate processes, so we also seed each live session pid as a root to stay honest.
@@ -2184,9 +2808,25 @@ namespace MultiTerm.PowerShellBridge
             return total;
         }
 
-        private string WelcomeJson()
+        private string WelcomeJson(out int pendingFolderCount)
         {
-            return "{\"type\":\"welcome\",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + ",\"sessions\":" + this.SessionsJson() + "}";
+            return "{\"type\":\"welcome\",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + ",\"sessions\":" + this.SessionsJson() + ",\"openFolders\":" + this.PendingOpenFoldersJson(out pendingFolderCount) + "}";
+        }
+
+        private string PendingOpenFoldersJson(out int pendingFolderCount)
+        {
+            StringBuilder builder = new StringBuilder("[");
+            bool first = true;
+            string[] folders = this.pendingOpenFolders.ToArray();
+            pendingFolderCount = folders.Length;
+            foreach (string folder in folders)
+            {
+                if (!first) builder.Append(",");
+                first = false;
+                builder.Append(Json.Quote(folder));
+            }
+            builder.Append("]");
+            return builder.ToString();
         }
 
         private string SessionsJson()
@@ -2394,23 +3034,28 @@ namespace MultiTerm.PowerShellBridge
 
         public WebSocket Socket { get; private set; }
 
-        public void Send(string message)
+        public bool Send(string message)
         {
             if (this.Socket.State != WebSocketState.Open)
             {
-                return;
+                return false;
             }
 
             byte[] bytes = Encoding.UTF8.GetBytes(message);
             lock (this.sendLock)
             {
-                if (this.Socket.State == WebSocketState.Open)
+                if (this.Socket.State != WebSocketState.Open)
                 {
-                    try
-                    {
-                        this.Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None).Wait();
-                    }
-                    catch { }
+                    return false;
+                }
+                try
+                {
+                    this.Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None).Wait();
+                    return true;
+                }
+                catch
+                {
+                    return false;
                 }
             }
         }
@@ -2562,6 +3207,10 @@ namespace MultiTerm.PowerShellBridge
         private StreamReader remoteReader;
         private StreamWriter remoteWriter;
         private readonly object remoteWriteLock = new object();
+        private long bytesIn;
+        private long bytesOut;
+        private long keystrokesIn;
+        private long keystrokesOut;
 
         public TerminalSession(string id, string title, ShellInfo shell, string cwd, int cols, int rows)
         {
@@ -2594,6 +3243,14 @@ namespace MultiTerm.PowerShellBridge
 
         public string StartedAt { get; private set; }
 
+        public long BytesIn { get { return Interlocked.Read(ref this.bytesIn); } }
+
+        public long BytesOut { get { return Interlocked.Read(ref this.bytesOut); } }
+
+        public long KeystrokesIn { get { return Interlocked.Read(ref this.keystrokesIn); } }
+
+        public long KeystrokesOut { get { return Interlocked.Read(ref this.keystrokesOut); } }
+
         // Absolute path of the file this session is currently logging to, or null when
         // logging is off. Read by the message loop to answer logStart/logStop.
         public string LogPath { get; private set; }
@@ -2623,7 +3280,9 @@ namespace MultiTerm.PowerShellBridge
 
                 Directory.CreateDirectory(directory);
                 string stamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
-                string path = Path.Combine(directory, SanitizeLogName(this.Title) + "-" + stamp + ".log");
+                string path = Path.Combine(
+                    directory,
+                    SanitizeLogName(this.Title) + "-" + stamp + "-" + SanitizeLogName(this.Id) + ".log");
 
                 StreamWriter writer = new StreamWriter(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false));
                 writer.AutoFlush = true;
@@ -2823,9 +3482,21 @@ namespace MultiTerm.PowerShellBridge
 
         public void Write(string data)
         {
+            this.WriteCore(data, true);
+        }
+
+        private void WriteCore(string data, bool countTraffic)
+        {
             if (this.exited || String.IsNullOrEmpty(data))
             {
                 return;
+            }
+
+            byte[] bytes = Encoding.UTF8.GetBytes(data);
+            if (countTraffic)
+            {
+                Interlocked.Add(ref this.keystrokesIn, data.Length);
+                Interlocked.Add(ref this.bytesIn, bytes.Length);
             }
 
             if (this.remote)
@@ -2839,7 +3510,6 @@ namespace MultiTerm.PowerShellBridge
                 return;
             }
 
-            byte[] bytes = Encoding.UTF8.GetBytes(data);
             lock (this.inputLock)
             {
                 try
@@ -2884,7 +3554,7 @@ namespace MultiTerm.PowerShellBridge
             // A shell sitting at its prompt exits well inside the first grace window, but one
             // busy in a foreground command ignores "exit" entirely until it is interrupted.
             // Force-kill is the last resort, never the first move.
-            this.Write("exit\r");
+            this.WriteCore("exit\r", false);
             Task.Delay(2500).ContinueWith(delegate
             {
                 if (this.exited)
@@ -2892,8 +3562,8 @@ namespace MultiTerm.PowerShellBridge
                     return;
                 }
 
-                this.Write("\u0003");
-                this.Write("exit\r");
+                this.WriteCore("\u0003", false);
+                this.WriteCore("exit\r", false);
                 Task.Delay(2500).ContinueWith(delegate
                 {
                     if (!this.exited)
@@ -2977,6 +3647,7 @@ namespace MultiTerm.PowerShellBridge
                         if (type == "output")
                         {
                             string data = Json.Get(message, "data");
+                            this.RecordOutput(data, Encoding.UTF8.GetByteCount(data));
                             Action<string> handler = this.Output;
                             this.AppendToLog(data);
                             if (handler != null)
@@ -3022,6 +3693,26 @@ namespace MultiTerm.PowerShellBridge
         public string SummaryJson()
         {
             return "{\"cols\":" + this.Cols + ",\"cwd\":" + Json.Quote(this.Cwd) + ",\"id\":" + Json.Quote(this.Id) + ",\"pid\":" + this.Pid + ",\"rows\":" + this.Rows + ",\"shell\":" + Json.Quote(this.Shell.Label) + ",\"startedAt\":" + Json.Quote(this.StartedAt) + ",\"title\":" + Json.Quote(this.Title) + "}";
+        }
+
+        public string StatisticsJson(double? cpuPercent, long? memoryBytes, long keysIn, long keysOut, long inputBytes, long outputBytes)
+        {
+            return "{\"id\":" + Json.Quote(this.Id)
+                + ",\"title\":" + Json.Quote(this.Title)
+                + ",\"pid\":" + this.Pid
+                + ",\"keystrokesIn\":" + keysIn
+                + ",\"keystrokesOut\":" + keysOut
+                + ",\"bytesIn\":" + inputBytes
+                + ",\"bytesOut\":" + outputBytes
+                + ",\"cpuPercent\":" + (cpuPercent.HasValue ? cpuPercent.Value.ToString("0.0", CultureInfo.InvariantCulture) : "null")
+                + ",\"memoryBytes\":" + (memoryBytes.HasValue ? memoryBytes.Value.ToString(CultureInfo.InvariantCulture) : "null") + "}";
+        }
+
+        private void RecordOutput(string data, int byteCount)
+        {
+            if (String.IsNullOrEmpty(data)) return;
+            Interlocked.Add(ref this.keystrokesOut, data.Length);
+            Interlocked.Add(ref this.bytesOut, byteCount);
         }
 
         private void StartProcess()
@@ -3094,6 +3785,7 @@ namespace MultiTerm.PowerShellBridge
 
                     Action<string> handler = this.Output;
                     string text = Encoding.UTF8.GetString(buffer, 0, count);
+                    this.RecordOutput(text, count);
                     this.AppendToLog(text);
                     if (handler != null)
                     {
@@ -3749,10 +4441,12 @@ if ($ElevatedHost) {
 $bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new(
     $HostName,
     $Port,
+    $useAutomaticPort,
     $effectiveAllowRemote,
     $publicDir,
     -not $NoBrowser.IsPresent,
-    $ConsoleDashboard.IsPresent)
+    $ConsoleDashboard.IsPresent,
+    $resolvedOpenFolder)
 try {
   $bridge.Run()
 } catch {

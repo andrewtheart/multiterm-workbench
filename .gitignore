@@ -11,6 +11,10 @@ Thumbs.db
 
 # Installer build output
 installer/Output/
+installer/explorer-integration/generated/
+*.exp
+*.lib
+*.obj
 
 # Deployment staging (not tracked)
 deploy/

@@ -29,8 +29,8 @@ describe("PowerShell bridge control dashboard", () => {
     expect(bridgeScript).toContain("internal sealed class BridgeConsoleDashboard");
     expect(bridgeScript).toContain('this.Row("NOTICE", "Logs (streaming)", "Terminals (select to terminate)"');
     expect(bridgeScript).toContain('"Closing this console"');
-    expect(bridgeScript).toContain('"will terminate ALL"');
-    expect(bridgeScript).toContain('"active MultiTerm"');
+    expect(bridgeScript).toContain('"will terminate every"');
+    expect(bridgeScript).toContain('"THIS INSTANCE."');
     expect(bridgeScript).toContain('"pid " + session.Pid');
   });
 
@@ -45,9 +45,32 @@ describe("PowerShell bridge control dashboard", () => {
 
   it("launches installed app shortcuts with the visible dashboard while Stop stays hidden", () => {
     const dashboardLaunches = installer.match(/-ConsoleDashboard/g) || [];
+    const newInstanceLaunches = installer.match(/-ConsoleDashboard -NewInstance/g) || [];
     expect(dashboardLaunches).toHaveLength(3);
+    expect(newInstanceLaunches).toHaveLength(3);
     expect(installer).toMatch(/Name: "\{group\}\\Stop[\s\S]*-WindowStyle Hidden[\s\S]*-Stop/);
+    expect(installer).toContain("Stop all {#MyAppName} instances");
     expect(installer).not.toMatch(/-WindowStyle Hidden[^\r\n]*-ConsoleDashboard/);
+  });
+
+  it("shows third-party notices before installation alongside the license", () => {
+    expect(installer).toContain("LicenseFile={#RepoRoot}\\LICENSE");
+    expect(installer).toContain("InfoBeforeFile={#RepoRoot}\\THIRD-PARTY-NOTICES.txt");
+    expect(installer).not.toContain("InfoAfterFile=");
+  });
+
+  it("isolates concurrent installed bridge instances", () => {
+    expect(bridgeScript).toContain("[switch]$NewInstance");
+    expect(bridgeScript).toContain("$useAutomaticPort = $NewInstance.IsPresent");
+    expect(bridgeScript).toMatch(/\$resolvedOpenFolder[\s\S]*\$useAutomaticPort = \$true/);
+    expect(bridgeScript).toMatch(/BridgeServer\]::new\([\s\S]*\$useAutomaticPort/);
+    expect(bridgeScript).toContain("this.listener.Start();");
+    expect(bridgeScript).toMatch(/this\.autoPort[\s\S]*this\.port\+\+[\s\S]*continue;/);
+    expect(bridgeScript).toContain('"MultiTerm", "Instances"');
+    expect(bridgeScript).toContain('\\"app\\":\\"MultiTerm Workbench\\"');
+    expect(bridgeScript).toContain('? profileRoot');
+    expect(bridgeScript).toContain('Path.Combine(profileRoot, "Instances", this.port.ToString(CultureInfo.InvariantCulture))');
+    expect(bridgeScript).toContain("Ctrl+Q stops this instance");
   });
 
   it("documents the close warning and keyboard controls and remains Windows PowerShell 5.1 safe", () => {

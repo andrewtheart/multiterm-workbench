@@ -1,0 +1,76 @@
+/*
+ * MultiTerm Workbench
+ * Copyright (C) 2026 the MultiTerm Workbench author
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "../..");
+const installer = fs.readFileSync(path.join(root, "installer", "MultiTerm.iss"), "utf8");
+const bridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), "utf8");
+const installScript = fs.readFileSync(path.join(root, "installer", "explorer-integration", "Install-ExplorerIntegration.ps1"), "utf8");
+const buildScript = fs.readFileSync(path.join(root, "installer", "explorer-integration", "build.ps1"), "utf8");
+const commandSource = fs.readFileSync(path.join(root, "installer", "explorer-integration", "MultiTermExplorerCommand.cpp"), "utf8");
+const renderer = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
+
+describe("File Explorer integration", () => {
+  it("requires the user to opt in before installing the context-menu feature", () => {
+    expect(installer).toContain('Name: "explorercontext"');
+    expect(installer).toContain("Add 'Open in MultiTerm' to File Explorer folder context menus");
+    expect(installer).toMatch(/Name: "explorercontext"[^\r\n]+Flags: unchecked/);
+    expect(installer).toContain("File Explorer integration (select to enable):");
+    expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Flags: checkedonce/);
+    expect(installer).toContain("Check: not IsAdminInstallMode");
+    expect(installer).toContain("Tasks: explorercontext");
+    expect(installer).toContain("not WizardIsTaskSelected('explorercontext')");
+    expect(installer).toContain("runasoriginaluser");
+  });
+
+  it("registers classic folder and folder-background verbs", () => {
+    expect(installScript).toContain("Software\\Classes\\Directory\\shell\\MultiTerm.Workbench");
+    expect(installScript).toContain("Software\\Classes\\Directory\\Background\\shell\\MultiTerm.Workbench");
+    expect(installScript).toContain("Open in MultiTerm");
+    expect(installScript).toContain('"%1\\."');
+    expect(installScript).toContain('"%V\\."');
+  });
+
+  it("builds a real Windows 11 IExplorerCommand sparse package", () => {
+    expect(buildScript).toContain('Category="windows.fileExplorerContextMenus"');
+    expect(buildScript).toContain('Type="Directory"');
+    expect(buildScript).toContain('Type="Directory\\Background"');
+    expect(buildScript).toContain("New-SelfSignedCertificate");
+    expect(buildScript).toContain("ExplorerCertificateInstallCommand");
+    expect(buildScript).toContain("Get-AppxPackage -AllUsers");
+    expect(commandSource).toContain("public IExplorerCommand");
+    expect(commandSource).toContain("public IObjectWithSite");
+    expect(commandSource).toContain("QueryService(SID_SFolderView");
+    expect(commandSource).toContain('SHStrDupW(L"Open in MultiTerm"');
+  });
+
+  it("forwards validated folders through the installed bridge", () => {
+    expect(bridge).toContain('[string]$OpenFolder = ""');
+    expect(bridge).toContain('if (path == "/open-folder")');
+    expect(bridge).toContain('"X-MultiTerm-Request"] != "Explorer"');
+    expect(bridge).toContain('\\"type\\":\\"openFolder\\"');
+    expect(bridge).toContain("PendingOpenFoldersJson");
+    expect(bridge).toContain("public bool Send(string message)");
+    expect(bridge).toContain("lock (this.openFolderLock)");
+    expect(bridge).toContain("private bool SendOpenFolderToExisting");
+    expect(bridge).toContain("is already in use by another application");
+    expect(renderer.indexOf("function openFolderInNewTerminal")).toBeGreaterThan(
+      renderer.indexOf("function handleBridgeMessage")
+    );
+  });
+
+  it("removes package, certificate, and classic verbs on uninstall", () => {
+    expect(installer).toContain("[UninstallRun]");
+    expect(installScript).toContain("Remove-ModernPackage");
+    expect(installScript).toContain("Remove-ClassicVerbs");
+    expect(installScript).toContain("FinalizeUninstall");
+    expect(installer).toContain("ExplorerCertificateRemoveCommand");
+    expect(installer).toContain('Verb: "runas"');
+    expect(installScript).not.toContain("-Verb RunAs");
+  });
+});
