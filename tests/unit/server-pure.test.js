@@ -197,7 +197,8 @@ describe("toSessionSummary", () => {
       rows: 24,
       shell: "PowerShell 7",
       startedAt: "2020-01-01",
-      title: "Shell"
+      title: "Shell",
+      tmux: null
     });
     expect(summary).toEqual({
       cols: 80,
@@ -207,7 +208,8 @@ describe("toSessionSummary", () => {
       rows: 24,
       shell: "PowerShell 7",
       startedAt: "2020-01-01",
-      title: "Shell"
+      title: "Shell",
+      tmux: null
     });
   });
 });

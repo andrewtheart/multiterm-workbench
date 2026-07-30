@@ -305,6 +305,11 @@ module.exports = {
   toSessionSummary,
   sanitizeId,
   getShell,
+  normalizeTmuxTarget,
+  getTmuxShell,
+  normalizeWslOutput,
+  parseTmuxSessions,
+  listWslTmuxSessions,
   getWorkingDirectory,
   isLocalAddress,
   startLog,
@@ -335,6 +340,10 @@ module.exports = {
   runMemStats,
   broadcastMemStats,
   requestMemStats,
+  collectProcessStatistics,
+  collectProcessTreeMetrics,
+  buildStatisticsFrame,
+  requestStatistics,
   pushMemStats,
   scheduleMemStats,
   startMemStats,
@@ -486,6 +495,9 @@ function handleClientMessage(client, rawMessage) {
     case "create":
       createSession(client, message);
       break;
+    case "listTmux":
+      listWslTmuxSessions(client, message.requestId);
+      break;
     case "input":
       writeSession(message.id, message.data);
       break;
@@ -522,6 +534,9 @@ function handleClientMessage(client, rawMessage) {
     case "memstats":
       requestMemStats(client);
       break;
+    case "statistics":
+      requestStatistics(client, message);
+      break;
     default:
       client.send({ type: "error", message: `Unsupported message type: ${message.type}` });
       break;
@@ -535,8 +550,14 @@ function createSession(client, options) {
     return;
   }
 
-  const shell = getShell(options.shell);
-  const cwd = getWorkingDirectory(options.cwd);
+  const tmux = normalizeTmuxTarget(options.tmux);
+  if (options.tmux && !tmux) {
+    client.send({ type: "createFailed", id, message: "Invalid WSL tmux target." });
+    return;
+  }
+
+  const shell = tmux ? getTmuxShell(tmux) : getShell(options.shell);
+  const cwd = tmux ? process.cwd() : getWorkingDirectory(options.cwd);
   const cols = Number(options.cols) || 120;
   const rows = Number(options.rows) || 30;
   let terminal;
@@ -561,24 +582,31 @@ function createSession(client, options) {
 
   const title = typeof options.title === "string" && options.title.trim() ? options.title.trim() : shell.label;
   const session = {
+    bytesIn: 0,
+    bytesOut: 0,
     cols,
     cwd,
     exited: false,
     id,
+    keystrokesIn: 0,
+    keystrokesOut: 0,
     killed: false,
     closing: false,
     logStream: null,
     logPath: null,
     rows,
-    shell: shell.label,
+    shell: tmux ? "wsl" : shell.label,
     startedAt: new Date().toISOString(),
     terminal,
-    title
+    title,
+    tmux
   };
 
   sessions.set(id, session);
 
   terminal.onData((data) => {
+    session.keystrokesOut += data.length;
+    session.bytesOut += Buffer.byteLength(data, "utf8");
     if (session.logStream) {
       try {
         session.logStream.write(stripAnsiForLog(data));
@@ -610,6 +638,8 @@ function writeSession(id, data) {
   if (!session || typeof data !== "string") return;
 
   if (isSessionRunning(session)) {
+    session.keystrokesIn += data.length;
+    session.bytesIn += Buffer.byteLength(data, "utf8");
     session.terminal.write(data);
   }
 }
@@ -657,11 +687,16 @@ function killSessionPty(session) {
 function interruptAndExit(session) {
   if (!isSessionRunning(session)) return;
 
-  try {
-    session.terminal.write("\u0003");
-    session.terminal.write("exit\r");
-  } catch {
+  if (session.tmux) {
     killSessionPty(session);
+    return;
+  } else {
+    try {
+      session.terminal.write("\u0003");
+      session.terminal.write("exit\r");
+    } catch {
+      killSessionPty(session);
+    }
   }
 }
 
@@ -705,7 +740,10 @@ function endSessionInput(session) {
   if (!isSessionRunning(session)) return;
 
   try {
-    session.terminal.write("exit\r");
+    // Detach only MultiTerm's tmux client. The standard prefix works immediately;
+    // a custom prefix falls back to killing this WSL client after the grace period,
+    // which still leaves the tmux server and its shells alive.
+    session.terminal.write(session.tmux ? "\u0002d" : "exit\r");
   } catch {
     killSessionPty(session);
   }
@@ -1147,8 +1185,12 @@ function handleElevatedConnection(attempt, socket) {
       attempt.client.send({ type: "created", ...toSessionSummary(attempt.session) });
     } else if (msg.type === "output" && attempt.session) {
       const data = decodeElevationData(msg.data);
+      attempt.session.keystrokesOut += data.length;
+      attempt.session.bytesOut += Buffer.byteLength(data, "utf8");
       if (attempt.session.logStream) {
         try { attempt.session.logStream.write(stripAnsiForLog(data)); } catch { /* logging must never break the session */ }
+      } else {
+        // No per-session log is active; the live output is still broadcast below.
       }
       broadcast({ type: "output", id: attempt.id, stream: "pty", data });
     } else if (msg.type === "exit" && attempt.session) {
@@ -1194,11 +1236,15 @@ function registerElevatedSession(attempt, socket, sendFrame, pid) {
   };
 
   const session = {
+    bytesIn: 0,
+    bytesOut: 0,
     cols: attempt.cols,
     cwd: attempt.cwd,
     elevated: true,
     exited: false,
     id: attempt.id,
+    keystrokesIn: 0,
+    keystrokesOut: 0,
     killed: false,
     closing: false,
     logStream: null,
@@ -1418,9 +1464,148 @@ function requestMemStats(client) {
   }
 }
 
+// Capture a point-in-time CPU percentage and working set for every process. The
+// formatted performance provider supplies a current CPU sample, while Win32_Process
+// supplies parent ids so each terminal includes descendants launched by its shell.
+// PercentProcessorTime is machine-wide (it can exceed 100 on multicore systems), so
+// buildStatisticsFrame normalizes the tree total to the familiar 0-100% scale.
+function collectProcessStatistics(callback) {
+  if (process.platform !== "win32") {
+    callback(null, "Process statistics are available on Windows only.");
+  } else {
+    const script = [
+      "$parents = @{}",
+      "Get-CimInstance Win32_Process | ForEach-Object { $parents[[string]$_.ProcessId] = [int]$_.ParentProcessId }",
+      "$rows = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $_.IDProcess -gt 0 } | ForEach-Object {",
+      "  [pscustomobject]@{ pid = [int]$_.IDProcess; ppid = [int]$parents[[string]$_.IDProcess]; cpu = [double]$_.PercentProcessorTime; memory = [long]$_.WorkingSet }",
+      "}",
+      "$rows | ConvertTo-Json -Compress"
+    ].join("; ");
+
+    childProcess.execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+      { windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: 8000 },
+      (error, stdout) => {
+        if (error) {
+          callback(null, error.message || "Could not sample processes.");
+        } else {
+          try {
+            const parsed = JSON.parse(stdout || "[]");
+            callback(Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []), null);
+          } catch {
+            callback(null, "Could not parse process statistics.");
+          }
+        }
+      }
+    );
+  }
+}
+
+function collectProcessTreeMetrics(rootPid, processRows) {
+  const byPid = new Map();
+  const children = new Map();
+  for (const row of processRows || []) {
+    const pid = Number(row.pid);
+    const ppid = Number(row.ppid);
+    if (!pid) {
+      continue;
+    } else {
+      byPid.set(pid, row);
+      if (!children.has(ppid)) {
+        children.set(ppid, []);
+      } else {
+        // Reuse the existing sibling list.
+      }
+      children.get(ppid).push(pid);
+    }
+  }
+
+  const seen = new Set();
+  const stack = [Number(rootPid) || 0];
+  let cpu = 0;
+  let memory = 0;
+  while (stack.length) {
+    const pid = stack.pop();
+    if (!pid || seen.has(pid)) {
+      continue;
+    } else {
+      seen.add(pid);
+      const row = byPid.get(pid);
+      if (row) {
+        [cpu, memory] = [
+          cpu + Math.max(0, Number(row.cpu) || 0),
+          memory + Math.max(0, Number(row.memory) || 0)
+        ];
+      } else {
+        // A root can disappear between snapshots; its surviving children still count.
+      }
+      for (const child of children.get(pid) || []) stack.push(child);
+    }
+  }
+  return { cpu, memory };
+}
+
+function buildStatisticsFrame(message, processRows, processError = null) {
+  const requestedId = typeof message.id === "string" && message.id ? message.id : null;
+  const selected = requestedId ? [sessions.get(requestedId)].filter(Boolean) : [...sessions.values()];
+  const logicalProcessors = Math.max(1, os.cpus().length);
+  const processSupported = processRows !== null;
+  const entries = selected.map((session) => {
+    const process = collectProcessTreeMetrics(session.terminal && session.terminal.pid, processRows || []);
+    return {
+      id: session.id,
+      title: session.title,
+      pid: Number(session.terminal && session.terminal.pid) || 0,
+      keystrokesIn: Number(session.keystrokesIn) || 0,
+      keystrokesOut: Number(session.keystrokesOut) || 0,
+      bytesIn: Number(session.bytesIn) || 0,
+      bytesOut: Number(session.bytesOut) || 0,
+      cpuPercent: processSupported ? Math.min(100, Math.round((process.cpu / logicalProcessors) * 10) / 10) : null,
+      memoryBytes: processSupported ? process.memory : null
+    };
+  });
+  const totals = { keystrokesIn: 0, keystrokesOut: 0, bytesIn: 0, bytesOut: 0, cpuPercent: 0, memoryBytes: 0 };
+  for (const entry of entries) {
+    totals.keystrokesIn += entry.keystrokesIn;
+    totals.keystrokesOut += entry.keystrokesOut;
+    totals.bytesIn += entry.bytesIn;
+    totals.bytesOut += entry.bytesOut;
+    totals.cpuPercent += entry.cpuPercent || 0;
+    totals.memoryBytes += entry.memoryBytes || 0;
+  }
+  if (processSupported) {
+    totals.cpuPercent = Math.min(100, Math.round(totals.cpuPercent * 10) / 10);
+  } else {
+    totals.cpuPercent = null;
+    totals.memoryBytes = null;
+  }
+
+  return {
+    type: "statistics",
+    requestId: message.requestId || "",
+    scope: requestedId ? "terminal" : "all",
+    requestedId,
+    generatedAt: new Date().toISOString(),
+    supported: processSupported,
+    processError,
+    sessions: entries,
+    totals
+  };
+}
+
+function requestStatistics(client, message) {
+  collectProcessStatistics((processRows, processError) => {
+    client.send(buildStatisticsFrame(message, processRows, processError));
+  });
+}
+
 function pushMemStats() {
-  if (!memStatsEnabled || memStatsInFlight || clients.size === 0) return;
-  runMemStats(broadcastMemStats);
+  if (!memStatsEnabled || memStatsInFlight || clients.size === 0) {
+    return;
+  } else {
+    runMemStats(broadcastMemStats);
+  }
 }
 
 // Debounced update: terminal open/close events coalesce into a single refresh
@@ -1453,7 +1638,11 @@ function stopMemStats() {
 
 function broadcast(message, excludedClient = null) {
   for (const client of clients) {
-    if (client !== excludedClient) client.send(message);
+    if (client === excludedClient) {
+      continue;
+    } else {
+      client.send(message);
+    }
   }
 }
 
@@ -1466,7 +1655,8 @@ function toSessionSummary(session) {
     rows: session.rows,
     shell: session.shell,
     startedAt: session.startedAt,
-    title: session.title
+    title: session.title,
+    tmux: session.tmux || null
   };
 }
 
@@ -1502,6 +1692,99 @@ const DEFAULT_SHELL = {
 
 function getShell(value) {
   return SHELL_DEFINITIONS[value] || DEFAULT_SHELL;
+}
+
+function normalizeTmuxTarget(value) {
+  if (!value || typeof value !== "object") return null;
+  const rawDistro = typeof value.distro === "string" ? value.distro : "";
+  const rawSession = typeof value.session === "string" ? value.session : "";
+  if (/[\u0000-\u001f\u007f]/.test(rawDistro) || /[\u0000-\u001f\u007f]/.test(rawSession)) return null;
+  const distro = rawDistro.trim();
+  const session = rawSession.trim();
+  if (!distro || !session || distro.length > 128 || session.length > 128) return null;
+  return { distro, session };
+}
+
+function getTmuxShell(target) {
+  return {
+    args: ["--distribution", target.distro, "--exec", "tmux", "attach-session", "-t", target.session],
+    file: "wsl.exe",
+    label: `tmux: ${target.session} (${target.distro})`
+  };
+}
+
+function normalizeWslOutput(value) {
+  return String(value || "").replace(/\u0000/g, "").replace(/^\uFEFF/, "");
+}
+
+function parseTmuxSessions(distro, output) {
+  return normalizeWslOutput(output)
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .map((line) => {
+      const [session, windows, attached, created, panePid, command, ...titleParts] = line.split("\t");
+      if (!session) {
+        return null;
+      } else {
+        return {
+          attached: Number(attached) > 0,
+          command: command || "",
+          created: Number(created) || 0,
+          distro,
+          panePid: Number(panePid) || null,
+          session,
+          title: titleParts.join("\t"),
+          windows: Number(windows) || 0
+        };
+      }
+    })
+    .filter(Boolean);
+}
+
+function listWslTmuxSessions(client, requestId) {
+  if (process.platform !== "win32") {
+    client.send({ type: "tmuxSessions", requestId, sessions: [], message: "WSL tmux attachment is available only on Windows." });
+    return;
+  } else {
+    childProcess.execFile("wsl.exe", ["--list", "--quiet"], { encoding: "utf8", timeout: 8000, windowsHide: true }, (listError, stdout) => {
+      if (listError) {
+        client.send({ type: "tmuxSessions", requestId, sessions: [], message: "Could not list WSL distributions. Confirm that WSL is installed." });
+        return;
+      } else {
+        const distros = normalizeWslOutput(stdout).split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+        if (distros.length === 0) {
+          client.send({ type: "tmuxSessions", requestId, sessions: [], message: "No WSL distributions were found." });
+          return;
+        } else {
+          const format = "#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{pane_pid}\t#{pane_current_command}\t#{pane_title}";
+          let remaining = distros.length;
+          const discovered = [];
+          for (const distro of distros) {
+            childProcess.execFile(
+              "wsl.exe",
+              ["--distribution", distro, "--exec", "tmux", "list-sessions", "-F", format],
+              { encoding: "utf8", timeout: 8000, windowsHide: true },
+              (error, sessionOutput) => {
+                const found = error ? [] : parseTmuxSessions(distro, sessionOutput);
+                discovered.push(...found);
+                remaining -= 1;
+                if (remaining !== 0) {
+                  return;
+                } else {
+                  discovered.sort((a, b) => a.distro.localeCompare(b.distro) || a.session.localeCompare(b.session));
+                  const message = discovered.length === 0
+                    ? "No running tmux sessions were found. Start tmux inside WSL first."
+                    : "";
+                  client.send({ type: "tmuxSessions", requestId, sessions: discovered, message });
+                }
+              }
+            );
+          }
+        }
+      }
+    });
+  }
 }
 
 function getWorkingDirectory(value) {
