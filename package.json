@@ -27,7 +27,9 @@
     "pretest:e2e": "npm run build:help",
     "test:e2e": "playwright test",
     "pretest:e2e:full": "npm run build:help",
-    "test:e2e:full": "playwright test --config playwright.full.config.js"
+    "test:e2e:full": "playwright test --config playwright.full.config.js",
+    "pretest:electron": "npm run build:help",
+    "test:electron": "playwright test --config playwright.electron.config.js"
   },
   "engines": {
     "node": ">=18"

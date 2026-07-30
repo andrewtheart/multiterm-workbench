@@ -51,6 +51,7 @@ function makeElectron() {
       setApplicationMenu: vi.fn(),
       buildFromTemplate: vi.fn((template) => ({ __template: template }))
     },
+    clipboard: { writeText: vi.fn() },
     shell: { openExternal: vi.fn() },
     dialog: { showErrorBox: vi.fn() },
     ipcMain: {
@@ -537,6 +538,42 @@ describe("showMainWindow / createTray / close handling edge cases", () => {
     main.__setElectron({ ...electron, ipcMain: { on } });
     main.registerCloseHandler();
     expect(on).toHaveBeenCalledWith("multiterm:close-response", expect.any(Function));
+  });
+});
+
+describe("clipboard IPC", () => {
+  it("writes validated text through Electron's main-process clipboard", () => {
+    main.createWindow();
+    const webContents = main.getMainWindow().webContents;
+    const mainFrame = { url: "http://127.0.0.1:3177/" };
+    webContents.mainFrame = mainFrame;
+    main.registerClipboardIpc();
+    const registration = electron.ipcMain.handle.mock.calls
+      .find(([channel]) => channel === "multiterm:write-clipboard");
+    const handler = registration[1];
+    const event = { sender: webContents, senderFrame: mainFrame };
+
+    expect(handler(event, "selected text")).toBe(true);
+    expect(electron.clipboard.writeText).toHaveBeenCalledWith("selected text");
+    expect(() => handler(event, 42)).toThrow("Clipboard text must be a string.");
+    expect(() => handler({ sender: webContents, senderFrame: { url: "https://example.com/" } }, "blocked"))
+      .toThrow("restricted to the MultiTerm application window");
+    expect(() => handler({ sender: {}, senderFrame: mainFrame }, "blocked"))
+      .toThrow("restricted to the MultiTerm application window");
+  });
+
+  it("replaces an existing handler and tolerates a missing one", () => {
+    electron.ipcMain.removeHandler.mockImplementation(() => { throw new Error("missing"); });
+    expect(() => main.registerClipboardIpc()).not.toThrow();
+    expect(electron.ipcMain.handle).toHaveBeenCalledWith("multiterm:write-clipboard", expect.any(Function));
+  });
+
+  it("is unavailable without IPC or a native clipboard writer", () => {
+    main.__setElectron({ ...electron, ipcMain: null });
+    expect(() => main.registerClipboardIpc()).not.toThrow();
+
+    main.__setElectron({ ...electron, clipboard: null });
+    expect(() => main.registerClipboardIpc()).not.toThrow();
   });
 });
 
@@ -1187,4 +1224,3 @@ describe("update checker", () => {
     });
   });
 });
-

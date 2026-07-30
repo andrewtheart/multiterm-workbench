@@ -32,6 +32,7 @@ const port = Number(process.env.PORT || 3177);
 let allowRemote = process.env.ALLOW_REMOTE === "1";
 const publicDir = path.join(__dirname, "public");
 const maxMessageSize = 1024 * 1024;
+const updatePreferencesMaxSize = 4096;
 const websocketAcceptHash = ["sha", "1"].join("");
 
 const sessions = new Map();
@@ -115,13 +116,18 @@ const mimeTypes = new Map([
 ]);
 
 const server = http.createServer((request, response) => {
+  const pathname = getPathname(request.url);
+
+  if (pathname === "/api/update-preferences") {
+    handleUpdatePreferencesRequest(request, response);
+    return;
+  }
+
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.writeHead(405, { Allow: "GET, HEAD" });
     response.end("Method not allowed");
     return;
   }
-
-  const pathname = getPathname(request.url);
 
   if (pathname === "/health") {
     sendJsonResponse(response, 200, {
@@ -278,12 +284,18 @@ module.exports = {
   clients,
   mimeTypes,
   maxMessageSize,
+  updatePreferencesMaxSize,
   __setPty,
   __setAllowRemote,
   __setMemStatsEnabled,
   getPathname,
   serveStaticFile,
   sendJsonResponse,
+  getUpdatePreferencesPath,
+  normalizeUpdatePreferences,
+  readUpdatePreferences,
+  writeUpdatePreferences,
+  handleUpdatePreferencesRequest,
   readFrames,
   encodeFrame,
   handleClientMessage,
@@ -404,6 +416,130 @@ function sendJsonResponse(response, status, body) {
     "Cache-Control": "no-store"
   });
   response.end(JSON.stringify(body));
+}
+
+function getUpdatePreferencesPath() {
+  if (process.env.MULTITERM_PREFERENCES_PATH) {
+    return path.resolve(process.env.MULTITERM_PREFERENCES_PATH);
+  }
+  const localData = process.env.LOCALAPPDATA
+    || (process.platform === "win32"
+      ? path.join(os.homedir(), "AppData", "Local")
+      : path.join(os.homedir(), ".local", "share"));
+  return path.join(localData, "MultiTerm", "update-preferences.json");
+}
+
+function normalizeUpdatePreferences(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Update preferences must be an object.");
+  }
+  if (typeof value.configured !== "boolean" || typeof value.enabled !== "boolean") {
+    throw new TypeError("Update preference flags must be boolean values.");
+  }
+  const intervalHours = Math.round(Number(value.intervalHours));
+  if (!Number.isFinite(intervalHours)) {
+    throw new TypeError("The update interval must be a number.");
+  }
+  return {
+    configured: value.configured,
+    enabled: value.configured && value.enabled,
+    intervalHours: Math.min(168, Math.max(1, intervalHours))
+  };
+}
+
+async function readUpdatePreferences(filePath = getUpdatePreferencesPath()) {
+  let content;
+  try {
+    content = await fs.promises.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  return normalizeUpdatePreferences(JSON.parse(content));
+}
+
+async function writeUpdatePreferences(value, filePath = getUpdatePreferencesPath()) {
+  const preferences = normalizeUpdatePreferences(value);
+  const directory = path.dirname(filePath);
+  const temporaryPath = `${filePath}.${process.pid}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+  await fs.promises.mkdir(directory, { recursive: true });
+  try {
+    await fs.promises.writeFile(temporaryPath, `${JSON.stringify(preferences)}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
+    await fs.promises.rename(temporaryPath, filePath);
+  } catch (error) {
+    await fs.promises.rm(temporaryPath, { force: true }).catch(() => {});
+    throw error;
+  }
+  return preferences;
+}
+
+function handleUpdatePreferencesRequest(request, response) {
+  if (!isLocalAddress(request.socket?.remoteAddress)
+      || request.headers["x-multiterm-request"] !== "Renderer") {
+    sendJsonResponse(response, 403, { ok: false, error: "Forbidden" });
+    return;
+  }
+
+  if (request.method === "GET") {
+    readUpdatePreferences().then(
+      (preferences) => sendJsonResponse(response, 200, { ok: true, preferences }),
+      (error) => sendJsonResponse(response, 500, { ok: false, error: String(error.message || error) })
+    );
+    return;
+  }
+
+  if (request.method !== "POST") {
+    response.setHeader("Allow", "GET, POST");
+    sendJsonResponse(response, 405, { ok: false, error: "Method not allowed" });
+    return;
+  }
+
+  const declaredSize = Number(request.headers["content-length"]);
+  if (Number.isFinite(declaredSize) && declaredSize > updatePreferencesMaxSize) {
+    request.resume();
+    sendJsonResponse(response, 413, { ok: false, error: "Request too large" });
+    return;
+  }
+
+  let body = "";
+  let tooLarge = false;
+  request.setEncoding("utf8");
+  request.on("data", (chunk) => {
+    if (tooLarge) return;
+    body += chunk;
+    if (Buffer.byteLength(body, "utf8") > updatePreferencesMaxSize) {
+      tooLarge = true;
+      body = "";
+    }
+  });
+  request.on("error", (error) => {
+    if (!response.headersSent) {
+      sendJsonResponse(response, 400, { ok: false, error: String(error.message || error) });
+    }
+  });
+  request.on("end", () => {
+    if (tooLarge) {
+      sendJsonResponse(response, 413, { ok: false, error: "Request too large" });
+      return;
+    }
+    let value;
+    try {
+      value = JSON.parse(body);
+    } catch {
+      sendJsonResponse(response, 400, { ok: false, error: "Invalid JSON" });
+      return;
+    }
+    writeUpdatePreferences(value).then(
+      (preferences) => sendJsonResponse(response, 200, { ok: true, preferences }),
+      (error) => {
+        const status = error instanceof TypeError ? 400 : 500;
+        sendJsonResponse(response, status, { ok: false, error: String(error.message || error) });
+      }
+    );
+  });
 }
 
 function readFrames(client, chunk) {

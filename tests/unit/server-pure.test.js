@@ -17,6 +17,7 @@
  */
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const server = require("../../server.js");
 
@@ -221,6 +222,56 @@ describe("sendJsonResponse", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toContain("application/json");
     expect(JSON.parse(res.body)).toEqual({ ok: true });
+  });
+});
+
+describe("persistent update preferences", () => {
+  it("normalizes, atomically replaces, and reloads a per-user choice", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-preferences-"));
+    const file = path.join(directory, "update-preferences.json");
+    try {
+      await expect(server.readUpdatePreferences(file)).resolves.toBeNull();
+      await expect(server.writeUpdatePreferences({
+        configured: true,
+        enabled: true,
+        intervalHours: 11.6
+      }, file)).resolves.toEqual({
+        configured: true,
+        enabled: true,
+        intervalHours: 12
+      });
+      await expect(server.writeUpdatePreferences({
+        configured: false,
+        enabled: true,
+        intervalHours: 999
+      }, file)).resolves.toEqual({
+        configured: false,
+        enabled: false,
+        intervalHours: 168
+      });
+      await expect(server.readUpdatePreferences(file)).resolves.toEqual({
+        configured: false,
+        enabled: false,
+        intervalHours: 168
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed preference data", () => {
+    expect(() => server.normalizeUpdatePreferences(null)).toThrow("must be an object");
+    expect(() => server.normalizeUpdatePreferences([])).toThrow("must be an object");
+    expect(() => server.normalizeUpdatePreferences({
+      configured: "yes",
+      enabled: true,
+      intervalHours: 6
+    })).toThrow("must be boolean");
+    expect(() => server.normalizeUpdatePreferences({
+      configured: true,
+      enabled: false,
+      intervalHours: "never"
+    })).toThrow("must be a number");
   });
 });
 

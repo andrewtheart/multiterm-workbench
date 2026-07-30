@@ -73,6 +73,13 @@ describe("PowerShell bridge control dashboard", () => {
     expect(bridgeScript).toContain("Ctrl+Q stops this instance");
   });
 
+  it("persists update consent outside port-specific browser profiles", () => {
+    expect(bridgeScript).toContain('path == "/api/update-preferences"');
+    expect(bridgeScript).toContain('"MultiTerm", "update-preferences.json"');
+    expect(bridgeScript).toContain('new Mutex(false, "Local\\\\MultiTerm.UpdatePreferences")');
+    expect(bridgeScript).toContain("SaveUpdatePreferences(preferences)");
+  });
+
   it("documents the close warning and keyboard controls and remains Windows PowerShell 5.1 safe", () => {
     expect(readme).toContain("Closing the control console also ends");
     expect(readme).toContain("Up/Down arrows to select a terminal and Enter");

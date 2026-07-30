@@ -22,7 +22,8 @@ describe("File Explorer integration", () => {
     expect(installer).toMatch(/Name: "explorercontext"[^\r\n]+Flags: unchecked/);
     expect(installer).toContain("File Explorer integration (select to enable):");
     expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Flags: checkedonce/);
-    expect(installer).toContain("Check: not IsAdminInstallMode");
+    expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Check:/);
+    expect(installer).not.toMatch(/Tasks: explorercontext[^\r\n]+Check: not IsAdminInstallMode/);
     expect(installer).toContain("Tasks: explorercontext");
     expect(installer).toContain("not WizardIsTaskSelected('explorercontext')");
     expect(installer).toContain("runasoriginaluser");

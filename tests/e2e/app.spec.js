@@ -656,6 +656,21 @@ test.describe("MultiTerm Workbench UI", () => {
       timerScheduled: true
     });
 
+    const restored = await page.evaluate(async () => {
+      localStorage.removeItem("multiterm.updateCheck");
+      const preferences = await hydrateAutomaticUpdatePreferences();
+      return {
+        ...preferences,
+        local: loadAutomaticUpdatePreferences()
+      };
+    });
+    expect(restored).toEqual({
+      configured: true,
+      enabled: true,
+      intervalHours: 12,
+      local: { configured: true, enabled: true, intervalHours: 12 }
+    });
+
     // A fresh app start checks immediately even if a prior check just completed.
     await page.evaluate(() => startAutomaticUpdateChecks({ checkNow: true }));
     await expect.poll(() => page.evaluate(() => window.__automaticUpdateCalls)).toBe(2);

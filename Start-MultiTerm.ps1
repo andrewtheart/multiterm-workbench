@@ -972,6 +972,12 @@ namespace MultiTerm.PowerShellBridge
                     return;
                 }
 
+                if (path == "/api/update-preferences")
+                {
+                    this.HandleUpdatePreferences(context);
+                    return;
+                }
+
                 if (context.Request.HttpMethod != "GET" && context.Request.HttpMethod != "HEAD")
                 {
                     context.Response.Headers["Allow"] = "GET, HEAD";
@@ -1002,6 +1008,162 @@ namespace MultiTerm.PowerShellBridge
                 }
                 catch { }
             }
+        }
+
+        private static string UpdatePreferencesPath()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MultiTerm", "update-preferences.json");
+        }
+
+        private string LoadUpdatePreferences()
+        {
+            string path = UpdatePreferencesPath();
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            Dictionary<string, string> value = Json.ParseFlatObject(
+                File.ReadAllText(path, new UTF8Encoding(false)));
+            return NormalizeUpdatePreferences(value);
+        }
+
+        private static string NormalizeUpdatePreferences(Dictionary<string, string> value)
+        {
+            bool configured;
+            bool enabled;
+            if (
+                !Boolean.TryParse(Json.Get(value, "configured"), out configured) ||
+                !Boolean.TryParse(Json.Get(value, "enabled"), out enabled)
+            )
+            {
+                throw new FormatException("Update preference flags must be boolean values.");
+            }
+
+            int intervalHours;
+            if (!Int32.TryParse(Json.Get(value, "intervalHours"), out intervalHours))
+            {
+                throw new FormatException("The update interval must be a number.");
+            }
+            intervalHours = Math.Min(168, Math.Max(1, intervalHours));
+            return "{\"configured\":" + (configured ? "true" : "false")
+                + ",\"enabled\":" + (configured && enabled ? "true" : "false")
+                + ",\"intervalHours\":" + intervalHours.ToString(CultureInfo.InvariantCulture) + "}";
+        }
+
+        private static void SaveUpdatePreferences(string preferences)
+        {
+            string path = UpdatePreferencesPath();
+            string directory = Path.GetDirectoryName(path);
+            Directory.CreateDirectory(directory);
+            string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            bool lockTaken = false;
+            using (Mutex mutex = new Mutex(false, "Local\\MultiTerm.UpdatePreferences"))
+            {
+                try
+                {
+                    try
+                    {
+                        lockTaken = mutex.WaitOne(TimeSpan.FromSeconds(5));
+                    }
+                    catch (AbandonedMutexException)
+                    {
+                        lockTaken = true;
+                    }
+                    if (!lockTaken)
+                    {
+                        throw new TimeoutException("Timed out saving update preferences.");
+                    }
+
+                    File.WriteAllText(temporaryPath, preferences + Environment.NewLine, new UTF8Encoding(false));
+                    if (File.Exists(path))
+                    {
+                        File.Replace(temporaryPath, path, null);
+                    }
+                    else
+                    {
+                        File.Move(temporaryPath, path);
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        if (File.Exists(temporaryPath))
+                        {
+                            File.Delete(temporaryPath);
+                        }
+                    }
+                    catch { }
+                    if (lockTaken)
+                    {
+                        mutex.ReleaseMutex();
+                    }
+                }
+            }
+        }
+
+        private void HandleUpdatePreferences(HttpListenerContext context)
+        {
+            if (
+                !context.Request.IsLocal ||
+                context.Request.Headers["X-MultiTerm-Request"] != "Renderer"
+            )
+            {
+                this.SendText(context.Response, 403, "{\"ok\":false,\"error\":\"Forbidden\"}", "application/json; charset=utf-8");
+                return;
+            }
+
+            if (context.Request.HttpMethod == "GET")
+            {
+                string preferences = this.LoadUpdatePreferences();
+                string body = "{\"ok\":true,\"preferences\":" + (preferences ?? "null") + "}";
+                this.SendText(context.Response, 200, body, "application/json; charset=utf-8");
+                return;
+            }
+
+            if (context.Request.HttpMethod != "POST")
+            {
+                context.Response.Headers["Allow"] = "GET, POST";
+                this.SendText(context.Response, 405, "{\"ok\":false,\"error\":\"Method not allowed\"}", "application/json; charset=utf-8");
+                return;
+            }
+            if (context.Request.ContentLength64 > 4096)
+            {
+                this.SendText(context.Response, 413, "{\"ok\":false,\"error\":\"Request too large\"}", "application/json; charset=utf-8");
+                return;
+            }
+
+            StringBuilder bodyBuilder = new StringBuilder();
+            using (StreamReader reader = new StreamReader(context.Request.InputStream, new UTF8Encoding(false)))
+            {
+                char[] buffer = new char[1024];
+                int count;
+                while ((count = reader.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    bodyBuilder.Append(buffer, 0, count);
+                    if (Encoding.UTF8.GetByteCount(bodyBuilder.ToString()) > 4096)
+                    {
+                        this.SendText(context.Response, 413, "{\"ok\":false,\"error\":\"Request too large\"}", "application/json; charset=utf-8");
+                        return;
+                    }
+                }
+            }
+
+            string preferences;
+            try
+            {
+                preferences = NormalizeUpdatePreferences(Json.ParseFlatObject(bodyBuilder.ToString()));
+                SaveUpdatePreferences(preferences);
+            }
+            catch (FormatException error)
+            {
+                this.SendText(context.Response, 400, "{\"ok\":false,\"error\":" + Json.Quote(error.Message) + "}", "application/json; charset=utf-8");
+                return;
+            }
+            this.SendText(context.Response, 200, "{\"ok\":true,\"preferences\":" + preferences + "}", "application/json; charset=utf-8");
         }
 
         // Returns the background thread that re-brands the browser window, or null

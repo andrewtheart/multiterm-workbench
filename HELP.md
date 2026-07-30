@@ -204,7 +204,7 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 
 ## Updates and version information
 
-Open **About MultiTerm** from the header or command palette to see the running version, check for updates, open the latest release, or download the current installer. Automatic checks use the configured interval and never install an update without confirmation.
+Open **About MultiTerm** from the header or command palette to see the running version, check for updates, open the latest release, or download the current installer. Automatic checks use the configured interval and never install an update without confirmation. Your update-check choice and interval are stored per user, survive upgrades, and are shared by concurrent MultiTerm instances; change them at any time in **Session settings**.
 
 ## Troubleshooting
 

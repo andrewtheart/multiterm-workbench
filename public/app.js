@@ -643,30 +643,42 @@ function bindControls() {
   bindSetting(elements.silenceSeconds, "silenceSeconds", "change", Number);
   bindSetting(elements.startupCommand, "startupCommand", "change", (value) => value);
 
-  elements.autoUpdateChecks.addEventListener("change", () => {
+  elements.autoUpdateChecks.addEventListener("change", async () => {
     const enabled = elements.autoUpdateChecks.checked;
-    saveAutomaticUpdatePreferences({
-      configured: true,
-      enabled,
-      intervalHours: elements.updateCheckIntervalHours.value
-    });
-    syncAutomaticUpdateControls();
-    if (enabled) {
-      startAutomaticUpdateChecks({ checkNow: true });
-      toast("Automatic update checks enabled.", "success", 2200);
-    } else {
-      stopAutomaticUpdateChecks();
-      toast("Automatic update checks disabled.", "info", 2200);
+    try {
+      await saveAndPersistAutomaticUpdatePreferences({
+        configured: true,
+        enabled,
+        intervalHours: elements.updateCheckIntervalHours.value
+      });
+      syncAutomaticUpdateControls();
+      if (enabled) {
+        startAutomaticUpdateChecks({ checkNow: true });
+        toast("Automatic update checks enabled.", "success", 2200);
+      } else {
+        stopAutomaticUpdateChecks();
+        toast("Automatic update checks disabled.", "info", 2200);
+      }
+    } catch (error) {
+      syncAutomaticUpdateControls();
+      log.error("app", "Could not save update preferences", { error: String(error?.message || error) });
+      toast("Update preference could not be saved.", "error", 4000);
     }
   });
 
-  elements.updateCheckIntervalHours.addEventListener("change", () => {
-    const preferences = saveAutomaticUpdatePreferences({
-      configured: true,
-      intervalHours: elements.updateCheckIntervalHours.value
-    });
-    syncAutomaticUpdateControls();
-    if (preferences.enabled) startAutomaticUpdateChecks({ checkNow: false });
+  elements.updateCheckIntervalHours.addEventListener("change", async () => {
+    try {
+      const preferences = await saveAndPersistAutomaticUpdatePreferences({
+        configured: true,
+        intervalHours: elements.updateCheckIntervalHours.value
+      });
+      syncAutomaticUpdateControls();
+      if (preferences.enabled) startAutomaticUpdateChecks({ checkNow: false });
+    } catch (error) {
+      syncAutomaticUpdateControls();
+      log.error("app", "Could not save update preferences", { error: String(error?.message || error) });
+      toast("Update preference could not be saved.", "error", 4000);
+    }
   });
 
   for (const notifyToggle of [elements.notifyActivity, elements.notifySilence]) {
@@ -1257,7 +1269,9 @@ function addTerminal(options = {}) {
     }
 
     if (selection && state.settings.copyOnSelect) {
-      navigator.clipboard.writeText(selection).catch(() => {});
+      writeClipboardText(selection).catch((error) => {
+        log.warn("clipboard", "Copy-on-select failed", { error: String(error?.message || error) });
+      });
     }
   });
 
@@ -3511,7 +3525,7 @@ function copyLogs() {
     toast("No logs to copy", "info", 1600);
     return;
   }
-  navigator.clipboard.writeText(text).then(
+  writeClipboardText(text).then(
     () => toast("Logs copied", "success", 1600),
     () => toast("Copy failed", "error", 1800)
   );
@@ -3557,11 +3571,21 @@ async function copyTerminalOutput(id, selectionOverride) {
   }
 
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
     toast(selection ? "Selection copied" : "Output copied", "success", 1800);
   } catch {
     toast("Clipboard unavailable", "error");
   }
+}
+
+function writeClipboardText(text) {
+  if (window.multiterm?.writeClipboardText) {
+    return window.multiterm.writeClipboardText(text);
+  }
+  if (!navigator.clipboard?.writeText) {
+    return Promise.reject(new Error("Clipboard write access is unavailable."));
+  }
+  return navigator.clipboard.writeText(text);
 }
 
 function copyActiveTerminal() {
@@ -4272,9 +4296,12 @@ function bindGlobalShortcuts() {
       toggleZoomPane(state.activeId);
     } else if (event.ctrlKey && event.shiftKey && key === "c") {
       const active = state.activeId ? state.terminals.get(state.activeId) : null;
-      if (active && !active.term.getSelection()) {
+      if (active) {
         event.preventDefault();
-        copyActiveTerminal();
+        const selection = active.term.getSelection()
+          || active.contextSelection
+          || active.selectionSnapshot;
+        copyTerminalOutput(active.id, selection || undefined);
       }
     } else if (event.ctrlKey && event.shiftKey && key === "q") {
       event.preventDefault();
@@ -6601,6 +6628,7 @@ const UPDATE_API_URL = `https://api.github.com/repos/${UPDATE_REPO}/releases/lat
 const UPDATE_DEFAULT_INTERVAL_HOURS = 6;
 const UPDATE_MIN_INTERVAL_HOURS = 1;
 const UPDATE_MAX_INTERVAL_HOURS = 168;
+const UPDATE_PREFERENCES_ENDPOINT = "/api/update-preferences";
 
 function loadUpdateMeta() {
   try {
@@ -6651,6 +6679,70 @@ function saveAutomaticUpdatePreferences({ configured, enabled, intervalHours } =
   return next;
 }
 
+async function loadPersistedAutomaticUpdatePreferences() {
+  const response = await fetch(UPDATE_PREFERENCES_ENDPOINT, {
+    cache: "no-store",
+    headers: { "X-MultiTerm-Request": "Renderer" }
+  });
+  const result = await response.json();
+  if (!response.ok || result?.ok === false) {
+    throw new Error(result?.error || `Preference service returned HTTP ${response.status}.`);
+  }
+  if (!result.preferences) return null;
+  return {
+    configured: result.preferences.configured === true,
+    enabled: result.preferences.configured === true && result.preferences.enabled === true,
+    intervalHours: normalizeUpdateIntervalHours(result.preferences.intervalHours)
+  };
+}
+
+async function persistAutomaticUpdatePreferences(preferences) {
+  const response = await fetch(UPDATE_PREFERENCES_ENDPOINT, {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+      "X-MultiTerm-Request": "Renderer"
+    },
+    body: JSON.stringify(preferences)
+  });
+  const result = await response.json();
+  if (!response.ok || result?.ok === false) {
+    throw new Error(result?.error || `Preference service returned HTTP ${response.status}.`);
+  }
+  return result.preferences;
+}
+
+async function saveAndPersistAutomaticUpdatePreferences(options) {
+  const previous = loadAutomaticUpdatePreferences();
+  const next = saveAutomaticUpdatePreferences(options);
+  try {
+    await persistAutomaticUpdatePreferences(next);
+    return next;
+  } catch (error) {
+    saveAutomaticUpdatePreferences(previous);
+    throw error;
+  }
+}
+
+async function hydrateAutomaticUpdatePreferences() {
+  const local = loadAutomaticUpdatePreferences();
+  try {
+    const persisted = await loadPersistedAutomaticUpdatePreferences();
+    if (persisted?.configured) {
+      return saveAutomaticUpdatePreferences(persisted);
+    }
+    if (local.configured) {
+      await persistAutomaticUpdatePreferences(local);
+    }
+  } catch (error) {
+    log.warn("app", "Could not load persistent update preferences", {
+      error: String(error?.message || error)
+    });
+  }
+  return local;
+}
+
 function syncAutomaticUpdateControls() {
   const preferences = loadAutomaticUpdatePreferences();
   elements.autoUpdateChecks.checked = preferences.enabled;
@@ -6682,26 +6774,46 @@ function closeUpdateConsentDialog() {
   }, 150);
 }
 
-function acceptAutomaticUpdateChecks() {
-  saveAutomaticUpdatePreferences({
-    configured: true,
-    enabled: true,
-    intervalHours: elements.updateConsentInterval.value
-  });
-  syncAutomaticUpdateControls();
-  closeUpdateConsentDialog();
-  startAutomaticUpdateChecks({ checkNow: true });
+async function acceptAutomaticUpdateChecks() {
+  elements.updateConsentEnable.disabled = true;
+  elements.updateConsentDecline.disabled = true;
+  try {
+    await saveAndPersistAutomaticUpdatePreferences({
+      configured: true,
+      enabled: true,
+      intervalHours: elements.updateConsentInterval.value
+    });
+    syncAutomaticUpdateControls();
+    closeUpdateConsentDialog();
+    startAutomaticUpdateChecks({ checkNow: true });
+  } catch (error) {
+    log.error("app", "Could not save update preferences", { error: String(error?.message || error) });
+    toast("Update preference could not be saved.", "error", 4000);
+  } finally {
+    elements.updateConsentEnable.disabled = false;
+    elements.updateConsentDecline.disabled = false;
+  }
 }
 
-function declineAutomaticUpdateChecks() {
-  saveAutomaticUpdatePreferences({
-    configured: true,
-    enabled: false,
-    intervalHours: elements.updateConsentInterval.value
-  });
-  syncAutomaticUpdateControls();
-  stopAutomaticUpdateChecks();
-  closeUpdateConsentDialog();
+async function declineAutomaticUpdateChecks() {
+  elements.updateConsentEnable.disabled = true;
+  elements.updateConsentDecline.disabled = true;
+  try {
+    await saveAndPersistAutomaticUpdatePreferences({
+      configured: true,
+      enabled: false,
+      intervalHours: elements.updateConsentInterval.value
+    });
+    syncAutomaticUpdateControls();
+    stopAutomaticUpdateChecks();
+    closeUpdateConsentDialog();
+  } catch (error) {
+    log.error("app", "Could not save update preferences", { error: String(error?.message || error) });
+    toast("Update preference could not be saved.", "error", 4000);
+  } finally {
+    elements.updateConsentEnable.disabled = false;
+    elements.updateConsentDecline.disabled = false;
+  }
 }
 
 // Numeric-segment compare; release tags are plain vMAJOR.MINOR.PATCH.
@@ -6808,7 +6920,7 @@ function stopAutomaticUpdateChecks() {
 
 function scheduleNextAutomaticUpdateCheck(generation = state.update.scheduleGeneration) {
   if (generation !== state.update.scheduleGeneration) return;
-  const preferences = loadAutomaticUpdatePreferences();
+  const preferences = await hydrateAutomaticUpdatePreferences();
   if (!preferences.enabled) return;
   const delay = preferences.intervalHours * 60 * 60 * 1000;
   state.update.timer = window.setTimeout(async () => {
@@ -7911,7 +8023,7 @@ function showSessionInfoMenu(terminal) {
     label: "Copy session details",
     icon: "clipboard-copy",
     run: () =>
-      navigator.clipboard.writeText(details).then(
+      writeClipboardText(details).then(
         () => toast("Session details copied", "success", 1600),
         () => toast("Copy failed", "error", 1800)
       )

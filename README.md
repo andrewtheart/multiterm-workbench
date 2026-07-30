@@ -53,7 +53,7 @@ Command Prompt, and WSL sessions side by side.
   <tr>
     <td align="center" width="33%">
       <h3>⬆️ Built-in updater</h3>
-      Opt in to update checks on first run, choose the recurring interval, read release notes in-app, and launch the newest installer directly from the update dialog.
+      Opt in to update checks once, choose a recurring interval that survives upgrades and concurrent instances, read release notes in-app, and launch the newest installer directly from the update dialog.
     </td>
     <td align="center" width="33%">
       <h3>📜 Live diagnostics log console</h3>
@@ -121,6 +121,13 @@ tagged `@full`. Use the full suite only when native interaction is acceptable:
 
 ```powershell
 npm run test:full
+```
+
+Run the dedicated Electron-shell regression separately when changing preload,
+IPC, native clipboard, or other desktop-only behavior:
+
+```powershell
+npm run test:electron
 ```
 
 The full suite includes UAC/elevated-process scenarios and the native script
@@ -582,7 +589,8 @@ already present in PATH is left untouched. The option is intentionally limited
 to machine-wide installs under Program Files so that Windows never searches a
 user-writable directory from the system PATH.
 
-Per-user setup also asks whether to add **Open in MultiTerm** to File Explorer.
+Both per-user and machine-wide setup ask whether to add **Open in MultiTerm**
+to File Explorer for the user running Setup.
 This task is unchecked by default, so no Explorer integration is registered
 without the user's explicit consent. When selected, the command is installed
 for both folder items and folder backgrounds. It appears directly in the Windows 11 modern context menu and in
@@ -592,7 +600,7 @@ instance (or starts an instance if none exists). The integration is optional and
 removed cleanly when disabled during an upgrade or when MultiTerm is uninstalled.
 Windows 11 asks for administrator approval to trust the package publisher
 certificate used by the modern menu extension; the app itself remains per-user.
-The Explorer integration is not offered for the optional machine-wide install
+The Explorer integration remains per-user even with a machine-wide app install
 because its AppX registration belongs to one Windows user profile.
 
 ### Download

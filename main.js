@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-let { app, BrowserWindow, Menu, Tray, shell, dialog, ipcMain } = require("electron");
+let { app, BrowserWindow, Menu, Tray, clipboard, shell, dialog, ipcMain } = require("electron");
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -27,7 +27,7 @@ const path = require("node:path");
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
 // `require("electron")` resolves to a path string, so these are set by tests.
 function __setElectron(mock) {
-  ({ app, BrowserWindow, Menu, Tray, shell, dialog, ipcMain } = mock);
+  ({ app, BrowserWindow, Menu, Tray, clipboard, shell, dialog, ipcMain } = mock);
 }
 
 function formatError(err) {
@@ -250,6 +250,34 @@ function registerCloseHandler() {
   });
 }
 
+function registerClipboardIpc() {
+  if (!ipcMain || typeof ipcMain.handle !== "function" || !clipboard?.writeText) return;
+  try { ipcMain.removeHandler("multiterm:write-clipboard"); } catch { /* no existing handler */ }
+  ipcMain.handle("multiterm:write-clipboard", (event, text) => {
+    const sender = event?.sender;
+    const senderFrame = event?.senderFrame;
+    const senderUrl = senderFrame?.url || sender?.getURL?.();
+    let trustedOrigin = false;
+    try {
+      const expectedOrigin = new URL(`http://${HOST}:${PORT}`).origin;
+      trustedOrigin = new URL(senderUrl).origin === expectedOrigin;
+    } catch {
+      trustedOrigin = false;
+    }
+    if (!mainWindow
+        || sender !== mainWindow.webContents
+        || (senderFrame && sender.mainFrame && senderFrame !== sender.mainFrame)
+        || !trustedOrigin) {
+      throw new Error("Clipboard writes are restricted to the MultiTerm application window.");
+    }
+    if (typeof text !== "string") {
+      throw new TypeError("Clipboard text must be a string.");
+    }
+    clipboard.writeText(text);
+    return true;
+  });
+}
+
 // Single-instance: focus the existing window instead of launching a second app.
 async function onReady() {
   startServer();
@@ -265,6 +293,7 @@ async function onReady() {
 
   registerScriptPicker();
   registerCloseHandler();
+  registerClipboardIpc();
   registerAdminIpc();
   registerUpdateIpc();
 
@@ -673,6 +702,7 @@ module.exports = {
   quitApp,
   handleCloseResponse,
   registerCloseHandler,
+  registerClipboardIpc,
   registerAdminIpc,
   registerUpdateIpc,
   configureChromiumCommandLine,
