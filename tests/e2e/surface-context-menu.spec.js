@@ -370,6 +370,320 @@ test.describe("Surface context menu", () => {
     await expect(copy).toHaveAttribute("aria-disabled", "true");
   });
 
+  // A mouse-aware TUI (Copilot CLI, vim, htop) turns on mouse tracking, and xterm
+  // then hands every gesture to the application rather than building a selection.
+  // Highlighting therefore produced no copyable text at all and the menu's Copy
+  // stayed disabled. MultiTerm now claims plain drags for selection while leaving
+  // clicks — and Alt+drag — to the application.
+  test.describe("Drag-to-select inside a mouse-reporting TUI", () => {
+    const LINE = "TUIDRAG SELECTABLE PAYLOAD";
+
+    // Reports what the application actually received, so a gesture that MultiTerm
+    // claims can be told apart from one it forwarded.
+    const setup = async (page, { reporting = true } = {}) => {
+      await page.goto("http://127.0.0.1:3199/");
+      await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+      const id = await page.evaluate(() => {
+        const terminal = state.terminals.get(state.activeId);
+        window.__mouseReports = [];
+        const original = window.sendBridge;
+        window.__restoreBridge = () => { window.sendBridge = original; };
+        window.sendBridge = (message) => {
+          if (message?.type === "input" && /\x1b\[</.test(message.data)) window.__mouseReports.push(message.data);
+          return original(message);
+        };
+        return terminal.id;
+      });
+
+      const box = await page.locator(`.terminal-pane[data-id="${id}"] .xterm-screen`).boundingBox();
+      // A starting shell repaints — and can clear — the screen, so the payload is
+      // rewritten until it survives rather than written once and hoped for.
+      let geometry = null;
+      await expect.poll(async () => {
+        geometry = await page.evaluate(async ({ tid, line, reporting }) => {
+          const terminal = state.terminals.get(tid);
+          const term = terminal.term;
+          // 1003 reports every motion, 1006 selects SGR encoding: what Copilot uses.
+          const prefix = reporting ? "\x1b[?1003h\x1b[?1006h" : "";
+          await new Promise((r) => term.write(`${prefix}\r\n${line}\r\n`, r));
+          await new Promise((r) => window.setTimeout(r, 250));
+          const buffer = term.buffer.active;
+          for (let i = buffer.length - 1; i >= 0; i -= 1) {
+            const row = i - buffer.viewportY;
+            if (row < 0 || row >= term.rows) continue;
+            if ((buffer.getLine(i)?.translateToString(true) || "").includes("TUIDRAG")) {
+              return { row, cols: term.cols, rows: term.rows };
+            }
+          }
+          return null;
+        }, { tid: id, line: LINE, reporting });
+        return geometry;
+      }).not.toBeNull();
+
+      const cellW = box.width / geometry.cols;
+      const y = Math.round(box.y + ((geometry.row + 0.5) * (box.height / geometry.rows)));
+      return {
+        id,
+        y,
+        row: geometry.row,
+        // Rounded so a press and a release aimed at the same column cannot land
+        // in different cells once the browser quantises the coordinates.
+        at: (col) => Math.round(box.x + ((col + 0.5) * cellW)),
+        reports: () => page.evaluate(() => window.__mouseReports.length),
+        reset: () => page.evaluate(() => { window.__mouseReports = []; }),
+        selection: () => page.evaluate((tid) => state.terminals.get(tid).term.getSelection(), id)
+      };
+    };
+
+    const drag = async (page, ctx, fromCol, toCol, { modifier } = {}) => {
+      await ctx.reset();
+      if (modifier) await page.keyboard.down(modifier);
+      await page.mouse.move(ctx.at(fromCol), ctx.y);
+      await page.mouse.down();
+      await page.mouse.move(ctx.at(toCol), ctx.y, { steps: 12 });
+      await page.mouse.up();
+      if (modifier) await page.keyboard.up(modifier);
+    };
+
+    test("a plain drag selects text and enables Copy, without reaching the TUI", async ({ page }) => {
+      const ctx = await setup(page);
+      await drag(page, ctx, 0, 7);
+
+      expect(await ctx.selection()).toBe("TUIDRAG");
+      // Only the pre-drag hover motion may be reported; the press, the drag and
+      // the release all belong to MultiTerm.
+      expect(await ctx.reports()).toBeLessThanOrEqual(1);
+      expect(await page.evaluate((tid) => state.terminals.get(tid).selectionSnapshot, ctx.id)).toBe("TUIDRAG");
+
+      await page.mouse.click(ctx.at(3), ctx.y, { button: "right" });
+      const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
+      await expect(copy).toBeVisible();
+      await expect(copy).not.toHaveAttribute("aria-disabled", "true");
+      await page.keyboard.press("Escape");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("a click still reaches the TUI so its buttons keep working", async ({ page }) => {
+      const ctx = await setup(page);
+      await ctx.reset();
+      await page.mouse.click(ctx.at(4), ctx.y);
+
+      // The press and release MultiTerm swallowed are replayed to the application.
+      expect(await ctx.reports()).toBeGreaterThanOrEqual(2);
+      expect(await ctx.selection()).toBe("");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("Alt+drag hands the whole gesture to the TUI", async ({ page }) => {
+      const ctx = await setup(page);
+      await drag(page, ctx, 0, 7, { modifier: "Alt" });
+
+      expect(await ctx.selection()).toBe("");
+      expect(await ctx.reports()).toBeGreaterThan(5);
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("Shift+drag keeps xterm's own selection override", async ({ page }) => {
+      const ctx = await setup(page);
+      await drag(page, ctx, 0, 7, { modifier: "Shift" });
+
+      expect(await ctx.selection()).toBe("TUIDRAG");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("terminals without mouse reporting are left to xterm", async ({ page }) => {
+      const ctx = await setup(page, { reporting: false });
+      await drag(page, ctx, 0, 7);
+
+      expect(await ctx.selection()).toBe("TUIDRAG");
+      expect(await ctx.reports()).toBe(0);
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("a drag returning to its origin selects nothing", async ({ page }) => {
+      const ctx = await setup(page);
+      await ctx.reset();
+      await page.mouse.move(ctx.at(4), ctx.y);
+      await page.mouse.down();
+      await page.mouse.move(ctx.at(14), ctx.y, { steps: 8 });
+      await page.mouse.move(ctx.at(4), ctx.y, { steps: 8 });
+      await page.mouse.up();
+
+      expect(await ctx.selection()).toBe("");
+      expect(await page.evaluate((tid) => state.terminals.get(tid).selectionSnapshot, ctx.id)).toBe("");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("dragging right-to-left selects the same span as left-to-right", async ({ page }) => {
+      const ctx = await setup(page);
+      await drag(page, ctx, 7, 0);
+      expect(await ctx.selection()).toBe("TUIDRAG");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("dragging upwards normalises across rows", async ({ page }) => {
+      const ctx = await setup(page);
+      const selection = await page.evaluate(({ tid, row }) => {
+        const terminal = state.terminals.get(tid);
+        const screen = terminal.term.element.querySelector(".xterm-screen");
+        const rect = screen.getBoundingClientRect();
+        const cellW = rect.width / terminal.term.cols;
+        const cellH = rect.height / terminal.term.rows;
+        const at = (col, r) => ({
+          bubbles: true,
+          button: 0,
+          clientX: rect.left + ((col + 0.5) * cellW),
+          clientY: rect.top + ((r + 0.5) * cellH)
+        });
+        // Start on the row below the payload and drag up onto it.
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", at(3, row + 1)));
+        window.dispatchEvent(new MouseEvent("mousemove", at(0, row)));
+        window.dispatchEvent(new MouseEvent("mouseup", at(0, row)));
+        return terminal.term.getSelection();
+      }, { tid: ctx.id, row: ctx.row });
+
+      expect(selection).toContain("TUIDRAG");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("mousedown outside the terminal body and non-left buttons are ignored", async ({ page }) => {
+      const ctx = await setup(page);
+      const outcome = await page.evaluate((tid) => {
+        const terminal = state.terminals.get(tid);
+        terminal.term.clearSelection();
+        // The pane bar is inside the pane but outside .xterm.
+        terminal.pane.querySelector(".pane-bar").dispatchEvent(
+          new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: 10, clientY: 10 })
+        );
+        const afterHeader = terminal.term.getSelection();
+
+        // A middle-button press must not start a selection drag either.
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 1, clientX: 200, clientY: 200 }));
+        window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, button: 1, clientX: 400, clientY: 200 }));
+        return { afterHeader, afterMiddle: terminal.term.getSelection() };
+      }, ctx.id);
+
+      expect(outcome).toEqual({ afterHeader: "", afterMiddle: "" });
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("a non-left release during a drag does not end it", async ({ page }) => {
+      const ctx = await setup(page);
+      const outcome = await page.evaluate(({ tid, row }) => {
+        const terminal = state.terminals.get(tid);
+        const rect = terminal.term.element.querySelector(".xterm-screen").getBoundingClientRect();
+        const cellW = rect.width / terminal.term.cols;
+        const cellH = rect.height / terminal.term.rows;
+        const at = (col, button) => ({
+          bubbles: true,
+          button,
+          clientX: rect.left + ((col + 0.5) * cellW),
+          clientY: rect.top + ((row + 0.5) * cellH)
+        });
+
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", at(0, 0)));
+        window.dispatchEvent(new MouseEvent("mousemove", at(7, 0)));
+        // A right-button release mid-drag is not ours to act on.
+        window.dispatchEvent(new MouseEvent("mouseup", at(7, 2)));
+        const stillDragging = terminal.term.getSelection();
+        window.dispatchEvent(new MouseEvent("mousemove", at(3, 0)));
+        const narrowed = terminal.term.getSelection();
+        window.dispatchEvent(new MouseEvent("mouseup", at(3, 0)));
+        return { stillDragging, narrowed };
+      }, { tid: ctx.id, row: ctx.row });
+
+      expect(outcome.stillDragging).toBe("TUIDRAG");
+      expect(outcome.narrowed).toBe("TUI");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("a press that never moves far enough stays a click", async ({ page }) => {
+      const ctx = await setup(page);
+      await ctx.reset();
+      await page.mouse.move(ctx.at(4), ctx.y);
+      await page.mouse.down();
+      await page.mouse.move(ctx.at(4) + 2, ctx.y);
+      await page.mouse.up();
+
+      expect(await ctx.selection()).toBe("");
+      expect(await ctx.reports()).toBeGreaterThanOrEqual(2);
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("survives a collapsed screen rect, a missing screen node and an off-screen release", async ({ page }) => {
+      const ctx = await setup(page);
+      const outcome = await page.evaluate(({ tid, row }) => {
+        const terminal = state.terminals.get(tid);
+        const screen = terminal.term.element.querySelector(".xterm-screen");
+        const realRect = screen.getBoundingClientRect.bind(screen);
+        // A pane mid-relayout measures zero; cells cannot be derived from it.
+        screen.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0 });
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: 50, clientY: 50 }));
+        window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
+        window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
+        const collapsed = terminal.term.getSelection();
+        screen.getBoundingClientRect = realRect;
+
+        // Fall back to the host element when the screen node cannot be found.
+        screen.classList.remove("xterm-screen");
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: 50, clientY: 50 }));
+        window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
+        window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
+        const withoutScreen = terminal.term.getSelection();
+        screen.classList.add("xterm-screen");
+
+        // A click released beyond the window has nothing under it to replay onto.
+        window.__mouseReports = [];
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: -80, clientY: -80 }));
+        window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: -80, clientY: -80 }));
+        const offScreenReplays = window.__mouseReports.length;
+
+        // A selection xterm cannot locate must still be snapshotted as text.
+        terminal.selectionSnapshot = "";
+        terminal.selectionSnapshotPosition = { start: 1 };
+        const realPosition = terminal.term.getSelectionPosition.bind(terminal.term);
+        terminal.term.getSelectionPosition = () => undefined;
+        const rect = realRect();
+        const cellW = rect.width / terminal.term.cols;
+        const y = rect.top + ((row + 0.5) * (rect.height / terminal.term.rows));
+        const at = (col) => ({ bubbles: true, button: 0, clientX: rect.left + ((col + 0.5) * cellW), clientY: y });
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", at(0)));
+        window.dispatchEvent(new MouseEvent("mousemove", at(7)));
+        window.dispatchEvent(new MouseEvent("mouseup", at(7)));
+        terminal.term.getSelectionPosition = realPosition;
+
+        // Mouse tracking that never reports leaves selection to xterm.
+        const realModes = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(terminal.term), "modes");
+        Object.defineProperty(terminal.term, "modes", { configurable: true, value: {} });
+        terminal.term.clearSelection();
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", at(0)));
+        window.dispatchEvent(new MouseEvent("mousemove", at(7)));
+        window.dispatchEvent(new MouseEvent("mouseup", at(7)));
+        const untracked = terminal.term.getSelection();
+        delete terminal.term.modes;
+        if (realModes) Object.defineProperty(terminal.term, "modes", realModes);
+
+        return {
+          collapsed,
+          withoutScreen,
+          offScreenReplays,
+          snapshot: terminal.selectionSnapshot,
+          snapshotPosition: terminal.selectionSnapshotPosition,
+          untracked
+        };
+      }, { tid: ctx.id, row: ctx.row });
+
+      expect(outcome.collapsed).toBe("");
+      expect(outcome.withoutScreen).not.toBe("");
+      expect(outcome.offScreenReplays).toBeGreaterThanOrEqual(2);
+      expect(outcome.snapshot).toBe("TUIDRAG");
+      expect(outcome.snapshotPosition).toBeNull();
+      expect(outcome.untracked).toBe("");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+  });
+
   test("context-menu Paste uses xterm bracketed paste for TUI prompts", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");

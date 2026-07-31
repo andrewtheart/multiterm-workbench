@@ -1266,7 +1266,7 @@ function addTerminal(options = {}) {
     const selection = term.getSelection();
     if (selection) {
       terminal.selectionSnapshot = selection;
-      terminal.selectionSnapshotPosition = term.getSelectionPosition();
+      terminal.selectionSnapshotPosition = term.getSelectionPosition() || null;
     }
 
     if (selection && state.settings.copyOnSelect) {
@@ -1381,9 +1381,21 @@ function bindTerminalFontZoom(terminal) {
   }, { capture: true, passive: false });
 }
 
+// A mouse-aware TUI turns on mouse tracking, and xterm then forwards every
+// mouse gesture to the application instead of building a selection — so a plain
+// drag highlights nothing xterm can copy, and "Copy" has no text to offer.
+function mouseReportingActive(terminal) {
+  const mode = terminal.term.modes?.mouseTrackingMode;
+  return Boolean(mode) && mode !== "none";
+}
+
+const DRAG_SELECT_THRESHOLD_PX = 3;
+
 function bindTerminalSelectionHandling(terminal) {
   const element = terminal.term.element;
   if (!element) return;
+
+  bindTuiDragSelection(terminal, element);
 
   const captureContextSelection = () => {
     const liveSelection = terminal.term.getSelection();
@@ -1436,6 +1448,105 @@ function bindTerminalSelectionHandling(terminal) {
       terminal.selectionSnapshot = selection;
       terminal.selectionSnapshotPosition = terminal.term.getSelectionPosition() || null;
     }
+  }, true);
+}
+
+// Takes drag gestures back from a mouse-reporting application so text can be
+// selected and copied, while a plain click is replayed to the application so its
+// buttons keep working. Alt+drag opts out and hands the whole gesture over.
+// Terminals without mouse reporting are left alone: xterm selects natively there.
+function bindTuiDragSelection(terminal, element) {
+  let drag = null;
+  let replaying = false;
+
+  const cellAt = (event) => {
+    const screen = element.querySelector(".xterm-screen") || element;
+    const rect = screen.getBoundingClientRect();
+    const { cols, rows } = terminal.term;
+    if (!rect.width || !rect.height) return { col: 0, row: terminal.term.buffer.active.viewportY };
+    const col = Math.max(0, Math.min(cols - 1, Math.floor(((event.clientX - rect.left) / rect.width) * cols)));
+    const row = Math.max(0, Math.min(rows - 1, Math.floor(((event.clientY - rect.top) / rect.height) * rows)));
+    return { col, row: row + terminal.term.buffer.active.viewportY };
+  };
+
+  const applySelection = (gesture, event) => {
+    const end = cellAt(event);
+    let from = gesture.startCell;
+    let to = end;
+    if (to.row < from.row || (to.row === from.row && to.col < from.col)) {
+      from = end;
+      to = gesture.startCell;
+    }
+    const length = ((to.row - from.row) * terminal.term.cols) + (to.col - from.col);
+    if (length > 0) terminal.term.select(from.col, from.row, length);
+    else terminal.term.clearSelection();
+  };
+
+  const endGesture = () => {
+    drag = null;
+    window.removeEventListener("mousemove", onMove, true);
+    window.removeEventListener("mouseup", onUp, true);
+  };
+
+  function onMove(event) {
+    if (!drag.moved) {
+      const far = Math.abs(event.clientX - drag.x) >= DRAG_SELECT_THRESHOLD_PX
+        || Math.abs(event.clientY - drag.y) >= DRAG_SELECT_THRESHOLD_PX;
+      if (!far) return;
+      drag.moved = true;
+    }
+    applySelection(drag, event);
+    event.stopImmediatePropagation();
+  }
+
+  function onUp(event) {
+    if (event.button !== 0) return;
+    const gesture = drag;
+    endGesture();
+
+    if (gesture.moved) {
+      applySelection(gesture, event);
+      const selection = terminal.term.getSelection();
+      terminal.selectionSnapshot = selection;
+      terminal.selectionSnapshotPosition = selection ? (terminal.term.getSelectionPosition() || null) : null;
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    // No movement, so this was a click and it belongs to the application. Replay
+    // the press/release pair the TUI never saw.
+    replaying = true;
+    const target = document.elementFromPoint(gesture.x, gesture.y) || element;
+    const shared = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      button: 0,
+      clientX: gesture.x,
+      clientY: gesture.y,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey
+    };
+    target.dispatchEvent(new MouseEvent("mousedown", { ...shared, buttons: 1 }));
+    target.dispatchEvent(new MouseEvent("mouseup", { ...shared, buttons: 0 }));
+    replaying = false;
+  }
+
+  // Bound on the pane because xterm's own mouse-protocol listener also runs in
+  // capture phase on its element, which is too late to intercept.
+  terminal.pane.addEventListener("mousedown", (event) => {
+    if (replaying || event.button !== 0 || event.altKey || event.shiftKey) return;
+    if (!event.target.closest(".xterm")) return;
+    if (!mouseReportingActive(terminal)) return;
+
+    drag = { startCell: cellAt(event), x: event.clientX, y: event.clientY, moved: false };
+    terminal.term.clearSelection();
+    terminal.term.focus();
+    window.addEventListener("mousemove", onMove, true);
+    window.addEventListener("mouseup", onUp, true);
+    event.stopImmediatePropagation();
   }, true);
 }
 
