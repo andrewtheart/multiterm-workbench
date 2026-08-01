@@ -46,8 +46,8 @@ layouts from auto-fit grids to a free-form canvas.
   </tr>
   <tr>
     <td align="center" width="33%">
-      <h3>☰ Always-on pane hamburger</h3>
-      Each pane keeps a menu with Find and Duplicate, plus overflowed actions when header space gets tight.
+      <h3>📝 PID-bound notes and command queues</h3>
+      Keep context beside each terminal process and stage commands or long prompts, then quick-dequeue them without pressing Enter. When a process exits, its notes move to Recovered notes and its queued commands remain reusable.
     </td>
     <td align="center" width="33%">
       <h3>⌨️ Command palette + quick switch</h3>
@@ -96,8 +96,8 @@ layouts from auto-fit grids to a free-form canvas.
       Copy, paste, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away.
     </td>
     <td align="center" width="33%">
-      <h3>📝 PID-bound notes and command queues</h3>
-      Keep context beside each terminal process and stage commands or long prompts, then quick-dequeue them into the terminal without pressing Enter. When a process exits its notes move to Recovered notes and its queue stays reusable, so you can hand both to a replacement terminal.
+      <h3>🔔 Activity and input alerts</h3>
+      Highlight terminals waiting for input and optionally notify when background panes become active, fall silent, or ring the terminal bell, so long-running work does not need constant watching.
     </td>
   </tr>
 </table>

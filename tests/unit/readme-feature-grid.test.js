@@ -15,7 +15,8 @@ const gridHeadings = [
   "❓ Built-in generated help",
   "🔒 Locked down by default",
   "🖱️ Deep right-click context menu",
-  "📝 PID-bound notes and command queues"
+  "📝 PID-bound notes and command queues",
+  "🔔 Activity and input alerts"
 ];
 
 function containingCell(heading) {
@@ -57,9 +58,16 @@ describe("README feature grid", () => {
     );
   });
 
-  it("places security, context menu, and PID-bound notes in one complete row", () => {
+  it("places PID-bound notes in the former hamburger slot", () => {
     expect(readme).toMatch(
-      /<tr>\s*<td[^>]*>\s*<h3>🔒[^]*?<\/td>\s*<td[^>]*>\s*<h3>🖱️[^]*?<\/td>\s*<td[^>]*>\s*<h3>📝[^]*?<\/td>\s*<\/tr>/
+      /<tr>\s*<td[^>]*>\s*<h3>📝[^]*?<\/td>\s*<td[^>]*>\s*<h3>⌨️[^]*?<\/td>\s*<td[^>]*>\s*<h3>🗂️[^]*?<\/td>\s*<\/tr>/
+    );
+    expect(readme).not.toContain("Always-on pane hamburger");
+  });
+
+  it("places security, context menu, and activity alerts in one complete row", () => {
+    expect(readme).toMatch(
+      /<tr>\s*<td[^>]*>\s*<h3>🔒[^]*?<\/td>\s*<td[^>]*>\s*<h3>🖱️[^]*?<\/td>\s*<td[^>]*>\s*<h3>🔔[^]*?<\/td>\s*<\/tr>/
     );
   });
 
