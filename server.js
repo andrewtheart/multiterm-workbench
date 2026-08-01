@@ -23,8 +23,6 @@ const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
 const childProcess = require("node:child_process");
-// `pty` is a mutable binding so tests can inject a fake terminal factory
-// via `__setPty` without spawning real shells.
 let pty = require("@homebridge/node-pty-prebuilt-multiarch");
 const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
 
@@ -44,6 +42,20 @@ const websocketAcceptHash = ["sha", "1"].join("");
 
 const sessions = new Map();
 const clients = new Set();
+
+// JavaScript dependencies are expressed as small capability objects rather than
+// nominal interfaces. Tests can provide the same one-method contract without
+// mutating process-wide module state.
+/**
+ * @typedef {object} SessionDependencies
+ * @property {(file: string, args: string[], options: object) => object} spawnPty
+ */
+/** @type {Readonly<SessionDependencies>} */
+const defaultSessionDependencies = Object.freeze({
+  spawnPty(...args) {
+    return pty.spawn(...args);
+  }
+});
 
 // Session teardown timings. Force-killing a ConPTY is genuinely dangerous — see
 // killSessionPty — so a closing session is given two chances to exit on its own:
@@ -734,7 +746,7 @@ function handleUpdatePreferencesRequest(request, response) {
   });
 }
 
-function readFrames(client, chunk) {
+function readFrames(client, chunk, dependencies = defaultSessionDependencies) {
   client.buffer = Buffer.concat([client.buffer, chunk]);
 
   while (client.buffer.length >= 2) {
@@ -784,7 +796,7 @@ function readFrames(client, chunk) {
     }
 
     if (opcode === 0x1) {
-      handleClientMessage(client, payload.toString("utf8"));
+      handleClientMessage(client, payload.toString("utf8"), dependencies);
     }
   }
 }
@@ -810,7 +822,7 @@ function encodeFrame(payload, opcode = 0x1) {
   return Buffer.concat([header, data]);
 }
 
-function handleClientMessage(client, rawMessage) {
+function handleClientMessage(client, rawMessage, dependencies = defaultSessionDependencies) {
   let message;
   try {
     message = JSON.parse(rawMessage);
@@ -821,7 +833,7 @@ function handleClientMessage(client, rawMessage) {
 
   switch (message.type) {
     case "create":
-      createSession(client, message);
+      createSession(client, message, dependencies);
       break;
     case "listTmux":
       listWslTmuxSessions(client, message.requestId);
@@ -874,7 +886,7 @@ function handleClientMessage(client, rawMessage) {
   }
 }
 
-function createSession(client, options) {
+function createSession(client, options, dependencies = defaultSessionDependencies) {
   const id = sanitizeId(options.id);
   if (sessions.has(id)) {
     client.send({ type: "error", id, message: "A session with this id already exists." });
@@ -899,7 +911,7 @@ function createSession(client, options) {
   let terminal;
 
   try {
-    terminal = pty.spawn(shell.file, shell.args, {
+    terminal = dependencies.spawnPty(shell.file, shell.args, {
       cols,
       cwd,
       env: {
