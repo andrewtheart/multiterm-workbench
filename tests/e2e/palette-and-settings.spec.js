@@ -1343,6 +1343,18 @@ test.describe("Settings panel — every control has its expected effect", () => 
       // It really moved to the opposite corner from the expanded "hide" button.
       expect(showBox.x).toBeLessThan(hideBox.x);
 
+      // And it must NOT sit on top of the pager's first page pill (Page 1): a
+      // collapsed pager reserves a left lane so the floating button never covers
+      // a page chip.
+      const firstChip = await page.locator(".pager-chip").first().boundingBox();
+      expect(firstChip).not.toBeNull();
+      const rectsOverlap = (a, b) =>
+        a.x < b.x + b.width &&
+        b.x < a.x + a.width &&
+        a.y < b.y + b.height &&
+        b.y < a.y + a.height;
+      expect(rectsOverlap(showBox, firstChip)).toBe(false);
+
       await domClick("#toggleSidecar"); // leave expanded/tidy
       await expect(page.locator("body")).not.toHaveClass(/(^|\s)sidecar-hidden(\s|$)/);
     });

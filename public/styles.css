@@ -1413,6 +1413,14 @@ body.header-hidden .status-hint kbd,
   padding: 4px 10px;
 }
 
+/* When the left control panel is collapsed, the floating "show layout controls"
+   button parks at the window's bottom-left (left: 14px, 40px wide) — right on top
+   of the pager's first page pill. Reserve that lane so a page chip never sits
+   under the button. 14 + 40 + 8px breathing room = 62px. */
+body.sidecar-hidden .pager {
+  padding-left: 62px;
+}
+
 .pager-list {
   display: flex;
   flex: 1;
