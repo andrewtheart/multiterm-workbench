@@ -147,8 +147,46 @@ test.describe("Settings panel verification", () => {
     await set("#scrollOnOutput", false, "change");
   });
 
-  test("session settings", async () => {
-    for (const [sel, key] of [
+  test("performance settings", async () => {
+    // Batching window: reaches state, is pushed to the bridge as a `config`
+    // frame, and out-of-range typing is folded back into the field on screen.
+    const sent = [];
+    await page.exposeFunction("recordBridgeConfig", (message) => sent.push(message));
+    await page.evaluate(() => {
+      const original = window.sendBridge;
+      window.__restoreSendBridge = () => { window.sendBridge = original; };
+      window.sendBridge = (message) => {
+        if (message.type === "config") window.recordBridgeConfig(message);
+        return original(message);
+      };
+    });
+
+    await set("#outputCoalesceMs", "24", "change");
+    expect(await setting("outputCoalesceMs")).toBe(24);
+    expect(sent).toContainEqual({ type: "config", outputCoalesceMs: 24 });
+
+    await set("#outputCoalesceMs", "9999", "change");
+    expect(await setting("outputCoalesceMs")).toBe(100);
+    expect(await page.locator("#outputCoalesceMs").inputValue()).toBe("100");
+
+    await set("#outputCoalesceMs", "8", "change");
+    await page.evaluate(() => window.__restoreSendBridge());
+
+    // Backlog ceiling: reaches state and changes the byte limit the flush path
+    // actually compares against.
+    await set("#outputBacklogKb", "2048", "change");
+    expect(await setting("outputBacklogKb")).toBe(2048);
+    expect(await page.evaluate(() => outputBacklogLimitBytes())).toBe(2048 * 1024);
+
+    await set("#outputBacklogKb", "1", "change");
+    expect(await setting("outputBacklogKb")).toBe(64);
+    expect(await page.locator("#outputBacklogKb").inputValue()).toBe("64");
+
+    await set("#outputBacklogKb", "1024", "change");
+    expect(await page.evaluate(() => outputBacklogLimitBytes())).toBe(1024 * 1024);
+  });
+
+  test("session settings", async () => {    for (const [sel, key] of [
       ["#restoreSession", "restoreSession"],
       ["#copyOnSelect", "copyOnSelect"],
       ["#highlightInputPrompts", "highlightInputPrompts"],

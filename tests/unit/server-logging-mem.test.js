@@ -473,6 +473,41 @@ describe("pushMemStats", () => {
   });
 });
 
+// A reading costs ~1.2s of wall time in a fresh PowerShell process, and the
+// figure is only ever shown while the memory chip is open. The timer-driven
+// refresh therefore runs only in the window after somebody actually asked.
+describe("pushMemStatsIfWatched", () => {
+  it("skips the probe when nobody has asked recently", () => {
+    const execFile = vi.spyOn(childProcess, "execFile");
+    server.__setMemStatsEnabled(true);
+    server.clients.add(fakeClient());
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    expect(server.hasRecentMemStatsInterest()).toBe(false);
+
+    server.pushMemStatsIfWatched();
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("probes inside the interest window and stops once it lapses", () => {
+    const execFile = vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) =>
+      cb(null, JSON.stringify([{ ProcessId: process.pid, ParentProcessId: 0, WorkingSetSize: 2048 }])));
+    server.__setMemStatsEnabled(true);
+    server.clients.add(fakeClient());
+
+    const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    server.noteMemStatsInterest();
+    expect(server.hasRecentMemStatsInterest()).toBe(true);
+    server.pushMemStatsIfWatched();
+    expect(execFile).toHaveBeenCalledTimes(1);
+
+    // 30s later the chip is presumed closed and the polling stops on its own.
+    now.mockReturnValue(1000 + 30000);
+    expect(server.hasRecentMemStatsInterest()).toBe(false);
+    server.pushMemStatsIfWatched();
+    expect(execFile).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("requestMemStats (on-demand, hover-driven)", () => {
   it("answers immediately with supported:false off Windows and never spawns a probe", () => {
     const execFile = vi.spyOn(childProcess, "execFile");

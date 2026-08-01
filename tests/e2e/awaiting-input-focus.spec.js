@@ -36,7 +36,10 @@ test.describe("Awaiting-input highlight and focus", () => {
         awaiting: pane.classList.contains("is-awaiting-input"),
         active: pane.classList.contains("is-active"),
         pillDisplay: getComputedStyle(pill).display,
-        animation: paneStyle.animationName,
+        // The glow animates a `::before` overlay's opacity rather than the
+        // pane's own box-shadow, so the compositor can run it off the main
+        // thread instead of repainting over live terminal output.
+        animation: getComputedStyle(pane, "::before").animationName,
         borderColor: paneStyle.borderTopColor,
         barBackground: getComputedStyle(pane.querySelector(".pane-bar")).backgroundColor,
       };

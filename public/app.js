@@ -39,6 +39,8 @@ const defaultSettings = {
   minWidth: 420,
   notifyActivity: false,
   notifySilence: false,
+  outputBacklogKb: 1024,
+  outputCoalesceMs: 8,
   paneHeight: 320,
   cleanCopilotClipboard: true,
   restoreSession: false,
@@ -251,6 +253,8 @@ const elements = {
   minimizedDock: document.querySelector("#minimizedDock"),
   notifyActivity: document.querySelector("#notifyActivity"),
   notifySilence: document.querySelector("#notifySilence"),
+  outputBacklogKb: document.querySelector("#outputBacklogKb"),
+  outputCoalesceMs: document.querySelector("#outputCoalesceMs"),
   paletteInput: document.querySelector("#paletteInput"),
   paletteList: document.querySelector("#paletteList"),
   paletteOverlay: document.querySelector("#paletteOverlay"),
@@ -478,6 +482,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindGlobalShortcuts();
   bindFindAll();
   window.addEventListener("resize", noteWindowResizeDrag);
+  document.addEventListener("visibilitychange", flushAllTerminalOutput);
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
   });
@@ -537,6 +542,8 @@ function bindControls() {
   elements.scrollbackLines.value = state.settings.scrollback;
   elements.scrollbackInfinite.checked = state.settings.scrollbackInfinite;
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
+  elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
+  elements.outputBacklogKb.value = state.settings.outputBacklogKb;
   elements.notifyActivity.checked = state.settings.notifyActivity;
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
@@ -651,6 +658,8 @@ function bindControls() {
   bindSetting(elements.scrollbackLines, "scrollback", "change", Number);
   bindSetting(elements.scrollbackInfinite, "scrollbackInfinite", "change", (_, element) => element.checked);
   bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
+  bindSetting(elements.outputCoalesceMs, "outputCoalesceMs", "change", clampOutputCoalesceMs);
+  bindSetting(elements.outputBacklogKb, "outputBacklogKb", "change", clampOutputBacklogKb);
   bindSetting(elements.notifyActivity, "notifyActivity", "change", (_, element) => element.checked);
   bindSetting(elements.notifySilence, "notifySilence", "change", (_, element) => element.checked);
   bindSetting(elements.silenceSeconds, "silenceSeconds", "change", Number);
@@ -732,9 +741,43 @@ function bindSetting(element, key, eventName, transform) {
     if (key === "layout") {
       clearSnapLayout(false);
     }
+    if (key === "outputCoalesceMs") {
+      sendBridgeConfig();
+    }
     applySettings();
     saveSettings();
   });
+}
+
+// The bridge batches pty output on a timer whose length is a renderer setting, so
+// it has to be pushed across on connect and on every change. An older bridge that
+// does not understand "config" answers with an "error" frame, which is ignored.
+function sendBridgeConfig() {
+  sendBridge({ type: "config", outputCoalesceMs: Number(state.settings.outputCoalesceMs) });
+}
+
+// Both performance limits are free-text number inputs, so a typo ("", "1e9",
+// "-5") has to be folded back to something the bridge and the flush path can
+// actually run with — and written back into the field so the value on screen is
+// the value in force.
+const OUTPUT_COALESCE_MS_BOUNDS = { min: 0, max: 100, fallback: 8 };
+const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
+
+function clampSettingNumber(value, element, bounds) {
+  const requested = Number(value);
+  const next = Number.isFinite(requested)
+    ? Math.min(bounds.max, Math.max(bounds.min, Math.round(requested)))
+    : bounds.fallback;
+  element.value = next;
+  return next;
+}
+
+function clampOutputCoalesceMs(value, element) {
+  return clampSettingNumber(value, element, OUTPUT_COALESCE_MS_BOUNDS);
+}
+
+function clampOutputBacklogKb(value, element) {
+  return clampSettingNumber(value, element, OUTPUT_BACKLOG_KB_BOUNDS);
 }
 
 function connectBridge(locationProtocol = window.location.protocol) {
@@ -759,6 +802,7 @@ function connectBridge(locationProtocol = window.location.protocol) {
     state.reconnectAttempts = 0;
     setBridgeStatus("Bridge connected", "online");
     log.info("bridge", wasReconnecting ? "WebSocket reconnected" : "WebSocket connected");
+    sendBridgeConfig();
     updateTerminalActions();
     for (const terminal of state.terminals.values()) {
       if (!terminal.remoteRequested && terminal.status !== "live") {
@@ -855,17 +899,19 @@ function handleBridgeMessage(message) {
           .filter((entry) => entry && entry.id)
           .map((entry) => [entry.id, entry])
       );
-      for (const session of orderSessionsBySavedArrangement(message.sessions)) {
-        known.add(session.id);
-        const existing = state.terminals.get(session.id);
-        if (existing) {
-          reattachExistingSession(existing, session);
-        } else {
-          const savedMeta = savedMetadata.get(session.id) || null;
-          const restored = addTerminal({ reattach: true, session, savedMeta });
-          if (savedMeta?.minimized && restored) minimizeTerminal(restored.id);
+      batchTerminalWork(() => {
+        for (const session of orderSessionsBySavedArrangement(message.sessions)) {
+          known.add(session.id);
+          const existing = state.terminals.get(session.id);
+          if (existing) {
+            reattachExistingSession(existing, session);
+          } else {
+            const savedMeta = savedMetadata.get(session.id) || null;
+            const restored = addTerminal({ reattach: true, session, savedMeta });
+            if (savedMeta?.minimized && restored) minimizeTerminal(restored.id);
+          }
         }
-      }
+      });
       // Any terminal we still hold that the bridge no longer lists must have
       // exited while we were disconnected.
       for (const terminal of state.terminals.values()) {
@@ -876,17 +922,19 @@ function handleBridgeMessage(message) {
     } else if (state.terminals.size === 0 && openFolders.length === 0) {
       const snapshot = state.settings.restoreSession ? loadSessionSnapshot() : null;
       if (snapshot && snapshot.length > 0) {
-        for (const meta of snapshot) {
-          const restored = addTerminal({
-            title: meta.title,
-            shell: meta.shell,
-            cwd: meta.cwd,
-            color: meta.color,
-            fontSizeOverride: meta.fontSizeOverride,
-            tmux: meta.tmux
-          });
-          if (meta.minimized && restored) minimizeTerminal(restored.id);
-        }
+        batchTerminalWork(() => {
+          for (const meta of snapshot) {
+            const restored = addTerminal({
+              title: meta.title,
+              shell: meta.shell,
+              cwd: meta.cwd,
+              color: meta.color,
+              fontSizeOverride: meta.fontSizeOverride,
+              tmux: meta.tmux
+            });
+            if (meta.minimized && restored) minimizeTerminal(restored.id);
+          }
+        });
       } else {
         addTerminal();
       }
@@ -1011,6 +1059,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "config") {
+    log.debug("bridge", "Bridge output batching applied", { outputCoalesceMs: message.outputCoalesceMs });
+    return;
+  }
+
   // An older bridge that predates on-demand memory stats rejects the probe with
   // a generic "Unsupported message type: memstats" error. That frame carries no
   // id, so without this guard it would fall through to the bridge-error branch
@@ -1019,6 +1072,13 @@ function handleBridgeMessage(message) {
   // feature degrades quietly against bridges that don't speak memstats.
   if (message.type === "error" && /Unsupported message type:\s*memstats/i.test(message.message || "")) {
     updateMemStatus({ supported: false, reason: "bridge" });
+    return;
+  }
+
+  // Same contract for output batching: an installed bridge that predates it keeps
+  // sending one frame per pty chunk, which still works.
+  if (message.type === "error" && /Unsupported message type:\s*config/i.test(message.message || "")) {
+    log.debug("bridge", "Bridge does not support output batching; using per-chunk delivery");
     return;
   }
 
@@ -1186,7 +1246,6 @@ function addTerminal(options = {}) {
     fontZoomIndicatorTimer: 0,
     fontZoomWheelDelta: 0,
     id,
-    elevated: Boolean(options.elevated),
     logging: false,
     logPath: null,
     minimized: false,
@@ -1195,7 +1254,9 @@ function addTerminal(options = {}) {
     pendingCommand: typeof options.pendingCommand === "string" ? options.pendingCommand : null,
     pendingCommandEnter: options.pendingCommandEnter !== false,
     pendingOutput: [],
+    pendingOutputBytes: 0,
     outputFlushHandle: 0,
+    outputFlushTimer: 0,
     fitScheduled: false,
     lastSentCols: 0,
     lastSentRows: 0,
@@ -1205,6 +1266,7 @@ function addTerminal(options = {}) {
     runStartup: Boolean(options.runStartup),
     searchAddon,
     searchText: "",
+    searchTextStale: false,
     selectionSnapshotPosition: null,
     selectionSnapshot: "",
     webglAddon: null,
@@ -1243,7 +1305,7 @@ function addTerminal(options = {}) {
   renderPager();
   saveTerminalPages();
   if (isOnActivePage(terminal)) setActiveTerminal(id);
-  refreshIcons();
+  refreshIcons(pane);
   bindTerminalKeyHandling(terminal);
   bindTerminalFontZoom(terminal);
   bindTerminalSelectionHandling(terminal);
@@ -2093,11 +2155,9 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.fontZoomIndicatorTimer);
   window.clearTimeout(terminal.webglRecoveryHandle);
   terminal.webglRecoveryHandle = 0;
-  if (terminal.outputFlushHandle) {
-    window.cancelAnimationFrame(terminal.outputFlushHandle);
-    terminal.outputFlushHandle = 0;
-  }
+  cancelTerminalOutputFlush(terminal);
   terminal.pendingOutput = [];
+  terminal.pendingOutputBytes = 0;
   terminal.observer.disconnect();
   // The WebGL addon can throw during Terminal.dispose() teardown (it dereferences
   // render state that xterm may already have torn down). Dispose it explicitly
@@ -2591,22 +2651,71 @@ function scheduleWebglRecovery(terminal) {
 // activity/notification/prompt scheduling + scroll) per message, we queue the raw
 // chunks and drain them once per animation frame. That collapses N messages/frame
 // into a single term.write and a single side-effect pass, keeping the UI responsive.
-function enqueueTerminalOutput(terminal, data) {
-  terminal.pendingOutput.push(data);
-  if (terminal.outputFlushHandle) return;
-  terminal.outputFlushHandle = window.requestAnimationFrame(() => flushTerminalOutput(terminal));
+//
+// rAF stops entirely while the window is hidden or minimized, so a hidden window
+// falls back to a timer and any pane whose backlog passes the configured ceiling
+// drains immediately. Terminals therefore keep consuming output off-screen instead
+// of hoarding a whole build transcript in JS and replaying it in one blocking
+// write when the window comes back.
+const HIDDEN_FLUSH_MS = 100;
+
+function outputBacklogLimitBytes() {
+  const kb = Number(state.settings.outputBacklogKb);
+  const bounds = OUTPUT_BACKLOG_KB_BOUNDS;
+  const clamped = Number.isFinite(kb) ? Math.min(bounds.max, Math.max(bounds.min, kb)) : bounds.fallback;
+  return clamped * 1024;
 }
 
-function flushTerminalOutput(terminal) {
+function isOutputBacklogFull(terminal) {
+  return terminal.pendingOutputBytes >= outputBacklogLimitBytes();
+}
+
+function isOutputFlushScheduled(terminal) {
+  return Boolean(terminal.outputFlushHandle || terminal.outputFlushTimer);
+}
+
+function enqueueTerminalOutput(terminal, data) {
+  terminal.pendingOutput.push(data);
+  terminal.pendingOutputBytes += data.length;
+  if (isOutputBacklogFull(terminal)) {
+    flushTerminalOutput(terminal);
+    return;
+  }
+  if (isOutputFlushScheduled(terminal)) return;
+  if (document.hidden) {
+    terminal.outputFlushTimer = window.setTimeout(() => flushTerminalOutput(terminal), HIDDEN_FLUSH_MS);
+  } else {
+    terminal.outputFlushHandle = window.requestAnimationFrame(() => flushTerminalOutput(terminal));
+  }
+}
+
+function cancelTerminalOutputFlush(terminal) {
   if (terminal.outputFlushHandle) {
     window.cancelAnimationFrame(terminal.outputFlushHandle);
     terminal.outputFlushHandle = 0;
   }
+  if (terminal.outputFlushTimer) {
+    window.clearTimeout(terminal.outputFlushTimer);
+    terminal.outputFlushTimer = 0;
+  }
+}
+
+function flushTerminalOutput(terminal) {
+  cancelTerminalOutputFlush(terminal);
   const chunks = terminal.pendingOutput;
   if (!chunks.length) return;
   terminal.pendingOutput = [];
+  terminal.pendingOutputBytes = 0;
   const data = chunks.length === 1 ? chunks[0] : chunks.join("");
   writeTerminal(terminal, data);
+}
+
+// Going hidden cancels the pending frame, and coming back must not wait for the
+// timer that replaced it — drain on every transition so no pane stalls.
+function flushAllTerminalOutput() {
+  for (const terminal of state.terminals.values()) {
+    flushTerminalOutput(terminal);
+  }
 }
 
 // Immediate, unbatched write. Coalesced live output funnels through here once per
@@ -2802,12 +2911,40 @@ function writelnTerminal(terminal, data) {
 const SEARCH_TEXT_CAP = 200000;
 const SEARCH_TEXT_TRIM_MARGIN = 40000;
 
+// Maintaining the transcript costs a control-code strip plus a large string
+// concat on every write, and nothing reads it unless the header filter is
+// active — which is almost never. So while no filter is running we skip the work
+// and just mark the transcript stale; the buffer xterm already keeps is the
+// source of truth we rebuild from the moment a filter starts.
+function isTerminalTranscriptNeeded() {
+  return Boolean(normalizeSearchText(state.terminalSearch));
+}
+
 function appendTerminalSearchText(terminal, text) {
+  if (!isTerminalTranscriptNeeded()) {
+    terminal.searchTextStale = true;
+    return;
+  }
   let nextText = `${terminal.searchText || ""}\n${normalizeSearchText(stripTerminalControlCodes(text))}`;
   if (nextText.length > SEARCH_TEXT_CAP + SEARCH_TEXT_TRIM_MARGIN) {
     nextText = nextText.slice(-SEARCH_TEXT_CAP);
   }
   terminal.searchText = nextText;
+}
+
+// xterm's buffer already holds the rendered text with control codes resolved, so
+// the rebuild is a plain line walk — no stripping needed.
+function rebuildTerminalSearchText(terminal) {
+  if (!terminal.searchTextStale) return;
+  terminal.searchTextStale = false;
+  const buffer = terminal.term?.buffer?.active;
+  const lines = [];
+  if (buffer) {
+    for (let i = 0; i < buffer.length; i += 1) {
+      lines.push(buffer.getLine(i)?.translateToString(true) || "");
+    }
+  }
+  terminal.searchText = `${normalizeSearchText(terminalMetadataText(terminal))}\n${normalizeSearchText(lines.join("\n"))}`.slice(-SEARCH_TEXT_CAP);
 }
 
 function refreshTerminalSearchText(terminal) {
@@ -2859,6 +2996,7 @@ function updateTerminalSearchVisibility(terminal) {
     setTerminalSearchHidden(terminal, false);
     return;
   }
+  rebuildTerminalSearchText(terminal);
   if (setTerminalSearchHidden(terminal, !terminal.searchText.includes(query))) {
     scheduleTerminalSearchRefresh();
   }
@@ -3025,7 +3163,56 @@ function updateLayoutMetrics() {
   elements.host.style.setProperty("--rest-count", Math.max(1, count - 1));
 }
 
+// Restoring a session calls addTerminal once per pane, and each call re-runs
+// whole-app passes that only need to happen once: applySettings walks every
+// terminal, renderPager rebuilds the whole tab strip, and the two snapshot saves
+// stringify + write localStorage synchronously. That made restore O(N^2)
+// (measured 17ms/pane at 2 panes rising to 34ms at 13). Wrapping a burst of
+// addTerminal calls collapses each of those to a single pass at the end.
+let terminalBatchDepth = 0;
+const pendingBatchTasks = new Set();
+
+function batchTerminalWork(run) {
+  terminalBatchDepth += 1;
+  try {
+    return run();
+  } finally {
+    terminalBatchDepth -= 1;
+    flushTerminalBatch();
+  }
+}
+
+function isBatchingTerminalWork() {
+  return terminalBatchDepth > 0;
+}
+
+// Returns true when the caller's work was deferred to the end of the batch.
+function deferDuringBatch(taskName) {
+  if (isBatchingTerminalWork()) {
+    pendingBatchTasks.add(taskName);
+    return true;
+  }
+  return false;
+}
+
+function flushTerminalBatch() {
+  if (isBatchingTerminalWork()) return;
+  const tasks = [...pendingBatchTasks];
+  pendingBatchTasks.clear();
+  for (const name of tasks) batchTaskRunners[name]();
+}
+
+// Declared after the helpers above only for readability; every entry is a hoisted
+// function declaration, so the table is complete by the time anything runs.
+const batchTaskRunners = {
+  applySettings,
+  renderPager,
+  saveSessionSnapshot,
+  saveTerminalPages
+};
+
 function applySettings() {
+  if (deferDuringBatch("applySettings")) return;
   applyAppTheme();
   document.body.classList.toggle("header-hidden", state.settings.headerHidden);
   document.body.classList.toggle("sidecar-hidden", state.settings.sidecarHidden);
@@ -3476,10 +3663,20 @@ function createId() {
   return `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function refreshIcons() {
-  if (window.lucide) {
-    window.lucide.createIcons();
-  }
+// lucide's replaceElement copies data-lucide onto the <svg> it generates, so the
+// generated icon keeps matching the selector and a plain createIcons() destroys
+// and rebuilds every icon in the document on every call — measured at 353 SVGs
+// per call with 13 panes open, from ~20 call sites. Restrict the scan to
+// unresolved placeholders (and, where the caller knows it, to the subtree that
+// actually changed) so the work is proportional to the new icons.
+function refreshIcons(scope) {
+  if (!window.lucide) return;
+  const container = scope && typeof scope.querySelectorAll === "function" ? scope : document;
+  window.lucide.createIcons({
+    root: {
+      querySelectorAll: (selector) => container.querySelectorAll(`${selector}:not(svg)`)
+    }
+  });
 }
 
 function applySnapLayout() {
@@ -3728,6 +3925,7 @@ function clearTerminal(id) {
   if (!terminal) return;
   terminal.term.clear();
   terminal.searchText = "";
+  terminal.searchTextStale = false;
   refreshTerminalSearchText(terminal);
 }
 
@@ -5573,6 +5771,7 @@ function savePages() {
 // terminals adopted so far would erase the assignments of every session still
 // waiting, collapsing them all onto the active page.
 function saveTerminalPages() {
+  if (deferDuringBatch("saveTerminalPages")) return;
   const map = { ...state.terminalPages };
   for (const terminal of state.terminals.values()) {
     map[terminal.id] = terminal.pageId;
@@ -5752,6 +5951,7 @@ function cyclePage(direction) {
 }
 
 function renderPager() {
+  if (deferDuringBatch("renderPager")) return;
   const list = elements.pagerList;
   if (!list) return;
 
@@ -5964,6 +6164,7 @@ function restoreWorkspace(name) {
   syncControlsFromSettings();
   clearSnapLayout(false);
   applySettings();
+  sendBridgeConfig();
   saveSettings();
 
   for (const terminal of [...state.terminals.values()]) {
@@ -5990,17 +6191,18 @@ function restoreWorkspace(name) {
   const list = Array.isArray(workspace.terminals) && workspace.terminals.length > 0
     ? workspace.terminals
     : [{ title: "PowerShell 7", shell: "pwsh" }];
-  for (const meta of list) {
-    addTerminal({
-      title: meta.title,
-      shell: meta.shell,
-      cwd: meta.cwd,
-      color: meta.color,
-      fontSizeOverride: meta.fontSizeOverride,
-      pageId: meta.pageId
-    });
-  }
-
+  batchTerminalWork(() => {
+    for (const meta of list) {
+      addTerminal({
+        title: meta.title,
+        shell: meta.shell,
+        cwd: meta.cwd,
+        color: meta.color,
+        fontSizeOverride: meta.fontSizeOverride,
+        pageId: meta.pageId
+      });
+    }
+  });
   applyPageVisibility();
   renderPager();
   updateTerminalActions();
@@ -6047,6 +6249,8 @@ function syncControlsFromSettings() {
   elements.scrollbackLines.value = state.settings.scrollback;
   elements.scrollbackInfinite.checked = state.settings.scrollbackInfinite;
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
+  elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
+  elements.outputBacklogKb.value = state.settings.outputBacklogKb;
   elements.notifyActivity.checked = state.settings.notifyActivity;
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
@@ -6092,6 +6296,7 @@ function handleBell(terminal) {
 /* ---------------- Session snapshot (auto-restore) --------------- */
 
 function saveSessionSnapshot() {
+  if (deferDuringBatch("saveSessionSnapshot")) return;
   const snapshot = [...state.terminals.values()].map((terminal) => ({
     id: terminal.id,
     title: terminal.titleInput.value,

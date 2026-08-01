@@ -200,6 +200,13 @@ function createWindow() {
       webSecurity: true,
       allowRunningInsecureContent: false,
       experimentalFeatures: false,
+      // Chromium stops requestAnimationFrame entirely for a minimized/occluded
+      // window (measured: 0 ticks over 3s). The renderer drains buffered terminal
+      // output on rAF, so throttling would let a background build accumulate its
+      // whole transcript in memory and then replay it in one blocking write on
+      // restore. Terminals must keep consuming output whether or not you are
+      // looking at them.
+      backgroundThrottling: false,
       // Run the renderer in Chromium's OS sandbox. Nothing in the renderer needs
       // Node; the preload only touches contextBridge/ipcRenderer, both of which
       // remain available to a sandboxed preload. This contains a renderer

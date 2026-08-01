@@ -755,4 +755,109 @@ describe("broadcast", () => {
     expect(a.send).toHaveBeenCalledWith({ type: "ping" });
     expect(b.send).toHaveBeenCalledWith({ type: "ping" });
   });
+
+  // Output broadcasts dominate bridge traffic, so the frame is encoded once and
+  // the same bytes are written to every socket that can take them.
+  it("encodes one frame and reuses it across frame-capable clients", () => {
+    const a = fakeClient();
+    const b = fakeClient();
+    a.sendFrame = vi.fn();
+    b.sendFrame = vi.fn();
+    server.clients.add(a);
+    server.clients.add(b);
+
+    server.broadcast({ type: "ping" });
+
+    const expected = server.encodeFrame(JSON.stringify({ type: "ping" }));
+    expect(a.sendFrame).toHaveBeenCalledWith(expected);
+    // Same buffer object, not merely an equal one.
+    expect(b.sendFrame.mock.calls[0][0]).toBe(a.sendFrame.mock.calls[0][0]);
+    expect(a.send).not.toHaveBeenCalled();
+  });
+
+  it("skips the excluded client and never encodes when nobody is left", () => {
+    const only = fakeClient();
+    only.sendFrame = vi.fn();
+    server.clients.add(only);
+    server.broadcast({ type: "ping" }, only);
+    expect(only.sendFrame).not.toHaveBeenCalled();
+    expect(only.send).not.toHaveBeenCalled();
+  });
 });
+
+describe("output coalescing", () => {
+  beforeEach(() => {
+    server.setOutputCoalesceMs(server.OUTPUT_COALESCE_DEFAULT_MS);
+  });
+
+  afterEach(() => {
+    server.setOutputCoalesceMs(server.OUTPUT_COALESCE_DEFAULT_MS);
+    vi.useRealTimers();
+  });
+
+  it("clamps the requested window and falls back on nonsense", () => {
+    expect(server.setOutputCoalesceMs(20)).toBe(20);
+    expect(server.setOutputCoalesceMs(2.4)).toBe(2);
+    expect(server.setOutputCoalesceMs(-5)).toBe(0);
+    expect(server.setOutputCoalesceMs(9999)).toBe(server.OUTPUT_COALESCE_MAX_MS);
+    expect(server.setOutputCoalesceMs("nope")).toBe(server.OUTPUT_COALESCE_DEFAULT_MS);
+    expect(server.getOutputCoalesceMs()).toBe(server.OUTPUT_COALESCE_DEFAULT_MS);
+  });
+
+  it("sends straight through when batching is switched off", () => {
+    const client = fakeClient();
+    server.clients.add(client);
+    server.setOutputCoalesceMs(0);
+    expect(server.isOutputCoalesced()).toBe(false);
+
+    const session = { id: "s1", pendingOutput: [], outputTimer: null };
+    server.queueSessionOutput(session, "hi");
+
+    expect(client.send).toHaveBeenCalledWith({ type: "output", id: "s1", stream: "pty", data: "hi" });
+    expect(session.pendingOutput).toEqual([]);
+  });
+
+  it("joins buffered chunks into a single frame on the flush timer", () => {
+    vi.useFakeTimers();
+    const client = fakeClient();
+    server.clients.add(client);
+    server.setOutputCoalesceMs(10);
+
+    const session = { id: "s1", pendingOutput: [], outputTimer: null };
+    server.queueSessionOutput(session, "a");
+    server.queueSessionOutput(session, "b");
+    // A second chunk must reuse the armed timer rather than starting another.
+    expect(client.send).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(10);
+    expect(client.send).toHaveBeenCalledTimes(1);
+    expect(client.send).toHaveBeenCalledWith({ type: "output", id: "s1", stream: "pty", data: "ab" });
+    expect(session.outputTimer).toBeNull();
+  });
+
+  it("flushing an empty buffer sends nothing", () => {
+    const client = fakeClient();
+    server.clients.add(client);
+    const session = { id: "s1", pendingOutput: [], outputTimer: null };
+    server.flushSessionOutput(session);
+    expect(client.send).not.toHaveBeenCalled();
+  });
+
+  it("applies a client's requested window and acknowledges it", () => {
+    const client = fakeClient();
+    server.applyClientConfig(client, { type: "config", outputCoalesceMs: 250 });
+    expect(server.getOutputCoalesceMs()).toBe(server.OUTPUT_COALESCE_MAX_MS);
+    expect(client.send).toHaveBeenCalledWith({
+      type: "config",
+      outputCoalesceMs: server.OUTPUT_COALESCE_MAX_MS
+    });
+  });
+
+  it("is reachable over the wire as a config message", () => {
+    const client = fakeClient();
+    server.handleClientMessage(client, JSON.stringify({ type: "config", outputCoalesceMs: 12 }));
+    expect(server.getOutputCoalesceMs()).toBe(12);
+    expect(client.send).toHaveBeenCalledWith({ type: "config", outputCoalesceMs: 12 });
+  });
+});
+

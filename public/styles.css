@@ -3752,9 +3752,25 @@ body.is-pane-dragging {
 }
 
 .terminal-pane.is-awaiting-input:not(.is-active) {
-  animation: await-glow 1.5s var(--ease-standard) infinite;
   border-color: var(--warn);
   z-index: 3;
+}
+
+/* Drawn as an overlay whose opacity is animated rather than as an animated
+   box-shadow on the pane. A box-shadow keyframe repaints the pane's whole paint
+   area every frame — with several panes waiting at once that repaint competes
+   with terminal output on the same thread. Opacity is composited, so the pulse
+   costs nothing on the main thread. The glow reads inward because the pane sets
+   overflow: hidden; the static warn border above supplies the outer edge. */
+.terminal-pane.is-awaiting-input:not(.is-active)::before {
+  animation: await-glow 1.5s var(--ease-standard) infinite;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 2px var(--warn), inset 0 0 20px 3px color-mix(in srgb, var(--warn) 45%, transparent);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 4;
 }
 
 .terminal-pane.is-awaiting-input:not(.is-active) .pane-bar {
@@ -3771,8 +3787,8 @@ body.is-pane-dragging {
 }
 
 @keyframes await-glow {
-  0%, 100% { box-shadow: 0 0 0 1px var(--warn), 0 0 8px 0 color-mix(in srgb, var(--warn) 40%, transparent); }
-  50% { box-shadow: 0 0 0 2px var(--warn), 0 0 20px 3px color-mix(in srgb, var(--warn) 55%, transparent); }
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
 }
 
 .pane-find {
@@ -3900,11 +3916,14 @@ body.is-pane-dragging {
 /* The session/PID pill floats over the bottom-right of the terminal instead of
    taking a column in the header. It stays at a low opacity so it never competes
    with terminal output — including while its pane is focused or hovered — and
-   only goes fully opaque when the pointer is directly over the pill itself. */
+   only goes fully opaque when the pointer is directly over the pill itself.
+
+   Deliberately no backdrop-filter: this pill sits directly on top of the live
+   terminal surface, so a blur would force the compositor to re-sample the region
+   underneath it on every repaint of that pane — i.e. on every burst of output,
+   in every pane, forever. An opaque background reads the same at this size. */
 .pane-status {
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
-  backdrop-filter: blur(10px) saturate(140%);
-  background: var(--surface-translucent);
+  background: var(--surface-high);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   bottom: 8px;

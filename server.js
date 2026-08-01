@@ -65,6 +65,85 @@ let nextTeardownAt = 0;
 const SHUTDOWN_MAX_WAIT_MS = 8000;
 const SHUTDOWN_POLL_MS = 100;
 
+// A pty hands us output in whatever slices the shell happens to write — measured
+// at ~11k chunks/second averaging ~100 bytes for a colorized build log. Forwarding
+// each one as its own WebSocket message costs a fixed ~6us of browser event
+// plumbing regardless of size, so the renderer spends most of a heavy stream
+// inside WebSocket dispatch rather than drawing. Holding chunks for a few
+// milliseconds and sending one message collapses that by more than an order of
+// magnitude and roughly halves the wire bytes (one JSON envelope instead of
+// thousands). The renderer already re-batches per animation frame, so nothing
+// about what the user sees changes.
+const OUTPUT_COALESCE_MAX_MS = 100;
+const OUTPUT_COALESCE_DEFAULT_MS = 8;
+let outputCoalesceMs = OUTPUT_COALESCE_DEFAULT_MS;
+
+function isOutputCoalesced() {
+  return outputCoalesceMs > 0;
+}
+
+// Clamped rather than rejected: the value arrives from renderer settings, and a
+// nonsense number should fall back to the default instead of dropping output
+// batching (or holding it for an unbounded time).
+function setOutputCoalesceMs(value) {
+  const requested = Number(value);
+  if (Number.isFinite(requested)) {
+    outputCoalesceMs = Math.min(OUTPUT_COALESCE_MAX_MS, Math.max(0, Math.round(requested)));
+  } else {
+    outputCoalesceMs = OUTPUT_COALESCE_DEFAULT_MS;
+  }
+  return outputCoalesceMs;
+}
+
+function getOutputCoalesceMs() {
+  return outputCoalesceMs;
+}
+
+function applyClientConfig(client, message) {
+  const applied = setOutputCoalesceMs(message.outputCoalesceMs);
+  client.send({ type: "config", outputCoalesceMs: applied });
+}
+
+function hasPendingOutput(session) {
+  return session.pendingOutput.length > 0;
+}
+
+function hasOutputFlushTimer(session) {
+  return Boolean(session.outputTimer);
+}
+
+function queueSessionOutput(session, data) {
+  if (isOutputCoalesced()) {
+    session.pendingOutput.push(data);
+    scheduleOutputFlush(session);
+  } else {
+    broadcast({ type: "output", id: session.id, stream: "pty", data });
+  }
+}
+
+function scheduleOutputFlush(session) {
+  if (hasOutputFlushTimer(session)) {
+    return;
+  } else {
+    session.outputTimer = setTimeout(() => flushSessionOutput(session), outputCoalesceMs);
+    session.outputTimer.unref();
+  }
+}
+
+// Also called before "exited" so a shell's final bytes can never arrive after the
+// frame that tells the renderer the session is gone.
+function flushSessionOutput(session) {
+  clearTimeout(session.outputTimer);
+  session.outputTimer = null;
+  if (hasPendingOutput(session)) {
+    const data = session.pendingOutput.join("");
+    session.pendingOutput = [];
+    broadcast({ type: "output", id: session.id, stream: "pty", data });
+  } else {
+    // Timer raced a flush that already drained the buffer; nothing to send.
+  }
+}
+
 function scheduleSessionTeardown(run) {
   const now = Date.now();
   const runAt = Math.max(now, nextTeardownAt);
@@ -110,6 +189,22 @@ let lastMemStats = null;
 // Clients waiting on the in-flight reading, so a burst of hovers coalesces into
 // a single CIM query instead of one PowerShell process per request.
 let memStatsWaiters = [];
+// Each reading costs ~1.2s of wall time and ~360ms of CPU in a fresh PowerShell
+// process. The status bar only shows the figure while the memory chip is open,
+// and polls on its own while it is, so the background refresh follows the same
+// contract: it runs only in the window after somebody actually asked. Without
+// this the bridge burned ~360 PowerShell spawns an hour for a chip nobody was
+// looking at.
+const MEM_INTEREST_WINDOW_MS = 30000;
+let lastMemStatsRequestAt = 0;
+
+function noteMemStatsInterest() {
+  lastMemStatsRequestAt = Date.now();
+}
+
+function hasRecentMemStatsInterest() {
+  return lastMemStatsRequestAt > 0 && Date.now() - lastMemStatsRequestAt < MEM_INTEREST_WINDOW_MS;
+}
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -253,8 +348,13 @@ server.on("upgrade", (request, socket) => {
     buffer: Buffer.alloc(0),
     socket,
     send(message) {
+      client.sendFrame(encodeFrame(JSON.stringify(message)));
+    },
+    // Writes bytes that have already been encoded. broadcast() builds one frame
+    // for the whole fan-out and hands the same buffer to every client.
+    sendFrame(frame) {
       if (!socket.destroyed) {
-        socket.write(encodeFrame(JSON.stringify(message)));
+        socket.write(frame);
       }
     }
   };
@@ -385,6 +485,15 @@ module.exports = {
   interruptAndExit,
   scheduleSessionTeardown,
   __resetTeardownSchedule,
+  isOutputCoalesced,
+  setOutputCoalesceMs,
+  getOutputCoalesceMs,
+  applyClientConfig,
+  queueSessionOutput,
+  scheduleOutputFlush,
+  flushSessionOutput,
+  OUTPUT_COALESCE_DEFAULT_MS,
+  OUTPUT_COALESCE_MAX_MS,
   killAllSessions,
   closeSessions,
   endSessionInput,
@@ -437,7 +546,10 @@ module.exports = {
   buildStatisticsFrame,
   requestStatistics,
   pushMemStats,
+  pushMemStatsIfWatched,
   scheduleMemStats,
+  noteMemStatsInterest,
+  hasRecentMemStatsInterest,
   startMemStats,
   stopMemStats,
   handleUncaughtException,
@@ -750,6 +862,9 @@ function handleClientMessage(client, rawMessage) {
     case "memstats":
       requestMemStats(client);
       break;
+    case "config":
+      applyClientConfig(client, message);
+      break;
     case "statistics":
       requestStatistics(client, message);
       break;
@@ -815,6 +930,8 @@ function createSession(client, options) {
     closing: false,
     logStream: null,
     logPath: null,
+    pendingOutput: [],
+    outputTimer: null,
     rows,
     shell: tmux ? "wsl" : shell.label,
     startedAt: new Date().toISOString(),
@@ -835,11 +952,12 @@ function createSession(client, options) {
         // A failed log write should never break the live session.
       }
     }
-    broadcast({ type: "output", id, stream: "pty", data });
+    queueSessionOutput(session, data);
   });
 
   terminal.onExit(({ exitCode, signal }) => {
     session.exited = true;
+    flushSessionOutput(session);
     closeLog(session);
     sessions.delete(id);
     broadcast({ type: "exited", id, code: exitCode, signal });
@@ -1427,7 +1545,7 @@ function handleElevatedConnection(attempt, socket) {
       } else {
         // No per-session log is active; the live output is still broadcast below.
       }
-      broadcast({ type: "output", id: attempt.id, stream: "pty", data });
+      queueSessionOutput(attempt.session, data);
     } else if (msg.type === "exit" && attempt.session) {
       finishElevatedSession(attempt.session, Number.isFinite(Number(msg.code)) ? Number(msg.code) : null);
     }
@@ -1484,6 +1602,8 @@ function registerElevatedSession(attempt, socket, sendFrame, pid) {
     closing: false,
     logStream: null,
     logPath: null,
+    pendingOutput: [],
+    outputTimer: null,
     rows: attempt.rows,
     shell: attempt.label,
     startedAt: new Date().toISOString(),
@@ -1501,6 +1621,7 @@ function finishElevatedSession(session, code) {
     return;
   } else {
     session.exited = true;
+    flushSessionOutput(session);
     closeLog(session);
     sessions.delete(session.id);
     broadcast({ type: "exited", id: session.id, code, signal: null });
@@ -1685,6 +1806,7 @@ function broadcastMemStats(stats) {
 // browser mode, where nothing sets MEMSTATS. Unsupported platforms answer
 // immediately so the UI can say so instead of spinning forever.
 function requestMemStats(client) {
+  noteMemStatsInterest();
   if (!memStatsSupported()) {
     client.send({ type: "memstats", supported: false });
     return;
@@ -1843,6 +1965,18 @@ function pushMemStats() {
   }
 }
 
+// Every timer-driven refresh goes through here rather than calling pushMemStats
+// directly, so an unattended bridge stops paying for readings nobody will see.
+// An explicit request (the client asking, or a caller priming the cache) is
+// never gated.
+function pushMemStatsIfWatched() {
+  if (hasRecentMemStatsInterest()) {
+    pushMemStats();
+  } else {
+    // Nobody has opened the memory readout recently; skip the ~1.2s probe.
+  }
+}
+
 // Debounced update: terminal open/close events coalesce into a single refresh
 // once the new PIDs have had time to settle.
 function scheduleMemStats(delay) {
@@ -1850,7 +1984,7 @@ function scheduleMemStats(delay) {
     return;
   } else {
     clearTimeout(memSettleTimer);
-    memSettleTimer = setTimeout(pushMemStats, Math.max(0, Number(delay) || 0));
+    memSettleTimer = setTimeout(pushMemStatsIfWatched, Math.max(0, Number(delay) || 0));
     memSettleTimer.unref();
   }
 }
@@ -1858,7 +1992,7 @@ function scheduleMemStats(delay) {
 function startMemStats() {
   if (!memStatsEnabled || memStatsInterval) return;
   scheduleMemStats(1500);
-  memStatsInterval = setInterval(pushMemStats, 10000);
+  memStatsInterval = setInterval(pushMemStatsIfWatched, 10000);
   memStatsInterval.unref();
 }
 
@@ -1871,14 +2005,26 @@ function stopMemStats() {
   memSettleTimer = null;
 }
 
+// One JSON.stringify and one WebSocket frame for the whole fan-out. Output
+// broadcasts dominate bridge traffic, so re-encoding the same bytes per client
+// was pure duplicated work. The encode is lazy so a fan-out to zero eligible
+// clients costs nothing.
 function broadcast(message, excludedClient = null) {
+  let frame;
   for (const client of clients) {
     if (client === excludedClient) {
       continue;
+    } else if (canSendFrame(client)) {
+      frame = frame === undefined ? encodeFrame(JSON.stringify(message)) : frame;
+      client.sendFrame(frame);
     } else {
       client.send(message);
     }
   }
+}
+
+function canSendFrame(client) {
+  return typeof client.sendFrame === "function";
 }
 
 function toSessionSummary(session) {

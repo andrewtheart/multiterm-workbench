@@ -299,6 +299,19 @@
           </section>
 
           <section class="control-section">
+            <h2>Performance</h2>
+            <label class="control-row">
+              <span title="How long the bridge groups PTY output before sending it. Higher trades a little latency for far fewer messages under heavy output. 0 disables batching.">Output batching (ms)</span>
+              <input id="outputCoalesceMs" type="number" min="0" max="100" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How much output a pane may hold before it is written to the terminal immediately instead of waiting for the next frame. Lower keeps memory down; higher smooths very bursty output.">Output buffer (KB)</span>
+              <input id="outputBacklogKb" type="number" min="64" max="65536" step="64" inputmode="numeric">
+            </label>
+          </section>
+
+          <section class="control-section">
             <h2>Session</h2>
             <label class="toggle-row">
               <input id="keepSessionsOnClose" type="checkbox">

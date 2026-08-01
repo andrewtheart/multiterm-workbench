@@ -340,7 +340,8 @@ test.describe("Renderer coverage completion", () => {
       const fake = {
         id: "coverage-fake", pane: fakePane, statusElement: fakeStatus,
         titleInput: { value: "Fake" }, term: { dispose() { throw new Error("dispose"); } },
-        observer: { disconnect() {} }, pendingOutput: [], outputFlushHandle: 0,
+        observer: { disconnect() {} }, pendingOutput: [], pendingOutputBytes: 0,
+        outputFlushHandle: 0, outputFlushTimer: 0,
         webglAddon: { dispose() { throw new Error("gl"); } }, webglRecoveryHandle: 0
       };
       state.terminals.set(fake.id, fake);
@@ -457,11 +458,12 @@ test.describe("Renderer coverage completion", () => {
       window.WebglAddon = oldWebgl;
       first.term.loadAddon = oldLoadAddon;
 
-      const emptyTerminal = { pendingOutput: [], outputFlushHandle: 0 };
+      const emptyTerminal = { pendingOutput: [], pendingOutputBytes: 0, outputFlushHandle: 0, outputFlushTimer: 0 };
       flushTerminalOutput(emptyTerminal);
       const writes = [];
       const outputProbe = {
-        id: "output-probe", pendingOutput: ["a", "b"], outputFlushHandle: 1,
+        id: "output-probe", pendingOutput: ["a", "b"], pendingOutputBytes: 2,
+        outputFlushHandle: 1, outputFlushTimer: 0,
         term: { write: (value) => writes.push(value), scrollToBottom() {} },
         pane: document.createElement("div"), titleInput: { value: "Probe" },
         createdAt: performance.now(), searchText: "", status: "live"
@@ -469,6 +471,65 @@ test.describe("Renderer coverage completion", () => {
       state.settings.notifyActivity = false;
       state.settings.notifySilence = false;
       flushTerminalOutput(outputProbe);
+
+      // Enqueue paths: a visible window schedules on rAF, a hidden one falls back
+      // to a timer, and a pane whose backlog passes the configured ceiling drains
+      // straight away rather than hoarding a whole transcript.
+      const enqueueWrites = [];
+      const makeEnqueueProbe = () => ({
+        id: "enqueue-probe", pendingOutput: [], pendingOutputBytes: 0,
+        outputFlushHandle: 0, outputFlushTimer: 0,
+        term: { write: (value) => enqueueWrites.push(value.length), scrollToBottom() {} },
+        pane: document.createElement("div"), titleInput: { value: "Enqueue" },
+        createdAt: performance.now(), searchText: "", status: "live"
+      });
+      const priorBacklogKb = state.settings.outputBacklogKb;
+      const framed = makeEnqueueProbe();
+      enqueueTerminalOutput(framed, "x");
+      const scheduledFrame = framed.outputFlushHandle !== 0;
+      // A second chunk must ride the already-armed frame rather than arming another.
+      enqueueTerminalOutput(framed, "y");
+      const reusedFrame = framed.pendingOutput.length === 2;
+      cancelTerminalOutputFlush(framed);
+
+      const hidden = makeEnqueueProbe();
+      const hiddenDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "hidden");
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      enqueueTerminalOutput(hidden, "z");
+      const scheduledTimer = hidden.outputFlushTimer !== 0;
+      cancelTerminalOutputFlush(hidden);
+      const clearedTimer = hidden.outputFlushTimer === 0;
+      Object.defineProperty(document, "hidden", hiddenDescriptor);
+
+      const overflowing = makeEnqueueProbe();
+      state.settings.outputBacklogKb = 64;
+      enqueueTerminalOutput(overflowing, "!".repeat(64 * 1024));
+      const drainedOnOverflow = overflowing.pendingOutput.length === 0;
+      // A nonsense ceiling falls back to the default rather than flushing per byte.
+      state.settings.outputBacklogKb = "not-a-number";
+      const fallbackBacklog = outputBacklogLimitBytes();
+      state.settings.outputBacklogKb = priorBacklogKb;
+      flushAllTerminalOutput();
+
+      // Both performance fields fold typos back to something usable and write the
+      // corrected value into the field; the real bindings push the batching window
+      // across to the bridge on change.
+      const priorCoalesce = state.settings.outputCoalesceMs;
+      elements.outputCoalesceMs.value = "500";
+      elements.outputCoalesceMs.dispatchEvent(new Event("change"));
+      const clampedField = elements.outputCoalesceMs.value;
+      elements.outputCoalesceMs.value = String(priorCoalesce);
+      elements.outputCoalesceMs.dispatchEvent(new Event("change"));
+      const numberField = document.createElement("input");
+      const clamped = [
+        clampOutputCoalesceMs("-3", numberField),
+        clampOutputCoalesceMs("abc", numberField),
+        clampOutputBacklogKb("99999999", numberField),
+        clampOutputBacklogKb("nonsense", numberField)
+      ];
+
+      // An older bridge answers "config" with an error frame; batching just stays off.
+      handleBridgeMessage({ type: "error", message: "Unsupported message type: config" });
 
       state.settings.highlightInputPrompts = true;
       const lines = ["Question", "1. Alpha", "2. Beta", "Choose:", ""];
@@ -518,7 +579,9 @@ test.describe("Renderer coverage completion", () => {
         ctorFailure: ctorFailure === null,
         loadFailure: loadFailure === null,
         addon: Boolean(addon), stale: Boolean(stale), disposed,
-        writes, prompt: prompt.awaitingInput, noHit: noHit === null, hit: Boolean(hit), savedSize
+        writes, prompt: prompt.awaitingInput, noHit: noHit === null, hit: Boolean(hit), savedSize,
+        scheduledFrame, reusedFrame, scheduledTimer, clearedTimer,
+        drainedOnOverflow, enqueueWrites, fallbackBacklog, clampedField, clamped
       };
     });
 
@@ -531,7 +594,17 @@ test.describe("Renderer coverage completion", () => {
       writes: ["ab"],
       prompt: true,
       noHit: true,
-      hit: true
+      hit: true,
+      scheduledFrame: true,
+      reusedFrame: true,
+      scheduledTimer: true,
+      clearedTimer: true,
+      drainedOnOverflow: true,
+      // Only the pane that passed its ceiling drained; the other two were cancelled.
+      enqueueWrites: [64 * 1024],
+      fallbackBacklog: 1024 * 1024,
+      clampedField: "100",
+      clamped: [0, 8, 65536, 1024]
     });
   });
 
@@ -541,11 +614,32 @@ test.describe("Renderer coverage completion", () => {
       if (!terminal) terminal = addTerminal({ title: "Utility" });
 
       const priorSearch = terminal.searchText;
-      appendTerminalSearchText(terminal, "x".repeat(SEARCH_TEXT_CAP + SEARCH_TEXT_TRIM_MARGIN + 10));
+      // The transcript is only maintained while a query is live, so arm one
+      // before feeding it enough text to trip the cap.
       state.terminalSearch = "not-present";
+      appendTerminalSearchText(terminal, "x".repeat(SEARCH_TEXT_CAP + SEARCH_TEXT_TRIM_MARGIN + 10));
       updateTerminalSearchVisibility(terminal);
       terminal.searchText += "not-present";
       updateTerminalSearchVisibility(terminal);
+
+      // With no query live the append is skipped and the pane is only marked
+      // stale; the next search rebuilds the transcript from the xterm buffer.
+      state.terminalSearch = "";
+      terminal.searchTextStale = false;
+      appendTerminalSearchText(terminal, "dropped-while-idle");
+      const wentStale = terminal.searchTextStale;
+      state.terminalSearch = "not-present";
+      updateTerminalSearchVisibility(terminal);
+      const rebuilt = terminal.searchTextStale === false;
+      // A second pass is a no-op, and a pane with no xterm yet rebuilds to just
+      // its metadata rather than throwing.
+      rebuildTerminalSearchText(terminal);
+      const bufferless = {
+        searchTextStale: true, searchText: "",
+        titleInput: { value: "Bufferless" }, statusElement: { textContent: "live" }
+      };
+      rebuildTerminalSearchText(bufferless);
+
       clearTerminalSearch();
       clearTerminalSearch();
       stripTerminalControlCodes("\x1b[31mred\x1b[0m\x07");
@@ -637,9 +731,12 @@ test.describe("Renderer coverage completion", () => {
       const fallbackId = createId();
       Object.defineProperty(window.crypto, "randomUUID", { configurable: true, value: oldRandomUUID });
 
-      return { priorSearch: typeof priorSearch, infinite, fallbackScrollback, manualA, bytes, loadedSettings: Boolean(loadedSettings), loadedLayouts, loadedWorkspaces, loadedSession, loadedOrder, fallbackId };
+      return { priorSearch: typeof priorSearch, wentStale, rebuilt, bufferless: bufferless.searchText, infinite, fallbackScrollback, manualA, bytes, loadedSettings: Boolean(loadedSettings), loadedLayouts, loadedWorkspaces, loadedSession, loadedOrder, fallbackId };
     });
 
+    expect(result.wentStale).toBe(true);
+    expect(result.rebuilt).toBe(true);
+    expect(result.bufferless).toContain("bufferless");
     expect(result.infinite).toBe(1000000);
     expect(result.fallbackScrollback).toBe(20000);
     expect(result.bytes).toEqual(["12 B", "2 KB", "2 MB", "2.0 GB"]);

@@ -64,6 +64,9 @@ describe("createSession", () => {
     expect(observer.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "session01", title: "Build" }));
 
     terminal.fire("data", "hello");
+    // Output is coalesced on a short timer, so it reaches clients on the next
+    // flush rather than synchronously with the pty event.
+    server.flushSessionOutput(server.sessions.get("session01"));
     expect(observer.send).toHaveBeenCalledWith(expect.objectContaining({ type: "output", id: "session01", data: "hello" }));
 
     terminal.fire("exit", { exitCode: 0, signal: 0 });

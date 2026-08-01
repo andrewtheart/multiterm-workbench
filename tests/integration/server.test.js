@@ -703,8 +703,10 @@ describe("elevated (administrator) terminal", () => {
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "admin-term-1", pid: 999 }));
     expect(app.sessions.has("admin-term-1")).toBe(true);
 
-    // Output is decoded and broadcast to connected clients.
+    // Output is decoded and broadcast to connected clients (after the coalescing
+    // buffer is drained).
     socket.feed({ type: "output", data: app.encodeElevationData("hello world") });
+    app.flushSessionOutput(app.sessions.get("admin-term-1"));
     expect(observer.send).toHaveBeenCalledWith({ type: "output", id: "admin-term-1", stream: "pty", data: "hello world" });
 
     // Output while logging is enabled also writes to the log stream.

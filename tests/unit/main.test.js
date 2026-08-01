@@ -315,6 +315,7 @@ describe("createWindow", () => {
       webSecurity: true,
       allowRunningInsecureContent: false,
       experimentalFeatures: false,
+      backgroundThrottling: false,
       sandbox: true
     });
   });
