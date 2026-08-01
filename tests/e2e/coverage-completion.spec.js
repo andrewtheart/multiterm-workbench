@@ -2968,10 +2968,29 @@ test.describe("Renderer coverage completion", () => {
       // live shell repaint over the tokens written straight into the buffer.
       window.queueResize = () => {};
 
+      // The live shell keeps painting its prompt after the pane opens, so a
+      // single write can be scrolled or cleared away before the search runs.
+      // Re-write until the token is actually resolvable in the buffer.
+      const bufferHasToken = (terminal, token) => {
+        const buffer = terminal.term.buffer.active;
+        for (let row = 0; row < buffer.length; row += 1) {
+          const line = buffer.getLine(row);
+          if (line && line.translateToString(true).includes(token)) return true;
+        }
+        return false;
+      };
+      const writeUntilVisible = async (terminal, text, token) => {
+        for (let attempt = 0; attempt < 25; attempt += 1) {
+          terminal.term.write(text);
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          if (bufferHasToken(terminal, token)) return true;
+        }
+        return false;
+      };
+
       const results = {};
-      alpha.term.write("\r\nCOVERTOKEN alpha line\r\n");
       beta.term.write("\r\nplain beta line\r\n");
-      await new Promise((resolve) => setTimeout(resolve, 80));
+      results.alphaTokenVisible = await writeUntilVisible(alpha, "\r\nCOVERTOKEN alpha line\r\n", "COVERTOKEN");
 
       // preserveNav keeps the caller's position when the pass is a refresh
       // rather than a brand-new query.
@@ -3021,7 +3040,7 @@ test.describe("Renderer coverage completion", () => {
 
       // A pane that starts matching mid-session schedules a debounced refresh
       // that re-runs the pass while the query is still live.
-      beta.term.write("\r\nCOVERTOKEN arrives late\r\n");
+      results.betaTokenVisible = await writeUntilVisible(beta, "\r\nCOVERTOKEN arrives late\r\n", "COVERTOKEN");
       beta.searchText = `${beta.searchText}covertoken`;
       updateTerminalSearchVisibility(beta);
       await new Promise((resolve) => setTimeout(resolve, 320));
@@ -3039,6 +3058,8 @@ test.describe("Renderer coverage completion", () => {
       return results;
     }, setup);
 
+    expect(result.alphaTokenVisible).toBe(true);
+    expect(result.betaTokenVisible).toBe(true);
     expect(result.preservedNav).toBe(4);
     expect(result.preservedOrder).toBeGreaterThan(0);
     expect(result.addonlessMatched).toBe(false);

