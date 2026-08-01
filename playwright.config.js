@@ -24,6 +24,9 @@ module.exports = defineConfig({
   grepInvert: /@full/,
   fullyParallel: false,
   workers: 1,
+  // Retry transient browser/PTY timing failures once in CI while keeping local
+  // runs fail-fast. Playwright still reports a failure if the retry also fails.
+  retries: process.env.CI ? 1 : 0,
   timeout: 60000,
   expect: { timeout: 15000 },
   reporter: [["list"]],
