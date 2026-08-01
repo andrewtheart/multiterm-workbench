@@ -91,21 +91,13 @@ layouts from auto-fit grids to a free-form canvas.
       <h3>🔒 Locked down by default</h3>
       Both bridges refuse non-loopback binds and enforce exact <code>Origin</code> and <code>Host</code> checks. Electron runs the renderer sandboxed with no Node access, elevated relays use one-time authentication, and updates require HTTPS plus exact size and SHA-256 verification before launch.
     </td>
-  </tr>
-  <tr>
-    <td align="center" width="100%" colspan="3">
+    <td align="center" width="33%">
       <h3>🖱️ Deep right-click context menu</h3>
       Copy, paste, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away.
-      <br /><br />
-      <img src="docs/images/context-menu.png" alt="Right-click context menu showing copy, find, maximize, Copilot CLI, scripts, Git status, and more" height="600" />
     </td>
-  </tr>
-  <tr>
-    <td align="center" width="100%" colspan="3">
+    <td align="center" width="33%">
       <h3>📝 PID-bound notes and command queues</h3>
       Keep context beside each terminal process and stage commands or long prompts, then quick-dequeue them into the terminal without pressing Enter. When a process exits its notes move to Recovered notes and its queue stays reusable, so you can hand both to a replacement terminal.
-      <br /><br />
-      <img src="docs/images/notes-command-queue.png" alt="Terminal notes and command queue dialog showing PID-bound notes and three staged commands" width="900" />
     </td>
   </tr>
 </table>
@@ -201,6 +193,16 @@ file-selection prompts on an interactive Windows desktop.
     <td align="center" width="50%">
       <img src="docs/images/snippets-workspaces.png" alt="Snippets and workspaces controls in the side panel">
       <br><strong>Snippets + workspaces:</strong> reusable commands and saved layouts.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/context-menu.png" alt="Right-click context menu showing copy, find, maximize, Copilot CLI, scripts, Git status, and more">
+      <br><strong>Deep context menu:</strong> terminal actions, scripts, statistics, logging, and process-aware tools in one place.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/notes-command-queue.png" alt="Terminal notes and command queue dialog showing PID-bound notes and three staged commands">
+      <br><strong>Notes + command queues:</strong> process-bound context and reusable staged commands.
     </td>
   </tr>
   <tr>

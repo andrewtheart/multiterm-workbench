@@ -13,7 +13,9 @@ const gridHeadings = [
   "📊 Per-terminal bridge and process statistics",
   "🔗 Attach running WSL tmux sessions",
   "❓ Built-in generated help",
-  "🔒 Locked down by default"
+  "🔒 Locked down by default",
+  "🖱️ Deep right-click context menu",
+  "📝 PID-bound notes and command queues"
 ];
 
 function containingCell(heading) {
@@ -53,5 +55,22 @@ describe("README feature grid", () => {
     expect(readme).toMatch(
       /<tr>\s*<td[^>]*>\s*<h3>📊[^]*?<\/td>\s*<td[^>]*>\s*<h3>🔗[^]*?<\/td>\s*<td[^>]*>\s*<h3>❓[^]*?<\/td>\s*<\/tr>/
     );
+  });
+
+  it("places security, context menu, and PID-bound notes in one complete row", () => {
+    expect(readme).toMatch(
+      /<tr>\s*<td[^>]*>\s*<h3>🔒[^]*?<\/td>\s*<td[^>]*>\s*<h3>🖱️[^]*?<\/td>\s*<td[^>]*>\s*<h3>📝[^]*?<\/td>\s*<\/tr>/
+    );
+  });
+
+  it.each([
+    "docs/images/context-menu.png",
+    "docs/images/notes-command-queue.png"
+  ])("keeps %s only in the Screenshot tour", (imagePath) => {
+    const tourIndex = readme.indexOf("## Screenshot tour");
+    const imageIndex = readme.indexOf(`src="${imagePath}"`);
+
+    expect(readme.split(`src="${imagePath}"`).length - 1).toBe(1);
+    expect(imageIndex).toBeGreaterThan(tourIndex);
   });
 });
