@@ -73,6 +73,14 @@ layouts from auto-fit grids to a free-form canvas.
   </tr>
   <tr>
     <td align="center" width="100%" colspan="3">
+      <h3>🖱️ Deep right-click context menu</h3>
+      Copy, paste, find, maximize, terminal statistics, notes &amp; command queue, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away.
+      <br /><br />
+      <img src="docs/images/context-menu.png" alt="Right-click context menu showing copy, find, maximize, Copilot CLI, scripts, Git status, and more" height="600" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="100%" colspan="3">
       <h3>🔗 Attach running WSL tmux sessions</h3>
       Discover tmux servers across installed WSL distributions and connect an existing session as another live MultiTerm client without restarting its shell or changing its current work.
     </td>
