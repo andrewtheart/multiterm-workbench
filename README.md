@@ -1,7 +1,8 @@
 # MultiTerm Workbench
 
-A local Windows terminal workbench for running PowerShell 7, Windows PowerShell,
-Command Prompt, and WSL sessions side by side.
+A Windows terminal workspace for people who run many shells at once — PowerShell,
+Command Prompt, and WSL together, with broadcast input, cross-terminal search, and
+layouts from auto-fit grids to a free-form canvas.
 
 **⬇️ [Download the latest MultiTerm Workbench installer](https://github.com/andrewtheart/multiterm-workbench/releases/latest)** — or browse all [releases](https://github.com/andrewtheart/multiterm-workbench/releases).
 
