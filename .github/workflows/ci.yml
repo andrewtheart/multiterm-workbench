@@ -25,8 +25,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Set up Pandoc
-        uses: r-lib/actions/setup-pandoc@v2
+      - name: Install Pandoc
+        run: choco install pandoc --no-progress
 
       - name: Install Playwright browser
         run: npx playwright install chromium
