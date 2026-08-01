@@ -35,17 +35,17 @@ function fakeClient() {
   return { send: vi.fn() };
 }
 
+let sessionDependencies;
 let terminal;
 
 beforeEach(() => {
   terminal = makeTerminal();
-  server.__setPty({ spawn: vi.fn(() => terminal) });
+  sessionDependencies = { spawnPty: vi.fn(() => terminal) };
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-  server.__setPty(require("@homebridge/node-pty-prebuilt-multiarch"));
   server.__resetTeardownSchedule();
   server.sessions.clear();
   server.clients.clear();
@@ -57,7 +57,7 @@ describe("createSession", () => {
     const observer = fakeClient();
     server.clients.add(observer);
 
-    server.createSession(client, { id: "session01", shell: "cmd", cwd: process.cwd(), cols: 100, rows: 40, title: "Build" });
+    server.createSession(client, { id: "session01", shell: "cmd", cwd: process.cwd(), cols: 100, rows: 40, title: "Build" }, sessionDependencies);
 
     expect(server.sessions.has("session01")).toBe(true);
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "session01", title: "Build" }));
@@ -77,7 +77,7 @@ describe("createSession", () => {
   it("rejects a duplicate id", () => {
     const client = fakeClient();
     server.sessions.set("dupe1234", { id: "dupe1234", terminal, exited: false });
-    server.createSession(client, { id: "dupe1234" });
+    server.createSession(client, { id: "dupe1234" }, sessionDependencies);
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ message: "A session with this id already exists." }));
   });
 
@@ -86,7 +86,7 @@ describe("createSession", () => {
     for (let index = 0; index < server.maxSessions; index += 1) {
       server.sessions.set(`filler${index}`, { id: `filler${index}`, terminal, exited: false });
     }
-    server.createSession(client, { id: "overflow1" });
+    server.createSession(client, { id: "overflow1" }, sessionDependencies);
     expect(client.send).toHaveBeenCalledWith({
       type: "createFailed",
       id: "overflow1",
@@ -97,7 +97,7 @@ describe("createSession", () => {
 
   it("defaults the title to the shell label and uses default dimensions", () => {
     const client = fakeClient();
-    server.createSession(client, { id: "session02", title: "   " });
+    server.createSession(client, { id: "session02", title: "   " }, sessionDependencies);
     const session = server.sessions.get("session02");
     expect(session.title).toBe("PowerShell 7");
     expect(session.cols).toBe(120);
@@ -105,16 +105,16 @@ describe("createSession", () => {
   });
 
   it("reports a spawn failure", () => {
-    server.__setPty({ spawn: vi.fn(() => { throw new Error("no shell"); }) });
     const client = fakeClient();
-    server.createSession(client, { id: "session03" });
+    const failingDependencies = { spawnPty: vi.fn(() => { throw new Error("no shell"); }) };
+    server.createSession(client, { id: "session03" }, failingDependencies);
     expect(client.send).toHaveBeenCalledWith({ type: "createFailed", id: "session03", message: "no shell" });
     expect(server.sessions.has("session03")).toBe(false);
   });
 
   it("writes sanitized pty output to the log stream when one is attached", () => {
     const client = fakeClient();
-    server.createSession(client, { id: "session04" });
+    server.createSession(client, { id: "session04" }, sessionDependencies);
     const session = server.sessions.get("session04");
     const write = vi.fn();
     session.logStream = { write };
@@ -125,7 +125,7 @@ describe("createSession", () => {
 
   it("never lets a failing log write break the live session", () => {
     const client = fakeClient();
-    server.createSession(client, { id: "session05" });
+    server.createSession(client, { id: "session05" }, sessionDependencies);
     const session = server.sessions.get("session05");
     session.logStream = { write: () => { throw new Error("disk full"); } };
 

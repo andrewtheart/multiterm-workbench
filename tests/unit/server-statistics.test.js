@@ -37,23 +37,23 @@ function fakeClient() {
   return { send: vi.fn() };
 }
 
+let sessionDependencies;
 let terminal;
 
 beforeEach(() => {
   terminal = makeTerminal();
-  server.__setPty({ spawn: vi.fn(() => terminal) });
+  sessionDependencies = { spawnPty: vi.fn(() => terminal) };
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  server.__setPty(require("@homebridge/node-pty-prebuilt-multiarch"));
   server.sessions.clear();
   server.clients.clear();
 });
 
 describe("terminal traffic counters", () => {
   it("counts input and output as string units and UTF-8 bridge bytes", () => {
-    server.createSession(fakeClient(), { id: "traffic01", title: "Traffic" });
+    server.createSession(fakeClient(), { id: "traffic01", title: "Traffic" }, sessionDependencies);
     const session = server.sessions.get("traffic01");
     const payload = "é😀";
 

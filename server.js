@@ -23,7 +23,7 @@ const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
 const childProcess = require("node:child_process");
-let pty = require("@homebridge/node-pty-prebuilt-multiarch");
+const pty = require("@homebridge/node-pty-prebuilt-multiarch");
 const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
 
 const host = process.env.HOST || "127.0.0.1";
@@ -52,9 +52,7 @@ const clients = new Set();
  */
 /** @type {Readonly<SessionDependencies>} */
 const defaultSessionDependencies = Object.freeze({
-  spawnPty(...args) {
-    return pty.spawn(...args);
-  }
+  spawnPty: pty.spawn.bind(pty)
 });
 
 // Session teardown timings. Force-killing a ConPTY is genuinely dangerous — see
@@ -449,10 +447,6 @@ if (require.main === module) {
   start();
 }
 
-function __setPty(mock) {
-  pty = mock;
-}
-
 function __setAllowRemote(value) {
   allowRemote = value;
 }
@@ -474,7 +468,6 @@ module.exports = {
   maxClients,
   maxSessions,
   updatePreferencesMaxSize,
-  __setPty,
   __setAllowRemote,
   __setMemStatsEnabled,
   getPathname,

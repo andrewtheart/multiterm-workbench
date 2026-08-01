@@ -17,7 +17,6 @@
  */
 
 const server = require("../../server.js");
-const pty = require("@homebridge/node-pty-prebuilt-multiarch");
 
 function makeTerminal() {
   return {
@@ -56,17 +55,17 @@ function maskFrame(payload) {
   return Buffer.concat([header, mask, masked]);
 }
 
+let sessionDependencies;
 let terminal;
 
 beforeEach(() => {
   terminal = makeTerminal();
-  server.__setPty({ spawn: vi.fn(() => terminal) });
+  sessionDependencies = { spawnPty: vi.fn(() => terminal) };
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
-  server.__setPty(pty);
   server.__resetTeardownSchedule();
   server.sessions.clear();
   server.clients.clear();
@@ -75,7 +74,11 @@ afterEach(() => {
 describe("handleClientMessage create dispatch", () => {
   it("creates a session from a create message", () => {
     const client = { send: vi.fn() };
-    server.handleClientMessage(client, JSON.stringify({ type: "create", id: "viamessage1", cwd: process.cwd() }));
+    server.handleClientMessage(
+      client,
+      JSON.stringify({ type: "create", id: "viamessage1", cwd: process.cwd() }),
+      sessionDependencies
+    );
     expect(server.sessions.has("viamessage1")).toBe(true);
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created" }));
   });
@@ -84,13 +87,12 @@ describe("handleClientMessage create dispatch", () => {
 describe("createSession environment branches", () => {
   it("uses default TERM/COLORTERM when unset", () => {
     const spawn = vi.fn(() => terminal);
-    server.__setPty({ spawn });
     const savedColor = process.env.COLORTERM;
     const savedTerm = process.env.TERM;
     delete process.env.COLORTERM;
     delete process.env.TERM;
     try {
-      server.createSession({ send: vi.fn() }, { id: "envdefault1" });
+      server.createSession({ send: vi.fn() }, { id: "envdefault1" }, { spawnPty: spawn });
       const opts = spawn.mock.calls[0][2];
       expect(opts.env.COLORTERM).toBe("truecolor");
       expect(opts.env.TERM).toBe("xterm-256color");
@@ -102,13 +104,12 @@ describe("createSession environment branches", () => {
 
   it("passes through an inherited TERM/COLORTERM", () => {
     const spawn = vi.fn(() => terminal);
-    server.__setPty({ spawn });
     const savedColor = process.env.COLORTERM;
     const savedTerm = process.env.TERM;
     process.env.COLORTERM = "yes-color";
     process.env.TERM = "vt100";
     try {
-      server.createSession({ send: vi.fn() }, { id: "envinherit1" });
+      server.createSession({ send: vi.fn() }, { id: "envinherit1" }, { spawnPty: spawn });
       const opts = spawn.mock.calls[0][2];
       expect(opts.env.COLORTERM).toBe("yes-color");
       expect(opts.env.TERM).toBe("vt100");
@@ -119,7 +120,7 @@ describe("createSession environment branches", () => {
   });
 
   it("defaults the title when none is supplied", () => {
-    server.createSession({ send: vi.fn() }, { id: "notitle1", shell: "cmd" });
+    server.createSession({ send: vi.fn() }, { id: "notitle1", shell: "cmd" }, sessionDependencies);
     expect(server.sessions.get("notitle1").title).toBe("Command Prompt");
   });
 });

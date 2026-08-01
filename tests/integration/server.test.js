@@ -148,7 +148,6 @@ describe("HTTP server", () => {
   });
 
   it("accepts a real WebSocket client and answers list", async () => {
-    app.__setPty({ spawn: () => ({ pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {} }) });
     const ws = new WebSocket(`ws://127.0.0.1:${new URL(baseUrl).port}/ws`);
     const messages = [];
     const done = new Promise((resolve, reject) => {
@@ -164,7 +163,6 @@ describe("HTTP server", () => {
     ws.close();
     expect(messages[0].type).toBe("welcome");
     expect(messages.some((m) => m.type === "sessions")).toBe(true);
-    app.__setPty(require("@homebridge/node-pty-prebuilt-multiarch"));
   });
 });
 

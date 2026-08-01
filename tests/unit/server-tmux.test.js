@@ -37,7 +37,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
-  server.__setPty(require("@homebridge/node-pty-prebuilt-multiarch"));
   server.sessions.clear();
   server.clients.clear();
 });
@@ -190,7 +189,6 @@ describe("tmux-backed terminal lifecycle", () => {
   it("creates a real wsl tmux client and includes its identity in summaries", () => {
     const terminal = makeTerminal();
     const spawn = vi.fn(() => terminal);
-    server.__setPty({ spawn });
     const client = fakeClient();
 
     server.createSession(client, {
@@ -199,7 +197,7 @@ describe("tmux-backed terminal lifecycle", () => {
       rows: 28,
       tmux: { distro: " Ubuntu ", session: " dev " },
       title: "Development"
-    });
+    }, { spawnPty: spawn });
 
     expect(spawn).toHaveBeenCalledWith(
       "wsl.exe",
@@ -218,9 +216,12 @@ describe("tmux-backed terminal lifecycle", () => {
 
   it("rejects invalid tmux targets before spawning", () => {
     const spawn = vi.fn();
-    server.__setPty({ spawn });
     const client = fakeClient();
-    server.createSession(client, { id: "tmuxbad01", tmux: { distro: "Ubuntu", session: "bad\nname" } });
+    server.createSession(
+      client,
+      { id: "tmuxbad01", tmux: { distro: "Ubuntu", session: "bad\nname" } },
+      { spawnPty: spawn }
+    );
     expect(spawn).not.toHaveBeenCalled();
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "createFailed", message: expect.stringMatching(/invalid/i) }));
   });
