@@ -35,7 +35,7 @@ describe("in-app help", () => {
     expect(packageJson.scripts["build:help"]).toContain("build-help.ps1");
     expect(packageJson.scripts.prestart).toBe("npm run build:help");
     expect(installerBuildScript.indexOf("Generate in-app help from HELP.md"))
-      .toBeLessThan(installerBuildScript.indexOf("Snapshot every pending change"));
+      .toBeLessThan(installerBuildScript.indexOf("Conservatively commit pending changes"));
   });
 
   it("exposes a visible question-mark button and the help modal", () => {
