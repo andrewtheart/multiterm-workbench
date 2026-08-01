@@ -204,23 +204,27 @@ describe("isAllowedWebSocketOrigin", () => {
     expect(server.isAllowedWebSocketOrigin("")).toBe(true);
   });
 
-  it("allows only loopback-literal http(s) origins", () => {
-    expect(server.isAllowedWebSocketOrigin("http://127.0.0.1:3177")).toBe(true);
-    expect(server.isAllowedWebSocketOrigin("http://localhost:3199")).toBe(true);
-    expect(server.isAllowedWebSocketOrigin("https://127.0.0.1")).toBe(true);
-    expect(server.isAllowedWebSocketOrigin("http://[::1]:3177")).toBe(true);
+  it("allows only exact loopback-literal hosts and ports", () => {
+    expect(server.isAllowedWebSocketOrigin("http://127.0.0.1:3177", "127.0.0.1:3177")).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("http://localhost:3199", "localhost:3199")).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("https://127.0.0.1:4443", "127.0.0.1:4443")).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("http://[::1]:3177", "[::1]:3177")).toBe(true);
   });
 
   it("rejects cross-site, rebinding, and non-http origins", () => {
     // A hostile website.
-    expect(server.isAllowedWebSocketOrigin("https://evil.example")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("https://evil.example", "127.0.0.1:3177")).toBe(false);
     // DNS-rebinding: a name that resolves to 127.0.0.1 still carries its own host.
-    expect(server.isAllowedWebSocketOrigin("http://attacker.local:3177")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("http://attacker.local:3177", "127.0.0.1:3177")).toBe(false);
+    // A different loopback app is still cross-origin and must not control shells.
+    expect(server.isAllowedWebSocketOrigin("http://localhost:3000", "localhost:3177")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("http://localhost:3177", "127.0.0.1:3177")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("http://localhost:3177", undefined)).toBe(false);
     // Non-http(s) schemes.
-    expect(server.isAllowedWebSocketOrigin("file://127.0.0.1")).toBe(false);
-    expect(server.isAllowedWebSocketOrigin("ftp://localhost")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("file://127.0.0.1", "127.0.0.1")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("ftp://localhost", "localhost")).toBe(false);
     // Unparseable Origin header.
-    expect(server.isAllowedWebSocketOrigin("not a url")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("not a url", "localhost:3177")).toBe(false);
   });
 });
 
@@ -272,6 +276,33 @@ describe("sendJsonResponse", () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toContain("application/json");
     expect(JSON.parse(res.body)).toEqual({ ok: true });
+  });
+});
+
+describe("setSecurityHeaders", () => {
+  it("applies a restrictive browser policy without allowing inline scripts", () => {
+    const res = mockResponse();
+    server.setSecurityHeaders(res);
+    expect(res.headers["Content-Security-Policy"]).toContain("script-src 'self'");
+    expect(res.headers["Content-Security-Policy"]).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(res.headers["Content-Security-Policy"]).toContain("frame-ancestors 'none'");
+    expect(res.headers["X-Content-Type-Options"]).toBe("nosniff");
+    expect(res.headers["Permissions-Policy"]).toContain("camera=()");
+  });
+
+  it("does not mutate a response after its headers were sent", () => {
+    const res = mockResponse();
+    res.headersSent = true;
+    server.setSecurityHeaders(res);
+    expect(res.headers).toBeNull();
+  });
+
+  it("allows only the Help document policy to opt into same-origin framing", () => {
+    const res = mockResponse();
+    server.setSecurityHeaders(res, { allowSameOriginFrame: true });
+    expect(res.headers["Content-Security-Policy"]).toContain("frame-ancestors 'self'");
+    expect(res.headers["Content-Security-Policy"]).not.toContain("frame-ancestors 'none'");
+    expect(res.headers["X-Frame-Options"]).toBe("SAMEORIGIN");
   });
 });
 

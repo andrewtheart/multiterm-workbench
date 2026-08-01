@@ -31,18 +31,31 @@ const LOOPBACK_ORIGIN_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 // cannot forge it, so:
 //   * A missing Origin means a non-browser client (our own tests, CLI tools).
 //     That can never be a cross-site browser request, so it is allowed.
-//   * A present Origin must be an http(s) page served from a loopback LITERAL.
+//   * A present Origin must be an http(s) page served from the exact loopback
+//     hostname and port in the WebSocket Host header. Allowing every localhost
+//     port would let an unrelated local web app drive real shells.
 //     Requiring the literal (not merely a name that resolves to 127.0.0.1) also
 //     defeats DNS-rebinding, because a rebinding page carries its own hostname
 //     in the Origin, never "127.0.0.1"/"localhost"/"::1".
-function isAllowedWebSocketOrigin(origin) {
+function isAllowedWebSocketOrigin(origin, expectedHost) {
   if (origin === undefined || origin === null || origin === "") return true;
   const parsed = URL.parse(String(origin));
   if (!parsed) return false;
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   // URL keeps IPv6 hosts wrapped in brackets ("[::1]"); compare on the literal.
   const hostname = parsed.hostname.replace(/^\[/, "").replace(/\]$/, "");
-  return LOOPBACK_ORIGIN_HOSTS.has(hostname);
+  if (!LOOPBACK_ORIGIN_HOSTS.has(hostname) || typeof expectedHost !== "string") return false;
+
+  const expected = URL.parse(`multiterm://${expectedHost}`);
+    if (!expected || expected.username || expected.password
+      || (expected.pathname !== "" && expected.pathname !== "/")
+      || expected.search || expected.hash) return false;
+  const expectedHostname = expected.hostname.replace(/^\[/, "").replace(/\]$/, "");
+  const originPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  const expectedPort = expected.port || "80";
+  return LOOPBACK_ORIGIN_HOSTS.has(expectedHostname)
+    && hostname === expectedHostname
+    && originPort === expectedPort;
 }
 
 module.exports = { LOOPBACK_ORIGIN_HOSTS, isAllowedWebSocketOrigin };

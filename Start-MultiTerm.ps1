@@ -978,6 +978,7 @@ namespace MultiTerm.PowerShellBridge
             try
             {
                 string path = context.Request.Url == null ? "/" : context.Request.Url.AbsolutePath;
+                this.ApplySecurityHeaders(context.Response, path == "/help.html");
 
                 if (context.Request.IsWebSocketRequest && path == "/ws")
                 {
@@ -2030,7 +2031,8 @@ namespace MultiTerm.PowerShellBridge
         private void HandleWebSocket(HttpListenerContext context)
         {
             IPAddress remoteAddress = context.Request.RemoteEndPoint == null ? null : context.Request.RemoteEndPoint.Address;
-            if (!this.allowRemote && !this.IsLocalAddress(remoteAddress))
+            if (!this.allowRemote &&
+                (!this.IsLocalAddress(remoteAddress) || !this.IsAllowedWebSocketOrigin(context.Request)))
             {
                 context.Response.StatusCode = 403;
                 context.Response.Close();
@@ -3181,6 +3183,65 @@ namespace MultiTerm.PowerShellBridge
             response.ContentLength64 = content.Length;
             response.OutputStream.Write(content, 0, content.Length);
             response.Close();
+        }
+
+        private void ApplySecurityHeaders(HttpListenerResponse response, bool allowSameOriginFrame)
+        {
+            string frameAncestors = allowSameOriginFrame ? "'self'" : "'none'";
+            response.Headers["Content-Security-Policy"] =
+                "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors " + frameAncestors
+                + "; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+                + "; img-src 'self' data:; font-src 'self'"
+                + "; connect-src 'self' ws://127.0.0.1:* ws://localhost:* https://api.github.com"
+                + "; frame-src 'self'; manifest-src 'self'; media-src 'none'; worker-src 'none'";
+            response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
+            response.Headers["Cross-Origin-Resource-Policy"] = "same-origin";
+            response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()";
+            response.Headers["Referrer-Policy"] = "no-referrer";
+            response.Headers["X-Content-Type-Options"] = "nosniff";
+            response.Headers["X-Frame-Options"] = allowSameOriginFrame ? "SAMEORIGIN" : "DENY";
+        }
+
+        private bool IsAllowedWebSocketOrigin(HttpListenerRequest request)
+        {
+            string origin = request.Headers["Origin"];
+            if (String.IsNullOrEmpty(origin))
+            {
+                return true;
+            }
+
+            Uri originUri;
+            Uri expectedUri;
+            string expectedHost = request.Headers["Host"];
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out originUri) ||
+                (originUri.Scheme != Uri.UriSchemeHttp && originUri.Scheme != Uri.UriSchemeHttps) ||
+                !this.IsLoopbackHostLiteral(originUri.Host) ||
+                String.IsNullOrEmpty(expectedHost) ||
+                !Uri.TryCreate("http://" + expectedHost + "/", UriKind.Absolute, out expectedUri) ||
+                !String.IsNullOrEmpty(expectedUri.UserInfo) ||
+                expectedUri.AbsolutePath != "/" ||
+                !String.IsNullOrEmpty(expectedUri.Query) ||
+                !String.IsNullOrEmpty(expectedUri.Fragment) ||
+                !this.IsLoopbackHostLiteral(expectedUri.Host))
+            {
+                return false;
+            }
+
+            return String.Equals(this.NormalizeHostLiteral(originUri.Host), this.NormalizeHostLiteral(expectedUri.Host), StringComparison.OrdinalIgnoreCase)
+                && originUri.Port == expectedUri.Port;
+        }
+
+        private bool IsLoopbackHostLiteral(string hostValue)
+        {
+            string normalized = this.NormalizeHostLiteral(hostValue);
+            return String.Equals(normalized, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(normalized, "localhost", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(normalized, "::1", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string NormalizeHostLiteral(string hostValue)
+        {
+            return (hostValue ?? String.Empty).Trim().TrimStart('[').TrimEnd(']');
         }
 
         private string SanitizeId(string value)

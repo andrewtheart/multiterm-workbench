@@ -407,13 +407,7 @@
       }
     }
   </style>
-  <script>
-    (() => {
-      const requestedTheme = new URLSearchParams(window.location.search).get("theme");
-      const theme = requestedTheme === "light" ? "light" : "dark";
-      document.documentElement.dataset.theme = theme;
-    })();
-  </script>
+  <script src="help-theme.js"></script>
 </head>
 <body>
 <nav id="TOC" role="doc-toc">

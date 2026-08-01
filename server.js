@@ -116,8 +116,47 @@ const mimeTypes = new Map([
   [".webmanifest", "application/manifest+json"]
 ]);
 
+const securityHeaders = Object.freeze({
+  "Content-Security-Policy": [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'none'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self' ws://127.0.0.1:* ws://localhost:* https://api.github.com",
+    "frame-src 'self'",
+    "manifest-src 'self'",
+    "media-src 'none'",
+    "worker-src 'none'"
+  ].join("; "),
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY"
+});
+
+function setSecurityHeaders(response, { allowSameOriginFrame = false } = {}) {
+  if (!response || response.headersSent || typeof response.setHeader !== "function") return;
+  for (const [name, value] of Object.entries(securityHeaders)) {
+    if (allowSameOriginFrame && name === "Content-Security-Policy") {
+      response.setHeader(name, value.replace("frame-ancestors 'none'", "frame-ancestors 'self'"));
+    } else if (allowSameOriginFrame && name === "X-Frame-Options") {
+      response.setHeader(name, "SAMEORIGIN");
+    } else {
+      response.setHeader(name, value);
+    }
+  }
+}
+
 const server = http.createServer((request, response) => {
   const pathname = getPathname(request.url);
+  setSecurityHeaders(response, { allowSameOriginFrame: pathname === "/help.html" });
 
   if (pathname === "/api/update-preferences") {
     handleUpdatePreferencesRequest(request, response);
@@ -157,7 +196,7 @@ server.on("upgrade", (request, socket) => {
 
   // Reject cross-site WebSocket handshakes (CSWSH). Skipped when remote access is
   // explicitly opted into, since remote clients legitimately carry other origins.
-  if (!allowRemote && !isAllowedWebSocketOrigin(request.headers.origin)) {
+  if (!allowRemote && !isAllowedWebSocketOrigin(request.headers.origin, request.headers.host)) {
     socket.destroy();
     return;
   }
@@ -291,12 +330,14 @@ module.exports = {
   sessions,
   clients,
   mimeTypes,
+  securityHeaders,
   maxMessageSize,
   updatePreferencesMaxSize,
   __setPty,
   __setAllowRemote,
   __setMemStatsEnabled,
   getPathname,
+  setSecurityHeaders,
   serveStaticFile,
   sendJsonResponse,
   getUpdatePreferencesPath,

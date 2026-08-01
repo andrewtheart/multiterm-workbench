@@ -27,6 +27,9 @@ describe("in-app help", () => {
     expect(generatedHelp).toContain("<title>MultiTerm Workbench Help</title>");
     expect(generatedHelp).toContain('id="notes-and-command-queues"');
     expect(generatedHelp).toContain("data-theme");
+    expect(generatedHelp).toContain('<script src="help-theme.js"></script>');
+    expect(generatedHelp).not.toMatch(/<script>(?:.|\r|\n)*?<\/script>/);
+    expect(read(path.join("public", "help-theme.js"))).toContain("URLSearchParams");
     expect(buildScript).toContain('"HELP.md"');
     expect(buildScript).toContain('"public\\help.html"');
     expect(packageJson.scripts["build:help"]).toContain("build-help.ps1");

@@ -177,12 +177,22 @@ describe("WebSocket upgrade guards", () => {
     const socket = fakeSocket("127.0.0.1");
     app.server.emit("upgrade", {
       url: "/ws",
-      headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==", origin: "http://127.0.0.1:3177" }
+      headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==", host: "127.0.0.1:3177", origin: "http://127.0.0.1:3177" }
     }, socket);
     expect(socket.destroy).not.toHaveBeenCalled();
     expect(String(socket.write.mock.calls[0][0])).toContain("101 Switching Protocols");
     expect(app.clients.size).toBe(1);
     socket.emit("close");
+  });
+
+  it("destroys an upgrade from a different loopback web app", () => {
+    const socket = fakeSocket("127.0.0.1");
+    app.server.emit("upgrade", {
+      url: "/ws",
+      headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==", host: "127.0.0.1:3177", origin: "http://127.0.0.1:3000" }
+    }, socket);
+    expect(socket.destroy).toHaveBeenCalled();
+    expect(app.clients.size).toBe(0);
   });
 
   it("removes the client on socket error", () => {

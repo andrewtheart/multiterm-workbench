@@ -110,6 +110,13 @@ function handlerFor(event) {
   return call && call[1];
 }
 
+function trustedIpcEvent() {
+  const webContents = main.getMainWindow().webContents;
+  const mainFrame = { url: "http://127.0.0.1:3177/" };
+  webContents.mainFrame = mainFrame;
+  return { sender: webContents, senderFrame: mainFrame };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   electron = makeElectron();
@@ -270,6 +277,9 @@ describe("createWindow", () => {
   it("recognizes only internal app URLs", () => {
     expect(main.isInternalUrl("http://127.0.0.1:3177/index.html")).toBe(true);
     expect(main.isInternalUrl("http://localhost:3177/x")).toBe(true);
+    expect(main.isInternalUrl("http://127.0.0.1.evil.example:3177/x")).toBe(false);
+    expect(main.isInternalUrl("http://localhost.evil.example:3177/x")).toBe(false);
+    expect(main.isInternalUrl("http://127.0.0.1:9999/x")).toBe(false);
     expect(main.isInternalUrl("https://example.com")).toBe(false);
     expect(main.isInternalUrl("file:///etc/passwd")).toBe(false);
     expect(main.isInternalUrl(undefined)).toBe(false);
@@ -428,17 +438,18 @@ describe("tray + close-to-tray", () => {
     expect(onCall).toBeTruthy();
     const listener = onCall[1];
     const win = main.getMainWindow();
+    const event = trustedIpcEvent();
 
-    listener({}, "tray");
+    listener(event, "tray");
     expect(win.hide).toHaveBeenCalled();
 
-    listener({}, "quit");
+    listener(event, "quit");
     expect(electron.app.isQuiting).toBe(true);
     expect(electron.app.quit).toHaveBeenCalled();
 
     win.hide.mockClear();
     electron.app.quit.mockClear();
-    listener({}, "cancel");
+    listener(event, "cancel");
     expect(win.hide).not.toHaveBeenCalled();
     expect(electron.app.quit).not.toHaveBeenCalled();
   });
@@ -450,7 +461,7 @@ describe("tray + close-to-tray", () => {
     const win = main.getMainWindow();
     win.isMinimized.mockReturnValue(true);
 
-    onCall[1]();
+    onCall[1](trustedIpcEvent());
 
     expect(win.restore).toHaveBeenCalled();
     expect(win.show).toHaveBeenCalled();
@@ -710,7 +721,7 @@ describe("registerScriptPicker (via onReady)", () => {
     electron.dialog.showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: ["C:\\scripts\\deploy.ps1"] }));
     await bootReady();
     const handler = pickHandler();
-    await expect(handler()).resolves.toBe("C:\\scripts\\deploy.ps1");
+    await expect(handler(trustedIpcEvent())).resolves.toBe("C:\\scripts\\deploy.ps1");
     expect(electron.dialog.showOpenDialog).toHaveBeenCalled();
   });
 
@@ -718,18 +729,19 @@ describe("registerScriptPicker (via onReady)", () => {
     electron.dialog.showOpenDialog = vi.fn();
     await bootReady();
     const handler = pickHandler();
+    const event = trustedIpcEvent();
 
     electron.dialog.showOpenDialog.mockResolvedValueOnce(null);
-    await expect(handler()).resolves.toBeNull();
+    await expect(handler(event)).resolves.toBeNull();
 
     electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: true });
-    await expect(handler()).resolves.toBeNull();
+    await expect(handler(event)).resolves.toBeNull();
 
     electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: "not-an-array" });
-    await expect(handler()).resolves.toBeNull();
+    await expect(handler(event)).resolves.toBeNull();
 
     electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [] });
-    await expect(handler()).resolves.toBeNull();
+    await expect(handler(event)).resolves.toBeNull();
   });
 });
 
@@ -787,7 +799,10 @@ describe("administrator elevation IPC", () => {
     return call && call[1];
   };
   let originalPlatform;
-  beforeEach(() => { originalPlatform = process.platform; });
+  beforeEach(() => {
+    originalPlatform = process.platform;
+    main.createWindow();
+  });
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
@@ -821,14 +836,14 @@ describe("administrator elevation IPC", () => {
   it("is-elevated handler reports the cached elevation flag (non-Windows short-circuit)", async () => {
     setPlatform("linux");
     main.registerAdminIpc();
-    await expect(adminHandler("multiterm:is-elevated")()).resolves.toBe(false);
+    await expect(adminHandler("multiterm:is-elevated")(trustedIpcEvent())).resolves.toBe(false);
   });
 
   it("is-elevated handler resolves true after a successful net session check on Windows", async () => {
     setPlatform("win32");
     vi.spyOn(childProcess, "exec").mockImplementation((cmd, opts, cb) => { cb(null); });
     main.registerAdminIpc();
-    await expect(adminHandler("multiterm:is-elevated")()).resolves.toBe(true);
+    await expect(adminHandler("multiterm:is-elevated")(trustedIpcEvent())).resolves.toBe(true);
     expect(childProcess.exec).toHaveBeenCalledWith("net session", expect.any(Object), expect.any(Function));
   });
 
@@ -837,7 +852,7 @@ describe("administrator elevation IPC", () => {
     setPlatform("win32");
     childProcess.spawn.mockImplementation(() => ({ unref: vi.fn() }));
     main.registerAdminIpc();
-    const result = adminHandler("multiterm:relaunch-as-admin")();
+    const result = adminHandler("multiterm:relaunch-as-admin")(trustedIpcEvent());
     expect(result).toBe(true);
     expect(electron.app.isQuiting).toBe(true);
     expect(electron.app.quit).not.toHaveBeenCalled();
@@ -848,7 +863,7 @@ describe("administrator elevation IPC", () => {
   it("relaunch-as-admin handler returns false without quitting when relaunch is unsupported", () => {
     setPlatform("linux");
     main.registerAdminIpc();
-    const result = adminHandler("multiterm:relaunch-as-admin")();
+    const result = adminHandler("multiterm:relaunch-as-admin")(trustedIpcEvent());
     expect(result).toBe(false);
     expect(electron.app.isQuiting).toBe(false);
     expect(electron.app.quit).not.toHaveBeenCalled();
@@ -876,7 +891,15 @@ describe("administrator elevation IPC", () => {
     vi.spyOn(childProcess, "exec").mockImplementation((cmd, opts, cb) => { cb(new Error("not admin")); });
     main.registerAdminIpc();
     await main.ensureElevationChecked();
-    await expect(adminHandler("multiterm:is-elevated")()).resolves.toBe(false);
+    await expect(adminHandler("multiterm:is-elevated")(trustedIpcEvent())).resolves.toBe(false);
+  });
+
+  it("rejects privileged IPC from a different frame or origin", async () => {
+    main.registerAdminIpc();
+    const webContents = main.getMainWindow().webContents;
+    webContents.mainFrame = { url: "http://127.0.0.1:3177/" };
+    const untrusted = { sender: webContents, senderFrame: { url: "https://example.com/" } };
+    await expect(adminHandler("multiterm:is-elevated")(untrusted)).rejects.toThrow(/restricted/);
   });
 
   it("ensureElevationChecked swallows a synchronous exec failure", async () => {
@@ -1098,9 +1121,14 @@ describe("update checker", () => {
   });
 
   describe("downloadUpdate", () => {
-    it("rejects assets that are missing or served over http", async () => {
+    it("rejects assets that are missing, insecure, or outside the project releases", async () => {
       await expect(main.downloadUpdate(null)).rejects.toThrow(/does not include a Windows installer/);
       await expect(main.downloadUpdate({ url: "http://example.com/setup.exe" })).rejects.toThrow(/insecure/);
+      await expect(main.downloadUpdate({ url: "https://example.com/setup.exe" })).rejects.toThrow(/untrusted/);
+      await expect(main.downloadUpdate({
+        name: "other.exe",
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+      })).rejects.toThrow(/untrusted/);
     });
 
     it("streams the installer to disk and reports progress", async () => {
@@ -1114,7 +1142,11 @@ describe("update checker", () => {
 
       const progress = [];
       const pending = main.downloadUpdate(
-        { name: "MultiTerm Setup.exe", url: "https://example.com/setup.exe", size: 10 },
+        {
+          name: "MultiTerm Setup.exe",
+          url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/MultiTerm%20Setup.exe",
+          size: 10
+        },
         (payload) => progress.push(payload)
       );
 
@@ -1136,7 +1168,10 @@ describe("update checker", () => {
       file.destroy = vi.fn();
       vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
 
-      const pending = main.downloadUpdate({ url: "https://example.com/setup.exe", size: 7 });
+      const pending = main.downloadUpdate({
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe",
+        size: 7
+      });
       await new Promise((resolve) => setTimeout(resolve, 0));
       response.emit("data", Buffer.alloc(7));
       file.emit("finish");
@@ -1155,7 +1190,10 @@ describe("update checker", () => {
       vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
       const unlink = vi.spyOn(fs, "unlink").mockImplementation((_path, cb) => cb());
 
-      const pending = main.downloadUpdate({ name: "setup.exe", url: "https://example.com/setup.exe" });
+      const pending = main.downloadUpdate({
+        name: "setup.exe",
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+      });
       await new Promise((resolve) => setTimeout(resolve, 0));
       response.emit("error", new Error("socket hang up"));
 
@@ -1172,7 +1210,10 @@ describe("update checker", () => {
       vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
       const unlink = vi.spyOn(fs, "unlink").mockImplementation((_path, cb) => cb());
 
-      const pending = main.downloadUpdate({ name: "setup.exe", url: "https://example.com/setup.exe" });
+      const pending = main.downloadUpdate({
+        name: "setup.exe",
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+      });
       await new Promise((resolve) => setTimeout(resolve, 0));
       file.emit("error", new Error("disk full"));
 
@@ -1231,6 +1272,10 @@ describe("update checker", () => {
   });
 
   describe("registerUpdateIpc", () => {
+    beforeEach(() => {
+      main.createWindow();
+    });
+
     function handlerFor(channel) {
       const call = electron.ipcMain.handle.mock.calls.find(([name]) => name === channel);
       return call && call[1];
@@ -1240,7 +1285,7 @@ describe("update checker", () => {
       stubHttps(() => makeResponse({ status: 500 }));
       main.registerUpdateIpc();
 
-      const result = await handlerFor("multiterm:check-update")();
+      const result = await handlerFor("multiterm:check-update")(trustedIpcEvent());
       expect(result.ok).toBe(false);
       expect(result.error).toMatch(/HTTP 500/);
       expect(result.releasePage).toContain("/releases/latest");
@@ -1248,14 +1293,13 @@ describe("update checker", () => {
 
     it("reports a download failure without quitting the app", async () => {
       main.registerUpdateIpc();
-      const result = await handlerFor("multiterm:download-update")({}, null);
+      const result = await handlerFor("multiterm:download-update")(trustedIpcEvent(), null);
       expect(result).toMatchObject({ ok: false });
       expect(electron.app.isQuiting).toBe(false);
     });
 
     it("downloads, throttles progress, launches the installer, and quits after handoff", async () => {
       vi.useFakeTimers();
-      main.createWindow();
       electron.app.getPath = vi.fn(() => "C:\\temp");
       const response = makeResponse({ headers: { "content-length": "10" } });
       stubHttps(() => response);
@@ -1267,9 +1311,9 @@ describe("update checker", () => {
       vi.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValue(1100);
       main.registerUpdateIpc();
 
-      const pending = handlerFor("multiterm:download-update")({}, {
+      const pending = handlerFor("multiterm:download-update")(trustedIpcEvent(), {
         name: "setup.exe",
-        url: "https://example.com/setup.exe",
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe",
         size: 10
       });
       await vi.runAllTicks();
@@ -1301,9 +1345,9 @@ describe("update checker", () => {
       electron.shell.openPath = vi.fn(() => { throw new Error("blocked"); });
       main.registerUpdateIpc();
 
-      const pending = handlerFor("multiterm:download-update")({}, {
+      const pending = handlerFor("multiterm:download-update")(trustedIpcEvent(), {
         name: "setup.exe",
-        url: "https://example.com/setup.exe"
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
       file.emit("finish");
@@ -1318,18 +1362,19 @@ describe("update checker", () => {
     it("only opens github.com URLs from the release-page handler", async () => {
       main.registerUpdateIpc();
       const open = handlerFor("multiterm:open-release");
+      const event = trustedIpcEvent();
 
-      await open({}, "https://github.com/andrewtheart/multiterm-workbench/releases/tag/v1.0.0");
+      await open(event, "https://github.com/andrewtheart/multiterm-workbench/releases/tag/v1.0.0");
       expect(electron.shell.openExternal).toHaveBeenLastCalledWith("https://github.com/andrewtheart/multiterm-workbench/releases/tag/v1.0.0");
 
-      await open({}, "https://evil.example.com/pwn");
+      await open(event, "https://evil.example.com/pwn");
       expect(electron.shell.openExternal).toHaveBeenLastCalledWith(expect.stringContaining("github.com/andrewtheart/multiterm-workbench"));
     });
 
     it("returns false when the release page cannot be opened", async () => {
       electron.shell.openExternal.mockRejectedValue(new Error("no browser"));
       main.registerUpdateIpc();
-      await expect(handlerFor("multiterm:open-release")({}, null)).resolves.toBe(false);
+      await expect(handlerFor("multiterm:open-release")(trustedIpcEvent(), null)).resolves.toBe(false);
     });
 
     it("does nothing when ipcMain is unavailable", () => {

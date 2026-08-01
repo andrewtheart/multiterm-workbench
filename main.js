@@ -40,8 +40,30 @@ const PORT = Number(process.env.PORT || 3177);
 // Whether a URL points back at the app's own local origin. Used to allow internal
 // navigations/window-opens while routing everything else to the default browser.
 function isInternalUrl(url) {
-  return typeof url === "string"
-    && (url.startsWith(`http://${HOST}`) || url.startsWith("http://localhost"));
+  if (typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:"
+      && (parsed.hostname === HOST || parsed.hostname === "localhost")
+      && parsed.port === String(PORT);
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedIpcSender(event) {
+  const sender = event?.sender;
+  const senderFrame = event?.senderFrame;
+  const webContents = mainWindow?.webContents;
+  if (!webContents || sender !== webContents) return false;
+  if (senderFrame && webContents.mainFrame && senderFrame !== webContents.mainFrame) return false;
+  return isInternalUrl(senderFrame?.url || sender?.getURL?.());
+}
+
+function assertTrustedIpcSender(event) {
+  if (!isTrustedIpcSender(event)) {
+    throw new Error("IPC is restricted to the MultiTerm application window.");
+  }
 }
 
 // Chromium force-loses the oldest WebGL context once ~16 are live, and xterm's
@@ -275,10 +297,12 @@ function registerCloseHandler() {
     ipcMain.removeAllListeners("multiterm:close-response");
     ipcMain.removeAllListeners("multiterm:focus-window");
   }
-  ipcMain.on("multiterm:close-response", (_event, action) => {
+  ipcMain.on("multiterm:close-response", (event, action) => {
+    if (!isTrustedIpcSender(event)) return;
     handleCloseResponse(action);
   });
-  ipcMain.on("multiterm:focus-window", () => {
+  ipcMain.on("multiterm:focus-window", (event) => {
+    if (!isTrustedIpcSender(event)) return;
     showMainWindow();
   });
 }
@@ -287,20 +311,7 @@ function registerClipboardIpc() {
   if (!ipcMain || typeof ipcMain.handle !== "function" || !clipboard?.writeText) return;
   try { ipcMain.removeHandler("multiterm:write-clipboard"); } catch { /* no existing handler */ }
   ipcMain.handle("multiterm:write-clipboard", (event, text) => {
-    const sender = event?.sender;
-    const senderFrame = event?.senderFrame;
-    const senderUrl = senderFrame?.url || sender?.getURL?.();
-    let trustedOrigin = false;
-    try {
-      const expectedOrigin = new URL(`http://${HOST}:${PORT}`).origin;
-      trustedOrigin = new URL(senderUrl).origin === expectedOrigin;
-    } catch {
-      trustedOrigin = false;
-    }
-    if (!mainWindow
-        || sender !== mainWindow.webContents
-        || (senderFrame && sender.mainFrame && senderFrame !== sender.mainFrame)
-        || !trustedOrigin) {
+    if (!isTrustedIpcSender(event)) {
       throw new Error("Clipboard writes are restricted to the MultiTerm application window.");
     }
     if (typeof text !== "string") {
@@ -341,7 +352,8 @@ async function onReady() {
 function registerScriptPicker() {
   if (!ipcMain || typeof ipcMain.handle !== "function") return;
   try { ipcMain.removeHandler("multiterm:pick-script"); } catch { /* no existing handler */ }
-  ipcMain.handle("multiterm:pick-script", async () => {
+  ipcMain.handle("multiterm:pick-script", async (event) => {
+    assertTrustedIpcSender(event);
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Select a script to run",
       properties: ["openFile"],
@@ -366,8 +378,13 @@ function registerAdminIpc() {
   for (const channel of ["multiterm:is-elevated", "multiterm:relaunch-as-admin"]) {
     try { ipcMain.removeHandler(channel); } catch { /* no existing handler */ }
   }
-  ipcMain.handle("multiterm:is-elevated", async () => { await ensureElevationChecked(); return appIsElevated; });
-  ipcMain.handle("multiterm:relaunch-as-admin", () => {
+  ipcMain.handle("multiterm:is-elevated", async (event) => {
+    assertTrustedIpcSender(event);
+    await ensureElevationChecked();
+    return appIsElevated;
+  });
+  ipcMain.handle("multiterm:relaunch-as-admin", (event) => {
+    assertTrustedIpcSender(event);
     const ok = relaunchAsAdmin();
     if (!ok) {
       /* relaunch unsupported or failed — keep the current window running */
@@ -563,6 +580,27 @@ async function checkForUpdate() {
   };
 }
 
+function isAllowedInstallerAsset(asset) {
+  if (!asset || typeof asset.url !== "string") return false;
+  try {
+    const parsed = new URL(asset.url);
+    const releasePrefix = `/${UPDATE_REPO}/releases/download/`.toLowerCase();
+    const urlName = decodeURIComponent(path.posix.basename(parsed.pathname));
+    return parsed.protocol === "https:"
+      && parsed.hostname === "github.com"
+      && parsed.port === ""
+      && parsed.username === ""
+      && parsed.password === ""
+      && parsed.search === ""
+      && parsed.hash === ""
+      && parsed.pathname.toLowerCase().startsWith(releasePrefix)
+      && /\.exe$/i.test(urlName)
+      && (asset.name === undefined || asset.name === urlName);
+  } catch {
+    return false;
+  }
+}
+
 // Streams the installer into the temp folder, reporting progress so the renderer
 // can show a determinate bar.
 function downloadUpdate(asset, onProgress) {
@@ -571,6 +609,9 @@ function downloadUpdate(asset, onProgress) {
   }
   if (!/^https:\/\//i.test(asset.url)) {
     return Promise.reject(new Error("Refusing to download an installer over an insecure URL."));
+  }
+  if (!isAllowedInstallerAsset(asset)) {
+    return Promise.reject(new Error("Refusing to download an installer from an untrusted release URL."));
   }
 
   let tempDir;
@@ -637,7 +678,8 @@ function registerUpdateIpc() {
     try { ipcMain.removeHandler(channel); } catch { /* no existing handler */ }
   }
 
-  ipcMain.handle("multiterm:check-update", async () => {
+  ipcMain.handle("multiterm:check-update", async (event) => {
+    assertTrustedIpcSender(event);
     try {
       return await checkForUpdate();
     } catch (err) {
@@ -645,7 +687,8 @@ function registerUpdateIpc() {
     }
   });
 
-  ipcMain.handle("multiterm:download-update", async (_event, asset) => {
+  ipcMain.handle("multiterm:download-update", async (event, asset) => {
+    assertTrustedIpcSender(event);
     let lastEmit = 0;
     try {
       const file = await downloadUpdate(asset, ({ received, total }) => {
@@ -669,7 +712,8 @@ function registerUpdateIpc() {
     }
   });
 
-  ipcMain.handle("multiterm:open-release", async (_event, url) => {
+  ipcMain.handle("multiterm:open-release", async (event, url) => {
+    assertTrustedIpcSender(event);
     const target = typeof url === "string" && /^https:\/\/github\.com\//i.test(url) ? url : RELEASE_PAGE_URL;
     try {
       await shell.openExternal(target);
@@ -747,6 +791,7 @@ module.exports = {
   readStream,
   fetchLatestRelease,
   checkForUpdate,
+  isAllowedInstallerAsset,
   downloadUpdate,
   runInstaller,
   sendUpdateProgress,
@@ -757,6 +802,7 @@ module.exports = {
   __setElectron,
   formatError,
   isInternalUrl,
+  isTrustedIpcSender,
   getMainWindow: () => mainWindow,
   getTray: () => tray,
   getServerProcess: () => serverProcess,
