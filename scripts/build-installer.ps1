@@ -263,9 +263,28 @@ function Normalize-CopilotReleaseNotes {
     return $notes.Trim()
 }
 
+function Add-ReleaseCompareLink {
+    param(
+        [string]$Notes,
+        [string]$RepositorySlug,
+        [string]$PreviousReleaseTag,
+        [string]$ReleaseTag
+    )
+
+    $notesWithLink = $Notes.Trim()
+    if ([string]::IsNullOrWhiteSpace($PreviousReleaseTag)) { return $notesWithLink }
+
+    $range = "$PreviousReleaseTag...$ReleaseTag"
+    $compareUrl = "https://github.com/$RepositorySlug/compare/$range"
+    if ($notesWithLink.Contains($compareUrl)) { return $notesWithLink }
+
+    return "$notesWithLink`r`n`r`n## Full changelog`r`n[Compare $range]($compareUrl)"
+}
+
 function New-CopilotReleaseNotes {
     param(
         [string]$RepositoryRoot,
+        [string]$RepositorySlug,
         [string]$ReleaseTag,
         [string]$PreviousReleaseTag,
         [string]$Version,
@@ -286,7 +305,7 @@ Installation section telling users to download and run the attached
 MultiTerm-Setup-$Version.exe. The first line must be exactly "## What's changed" and
 the final section heading must be exactly "## Installation". Return only Markdown for
 the release body, with no title, preamble, explanation, or fenced code block. Do not
-modify any files.
+add a changelog or comparison link; release automation appends it. Do not modify any files.
 "@
         $result = Get-NativeOutput {
             & $Executable -C $RepositoryRoot -p $prompt --silent --no-color `
@@ -305,7 +324,7 @@ modify any files.
             if ($preview.Length -gt 240) { $preview = $preview.Substring(0, 240) + '...' }
             throw "Copilot CLI returned release notes with an unexpected Markdown structure. Output began: $preview"
         }
-        return $notes
+        return Add-ReleaseCompareLink -Notes $notes -RepositorySlug $RepositorySlug -PreviousReleaseTag $PreviousReleaseTag -ReleaseTag $ReleaseTag
     }
     finally {
         Remove-Item -LiteralPath $contextPath -Force -ErrorAction SilentlyContinue
@@ -629,7 +648,7 @@ if (-not ($NoVersionBump -and $Force -and $releaseExists)) {
     }
     else {
         Write-Step "Generating release notes with GitHub Copilot CLI..."
-        $ReleaseNotes = New-CopilotReleaseNotes -RepositoryRoot $RepoRoot -ReleaseTag $Tag -PreviousReleaseTag $PreviousReleaseTag -Version $Version -Executable $ResolvedCopilotPath
+        $ReleaseNotes = New-CopilotReleaseNotes -RepositoryRoot $RepoRoot -RepositorySlug $RepoSlug -ReleaseTag $Tag -PreviousReleaseTag $PreviousReleaseTag -Version $Version -Executable $ResolvedCopilotPath
         Write-Step "Copilot release notes generated from changes since the previous release tag."
     }
 }
