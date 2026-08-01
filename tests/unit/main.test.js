@@ -634,6 +634,40 @@ describe("clipboard IPC", () => {
       .toThrow("restricted to the MultiTerm application window");
   });
 
+  it("falls back to the sender's own URL when the frame does not expose one", () => {
+    main.createWindow();
+    const webContents = main.getMainWindow().webContents;
+    // Electron only populates senderFrame.url for frames it has finished
+    // navigating; the trust check must still resolve an origin without it.
+    const mainFrame = {};
+    webContents.mainFrame = mainFrame;
+    webContents.getURL = vi.fn(() => "http://127.0.0.1:3177/index.html");
+    main.registerClipboardIpc();
+    const handler = electron.ipcMain.handle.mock.calls
+      .find(([channel]) => channel === "multiterm:write-clipboard")[1];
+
+    expect(handler({ sender: webContents, senderFrame: mainFrame }, "from frame url fallback")).toBe(true);
+    expect(webContents.getURL).toHaveBeenCalled();
+    expect(electron.clipboard.writeText).toHaveBeenCalledWith("from frame url fallback");
+  });
+
+  it("treats a sender with an unparseable URL as untrusted instead of throwing on the parse", () => {
+    main.createWindow();
+    const webContents = main.getMainWindow().webContents;
+    const mainFrame = {};
+    webContents.mainFrame = mainFrame;
+    // Neither source yields a URL, so `new URL(undefined)` throws inside the
+    // origin check. That must deny the write, not escape as a parse error.
+    webContents.getURL = vi.fn(() => undefined);
+    main.registerClipboardIpc();
+    const handler = electron.ipcMain.handle.mock.calls
+      .find(([channel]) => channel === "multiterm:write-clipboard")[1];
+
+    expect(() => handler({ sender: webContents, senderFrame: mainFrame }, "blocked"))
+      .toThrow("restricted to the MultiTerm application window");
+    expect(electron.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
   it("replaces an existing handler and tolerates a missing one", () => {
     electron.ipcMain.removeHandler.mockImplementation(() => { throw new Error("missing"); });
     expect(() => main.registerClipboardIpc()).not.toThrow();
@@ -1052,6 +1086,14 @@ describe("update checker", () => {
     it("falls back to package.json when Electron cannot report a version", () => {
       electron.app.getVersion = vi.fn(() => { throw new Error("not ready"); });
       expect(main.getCurrentVersion()).toBe(require("../../package.json").version);
+    });
+
+    it("falls back to package.json when Electron reports an empty version", () => {
+      // app.getVersion() succeeds but yields nothing useful before the app is
+      // packaged, so an empty string must not be reported as the version.
+      electron.app.getVersion = vi.fn(() => "");
+      expect(main.getCurrentVersion()).toBe(require("../../package.json").version);
+      expect(electron.app.getVersion).toHaveBeenCalled();
     });
   });
 
