@@ -76,8 +76,12 @@ function makeWindow() {
   return {
     webContents: {
       setWindowOpenHandler: vi.fn(),
+      on: vi.fn(),
       send: vi.fn(),
-      isDestroyed: vi.fn(() => false)
+      isDestroyed: vi.fn(() => false),
+      session: {
+        setPermissionRequestHandler: vi.fn()
+      }
     },
     loadURL: vi.fn(),
     on: vi.fn(),
@@ -89,6 +93,11 @@ function makeWindow() {
     hide: vi.fn(),
     focus: vi.fn()
   };
+}
+
+function wcHandlerFor(win, event) {
+  const call = win.webContents.on.mock.calls.find(([name]) => name === event);
+  return call && call[1];
 }
 
 function winHandlerFor(win, event) {
@@ -258,6 +267,15 @@ describe("waitForServer", () => {
 });
 
 describe("createWindow", () => {
+  it("recognizes only internal app URLs", () => {
+    expect(main.isInternalUrl("http://127.0.0.1:3177/index.html")).toBe(true);
+    expect(main.isInternalUrl("http://localhost:3177/x")).toBe(true);
+    expect(main.isInternalUrl("https://example.com")).toBe(false);
+    expect(main.isInternalUrl("file:///etc/passwd")).toBe(false);
+    expect(main.isInternalUrl(undefined)).toBe(false);
+    expect(main.isInternalUrl(null)).toBe(false);
+  });
+
   it("creates the window, routes external links, and clears on close", () => {
     main.createWindow();
     const win = main.getMainWindow();
@@ -272,6 +290,60 @@ describe("createWindow", () => {
     const closedHandler = win.on.mock.calls.find(([e]) => e === "closed")[1];
     closedHandler();
     expect(main.getMainWindow()).toBeNull();
+  });
+
+  it("runs the renderer sandboxed with node integration off", () => {
+    main.createWindow();
+    const options = electron.BrowserWindow.mock.calls[0][0];
+    expect(options.webPreferences).toMatchObject({
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    });
+  });
+
+  it("blocks off-origin navigation and opens external links in the browser", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    const onNavigate = wcHandlerFor(win, "will-navigate");
+    expect(onNavigate).toBeTypeOf("function");
+
+    // Internal navigations are left alone.
+    const internal = { preventDefault: vi.fn() };
+    onNavigate(internal, "http://127.0.0.1:3177/index.html");
+    expect(internal.preventDefault).not.toHaveBeenCalled();
+    expect(electron.shell.openExternal).not.toHaveBeenCalled();
+
+    // A remote http(s) navigation is cancelled and handed to the default browser.
+    const external = { preventDefault: vi.fn() };
+    onNavigate(external, "https://evil.example/pwn");
+    expect(external.preventDefault).toHaveBeenCalled();
+    expect(electron.shell.openExternal).toHaveBeenCalledWith("https://evil.example/pwn");
+
+    // A non-http scheme is cancelled but never opened externally.
+    electron.shell.openExternal.mockClear();
+    const scheme = { preventDefault: vi.fn() };
+    onNavigate(scheme, "file:///etc/passwd");
+    expect(scheme.preventDefault).toHaveBeenCalled();
+    expect(electron.shell.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("denies every web permission request", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    const handler = win.webContents.session.setPermissionRequestHandler.mock.calls[0][0];
+    const callback = vi.fn();
+    handler({}, "media", callback);
+    expect(callback).toHaveBeenCalledWith(false);
+  });
+
+  it("tolerates a session without a permission-handler API", () => {
+    electron.BrowserWindow.mockImplementationOnce(function BrowserWindowMock() {
+      const win = makeWindow();
+      win.webContents.session = {};
+      return win;
+    });
+    expect(() => main.createWindow()).not.toThrow();
   });
 });
 

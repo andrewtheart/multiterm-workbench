@@ -37,6 +37,13 @@ function formatError(err) {
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
 
+// Whether a URL points back at the app's own local origin. Used to allow internal
+// navigations/window-opens while routing everything else to the default browser.
+function isInternalUrl(url) {
+  return typeof url === "string"
+    && (url.startsWith(`http://${HOST}`) || url.startsWith("http://localhost"));
+}
+
 // Chromium force-loses the oldest WebGL context once ~16 are live, and xterm's
 // WebGL addon leaves a pane with no renderer when its context dies. Raising the
 // ceiling keeps terminal renderers from competing with each other (and with the
@@ -158,18 +165,44 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      // Run the renderer in Chromium's OS sandbox. Nothing in the renderer needs
+      // Node; the preload only touches contextBridge/ipcRenderer, both of which
+      // remain available to a sandboxed preload. This contains a renderer
+      // compromise (e.g. via hostile terminal output) behind the sandbox broker.
+      sandbox: true,
       preload: path.join(__dirname, "preload.js")
     }
   });
 
   // Open external links in the user's default browser, not inside the app.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith(`http://${HOST}`) || url.startsWith("http://localhost")) {
+    if (isInternalUrl(url)) {
       return { action: "allow" };
     }
     shell.openExternal(url);
     return { action: "deny" };
   });
+
+  // Pin the top-level frame to the app's own origin. Nothing in MultiTerm should
+  // navigate away; a stray navigation to a remote page (e.g. from injected markup
+  // or a mis-handled link) would otherwise hand that page the renderer context.
+  // Legitimate external links are routed to the default browser instead.
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (!isInternalUrl(url)) {
+      event.preventDefault();
+      if (/^https?:\/\//i.test(String(url))) {
+        shell.openExternal(url);
+      }
+    }
+  });
+
+  // The workbench needs no web permissions (camera, microphone, geolocation,
+  // notifications from web content, and so on). Deny every request so nothing the
+  // renderer displays can provoke an OS permission prompt.
+  const ses = mainWindow.webContents.session;
+  if (ses && typeof ses.setPermissionRequestHandler === "function") {
+    ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  }
 
   mainWindow.loadURL(`http://${HOST}:${PORT}/`);
 
@@ -723,6 +756,7 @@ module.exports = {
   bootstrap,
   __setElectron,
   formatError,
+  isInternalUrl,
   getMainWindow: () => mainWindow,
   getTray: () => tray,
   getServerProcess: () => serverProcess,

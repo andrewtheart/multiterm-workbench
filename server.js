@@ -26,6 +26,7 @@ const childProcess = require("node:child_process");
 // `pty` is a mutable binding so tests can inject a fake terminal factory
 // via `__setPty` without spawning real shells.
 let pty = require("@homebridge/node-pty-prebuilt-multiarch");
+const { isAllowedWebSocketOrigin } = require("./ws-origin");
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3177);
@@ -150,6 +151,13 @@ server.on("upgrade", (request, socket) => {
   }
 
   if (!allowRemote && !isLocalAddress(socket.remoteAddress)) {
+    socket.destroy();
+    return;
+  }
+
+  // Reject cross-site WebSocket handshakes (CSWSH). Skipped when remote access is
+  // explicitly opted into, since remote clients legitimately carry other origins.
+  if (!allowRemote && !isAllowedWebSocketOrigin(request.headers.origin)) {
     socket.destroy();
     return;
   }
@@ -324,6 +332,7 @@ module.exports = {
   listWslTmuxSessions,
   getWorkingDirectory,
   isLocalAddress,
+  isAllowedWebSocketOrigin,
   startLog,
   stopLog,
   closeLog,

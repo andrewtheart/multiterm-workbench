@@ -197,6 +197,33 @@ describe("isLocalAddress", () => {
   });
 });
 
+describe("isAllowedWebSocketOrigin", () => {
+  it("allows requests with no Origin (non-browser clients)", () => {
+    expect(server.isAllowedWebSocketOrigin(undefined)).toBe(true);
+    expect(server.isAllowedWebSocketOrigin(null)).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("")).toBe(true);
+  });
+
+  it("allows only loopback-literal http(s) origins", () => {
+    expect(server.isAllowedWebSocketOrigin("http://127.0.0.1:3177")).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("http://localhost:3199")).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("https://127.0.0.1")).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("http://[::1]:3177")).toBe(true);
+  });
+
+  it("rejects cross-site, rebinding, and non-http origins", () => {
+    // A hostile website.
+    expect(server.isAllowedWebSocketOrigin("https://evil.example")).toBe(false);
+    // DNS-rebinding: a name that resolves to 127.0.0.1 still carries its own host.
+    expect(server.isAllowedWebSocketOrigin("http://attacker.local:3177")).toBe(false);
+    // Non-http(s) schemes.
+    expect(server.isAllowedWebSocketOrigin("file://127.0.0.1")).toBe(false);
+    expect(server.isAllowedWebSocketOrigin("ftp://localhost")).toBe(false);
+    // Unparseable Origin header.
+    expect(server.isAllowedWebSocketOrigin("not a url")).toBe(false);
+  });
+});
+
 describe("isSessionRunning", () => {
   it("checks the terminal and exited flags", () => {
     expect(server.isSessionRunning(null)).toBe(false);
