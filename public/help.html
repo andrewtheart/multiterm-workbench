@@ -580,13 +580,14 @@
 <p>Use <strong>Fit all terminals</strong> after resizing the window or changing layouts. <strong>Reset layout</strong> clears layout-specific adjustments. <kbd>Ctrl+Shift+X</kbd> temporarily maximizes the active pane.</p>
 <h2 id="notes-and-command-queues">Notes and command queues</h2>
 <h3 id="pid-bound-notes">PID-bound notes</h3>
-<p>Open <strong>Notes &amp; command queue...</strong> from a terminal's context menu or the command palette. Notes are stored against the terminal PID so each live shell has its own working context.</p>
+<p>Open <strong>Notes...</strong> from a terminal's context menu, or <strong>Notes &amp; command queue...</strong> from the header notebook button or the command palette. Notes are stored against the terminal PID so each live shell has its own working context.</p>
 <p>When a shell exits, its notes are retained in <strong>Recovered notes</strong> instead of being deleted. You can copy or remove recovered notes after reviewing them.</p>
 <h3 id="command-queues">Command queues</h3>
 <p>Build a list of commands or prompts without sending them immediately. Each live terminal has its own queue.</p>
 <ul>
 <li>Select a queued item to insert it into that terminal.</li>
 <li>Inserting a queued item does <strong>not</strong> send Enter, so you can review or edit it first.</li>
+<li>Hover <strong>Command queue</strong> in a terminal's context menu to see that terminal's queued commands (most recent first); click one to insert it and dequeue it in a single step.</li>
 <li>Use the pane's quick-dequeue control or press <kbd>Ctrl+Shift+Q</kbd> to insert the next queued item without reopening the dialog.</li>
 <li>Reorder or remove items from the queue manager.</li>
 </ul>

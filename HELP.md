@@ -86,7 +86,7 @@ Use **Fit all terminals** after resizing the window or changing layouts. **Reset
 
 ### PID-bound notes
 
-Open **Notes & command queue...** from a terminal's context menu or the command palette. Notes are stored against the terminal PID so each live shell has its own working context.
+Open **Notes...** from a terminal's context menu, or **Notes & command queue...** from the header notebook button or the command palette. Notes are stored against the terminal PID so each live shell has its own working context.
 
 When a shell exits, its notes are retained in **Recovered notes** instead of being deleted. You can copy or remove recovered notes after reviewing them.
 
@@ -96,6 +96,7 @@ Build a list of commands or prompts without sending them immediately. Each live 
 
 - Select a queued item to insert it into that terminal.
 - Inserting a queued item does **not** send Enter, so you can review or edit it first.
+- Hover **Command queue** in a terminal's context menu to see that terminal's queued commands (most recent first); click one to insert it and dequeue it in a single step.
 - Use the pane's quick-dequeue control or press <kbd>Ctrl+Shift+Q</kbd> to insert the next queued item without reopening the dialog.
 - Reorder or remove items from the queue manager.
 

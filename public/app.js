@@ -215,6 +215,7 @@ const elements = {
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
   contextMenu: document.querySelector("#contextMenu"),
+  contextSubmenu: document.querySelector("#contextSubmenu"),
   controlPanel: document.querySelector(".control-panel"),
   cleanCopilotClipboard: document.querySelector("#cleanCopilotClipboard"),
   copyOnSelect: document.querySelector("#copyOnSelect"),
@@ -6658,6 +6659,23 @@ function dequeueNextTerminalCommand(terminal) {
   });
 }
 
+// Dequeues one specific command (by id) for a terminal — used by the context
+// menu's "Command queue" submenu. Like the FIFO path it inserts the command
+// without pressing Enter and removes it from the queue.
+function dequeueTerminalCommand(terminal, id) {
+  if (!terminal) {
+    toast("Select a terminal before dequeuing a command.", "info", 1800);
+    return false;
+  }
+  const queue = state.terminalArtifacts.terminals[terminal.id]?.queue || [];
+  return dequeueQueueItem({
+    items: queue,
+    terminal,
+    id,
+    closeArtifacts: false
+  });
+}
+
 function openTerminalArtifacts(terminalId = null) {
   if (!elements.terminalArtifactsOverlay) return;
   closePalette();
@@ -7618,10 +7636,18 @@ function bindContextMenu() {
   });
 
   document.addEventListener("pointerdown", (event) => {
-    if (!elements.contextMenu.hidden && !elements.contextMenu.contains(event.target)) {
+    if (!elements.contextMenu.hidden
+      && !elements.contextMenu.contains(event.target)
+      && !elements.contextSubmenu.contains(event.target)) {
       hideContextMenu();
     }
   });
+  // Hover intent for the submenu: leaving the menu arms a short close timer that
+  // entering either the menu or the submenu cancels, so the panel survives the
+  // pointer sliding across the gap between a row and its submenu.
+  elements.contextMenu.addEventListener("pointerleave", scheduleSubmenuClose);
+  elements.contextSubmenu.addEventListener("pointerenter", cancelSubmenuClose);
+  elements.contextSubmenu.addEventListener("pointerleave", scheduleSubmenuClose);
   // Capture phase so menu navigation wins over xterm's own key handling while the
   // menu is open, and so accelerator keys never fall through to the terminal.
   window.addEventListener("keydown", onContextMenuKeydown, true);
@@ -7716,6 +7742,30 @@ function logFileName(logPath) {
   return parts[parts.length - 1] || "log";
 }
 
+// The "Command queue" context-menu row carries a hover submenu listing this
+// terminal's queued commands, newest first (the queue is stored oldest-first,
+// so it is reversed for display). Picking one inserts it into the terminal
+// without pressing Enter and removes it from the queue; clicking the row itself
+// opens the full notes & queue manager so commands can still be staged there.
+function buildCommandQueueMenuItem(terminal) {
+  const queue = state.terminalArtifacts.terminals[terminal.id]?.queue || [];
+  const submenu = queue.length
+    ? [...queue].reverse().map((entry) => ({
+        label: entry.command,
+        icon: "terminal",
+        title: entry.command,
+        run: () => dequeueTerminalCommand(terminal, entry.id)
+      }))
+    : [{ info: true, icon: "inbox", label: "No queued commands" }];
+  return {
+    label: "Command queue",
+    icon: "list-ordered",
+    title: "Insert a queued command, or open the queue manager",
+    submenu,
+    run: () => openTerminalArtifacts(terminal.id)
+  };
+}
+
 function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const hasSelection = Boolean(selection);
   const isZoomed = state.zoomedId === terminal.id;
@@ -7736,7 +7786,8 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", run: () => clearTerminal(terminal.id) },
     { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", run: () => toggleZoomPane(terminal.id) },
     { label: "Terminal statistics\u2026", icon: "activity", run: () => openStatistics(terminal.id) },
-    { label: "Notes & command queue\u2026", icon: "notebook-tabs", run: () => openTerminalArtifacts(terminal.id) },
+    { label: "Notes\u2026", icon: "notebook-pen", run: () => openTerminalArtifacts(terminal.id) },
+    buildCommandQueueMenuItem(terminal),
     { separator: true },
     { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
@@ -7895,6 +7946,16 @@ let ctxKeyIndex = -1;
 const ctxByLetter = new Map();
 const ctxByNumber = new Map();
 
+// A submenu-parent row (currently just "Command queue") hangs a second panel off
+// its right edge on hover. These track that panel's rows, keyboard highlight and
+// the parent it belongs to, plus a short close timer so sliding the pointer from
+// the row into the panel does not dismiss it.
+const ctxSubmenus = new Map();
+let subFocusables = [];
+let subKeyIndex = -1;
+let activeSubmenuParent = null;
+let submenuCloseTimer = 0;
+
 // Picks a unique, memorable accelerator letter for a label: word initials first
 // (so "Find in all terminals" prefers F, then I, A, T), then any remaining
 // letter, skipping ones already claimed by earlier rows in the same menu.
@@ -7936,11 +7997,13 @@ function renderAccelLabel(text, index) {
 }
 
 function renderContextMenu(items) {
+  hideContextSubmenu();
   elements.contextMenu.innerHTML = "";
   ctxFocusables = [];
   ctxKeyIndex = -1;
   ctxByLetter.clear();
   ctxByNumber.clear();
+  ctxSubmenus.clear();
   elements.contextMenu.removeAttribute("aria-activedescendant");
   const usedLetters = new Set();
   let rowId = 0;
@@ -8040,8 +8103,8 @@ function renderContextMenu(items) {
     if (item.title) el.title = item.title;
 
     // The keyboard hint and the number badge share a right-aligned tail so they
-    // never collide with the label.
-    if (item.hint || number != null) {
+    // never collide with the label; a submenu parent adds a chevron at the end.
+    if (item.hint || number != null || item.submenu) {
       const accessories = document.createElement("span");
       accessories.className = "ctx-accessories";
       if (item.hint) {
@@ -8060,6 +8123,15 @@ function renderContextMenu(items) {
         badge.setAttribute("aria-hidden", "true");
         accessories.append(badge);
       }
+      if (item.submenu) {
+        const caret = document.createElement("span");
+        caret.className = "ctx-submenu-caret";
+        caret.setAttribute("aria-hidden", "true");
+        const caretIcon = document.createElement("i");
+        caretIcon.setAttribute("data-lucide", "chevron-right");
+        caret.append(caretIcon);
+        accessories.append(caret);
+      }
       el.append(accessories);
     }
 
@@ -8070,9 +8142,19 @@ function renderContextMenu(items) {
         item.run();
       });
       // Keep the keyboard highlight in step with the pointer so the two input
-      // modes never disagree about which row is current.
-      el.addEventListener("pointerenter", () => setContextFocus(ctxFocusables.indexOf(el)));
+      // modes never disagree about which row is current. A submenu parent also
+      // opens its panel on hover; any other row dismisses an open panel.
+      el.addEventListener("pointerenter", () => {
+        setContextFocus(ctxFocusables.indexOf(el));
+        if (item.submenu) openContextSubmenuFor(el, item.submenu);
+        else scheduleSubmenuClose();
+      });
       ctxFocusables.push(el);
+      if (item.submenu) {
+        el.setAttribute("aria-haspopup", "menu");
+        el.setAttribute("aria-expanded", "false");
+        ctxSubmenus.set(el, item.submenu);
+      }
       if (accel) {
         el.dataset.accelKey = accel.key;
         ctxByLetter.set(accel.key, el);
@@ -8085,6 +8167,125 @@ function renderContextMenu(items) {
 
     elements.contextMenu.append(el);
   }
+}
+
+// Renders the rows of the hover submenu into its own panel. Kept separate from
+// renderContextMenu so it never disturbs the parent menu's focus/accelerator
+// bookkeeping. Rows are plain: an icon, a label, and (for real commands) a click
+// that inserts the command and closes the whole menu.
+function renderContextSubmenu(items) {
+  const menu = elements.contextSubmenu;
+  menu.innerHTML = "";
+  subFocusables = [];
+  subKeyIndex = -1;
+
+  for (const item of items) {
+    const el = document.createElement("div");
+    el.className = `ctx-item${item.info ? " ctx-info" : ""}`;
+    el.setAttribute("role", item.info ? "presentation" : "menuitem");
+
+    const icon = document.createElement("i");
+    icon.setAttribute("data-lucide", item.icon);
+    el.append(icon);
+
+    const label = document.createElement("span");
+    label.className = "ctx-label ctx-submenu-label";
+    label.textContent = item.label;
+    el.append(label);
+
+    if (item.title) el.title = item.title;
+
+    if (item.run && !item.info) {
+      el.addEventListener("click", () => {
+        hideContextMenu();
+        item.run();
+      });
+      el.addEventListener("pointerenter", () => setSubmenuFocus(subFocusables.indexOf(el)));
+      subFocusables.push(el);
+    }
+
+    menu.append(el);
+  }
+}
+
+// Opens (or keeps open) the submenu belonging to a parent row, anchored to that
+// row's right edge and flipping to the left when there is no room.
+function openContextSubmenuFor(parentEl, items) {
+  cancelSubmenuClose();
+  if (activeSubmenuParent === parentEl && !elements.contextSubmenu.hidden) return;
+  if (activeSubmenuParent && activeSubmenuParent !== parentEl) {
+    activeSubmenuParent.setAttribute("aria-expanded", "false");
+  }
+  activeSubmenuParent = parentEl;
+  renderContextSubmenu(items);
+
+  const menu = elements.contextSubmenu;
+  menu.classList.add("is-positioning");
+  menu.hidden = false;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  // Swap the <i data-lucide> placeholders for real SVGs before measuring, for the
+  // same width-accuracy reason the main menu does.
+  refreshIcons();
+
+  const parent = parentEl.getBoundingClientRect();
+  const rect = menu.getBoundingClientRect();
+  let left = parent.right - 4;
+  if (left + rect.width > window.innerWidth - 8) left = parent.left - rect.width + 4;
+  left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
+  let top = Math.max(8, Math.min(parent.top - 6, window.innerHeight - rect.height - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.classList.remove("is-positioning");
+  parentEl.setAttribute("aria-expanded", "true");
+}
+
+function hideContextSubmenu() {
+  cancelSubmenuClose();
+  if (!elements.contextSubmenu.hidden) {
+    elements.contextSubmenu.hidden = true;
+    elements.contextSubmenu.innerHTML = "";
+  }
+  if (activeSubmenuParent) {
+    activeSubmenuParent.setAttribute("aria-expanded", "false");
+    activeSubmenuParent = null;
+  }
+  subFocusables = [];
+  subKeyIndex = -1;
+}
+
+// Sliding the pointer between the parent row and its panel briefly leaves both,
+// so closing is deferred and cancelled the moment either is re-entered.
+function scheduleSubmenuClose() {
+  cancelSubmenuClose();
+  submenuCloseTimer = window.setTimeout(hideContextSubmenu, 140);
+}
+
+function cancelSubmenuClose() {
+  if (submenuCloseTimer) {
+    window.clearTimeout(submenuCloseTimer);
+    submenuCloseTimer = 0;
+  }
+}
+
+function setSubmenuFocus(index) {
+  if (subKeyIndex >= 0 && subFocusables[subKeyIndex]) {
+    subFocusables[subKeyIndex].classList.remove("is-key-focus");
+  }
+  subKeyIndex = index;
+  const el = subFocusables[index];
+  if (el) {
+    el.classList.add("is-key-focus");
+    el.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function moveSubmenuFocus(delta) {
+  if (!subFocusables.length) return;
+  let next = subKeyIndex;
+  if (next < 0) next = delta > 0 ? 0 : subFocusables.length - 1;
+  else next = (next + delta + subFocusables.length) % subFocusables.length;
+  setSubmenuFocus(next);
 }
 
 // Moves the keyboard highlight to a specific row, syncing the class, scroll
@@ -8127,8 +8328,62 @@ function onContextMenuKeydown(event) {
     event.stopPropagation();
   };
 
+  // Once the submenu holds the keyboard (entered with ArrowRight), it owns
+  // navigation until ArrowLeft/Escape hands control back to the parent menu.
+  if (!elements.contextSubmenu.hidden && subKeyIndex >= 0) {
+    if (key === "ArrowDown") {
+      moveSubmenuFocus(1);
+      stop();
+      return;
+    }
+    if (key === "ArrowUp") {
+      moveSubmenuFocus(-1);
+      stop();
+      return;
+    }
+    if (key === "Home") {
+      setSubmenuFocus(0);
+      stop();
+      return;
+    }
+    if (key === "End") {
+      setSubmenuFocus(subFocusables.length - 1);
+      stop();
+      return;
+    }
+    if (key === "Enter" || key === " ") {
+      const el = subFocusables[subKeyIndex];
+      if (el) el.click();
+      stop();
+      return;
+    }
+    if (key === "ArrowLeft" || key === "Escape") {
+      hideContextSubmenu();
+      stop();
+      return;
+    }
+    // Any other key is swallowed so it never leaks into the terminal beneath.
+    stop();
+    return;
+  }
+
+  // A submenu opened by hover (no keyboard focus in it yet) is stale the instant
+  // the keyboard drives the parent menu, so dismiss it on any key except the one
+  // that steps into it.
+  if (!elements.contextSubmenu.hidden && key !== "ArrowRight") hideContextSubmenu();
+
   if (key === "Escape") {
     hideContextMenu();
+    stop();
+    return;
+  }
+  if (key === "ArrowRight") {
+    const el = ctxFocusables[ctxKeyIndex];
+    const items = el ? ctxSubmenus.get(el) : null;
+    if (items && items.some((entry) => entry.run)) {
+      openContextSubmenuFor(el, items);
+      setSubmenuFocus(0);
+    }
     stop();
     return;
   }
@@ -8270,6 +8525,7 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } 
 }
 
 function hideContextMenu() {
+  hideContextSubmenu();
   if (!elements.contextMenu.hidden) {
     elements.contextMenu.hidden = true;
     ctxKeyIndex = -1;

@@ -3123,6 +3123,41 @@ body.sidecar-hidden .pager {
   margin: 6px 6px;
 }
 
+/* The hover submenu reuses the context-menu shell but floats just above it and
+   stays compact, ellipsising long commands (each row's title carries the full
+   text). */
+.context-submenu {
+  max-width: 380px;
+  min-width: 200px;
+  z-index: 131;
+}
+
+.ctx-submenu-label {
+  display: block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The chevron marking a row that opens a submenu. It rides at the end of the
+   right-aligned accessories tail. */
+.ctx-submenu-caret {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+}
+
+.ctx-submenu-caret svg {
+  height: 14px;
+  width: 14px;
+}
+
+.ctx-item.is-key-focus .ctx-submenu-caret,
+.ctx-item:hover .ctx-submenu-caret {
+  color: var(--text);
+}
+
 /* ---------------- Searchable combobox --------------- */
 
 .combobox {

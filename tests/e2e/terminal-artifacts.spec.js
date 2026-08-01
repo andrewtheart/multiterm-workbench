@@ -209,3 +209,161 @@ test.describe("Terminal notes and command queue", () => {
     expect(rendered).toEqual([]);
   });
 });
+
+// Stages `commands` (oldest first) onto the active terminal's queue through the
+// hub, then closes the hub so the pane is ready for a right-click.
+async function queueCommands(page, commands) {
+  await page.locator("#terminalArtifactsToggle").click();
+  await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+  for (const command of commands) {
+    await page.locator("#commandQueueInput").fill(command);
+    await page.locator("#commandQueueAdd").click();
+  }
+  if (commands.length) {
+    await expect(page.locator(".command-queue-item")).toHaveCount(commands.length);
+  }
+  await page.locator("#terminalArtifactsClose").click();
+  await expect(page.locator("#terminalArtifactsOverlay")).toBeHidden();
+}
+
+// Captures bridge input frames, ignoring the focus in/out escape sequences xterm
+// emits when the pane regains focus after a dequeue.
+async function captureInputFrames(page, action) {
+  await page.evaluate(() => {
+    window.__queueFrames = [];
+    window.__queueOriginalSend = state.socket.send.bind(state.socket);
+    state.socket.send = (payload) => window.__queueFrames.push(JSON.parse(payload));
+  });
+  await action();
+  return page.evaluate(() => {
+    state.socket.send = window.__queueOriginalSend;
+    return window.__queueFrames.filter(
+      (frame) => frame.type === "input" && !/^\u001b\[[IO]$/.test(frame.data)
+    );
+  });
+}
+
+test.describe("Command queue context submenu", () => {
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => {
+      closeTerminalArtifacts({ restoreFocus: false });
+      closeAllTerminals();
+      localStorage.removeItem("multiterm.terminalArtifacts");
+      state.terminalArtifacts = emptyTerminalArtifacts();
+    });
+  });
+
+  test("splits the combined item into separate Notes and Command queue rows", async ({ page }) => {
+    await reset(page);
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    const menu = page.locator("#contextMenu");
+    await expect(menu).toBeVisible();
+
+    await expect(menu.locator(".ctx-item", { hasText: "Notes\u2026" })).toHaveCount(1);
+    const queueRow = menu.locator(".ctx-item", { hasText: "Command queue" });
+    await expect(queueRow).toHaveCount(1);
+    // The old combined label is gone entirely.
+    await expect(menu.locator(".ctx-item", { hasText: "command queue\u2026" })).toHaveCount(0);
+    // The queue row advertises its submenu to assistive tech.
+    await expect(queueRow).toHaveAttribute("aria-haspopup", "menu");
+    await expect(queueRow.locator(".ctx-submenu-caret")).toHaveCount(1);
+  });
+
+  test("lists queued commands newest-first on hover", async ({ page }) => {
+    await reset(page);
+    await queueCommands(page, ["alpha task", "beta task", "gamma task"]);
+
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Command queue" }).hover();
+
+    const submenu = page.locator("#contextSubmenu");
+    await expect(submenu).toBeVisible();
+    await expect(submenu.locator(".ctx-item")).toHaveText(["gamma task", "beta task", "alpha task"]);
+  });
+
+  test("inserts a submenu command without Enter and dequeues just that command", async ({ page }) => {
+    await reset(page);
+    await queueCommands(page, ["staged one", "staged two"]);
+
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Command queue" }).hover();
+    const submenu = page.locator("#contextSubmenu");
+    await expect(submenu).toBeVisible();
+
+    const frames = await captureInputFrames(page, async () => {
+      // Newest-first ordering puts "staged two" at the top.
+      await submenu.locator(".ctx-item").first().click();
+    });
+
+    expect(frames).toEqual([{ type: "input", id: expect.any(String), data: "staged two" }]);
+    expect(frames[0].data).not.toMatch(/[\r\n]$/);
+
+    const remaining = await page.evaluate(() =>
+      Object.values(state.terminalArtifacts.terminals).flatMap((record) => record.queue).map((entry) => entry.command)
+    );
+    expect(remaining).toEqual(["staged one"]);
+
+    await expect(page.locator("#contextMenu")).toBeHidden();
+    await expect(submenu).toBeHidden();
+  });
+
+  test("shows an inert empty-state row when nothing is queued", async ({ page }) => {
+    await reset(page);
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Command queue" }).hover();
+
+    const submenu = page.locator("#contextSubmenu");
+    await expect(submenu).toBeVisible();
+    const rows = submenu.locator(".ctx-item");
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toHaveText("No queued commands");
+    // The placeholder is presentational, never a menuitem.
+    await expect(rows.first()).toHaveClass(/ctx-info/);
+    await expect(rows.first()).toHaveAttribute("role", "presentation");
+  });
+
+  test("opens the submenu with ArrowRight and runs the focused row with Enter", async ({ page }) => {
+    await reset(page);
+    await queueCommands(page, ["keyboard staged"]);
+
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await expect(page.locator("#contextMenu")).toBeVisible();
+
+    // Drive the keyboard highlight onto the queue row without relying on how many
+    // rows precede it, then step into the submenu.
+    await page.evaluate(() => {
+      const index = ctxFocusables.findIndex((el) => el.textContent.includes("Command queue"));
+      setContextFocus(index);
+    });
+    await page.keyboard.press("ArrowRight");
+
+    const submenu = page.locator("#contextSubmenu");
+    await expect(submenu).toBeVisible();
+    await expect(submenu.locator(".ctx-item").first()).toHaveClass(/is-key-focus/);
+
+    const frames = await captureInputFrames(page, async () => {
+      await page.keyboard.press("Enter");
+    });
+    expect(frames).toEqual([{ type: "input", id: expect.any(String), data: "keyboard staged" }]);
+
+    const remaining = await page.evaluate(() =>
+      Object.values(state.terminalArtifacts.terminals).flatMap((record) => record.queue).length
+    );
+    expect(remaining).toBe(0);
+  });
+
+  test("opens the full queue hub when the parent row itself is clicked", async ({ page }) => {
+    await reset(page);
+    await queueCommands(page, ["stays queued"]);
+
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Command queue" }).click();
+
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+    // Clicking the parent opens the manager rather than dequeuing anything.
+    const remaining = await page.evaluate(() =>
+      Object.values(state.terminalArtifacts.terminals).flatMap((record) => record.queue).length
+    );
+    expect(remaining).toBe(1);
+  });
+});
