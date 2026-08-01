@@ -60,6 +60,59 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
     await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+T)");
     await expect(page.locator("#addTerminal")).toHaveAttribute("aria-keyshortcuts", "Control+T");
+    await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("title", "Collapse top bar");
+    await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("aria-label", "Collapse top bar");
+    await expect(page.locator(".action-cluster > :last-child")).toHaveAttribute("id", "addTerminal");
+  });
+
+  test("keeps New terminal fully reachable in a compressed desktop header", async () => {
+    try {
+      for (const width of [1041, 1145, 1270, 1280]) {
+        await page.setViewportSize({ width, height: 768 });
+        const addTerminalButton = page.locator("#addTerminal");
+        const headerToggle = page.locator("#toggleHeaderTop");
+        await expect(addTerminalButton).toBeVisible();
+        await expect(headerToggle).toBeVisible();
+        await addTerminalButton.click({ trial: true });
+        await headerToggle.click({ trial: true });
+
+        const layout = await page.evaluate(() => {
+          const bounds = (selector) => {
+            const rect = document.querySelector(selector).getBoundingClientRect();
+            const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            return {
+              left: rect.left,
+              right: rect.right,
+              width: rect.width,
+              hit: Boolean(hit?.closest(selector))
+            };
+          };
+          return {
+            add: bounds("#addTerminal"),
+            toggle: bounds("#toggleHeaderTop"),
+            clusterRight: document.querySelector(".action-cluster").getBoundingClientRect().right,
+            viewportWidth: window.innerWidth,
+            scrollWidth: document.documentElement.scrollWidth
+          };
+        });
+
+        expect(layout.add.left, `${width}px add left`).toBeGreaterThanOrEqual(0);
+        expect(layout.add.right, `${width}px add right`).toBeLessThanOrEqual(layout.viewportWidth);
+        if (width <= 1270) {
+          expect(layout.add.width, `${width}px compact add width`).toBe(38);
+        } else {
+          expect(layout.add.width, `${width}px full add width`).toBeGreaterThan(38);
+        }
+        expect(layout.add.hit, `${width}px add hit target`).toBe(true);
+        expect(layout.toggle.right, `${width}px toggle right`).toBeLessThanOrEqual(layout.viewportWidth);
+        expect(layout.toggle.hit, `${width}px toggle hit target`).toBe(true);
+        expect(layout.toggle.right, `${width}px collapse precedes add`).toBeLessThan(layout.add.left);
+        expect(Math.abs(layout.add.right - layout.clusterRight), `${width}px add is rightmost`).toBeLessThan(0.5);
+        expect(layout.scrollWidth, `${width}px document width`).toBeLessThanOrEqual(layout.viewportWidth);
+      }
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
   });
 
   test("adds terminals and runs a command", async () => {
@@ -273,13 +326,17 @@ test.describe("MultiTerm Workbench UI", () => {
     await setCheck("#compactChrome", true);
     await expect(page.locator("#terminalHost")).toHaveClass(/compact/);
 
-    // Chrome toggles are style-hidden until hover, so fire the DOM handler directly.
-    const domClick = (selector) => page.evaluate((s) => document.querySelector(s).click(), selector);
-
-    await domClick("#toggleHeader");
+    await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("title", "Collapse top bar");
+    await page.locator("#toggleHeaderTop").click();
     await expect(page.locator("body")).toHaveClass(/header-hidden/);
-    await domClick("#toggleHeader");
+    await expect(page.locator("#toggleHeader")).toBeVisible();
+    await expect(page.locator("#toggleHeader")).toHaveAttribute("title", "Expand top bar");
+    await page.locator("#toggleHeader").click();
     await expect(page.locator("body")).not.toHaveClass(/header-hidden/);
+
+    // The sidecar restore control is style-hidden until the panel is collapsed,
+    // so fire its shared DOM handler directly in this broad settings test.
+    const domClick = (selector) => page.evaluate((s) => document.querySelector(s).click(), selector);
 
     await domClick("#toggleSidecar");
     await expect(page.locator("body")).toHaveClass(/sidecar-hidden/);

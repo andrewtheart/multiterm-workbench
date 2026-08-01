@@ -40,9 +40,9 @@
   <body>
     <div class="app-shell">
       <nav class="chrome-controls" aria-label="Workspace chrome controls">
-        <button id="toggleHeader" class="chrome-toggle" type="button" title="Hide header" aria-label="Hide header" aria-pressed="false">
-          <i class="icon-when-visible" data-lucide="panel-top-close"></i>
-          <i class="icon-when-hidden" data-lucide="panel-top-open"></i>
+        <button id="toggleHeader" class="chrome-toggle" type="button" title="Expand top bar" aria-label="Expand top bar" aria-pressed="false">
+          <i class="icon-when-visible" data-lucide="chevron-up"></i>
+          <i class="icon-when-hidden" data-lucide="chevron-down"></i>
         </button>
         <button id="toggleSidecar" class="chrome-toggle" type="button" title="Hide layout controls" aria-label="Hide layout controls" aria-pressed="false">
           <i class="icon-when-visible" data-lucide="panel-left-close"></i>
@@ -107,12 +107,12 @@
             <button id="attachTmux" class="icon-button" type="button" title="Attach WSL tmux session" aria-label="Attach WSL tmux session">
               <i data-lucide="link"></i>
             </button>
+            <button id="toggleHeaderTop" class="icon-button topbar-collapse" type="button" title="Collapse top bar" aria-label="Collapse top bar" aria-pressed="false">
+              <i data-lucide="chevron-up"></i>
+            </button>
             <button id="addTerminal" class="primary-action" type="button" title="New terminal (Ctrl+T)" aria-label="New terminal" aria-keyshortcuts="Control+T">
               <i data-lucide="plus"></i>
               <span>Terminal</span>
-            </button>
-            <button id="toggleHeaderTop" class="icon-button" type="button" title="Hide header" aria-label="Hide header" aria-pressed="false">
-              <i data-lucide="panel-top-close"></i>
             </button>
           </div>
         </div>

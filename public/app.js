@@ -3329,9 +3329,9 @@ function updateFontZoomControls() {
 }
 
 function updateChromeToggles() {
-  setChromeToggle(elements.toggleHeader, state.settings.headerHidden, "Show header", "Hide header");
+  setChromeToggle(elements.toggleHeader, state.settings.headerHidden, "Expand top bar", "Collapse top bar");
   setChromeToggle(elements.toggleSidecar, state.settings.sidecarHidden, "Show layout controls", "Hide layout controls");
-  setChromeToggle(elements.toggleHeaderTop, state.settings.headerHidden, "Show header", "Hide header");
+  setChromeToggle(elements.toggleHeaderTop, state.settings.headerHidden, "Expand top bar", "Collapse top bar");
   setChromeToggle(elements.toggleSidecarTop, state.settings.sidecarHidden, "Show layout controls", "Hide layout controls");
 }
 

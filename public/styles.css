@@ -437,8 +437,8 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   z-index: 40;
 }
 
-/* The "show header" restore button floats at the top-right, where the header
-   it reveals lives — not alongside the bottom-left sidecar toggle. */
+/* The "expand top bar" restore chevron floats at the top-right, where the bar
+  it reveals lives — not alongside the bottom-left sidecar toggle. */
 .chrome-controls #toggleHeader {
   position: fixed;
   top: 14px;
@@ -590,6 +590,17 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   align-items: end;
   display: flex;
   gap: 8px;
+  justify-content: flex-end;
+}
+
+.topbar-collapse {
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.topbar-collapse:hover,
+.topbar-collapse:focus-visible {
+  color: var(--text);
 }
 
 /* ---------------- Workbench --------------- */
@@ -4119,7 +4130,48 @@ body.is-pane-dragging {
   }
 }
 
-@media (max-width: 920px) {
+/* Keep the primary New terminal action reachable in medium-width desktop
+   windows. The full header's fixed icon cluster plus field minimums exceed the
+   viewport before the stacked/mobile layout takes over, so this middle state
+   lets fields yield and presents the already-labelled action as an icon. */
+@media (min-width: 1041px) and (max-width: 1270px) {
+  .topbar {
+    gap: 12px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .brand {
+    gap: 8px;
+    min-width: 150px;
+  }
+
+  .brand-mark {
+    height: 32px;
+    width: 32px;
+  }
+
+  .top-actions {
+    grid-template-columns: minmax(105px, 150px) minmax(130px, 220px) minmax(120px, 180px) auto;
+    min-width: 0;
+  }
+
+  .action-cluster {
+    gap: 6px;
+  }
+
+  #addTerminal {
+    flex: 0 0 38px;
+    padding: 0;
+    width: 38px;
+  }
+
+  #addTerminal span {
+    display: none;
+  }
+}
+
+@media (max-width: 1040px) {
   .topbar {
     align-items: stretch;
     flex-direction: column;
