@@ -57,6 +57,8 @@ describe("tmux target validation and shell construction", () => {
     expect(server.normalizeTmuxTarget({ distro: "Ubuntu", session: "x".repeat(129) })).toBeNull();
     expect(server.normalizeTmuxTarget({ distro: "Ubuntu\n", session: "dev" })).toBeNull();
     expect(server.normalizeTmuxTarget({ distro: "Ubuntu", session: "dev\u007f" })).toBeNull();
+    // Non-string fields must degrade to empty, not stringify into a target.
+    expect(server.normalizeTmuxTarget({ distro: 5, session: 6 })).toBeNull();
   });
 
   it("builds an argument-safe wsl tmux attach command", () => {

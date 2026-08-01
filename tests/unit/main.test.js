@@ -80,7 +80,8 @@ function makeWindow() {
       send: vi.fn(),
       isDestroyed: vi.fn(() => false),
       session: {
-        setPermissionRequestHandler: vi.fn()
+        setPermissionRequestHandler: vi.fn(),
+        setPermissionCheckHandler: vi.fn()
       }
     },
     loadURL: vi.fn(),
@@ -308,6 +309,12 @@ describe("createWindow", () => {
     expect(options.webPreferences).toMatchObject({
       contextIsolation: true,
       nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      webviewTag: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
       sandbox: true
     });
   });
@@ -345,6 +352,17 @@ describe("createWindow", () => {
     const callback = vi.fn();
     handler({}, "media", callback);
     expect(callback).toHaveBeenCalledWith(false);
+  });
+
+  it("answers synchronous permission checks with clipboard-only, same-origin access", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    const check = win.webContents.session.setPermissionCheckHandler.mock.calls[0][0];
+    expect(check({}, "clipboard-read", "http://127.0.0.1:3177")).toBe(true);
+    expect(check({}, "clipboard-sanitized-write", "http://127.0.0.1:3177")).toBe(true);
+    // Anything else, and anything asking from another origin, is refused.
+    expect(check({}, "media", "http://127.0.0.1:3177")).toBe(false);
+    expect(check({}, "clipboard-read", "https://evil.example")).toBe(false);
   });
 
   it("tolerates a session without a permission-handler API", () => {
@@ -1081,6 +1099,12 @@ describe("update checker", () => {
       expect(https.get).toHaveBeenCalledTimes(6);
     });
 
+    it("refuses to follow a redirect off HTTPS", async () => {
+      stubHttps(() => makeResponse({ status: 302, headers: { location: "http://api.github.com/plain" } }));
+      await expect(main.fetchLatestRelease()).rejects.toThrow(/away from HTTPS/);
+      expect(https.get).toHaveBeenCalledTimes(1);
+    });
+
     it("propagates synchronous request setup failures", async () => {
       vi.spyOn(https, "get").mockImplementation(() => { throw new Error("bad URL setup"); });
       await expect(main.openHttpsStream("https://example.com")).rejects.toThrow("bad URL setup");
@@ -1121,6 +1145,11 @@ describe("update checker", () => {
   });
 
   describe("downloadUpdate", () => {
+    beforeEach(() => {
+      // The real call would create a directory on disk; keep it deterministic.
+      vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => `${prefix}a1b2c3`);
+    });
+
     it("rejects assets that are missing, insecure, or outside the project releases", async () => {
       await expect(main.downloadUpdate(null)).rejects.toThrow(/does not include a Windows installer/);
       await expect(main.downloadUpdate({ url: "http://example.com/setup.exe" })).rejects.toThrow(/insecure/);
@@ -1157,6 +1186,9 @@ describe("update checker", () => {
       const target = await pending;
       // The asset name is sanitized before it is used as a file name.
       expect(target).toMatch(/MultiTerm_Setup\.exe$/);
+      // ...and it lands in a per-download directory, not straight in the temp root.
+      expect(fs.mkdtempSync).toHaveBeenCalledWith(expect.stringContaining("multiterm-update-"));
+      expect(target).toContain("multiterm-update-a1b2c3");
       expect(progress).toEqual([{ received: 4, total: 10 }]);
     });
 
@@ -1176,7 +1208,7 @@ describe("update checker", () => {
       response.emit("data", Buffer.alloc(7));
       file.emit("finish");
 
-      await expect(pending).resolves.toBe("C:\\ElectronTemp\\MultiTerm-Setup.exe");
+      await expect(pending).resolves.toBe("C:\\ElectronTemp\\multiterm-update-a1b2c3\\MultiTerm-Setup.exe");
       expect(electron.app.getPath).toHaveBeenCalledWith("temp");
     });
 
@@ -1274,6 +1306,7 @@ describe("update checker", () => {
   describe("registerUpdateIpc", () => {
     beforeEach(() => {
       main.createWindow();
+      vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => `${prefix}a1b2c3`);
     });
 
     function handlerFor(channel) {
@@ -1323,7 +1356,7 @@ describe("update checker", () => {
       response.emit("data", Buffer.alloc(4));
       file.emit("finish");
 
-      await expect(pending).resolves.toEqual({ ok: true, path: "C:\\temp\\setup.exe" });
+      await expect(pending).resolves.toEqual({ ok: true, path: "C:\\temp\\multiterm-update-a1b2c3\\setup.exe" });
       expect(unref).toHaveBeenCalled();
       expect(main.getMainWindow().webContents.send.mock.calls).toEqual(expect.arrayContaining([
         ["multiterm:update-progress", { received: 4, total: 10 }],

@@ -99,6 +99,12 @@ layouts from auto-fit grids to a free-form canvas.
       Open the top-right question-mark button for navigable, theme-aware guidance generated from the repository's canonical <code>HELP.md</code>.
     </td>
   </tr>
+  <tr>
+    <td align="center" width="100%" colspan="3">
+      <h3>🔒 Locked down by default</h3>
+      The terminal bridge listens on loopback only and checks both <code>Origin</code> and <code>Host</code>, so no web page can reach your shells. The renderer runs sandboxed with context isolation and no Node access, elevated terminals need a one-time token, and updates arrive over HTTPS pinned to the official GitHub release.
+    </td>
+  </tr>
 </table>
 
 ### Attaching an existing terminal

@@ -18,6 +18,23 @@ describe("installed bridge security", () => {
     expect(bridgeScript).toContain('String.Equals(normalized, "127.0.0.1"');
   });
 
+  it("rejects HTTP requests whose Host header is not a loopback literal", () => {
+    // Without this, a DNS-rebinding page reaches the bridge as a same-origin
+    // client and the Origin check above never fires.
+    expect(bridgeScript).toContain("!this.allowRemote && !this.IsAllowedHttpHost(context.Request)");
+    expect(bridgeScript).toContain('this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8")');
+    expect(bridgeScript).toContain("private bool IsAllowedHttpHost(HttpListenerRequest request)");
+    expect(bridgeScript).toContain("return this.IsLoopbackHostLiteral(hostUri.Host);");
+  });
+
+  it("caps concurrent clients and sessions", () => {
+    expect(bridgeScript).toContain("private const int MaxClients = 32;");
+    expect(bridgeScript).toContain("private const int MaxSessions = 64;");
+    expect(bridgeScript).toContain("this.clients.Count >= MaxClients");
+    // Both session entry points, plain and elevated.
+    expect(bridgeScript.match(/this\.sessions\.Count >= MaxSessions/g)).toHaveLength(2);
+  });
+
   it("applies browser security headers with a Help-only framing exception", () => {
     expect(bridgeScript).toContain('this.ApplySecurityHeaders(context.Response, path == "/help.html")');
     expect(bridgeScript).toContain('response.Headers["Content-Security-Policy"]');

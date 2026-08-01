@@ -21,6 +21,35 @@
 // Only these host LITERALS may originate a browser WebSocket handshake.
 const LOOPBACK_ORIGIN_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
+// URL keeps IPv6 hosts wrapped in brackets ("[::1]"); compare on the literal.
+function normalizeHostLiteral(value) {
+  return String(value).replace(/^\[/, "").replace(/\]$/, "");
+}
+
+// Split an HTTP `Host` header into its hostname and port. Anything carrying extra
+// URL structure (credentials, a path, a query, a fragment) is not a real authority
+// and is rejected rather than parsed leniently.
+function parseHostHeader(value) {
+  if (typeof value !== "string" || value === "") return null;
+  const parsed = URL.parse(`multiterm://${value}`);
+  if (!parsed || parsed.username || parsed.password
+    || (parsed.pathname !== "" && parsed.pathname !== "/")
+    || parsed.search || parsed.hash) return null;
+  return { hostname: normalizeHostLiteral(parsed.hostname), port: parsed.port || "80" };
+}
+
+// Gate ordinary HTTP requests on their Host header to stop DNS rebinding. Binding
+// to loopback does not help here: an attacker page served from a name that later
+// re-resolves to 127.0.0.1 reaches this server as SAME-ORIGIN, so the browser stops
+// enforcing CORS and the custom-header guard on /api/update-preferences no longer
+// applies — the page could then read every response, including /health and the
+// stored update preferences. Such a request always carries the attacker's own
+// hostname in Host, never a loopback literal, so this rejects it outright.
+function isAllowedHttpHost(hostHeader) {
+  const parsed = parseHostHeader(hostHeader);
+  return parsed !== null && LOOPBACK_ORIGIN_HOSTS.has(parsed.hostname);
+}
+
 // Gate the WebSocket upgrade on its Origin to stop Cross-Site WebSocket
 // Hijacking. Binding to loopback is not enough on its own: a browser tab on the
 // same machine also connects from 127.0.0.1, so without this check any web page
@@ -42,20 +71,13 @@ function isAllowedWebSocketOrigin(origin, expectedHost) {
   const parsed = URL.parse(String(origin));
   if (!parsed) return false;
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-  // URL keeps IPv6 hosts wrapped in brackets ("[::1]"); compare on the literal.
-  const hostname = parsed.hostname.replace(/^\[/, "").replace(/\]$/, "");
-  if (!LOOPBACK_ORIGIN_HOSTS.has(hostname) || typeof expectedHost !== "string") return false;
+  const hostname = normalizeHostLiteral(parsed.hostname);
+  if (!LOOPBACK_ORIGIN_HOSTS.has(hostname)) return false;
 
-  const expected = URL.parse(`multiterm://${expectedHost}`);
-    if (!expected || expected.username || expected.password
-      || (expected.pathname !== "" && expected.pathname !== "/")
-      || expected.search || expected.hash) return false;
-  const expectedHostname = expected.hostname.replace(/^\[/, "").replace(/\]$/, "");
+  const expected = parseHostHeader(expectedHost);
+  if (expected === null || !LOOPBACK_ORIGIN_HOSTS.has(expected.hostname)) return false;
   const originPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
-  const expectedPort = expected.port || "80";
-  return LOOPBACK_ORIGIN_HOSTS.has(expectedHostname)
-    && hostname === expectedHostname
-    && originPort === expectedPort;
+  return hostname === expected.hostname && originPort === expected.port;
 }
 
-module.exports = { LOOPBACK_ORIGIN_HOSTS, isAllowedWebSocketOrigin };
+module.exports = { LOOPBACK_ORIGIN_HOSTS, isAllowedHttpHost, isAllowedWebSocketOrigin };

@@ -66,6 +66,10 @@ function assertTrustedIpcSender(event) {
   }
 }
 
+// The only web capabilities the workbench itself uses, for the permission CHECK
+// handler installed in createWindow.
+const ALLOWED_PERMISSIONS = new Set(["clipboard-read", "clipboard-sanitized-write"]);
+
 // Chromium force-loses the oldest WebGL context once ~16 are live, and xterm's
 // WebGL addon leaves a pane with no renderer when its context dies. Raising the
 // ceiling keeps terminal renderers from competing with each other (and with the
@@ -187,6 +191,15 @@ function createWindow() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      // Nothing in this app embeds foreign content, so remove the machinery that
+      // would host it. Explicit rather than relying on Electron's defaults, which
+      // have changed between major versions.
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      webviewTag: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
       // Run the renderer in Chromium's OS sandbox. Nothing in the renderer needs
       // Node; the preload only touches contextBridge/ipcRenderer, both of which
       // remain available to a sandboxed preload. This contains a renderer
@@ -224,6 +237,12 @@ function createWindow() {
   const ses = mainWindow.webContents.session;
   if (ses && typeof ses.setPermissionRequestHandler === "function") {
     ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    // Some permissions are resolved by a synchronous CHECK that never reaches the
+    // request handler above, so it has to be answered separately or those default
+    // to allowed. Terminal copy/paste is the only capability the workbench uses.
+    ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => (
+      ALLOWED_PERMISSIONS.has(permission) && isInternalUrl(requestingOrigin)
+    ));
   }
 
   mainWindow.loadURL(`http://${HOST}:${PORT}/`);
@@ -501,7 +520,15 @@ function openHttpsStream(url, { accept } = {}, redirects = 0) {
             reject(new Error("Too many redirects while contacting GitHub."));
             return;
           }
-          resolve(openHttpsStream(new URL(location, url).toString(), { accept }, redirects + 1));
+          // Release downloads redirect to a CDN host, so the target host cannot be
+          // pinned — but the transport can. Without this an attacker who could
+          // influence the redirect would get the installer fetched in cleartext.
+          const next = new URL(location, url);
+          if (next.protocol !== "https:") {
+            reject(new Error("Refusing to follow a redirect away from HTTPS."));
+            return;
+          }
+          resolve(openHttpsStream(next.toString(), { accept }, redirects + 1));
           return;
         }
         if (status !== 200) {
@@ -621,7 +648,11 @@ function downloadUpdate(asset, onProgress) {
     tempDir = os.tmpdir();
   }
   const safeName = String(asset.name || "MultiTerm-Setup.exe").replace(/[^\w.-]+/g, "_");
-  const target = path.join(tempDir, safeName);
+  // Land the installer in a fresh, unguessable directory. A fixed name directly in
+  // the shared temp folder is predictable, so any other process running as this user
+  // could pre-create or swap the file between this download and runInstaller() and
+  // have MultiTerm execute it for them.
+  const target = path.join(fs.mkdtempSync(path.join(tempDir, "multiterm-update-")), safeName);
 
   return openHttpsStream(asset.url, { accept: "application/octet-stream" }).then((response) => (
     new Promise((resolve, reject) => {

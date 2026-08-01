@@ -78,6 +78,20 @@ describe("createSession", () => {
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ message: "A session with this id already exists." }));
   });
 
+  it("refuses to spawn past the session ceiling", () => {
+    const client = fakeClient();
+    for (let index = 0; index < server.maxSessions; index += 1) {
+      server.sessions.set(`filler${index}`, { id: `filler${index}`, terminal, exited: false });
+    }
+    server.createSession(client, { id: "overflow1" });
+    expect(client.send).toHaveBeenCalledWith({
+      type: "createFailed",
+      id: "overflow1",
+      message: `The bridge is limited to ${server.maxSessions} terminals.`
+    });
+    expect(server.sessions.has("overflow1")).toBe(false);
+  });
+
   it("defaults the title to the shell label and uses default dimensions", () => {
     const client = fakeClient();
     server.createSession(client, { id: "session02", title: "   " });

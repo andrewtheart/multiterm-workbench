@@ -722,6 +722,13 @@ namespace MultiTerm.PowerShellBridge
         private const string AppUserModelId = "MultiTerm.Workbench";
         private readonly ConcurrentDictionary<string, BridgeClient> clients = new ConcurrentDictionary<string, BridgeClient>();
         private readonly ConcurrentDictionary<string, TerminalSession> sessions = new ConcurrentDictionary<string, TerminalSession>();
+
+        // Concurrency ceilings. Not access control -- the loopback bind and the Origin
+        // check are -- but every session is a real ConPTY and every client holds an open
+        // socket, so an unbounded create loop can exhaust the machine. Both sit far above
+        // real usage, and match the Electron bridge in server.js.
+        private const int MaxClients = 32;
+        private const int MaxSessions = 64;
         private readonly Dictionary<string, string> mimeTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             { ".html", "text/html; charset=utf-8" },
@@ -979,6 +986,17 @@ namespace MultiTerm.PowerShellBridge
             {
                 string path = context.Request.Url == null ? "/" : context.Request.Url.AbsolutePath;
                 this.ApplySecurityHeaders(context.Response, path == "/help.html");
+
+                // Anti-DNS-rebinding. A rebound page counts as same-origin, so the
+                // origin and custom-header checks below stop protecting anything;
+                // what still gives the request away is the attacker's own name in
+                // Host. Skipped when remote access is opted into, because those
+                // clients legitimately arrive under some other hostname.
+                if (!this.allowRemote && !this.IsAllowedHttpHost(context.Request))
+                {
+                    this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8");
+                    return;
+                }
 
                 if (context.Request.IsWebSocketRequest && path == "/ws")
                 {
@@ -2039,6 +2057,14 @@ namespace MultiTerm.PowerShellBridge
                 return;
             }
 
+            if (this.clients.Count >= MaxClients)
+            {
+                this.Log("warn", "Refused a client: already at the " + MaxClients + "-client limit.");
+                context.Response.StatusCode = 503;
+                context.Response.Close();
+                return;
+            }
+
             HttpListenerWebSocketContext webSocketContext;
             try
             {
@@ -2215,6 +2241,12 @@ namespace MultiTerm.PowerShellBridge
                 return;
             }
 
+            if (this.sessions.Count >= MaxSessions)
+            {
+                client.Send("{\"type\":\"createFailed\",\"id\":" + Json.Quote(id) + ",\"message\":\"The bridge is limited to " + MaxSessions + " terminals.\"}");
+                return;
+            }
+
             ShellInfo shell = this.GetShell(Json.Get(options, "shell"));
             string cwd = this.GetWorkingDirectory(Json.Get(options, "cwd"));
             int cols = Math.Max(20, Json.GetInt(options, "cols", 120));
@@ -2302,6 +2334,12 @@ namespace MultiTerm.PowerShellBridge
             if (this.sessions.ContainsKey(id))
             {
                 client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"A session with this id already exists.\"}");
+                return;
+            }
+
+            if (this.sessions.Count >= MaxSessions)
+            {
+                this.SendElevateError(client, id, "The bridge is limited to " + MaxSessions + " terminals.");
                 return;
             }
 
@@ -3200,6 +3238,25 @@ namespace MultiTerm.PowerShellBridge
             response.Headers["Referrer-Policy"] = "no-referrer";
             response.Headers["X-Content-Type-Options"] = "nosniff";
             response.Headers["X-Frame-Options"] = allowSameOriginFrame ? "SAMEORIGIN" : "DENY";
+        }
+
+        private bool IsAllowedHttpHost(HttpListenerRequest request)
+        {
+            string hostHeader = request.Headers["Host"];
+            Uri hostUri;
+            // Anything carrying extra URL structure is not a bare authority, so it
+            // is rejected rather than parsed leniently.
+            if (String.IsNullOrEmpty(hostHeader) ||
+                !Uri.TryCreate("http://" + hostHeader + "/", UriKind.Absolute, out hostUri) ||
+                !String.IsNullOrEmpty(hostUri.UserInfo) ||
+                hostUri.AbsolutePath != "/" ||
+                !String.IsNullOrEmpty(hostUri.Query) ||
+                !String.IsNullOrEmpty(hostUri.Fragment))
+            {
+                return false;
+            }
+
+            return this.IsLoopbackHostLiteral(hostUri.Host);
         }
 
         private bool IsAllowedWebSocketOrigin(HttpListenerRequest request)

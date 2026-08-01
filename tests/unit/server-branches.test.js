@@ -43,6 +43,10 @@ function fakeSocket(remoteAddress = "127.0.0.1") {
   };
 }
 
+function handshakeHeaders(extra = {}) {
+  return { "sec-websocket-key": "dGhlIHNhbXBsZQ==", "sec-websocket-version": "13", ...extra };
+}
+
 function maskFrame(payload) {
   const data = Buffer.from(payload);
   const mask = Buffer.from([2, 4, 6, 8]);
@@ -173,7 +177,7 @@ describe("start edge cases", () => {
 describe("client send when socket is destroyed", () => {
   it("skips writing to a destroyed socket", () => {
     const socket = fakeSocket("127.0.0.1");
-    server.server.emit("upgrade", { url: "/ws", headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==" } }, socket);
+    server.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
     const writesAfterHandshake = socket.write.mock.calls.length;
     socket.destroyed = true;
     socket.emit("data", maskFrame(JSON.stringify({ type: "list" })));
@@ -187,7 +191,7 @@ describe("allowRemote enabled", () => {
     server.__setAllowRemote(true);
     try {
       const socket = fakeSocket("203.0.113.5");
-      server.server.emit("upgrade", { url: "/ws", headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==" } }, socket);
+      server.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
       expect(socket.destroy).not.toHaveBeenCalled();
       expect(String(socket.write.mock.calls[0][0])).toContain("101 Switching Protocols");
       server.clients.clear();

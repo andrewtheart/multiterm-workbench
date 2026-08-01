@@ -26,13 +26,19 @@ const childProcess = require("node:child_process");
 // `pty` is a mutable binding so tests can inject a fake terminal factory
 // via `__setPty` without spawning real shells.
 let pty = require("@homebridge/node-pty-prebuilt-multiarch");
-const { isAllowedWebSocketOrigin } = require("./ws-origin");
+const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3177);
 let allowRemote = process.env.ALLOW_REMOTE === "1";
 const publicDir = path.join(__dirname, "public");
 const maxMessageSize = 1024 * 1024;
+// Concurrency ceilings. These are not access control -- the loopback bind and the
+// Origin check are -- but every session is a real ConPTY and every client holds an
+// open socket, so an unbounded create loop (a renderer bug as easily as a hostile
+// same-user process) can exhaust the machine. Both sit far above real usage.
+const maxClients = 32;
+const maxSessions = 64;
 const updatePreferencesMaxSize = 4096;
 const websocketAcceptHash = ["sha", "1"].join("");
 
@@ -158,6 +164,14 @@ const server = http.createServer((request, response) => {
   const pathname = getPathname(request.url);
   setSecurityHeaders(response, { allowSameOriginFrame: pathname === "/help.html" });
 
+  // Anti-DNS-rebinding. Skipped when remote access is explicitly opted into, since
+  // remote clients legitimately reach the bridge under some other hostname.
+  if (!allowRemote && !isAllowedHttpHost(request.headers.host)) {
+    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Forbidden");
+    return;
+  }
+
   if (pathname === "/api/update-preferences") {
     handleUpdatePreferencesRequest(request, response);
     return;
@@ -203,6 +217,19 @@ server.on("upgrade", (request, socket) => {
 
   const key = request.headers["sec-websocket-key"];
   if (!key) {
+    socket.destroy();
+    return;
+  }
+
+  // RFC 6455 defines this handshake for version 13 only. Anything else is a
+  // pre-standard client or a probe, and must not be answered with a 101.
+  if (request.headers["sec-websocket-version"] !== "13") {
+    socket.destroy();
+    return;
+  }
+
+  if (clients.size >= maxClients) {
+    console.warn(`[bridge] Refused a WebSocket client: already at the ${maxClients}-client limit.`);
     socket.destroy();
     return;
   }
@@ -332,6 +359,8 @@ module.exports = {
   mimeTypes,
   securityHeaders,
   maxMessageSize,
+  maxClients,
+  maxSessions,
   updatePreferencesMaxSize,
   __setPty,
   __setAllowRemote,
@@ -373,6 +402,7 @@ module.exports = {
   listWslTmuxSessions,
   getWorkingDirectory,
   isLocalAddress,
+  isAllowedHttpHost,
   isAllowedWebSocketOrigin,
   startLog,
   stopLog,
@@ -736,6 +766,11 @@ function createSession(client, options) {
     return;
   }
 
+  if (sessions.size >= maxSessions) {
+    client.send({ type: "createFailed", id, message: `The bridge is limited to ${maxSessions} terminals.` });
+    return;
+  }
+
   const tmux = normalizeTmuxTarget(options.tmux);
   if (options.tmux && !tmux) {
     client.send({ type: "createFailed", id, message: "Invalid WSL tmux target." });
@@ -1047,25 +1082,25 @@ function pickScript(client, message) {
   }
 
   // -STA is required: the shell-based file dialog cannot run on an MTA thread.
-  // The path is written to stdout on its own line so an empty result reads as a
-  // cancellation rather than a failure.
+  // The initial directory travels in the environment rather than being interpolated
+  // into the command text, so a directory name can never terminate the string
+  // literal and inject PowerShell. The chosen path is written to stdout on its own
+  // line so an empty result reads as a cancellation rather than a failure.
   const script = [
     "Add-Type -AssemblyName System.Windows.Forms",
     "$d = New-Object System.Windows.Forms.OpenFileDialog",
     "$d.Title = 'Select a script to run'",
     "$d.Filter = 'Scripts (*.ps1;*.bat;*.cmd)|*.ps1;*.bat;*.cmd|PowerShell (*.ps1)|*.ps1|Batch (*.bat;*.cmd)|*.bat;*.cmd|All files (*.*)|*.*'",
-    initialDir ? `$d.InitialDirectory = '${initialDir.replace(/'/g, "''")}'` : "",
+    "if ($env:MT_PICK_DIR) { $d.InitialDirectory = $env:MT_PICK_DIR }",
     "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"
-  ]
-    .filter(Boolean)
-    .join("; ");
+  ].join("; ");
 
   let child;
   try {
     child = childProcess.spawn(
       "powershell.exe",
-      ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
-      { windowsHide: true }
+      ["-NoProfile", "-STA", "-Command", script],
+      { windowsHide: true, env: { ...process.env, MT_PICK_DIR: initialDir } }
     );
   } catch (error) {
     console.error("[bridge] Script picker failed to start:", error.message);
@@ -1110,10 +1145,22 @@ function openPath(client, message) {
 
     try {
       if (process.platform === "win32") {
-        // Association lookup is a shell operation, so it has to go through the shell.
-        // The empty string is start's title argument: without it a quoted path is
-        // consumed as the window title and nothing opens.
-        childProcess.spawn("cmd.exe", ["/c", "start", "", resolved], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+        // Association lookup is a shell operation, but it must NOT go through cmd.exe:
+        // Windows only quotes an argument that contains whitespace, so a path holding
+        // `&` or `|` (both legal in a file name) would reach `cmd /c` unquoted and be
+        // re-parsed as extra commands. Hand the path to PowerShell through the
+        // environment instead, where it is never part of a command line, and use
+        // -LiteralPath so wildcards are not expanded either.
+        childProcess.spawn(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-Command", "Start-Process -LiteralPath $env:MT_OPEN_PATH"],
+          {
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true,
+            env: { ...process.env, MT_OPEN_PATH: resolved }
+          }
+        ).unref();
       } else {
         const command = process.platform === "darwin" ? "open" : "xdg-open";
         childProcess.spawn(command, [resolved], { detached: true, stdio: "ignore" }).unref();
@@ -1195,6 +1242,8 @@ function launchElevatedTerminal(client, message) {
   const id = sanitizeId(message.id);
   if (sessions.has(id)) {
     client.send({ type: "error", id, message: "A session with this id already exists." });
+  } else if (sessions.size >= maxSessions) {
+    client.send({ type: "elevateError", id, message: `The bridge is limited to ${maxSessions} terminals.` });
   } else {
     beginElevationAttempt(client, id, message);
   }

@@ -16,7 +16,28 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+const http = require("node:http");
 const app = require("../../server.js");
+
+// `fetch` derives Host from the URL, so spoofing it (as a rebinding attack does)
+// needs the lower-level client.
+function requestWithHost(baseUrl, requestPath, hostHeader) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: "127.0.0.1",
+      port: new URL(baseUrl).port,
+      path: requestPath,
+      headers: { Host: hostHeader }
+    }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, body }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
 
 function fakeSocket(remoteAddress = "127.0.0.1") {
   const listeners = {};
@@ -29,6 +50,10 @@ function fakeSocket(remoteAddress = "127.0.0.1") {
     on: vi.fn((event, cb) => { listeners[event] = cb; }),
     emit(event, arg) { if (listeners[event]) listeners[event](arg); }
   };
+}
+
+function handshakeHeaders(extra = {}) {
+  return { "sec-websocket-key": "dGhlIHNhbXBsZQ==", "sec-websocket-version": "13", ...extra };
 }
 
 function maskFrame(payload) {
@@ -103,6 +128,25 @@ describe("HTTP server", () => {
     expect(res.headers.get("allow")).toBe("GET, HEAD");
   });
 
+  // DNS rebinding turns an attacker's page into a SAME-ORIGIN client of this
+  // server, so CORS and the custom-header guard stop applying. The rebound
+  // request still carries the attacker's own name in Host, which is the tell.
+  it("rejects requests whose Host header is not a loopback literal", async () => {
+    const res = await requestWithHost(baseUrl, "/health", "multiterm.attacker.example");
+    expect(res.status).toBe(403);
+    expect(res.body).toBe("Forbidden");
+  });
+
+  it("allows any Host once remote access is explicitly enabled", async () => {
+    app.__setAllowRemote(true);
+    try {
+      const res = await requestWithHost(baseUrl, "/health", "multiterm.example.net");
+      expect(res.status).toBe(200);
+    } finally {
+      app.__setAllowRemote(false);
+    }
+  });
+
   it("accepts a real WebSocket client and answers list", async () => {
     app.__setPty({ spawn: () => ({ pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {} }) });
     const ws = new WebSocket(`ws://127.0.0.1:${new URL(baseUrl).port}/ws`);
@@ -149,7 +193,7 @@ describe("WebSocket upgrade guards", () => {
 
   it("completes a valid handshake and wires socket events", () => {
     const socket = fakeSocket("127.0.0.1");
-    app.server.emit("upgrade", { url: "/ws", headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==" } }, socket);
+    app.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
 
     const handshake = socket.write.mock.calls[0][0];
     expect(String(handshake)).toContain("101 Switching Protocols");
@@ -167,7 +211,7 @@ describe("WebSocket upgrade guards", () => {
     const socket = fakeSocket("127.0.0.1");
     app.server.emit("upgrade", {
       url: "/ws",
-      headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==", origin: "https://evil.example" }
+      headers: handshakeHeaders({ origin: "https://evil.example" })
     }, socket);
     expect(socket.destroy).toHaveBeenCalled();
     expect(app.clients.size).toBe(0);
@@ -177,7 +221,7 @@ describe("WebSocket upgrade guards", () => {
     const socket = fakeSocket("127.0.0.1");
     app.server.emit("upgrade", {
       url: "/ws",
-      headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==", host: "127.0.0.1:3177", origin: "http://127.0.0.1:3177" }
+      headers: handshakeHeaders({ host: "127.0.0.1:3177", origin: "http://127.0.0.1:3177" })
     }, socket);
     expect(socket.destroy).not.toHaveBeenCalled();
     expect(String(socket.write.mock.calls[0][0])).toContain("101 Switching Protocols");
@@ -189,15 +233,40 @@ describe("WebSocket upgrade guards", () => {
     const socket = fakeSocket("127.0.0.1");
     app.server.emit("upgrade", {
       url: "/ws",
-      headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==", host: "127.0.0.1:3177", origin: "http://127.0.0.1:3000" }
+      headers: handshakeHeaders({ host: "127.0.0.1:3177", origin: "http://127.0.0.1:3000" })
     }, socket);
     expect(socket.destroy).toHaveBeenCalled();
     expect(app.clients.size).toBe(0);
   });
 
+  it("destroys upgrades that do not speak WebSocket version 13", () => {
+    const socket = fakeSocket("127.0.0.1");
+    app.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders({ "sec-websocket-version": "8" }) }, socket);
+    expect(socket.destroy).toHaveBeenCalled();
+    expect(app.clients.size).toBe(0);
+  });
+
+  it("refuses new clients once the connection ceiling is reached", () => {
+    const sockets = [];
+    for (let index = 0; index < app.maxClients; index += 1) {
+      const socket = fakeSocket("127.0.0.1");
+      app.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
+      sockets.push(socket);
+    }
+    expect(app.clients.size).toBe(app.maxClients);
+
+    const refused = fakeSocket("127.0.0.1");
+    app.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, refused);
+    expect(refused.destroy).toHaveBeenCalled();
+    expect(refused.write).not.toHaveBeenCalled();
+    expect(app.clients.size).toBe(app.maxClients);
+
+    sockets.forEach((socket) => socket.emit("close"));
+  });
+
   it("removes the client on socket error", () => {
     const socket = fakeSocket("127.0.0.1");
-    app.server.emit("upgrade", { url: "/ws", headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==" } }, socket);
+    app.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
     expect(app.clients.size).toBe(1);
     socket.emit("error", new Error("reset"));
     expect(app.clients.size).toBe(0);
@@ -268,7 +337,7 @@ describe("connection: memory stats welcome + client data isolation", () => {
   });
 
   function connect(socket) {
-    app.server.emit("upgrade", { url: "/ws", headers: { "sec-websocket-key": "dGhlIHNhbXBsZQ==" } }, socket);
+    app.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
   }
 
   function writesText(socket) {
@@ -473,6 +542,26 @@ describe("elevated (administrator) terminal", () => {
     expect(client.send).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", id: "admin-term-1" })
     );
+  });
+
+  it("refuses to launch past the session ceiling", () => {
+    const fillers = Array.from({ length: app.maxSessions }, (_unused, index) => `filler${index}`);
+    fillers.forEach((id) => app.sessions.set(id, { id }));
+    const spawn = vi.spyOn(childProcess, "spawn");
+    const client = makeClient();
+    try {
+      app.launchElevatedTerminal(client, { id: "admin-term-1", shell: "pwsh", cwd: process.cwd() });
+      expect(spawn).not.toHaveBeenCalled();
+      expect(client.send).toHaveBeenCalledWith({
+        type: "elevateError",
+        id: "admin-term-1",
+        message: `The bridge is limited to ${app.maxSessions} terminals.`
+      });
+    } finally {
+      // This describe has no session reset, and leaving the fillers behind would
+      // make every later create hit the ceiling.
+      fillers.forEach((id) => app.sessions.delete(id));
+    }
   });
 
   // --- launcher spawn -----------------------------------------------------

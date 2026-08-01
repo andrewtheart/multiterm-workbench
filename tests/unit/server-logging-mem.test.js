@@ -231,18 +231,20 @@ describe("openPath", () => {
     expect(client.send).toHaveBeenCalledWith({ type: "openError", message: "Path not found." });
   });
 
-  it("goes through the shell on Windows so the file association is honoured", () => {
+  it("honours the file association on Windows without going through cmd.exe", () => {
     setPlatform("win32");
     vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => false });
     const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue({ unref: vi.fn() });
-    server.openPath(fakeClient(), { path: "C:\\Users\\me\\session.log" });
+    server.openPath(fakeClient(), { path: "C:\\Users\\me\\rm -rf & calc.log" });
 
-    const [command, args] = spawn.mock.calls[0];
-    expect(command).toBe("cmd.exe");
-    // The empty title argument matters: without it 'start' consumes the quoted
-    // path as the window title and never opens the file.
-    expect(args.slice(0, 3)).toEqual(["/c", "start", ""]);
-    expect(args[3]).toContain("session.log");
+    const [command, args, options] = spawn.mock.calls[0];
+    expect(command).toBe("powershell.exe");
+    // The path must never appear on a command line: `cmd /c` would re-parse an
+    // unquoted `&` in a (perfectly legal) file name as another command to run.
+    expect(args.join(" ")).not.toContain("calc");
+    expect(args.at(-1)).toBe("Start-Process -LiteralPath $env:MT_OPEN_PATH");
+    expect(options.env.MT_OPEN_PATH).toContain("rm -rf & calc.log");
+    expect(options.windowsHide).toBe(true);
   });
 
   it("opens the file itself, not its parent folder", () => {
@@ -307,7 +309,10 @@ describe("pickScript", () => {
     // -STA is not cosmetic: the shell file dialog cannot be shown from an MTA thread.
     expect(args).toContain("-STA");
     expect(options.windowsHide).toBe(true);
-    expect(args[args.length - 1]).toContain("C:\\work");
+    // The directory travels in the environment, so it can never close the quoted
+    // PowerShell string literal it used to be interpolated into.
+    expect(args.at(-1)).not.toContain("C:\\work");
+    expect(options.env.MT_PICK_DIR).toBe("C:\\work");
   });
 
   it("falls back to the process directory and omits a non-directory picker path", () => {
@@ -319,8 +324,7 @@ describe("pickScript", () => {
     server.pickScript(fakeClient(), { requestId: "no-cwd" });
 
     expect(statSync).toHaveBeenCalledWith(process.cwd());
-    const script = spawn.mock.calls[0][1].at(-1);
-    expect(script).not.toContain("InitialDirectory");
+    expect(spawn.mock.calls[0][2].env.MT_PICK_DIR).toBe("");
   });
 
   it("returns the chosen path once the picker closes", () => {
@@ -598,7 +602,7 @@ describe("handleClientMessage dispatch (log + reveal + open + killAll)", () => {
 
     childProcess.spawn.mockClear();
     server.handleClientMessage(client, JSON.stringify({ type: "openPath", path: "C:\\Users\\me\\s.log" }));
-    expect(childProcess.spawn.mock.calls[0][0]).toBe("cmd.exe");
+    expect(childProcess.spawn.mock.calls[0][0]).toBe("powershell.exe");
 
     // pickScript must be routed, not fall through to "Unsupported message type":
     // an unanswered request leaves the browser waiting on a promise for minutes.

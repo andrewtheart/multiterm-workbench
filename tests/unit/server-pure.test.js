@@ -56,7 +56,9 @@ function mockRequest({
   const request = new EventEmitter();
   request.method = method;
   request.url = url;
-  request.headers = headers;
+  // Every real request carries a Host, and the server rejects those that do not
+  // name a loopback address.
+  request.headers = { host: "127.0.0.1:3177", ...headers };
   request.socket = { remoteAddress };
   request.setEncoding = vi.fn();
   request.resume = vi.fn();
@@ -225,6 +227,38 @@ describe("isAllowedWebSocketOrigin", () => {
     expect(server.isAllowedWebSocketOrigin("ftp://localhost", "localhost")).toBe(false);
     // Unparseable Origin header.
     expect(server.isAllowedWebSocketOrigin("not a url", "localhost:3177")).toBe(false);
+    // A Host header that is itself not loopback.
+    expect(server.isAllowedWebSocketOrigin("http://127.0.0.1:3177", "evil.example:3177")).toBe(false);
+  });
+
+  it("matches a default-port Origin against a portless Host", () => {
+    expect(server.isAllowedWebSocketOrigin("http://localhost", "localhost")).toBe(true);
+    expect(server.isAllowedWebSocketOrigin("https://localhost", "localhost")).toBe(false);
+  });
+});
+
+describe("isAllowedHttpHost", () => {
+  it("accepts loopback literals with or without a port", () => {
+    expect(server.isAllowedHttpHost("127.0.0.1:3177")).toBe(true);
+    expect(server.isAllowedHttpHost("localhost:3199")).toBe(true);
+    expect(server.isAllowedHttpHost("[::1]:3177")).toBe(true);
+    expect(server.isAllowedHttpHost("localhost")).toBe(true);
+    // A trailing slash is still a bare authority.
+    expect(server.isAllowedHttpHost("127.0.0.1:3177/")).toBe(true);
+  });
+
+  it("rejects rebinding hosts and headers carrying extra URL structure", () => {
+    // The whole point: a rebound request arrives under the attacker's own name.
+    expect(server.isAllowedHttpHost("multiterm.attacker.example:3177")).toBe(false);
+    expect(server.isAllowedHttpHost("127.0.0.1.attacker.example")).toBe(false);
+    expect(server.isAllowedHttpHost(undefined)).toBe(false);
+    expect(server.isAllowedHttpHost("")).toBe(false);
+    expect(server.isAllowedHttpHost(42)).toBe(false);
+    expect(server.isAllowedHttpHost("not a host")).toBe(false);
+    expect(server.isAllowedHttpHost("user:secret@127.0.0.1:3177")).toBe(false);
+    expect(server.isAllowedHttpHost("127.0.0.1:3177/evil")).toBe(false);
+    expect(server.isAllowedHttpHost("127.0.0.1:3177?q=1")).toBe(false);
+    expect(server.isAllowedHttpHost("127.0.0.1:3177#frag")).toBe(false);
   });
 });
 
