@@ -48,7 +48,11 @@ contextBridge.exposeInMainWorld("multiterm", {
   // Update checker: query the latest GitHub release, then optionally download
   // and launch its installer (which quits the app once it starts).
   checkForUpdate: () => ipcRenderer.invoke("multiterm:check-update"),
-  downloadUpdate: (asset) => ipcRenderer.invoke("multiterm:download-update", asset),
+  downloadUpdate: (asset, maxInstallerSizeMb) => ipcRenderer.invoke(
+    "multiterm:download-update",
+    asset,
+    maxInstallerSizeMb
+  ),
   openReleasePage: (url) => ipcRenderer.invoke("multiterm:open-release", url),
   onUpdateProgress: (handler) => {
     if (typeof handler !== "function") return;

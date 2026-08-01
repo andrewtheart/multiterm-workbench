@@ -184,6 +184,14 @@ test.describe("Settings panel verification", () => {
 
     await set("#outputBacklogKb", "1024", "change");
     expect(await page.evaluate(() => outputBacklogLimitBytes())).toBe(1024 * 1024);
+
+    await set("#maxInstallerSizeMb", "512", "change");
+    expect(await setting("maxInstallerSizeMb")).toBe(512);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).maxInstallerSizeMb)).toBe(512);
+
+    await set("#maxInstallerSizeMb", "not-a-number", "change");
+    expect(await setting("maxInstallerSizeMb")).toBe(256);
+    expect(await page.locator("#maxInstallerSizeMb").inputValue()).toBe("256");
   });
 
   test("session settings", async () => {    for (const [sel, key] of [

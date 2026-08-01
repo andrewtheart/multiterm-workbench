@@ -235,7 +235,9 @@ Open **Runtime logs** from the status bar and choose the appropriate severity. I
 
 ## Privacy and security
 
-MultiTerm serves its UI and terminal bridge on the local machine. Bridge requests use a per-run authentication token. Notes, queues, settings, and workspace metadata are stored locally. Terminal commands and output are not sent to a remote MultiTerm service.
+MultiTerm serves its UI and terminal bridge on loopback only. Browser clients must pass exact Host and Origin checks; remote-mode flags and non-loopback bind hosts are refused. Notes, queues, settings, and workspace metadata are stored locally. Terminal commands and output are not sent to a remote MultiTerm service.
+
+Electron opens only HTTPS external links. Updates must match the GitHub release asset's exact size and SHA-256 digest before launch; the maximum installer size is configurable under **Performance**. Installers are not yet Authenticode-signed, so verify the release source before approving an update.
 
 Treat copied commands, scripts, Administrator terminals, Explorer extensions, and third-party CLIs with the same care you would use in a standalone terminal.
 

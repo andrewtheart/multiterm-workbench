@@ -37,6 +37,7 @@ const defaultSettings = {
   layout: "auto",
   minimizedScope: "page",
   minWidth: 420,
+  maxInstallerSizeMb: 256,
   notifyActivity: false,
   notifySilence: false,
   outputBacklogKb: 1024,
@@ -251,6 +252,7 @@ const elements = {
   minWidth: document.querySelector("#minWidth"),
   minWidthValue: document.querySelector("#minWidthValue"),
   minimizedDock: document.querySelector("#minimizedDock"),
+  maxInstallerSizeMb: document.querySelector("#maxInstallerSizeMb"),
   notifyActivity: document.querySelector("#notifyActivity"),
   notifySilence: document.querySelector("#notifySilence"),
   outputBacklogKb: document.querySelector("#outputBacklogKb"),
@@ -544,6 +546,10 @@ function bindControls() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
+    state.settings.maxInstallerSizeMb,
+    elements.maxInstallerSizeMb
+  );
   elements.notifyActivity.checked = state.settings.notifyActivity;
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
@@ -660,6 +666,7 @@ function bindControls() {
   bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
   bindSetting(elements.outputCoalesceMs, "outputCoalesceMs", "change", clampOutputCoalesceMs);
   bindSetting(elements.outputBacklogKb, "outputBacklogKb", "change", clampOutputBacklogKb);
+  bindSetting(elements.maxInstallerSizeMb, "maxInstallerSizeMb", "change", normalizeInstallerSizeMb);
   bindSetting(elements.notifyActivity, "notifyActivity", "change", (_, element) => element.checked);
   bindSetting(elements.notifySilence, "notifySilence", "change", (_, element) => element.checked);
   bindSetting(elements.silenceSeconds, "silenceSeconds", "change", Number);
@@ -762,6 +769,7 @@ function sendBridgeConfig() {
 // the value in force.
 const OUTPUT_COALESCE_MS_BOUNDS = { min: 0, max: 100, fallback: 8 };
 const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
+const INSTALLER_SIZE_MB_FALLBACK = 256;
 
 function clampSettingNumber(value, element, bounds) {
   const requested = Number(value);
@@ -778,6 +786,16 @@ function clampOutputCoalesceMs(value, element) {
 
 function clampOutputBacklogKb(value, element) {
   return clampSettingNumber(value, element, OUTPUT_BACKLOG_KB_BOUNDS);
+}
+
+function normalizeInstallerSizeMb(value, element) {
+  const requested = Math.round(Number(value));
+  const bytes = requested * 1024 * 1024;
+  const next = Number.isFinite(requested) && requested > 0 && Number.isSafeInteger(bytes)
+    ? requested
+    : INSTALLER_SIZE_MB_FALLBACK;
+  element.value = next;
+  return next;
 }
 
 function connectBridge(locationProtocol = window.location.protocol) {
@@ -6251,6 +6269,10 @@ function syncControlsFromSettings() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
+    state.settings.maxInstallerSizeMb,
+    elements.maxInstallerSizeMb
+  );
   elements.notifyActivity.checked = state.settings.notifyActivity;
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
@@ -7344,7 +7366,12 @@ function pickInstallerAsset(assets) {
   const executables = list.filter((asset) => /\.exe$/i.test(asset?.name || "") && asset?.browser_download_url);
   const installer = executables.find((asset) => /setup|install/i.test(asset.name)) || executables[0];
   if (!installer) return null;
-  return { name: installer.name, url: installer.browser_download_url, size: Number(installer.size) || 0 };
+  return {
+    digest: typeof installer.digest === "string" ? installer.digest.toLowerCase() : "",
+    name: installer.name,
+    url: installer.browser_download_url,
+    size: Number(installer.size) || 0
+  };
 }
 
 // Browser fallback (the PowerShell bridge runs MultiTerm as a plain web app, with
@@ -7622,7 +7649,10 @@ async function startUpdateDownload() {
   elements.updateProgressBar.style.width = "0%";
   elements.updateProgressText.textContent = `Downloading ${release.asset.name}\u2026`;
 
-  const result = await window.multiterm.downloadUpdate(release.asset);
+  const result = await window.multiterm.downloadUpdate(
+    release.asset,
+    state.settings.maxInstallerSizeMb
+  );
   if (result?.ok) {
     elements.updateProgressText.textContent = "Starting the installer\u2014 MultiTerm will close.";
     return;

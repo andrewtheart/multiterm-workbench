@@ -309,6 +309,11 @@
               <span title="How much output a pane may hold before it is written to the terminal immediately instead of waiting for the next frame. Lower keeps memory down; higher smooths very bursty output.">Output buffer (KB)</span>
               <input id="outputBacklogKb" type="number" min="64" max="65536" step="64" inputmode="numeric">
             </label>
+
+            <label class="control-row">
+              <span title="Largest installer the updater may download. The SHA-256 digest and exact release size are verified before launch.">Maximum installer size (MB)</span>
+              <input id="maxInstallerSizeMb" type="number" min="1" step="1" inputmode="numeric">
+            </label>
           </section>
 
           <section class="control-section">

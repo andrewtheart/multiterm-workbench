@@ -187,17 +187,23 @@ describe("client send when socket is destroyed", () => {
   });
 });
 
-describe("allowRemote enabled", () => {
-  it("permits non-local upgrades when allowRemote is enabled", () => {
-    server.__setAllowRemote(true);
+describe("local-only bridge", () => {
+  it("always rejects non-local upgrades", () => {
+    const socket = fakeSocket("203.0.113.5");
+    server.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
+    expect(socket.destroy).toHaveBeenCalled();
+    expect(socket.write).not.toHaveBeenCalled();
+  });
+
+  it("refuses remote-mode and non-loopback startup configuration", () => {
+    const prior = process.env.ALLOW_REMOTE;
+    process.env.ALLOW_REMOTE = "1";
     try {
-      const socket = fakeSocket("203.0.113.5");
-      server.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
-      expect(socket.destroy).not.toHaveBeenCalled();
-      expect(String(socket.write.mock.calls[0][0])).toContain("101 Switching Protocols");
-      server.clients.clear();
+      expect(() => server.start(undefined, 0, "127.0.0.1")).toThrow(/no longer supported/);
     } finally {
-      server.__setAllowRemote(false);
+      if (prior === undefined) delete process.env.ALLOW_REMOTE;
+      else process.env.ALLOW_REMOTE = prior;
     }
+    expect(() => server.start(undefined, 0, "0.0.0.0")).toThrow(/loopback/);
   });
 });

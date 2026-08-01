@@ -48,6 +48,13 @@ if (-not $HostName) {
   }
 }
 
+if ($AllowRemote.IsPresent -or $env:ALLOW_REMOTE -eq "1") {
+    throw "Remote mode is no longer supported because the bridge does not provide remote authentication or TLS."
+}
+if ($HostName -notin @("127.0.0.1", "localhost", "::1", "[::1]")) {
+    throw "MultiTerm may listen only on a loopback host."
+}
+
 $instanceDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) "MultiTerm\Instances"
 
 function Get-RunningMultiTermInstances {
@@ -345,7 +352,6 @@ if (-not $ShowConsole.IsPresent -and -not $ConsoleDashboard.IsPresent -and [Mult
   $consoleHidden = $true
 }
 
-$effectiveAllowRemote = $AllowRemote.IsPresent -or $env:ALLOW_REMOTE -eq "1"
 $publicDir = Join-Path $PSScriptRoot "public"
 
 if (-not (Test-Path -LiteralPath $publicDir -PathType Container)) {
@@ -705,12 +711,18 @@ namespace MultiTerm.PowerShellBridge
 
     public sealed class BridgeServer
     {
+        private sealed class OutputBatch
+        {
+            public readonly object Sync = new object();
+            public readonly StringBuilder Data = new StringBuilder();
+            public Timer Timer;
+        }
+
         private readonly string host;
         private int port;
         private readonly bool autoPort;
         private readonly int minimumAutoPort;
         private readonly int maximumAutoPort;
-        private readonly bool allowRemote;
         private readonly bool consoleDashboardEnabled;
         private readonly bool openBrowser;
         private readonly string publicDir;
@@ -722,6 +734,8 @@ namespace MultiTerm.PowerShellBridge
         private const string AppUserModelId = "MultiTerm.Workbench";
         private readonly ConcurrentDictionary<string, BridgeClient> clients = new ConcurrentDictionary<string, BridgeClient>();
         private readonly ConcurrentDictionary<string, TerminalSession> sessions = new ConcurrentDictionary<string, TerminalSession>();
+        private readonly ConcurrentDictionary<string, OutputBatch> outputBatches = new ConcurrentDictionary<string, OutputBatch>();
+        private int outputCoalesceMs = 8;
 
         // Concurrency ceilings. Not access control -- the loopback bind and the Origin
         // check are -- but every session is a real ConPTY and every client holds an open
@@ -751,14 +765,13 @@ namespace MultiTerm.PowerShellBridge
         // pseudo-console, so we need to know where we came from.
         public static string ScriptPath;
 
-        public BridgeServer(string host, int port, bool autoPort, bool allowRemote, string publicDir, bool openBrowser, bool consoleDashboardEnabled, string startupOpenFolder)
+        public BridgeServer(string host, int port, bool autoPort, string publicDir, bool openBrowser, bool consoleDashboardEnabled, string startupOpenFolder)
         {
             this.host = host;
             this.port = port;
             this.autoPort = autoPort;
             this.minimumAutoPort = port;
             this.maximumAutoPort = Math.Min(UInt16.MaxValue, port + 1000);
-            this.allowRemote = allowRemote;
             this.publicDir = Path.GetFullPath(publicDir);
             this.openBrowser = openBrowser;
             this.consoleDashboardEnabled = consoleDashboardEnabled;
@@ -990,9 +1003,8 @@ namespace MultiTerm.PowerShellBridge
                 // Anti-DNS-rebinding. A rebound page counts as same-origin, so the
                 // origin and custom-header checks below stop protecting anything;
                 // what still gives the request away is the attacker's own name in
-                // Host. Skipped when remote access is opted into, because those
-                // clients legitimately arrive under some other hostname.
-                if (!this.allowRemote && !this.IsAllowedHttpHost(context.Request))
+                // Host.
+                if (!this.IsAllowedHttpHost(context.Request))
                 {
                     this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8");
                     return;
@@ -2049,8 +2061,7 @@ namespace MultiTerm.PowerShellBridge
         private void HandleWebSocket(HttpListenerContext context)
         {
             IPAddress remoteAddress = context.Request.RemoteEndPoint == null ? null : context.Request.RemoteEndPoint.Address;
-            if (!this.allowRemote &&
-                (!this.IsLocalAddress(remoteAddress) || !this.IsAllowedWebSocketOrigin(context.Request)))
+            if (!this.IsLocalAddress(remoteAddress) || !this.IsAllowedWebSocketOrigin(context.Request))
             {
                 context.Response.StatusCode = 403;
                 context.Response.Close();
@@ -2222,6 +2233,12 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.RequestMemStats(client);
             }
+            else if (type == "config")
+            {
+                int requested = Json.GetInt(message, "outputCoalesceMs", 8);
+                this.outputCoalesceMs = Math.Min(100, Math.Max(0, requested));
+                client.Send("{\"type\":\"config\",\"outputCoalesceMs\":" + this.outputCoalesceMs + "}");
+            }
             else if (type == "statistics")
             {
                 this.RequestStatistics(client, message);
@@ -2260,10 +2277,12 @@ namespace MultiTerm.PowerShellBridge
             TerminalSession session = new TerminalSession(id, title.Trim(), shell, cwd, cols, rows);
             session.Output += delegate(string data)
             {
-                this.Broadcast("{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data) + "}");
+                this.QueueSessionOutput(id, data);
             };
             session.Exited += delegate(int exitCode)
             {
+                this.FlushSessionOutput(id);
+                this.RemoveSessionOutputBatch(id);
                 TerminalSession removed;
                 this.sessions.TryRemove(id, out removed);
                 this.Log("info", "Session exited: " + id + " (code " + exitCode + ")");
@@ -2519,10 +2538,12 @@ namespace MultiTerm.PowerShellBridge
             TerminalSession session = new TerminalSession(id, title, shell, cwd, cols, rows);
             session.Output += delegate(string data)
             {
-                this.Broadcast("{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data) + "}");
+                this.QueueSessionOutput(id, data);
             };
             session.Exited += delegate(int exitCode)
             {
+                this.FlushSessionOutput(id);
+                this.RemoveSessionOutputBatch(id);
                 TerminalSession removed;
                 this.sessions.TryRemove(id, out removed);
                 this.Log("info", "Administrator session exited: " + id + " (code " + exitCode + ")");
@@ -3148,6 +3169,77 @@ namespace MultiTerm.PowerShellBridge
             foreach (BridgeClient client in this.clients.Values)
             {
                 client.Send(message);
+            }
+        }
+
+        private void QueueSessionOutput(string id, string data)
+        {
+            int delay = Volatile.Read(ref this.outputCoalesceMs);
+            if (delay <= 0)
+            {
+                this.BroadcastOutput(id, data);
+                return;
+            }
+
+            OutputBatch batch = this.outputBatches.GetOrAdd(id, delegate { return new OutputBatch(); });
+            lock (batch.Sync)
+            {
+                batch.Data.Append(data);
+                if (batch.Timer == null)
+                {
+                    batch.Timer = new Timer(delegate { this.FlushSessionOutput(id); }, null, delay, Timeout.Infinite);
+                }
+            }
+        }
+
+        private void FlushSessionOutput(string id)
+        {
+            OutputBatch batch;
+            if (!this.outputBatches.TryGetValue(id, out batch))
+            {
+                return;
+            }
+
+            string data = null;
+            lock (batch.Sync)
+            {
+                if (batch.Timer != null)
+                {
+                    batch.Timer.Dispose();
+                    batch.Timer = null;
+                }
+                if (batch.Data.Length > 0)
+                {
+                    data = batch.Data.ToString();
+                    batch.Data.Clear();
+                }
+            }
+            if (data != null)
+            {
+                this.BroadcastOutput(id, data);
+            }
+        }
+
+        private void BroadcastOutput(string id, string data)
+        {
+            this.Broadcast("{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data) + "}");
+        }
+
+        private void RemoveSessionOutputBatch(string id)
+        {
+            OutputBatch batch;
+            if (!this.outputBatches.TryRemove(id, out batch))
+            {
+                return;
+            }
+            lock (batch.Sync)
+            {
+                if (batch.Timer != null)
+                {
+                    batch.Timer.Dispose();
+                    batch.Timer = null;
+                }
+                batch.Data.Clear();
             }
         }
 
@@ -4816,7 +4908,6 @@ $bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new(
     $HostName,
     $Port,
     $useAutomaticPort,
-    $effectiveAllowRemote,
     $publicDir,
     -not $NoBrowser.IsPresent,
     $ConsoleDashboard.IsPresent,

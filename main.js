@@ -18,6 +18,7 @@
 
 let { app, BrowserWindow, Menu, Tray, clipboard, shell, dialog, ipcMain } = require("electron");
 const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
@@ -46,6 +47,16 @@ function isInternalUrl(url) {
     return parsed.protocol === "http:"
       && (parsed.hostname === HOST || parsed.hostname === "localhost")
       && parsed.port === String(PORT);
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedExternalUrl(url) {
+  if (typeof url !== "string") return false;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === "https:";
   } catch {
     return false;
   }
@@ -221,7 +232,9 @@ function createWindow() {
     if (isInternalUrl(url)) {
       return { action: "allow" };
     }
-    shell.openExternal(url);
+    if (isAllowedExternalUrl(url)) {
+      shell.openExternal(url);
+    }
     return { action: "deny" };
   });
 
@@ -232,7 +245,7 @@ function createWindow() {
   mainWindow.webContents.on("will-navigate", (event, url) => {
     if (!isInternalUrl(url)) {
       event.preventDefault();
-      if (/^https?:\/\//i.test(String(url))) {
+      if (isAllowedExternalUrl(url)) {
         shell.openExternal(url);
       }
     }
@@ -473,6 +486,16 @@ const RELEASE_PAGE_URL = `https://github.com/${UPDATE_REPO}/releases/latest`;
 const UPDATE_USER_AGENT = "MultiTerm-Workbench";
 const UPDATE_TIMEOUT_MS = 20000;
 const MAX_UPDATE_REDIRECTS = 5;
+const DEFAULT_MAX_INSTALLER_SIZE_MB = 256;
+
+function installerSizeLimitBytes(value) {
+  const requested = Math.round(Number(value));
+  const megabytes = Number.isFinite(requested) && requested > 0
+    ? requested
+    : DEFAULT_MAX_INSTALLER_SIZE_MB;
+  const bytes = megabytes * 1024 * 1024;
+  return Number.isSafeInteger(bytes) ? bytes : DEFAULT_MAX_INSTALLER_SIZE_MB * 1024 * 1024;
+}
 
 // Numeric-segment version compare (1 = a is newer). Release tags are plain
 // `vMAJOR.MINOR.PATCH`, so a full semver parser would be dead weight; any
@@ -576,6 +599,7 @@ function pickInstallerAsset(assets) {
     return null;
   } else {
     return {
+      digest: typeof installer.digest === "string" ? installer.digest.toLowerCase() : "",
       name: installer.name,
       url: installer.browser_download_url,
       size: Number(installer.size) || 0
@@ -614,12 +638,13 @@ async function checkForUpdate() {
   };
 }
 
-function isAllowedInstallerAsset(asset) {
+function isAllowedInstallerAsset(asset, maxInstallerSizeMb = DEFAULT_MAX_INSTALLER_SIZE_MB) {
   if (!asset || typeof asset.url !== "string") return false;
   try {
     const parsed = new URL(asset.url);
     const releasePrefix = `/${UPDATE_REPO}/releases/download/`.toLowerCase();
     const urlName = decodeURIComponent(path.posix.basename(parsed.pathname));
+    const size = Number(asset.size);
     return parsed.protocol === "https:"
       && parsed.hostname === "github.com"
       && parsed.port === ""
@@ -629,7 +654,11 @@ function isAllowedInstallerAsset(asset) {
       && parsed.hash === ""
       && parsed.pathname.toLowerCase().startsWith(releasePrefix)
       && /\.exe$/i.test(urlName)
-      && (asset.name === undefined || asset.name === urlName);
+      && (asset.name === undefined || asset.name === urlName)
+      && Number.isSafeInteger(size)
+      && size > 0
+      && size <= installerSizeLimitBytes(maxInstallerSizeMb)
+      && /^sha256:[a-f0-9]{64}$/i.test(asset.digest || "");
   } catch {
     return false;
   }
@@ -637,14 +666,14 @@ function isAllowedInstallerAsset(asset) {
 
 // Streams the installer into the temp folder, reporting progress so the renderer
 // can show a determinate bar.
-function downloadUpdate(asset, onProgress) {
+function downloadUpdate(asset, onProgress, maxInstallerSizeMb = DEFAULT_MAX_INSTALLER_SIZE_MB) {
   if (!asset || !asset.url) {
     return Promise.reject(new Error("This release does not include a Windows installer."));
   }
   if (!/^https:\/\//i.test(asset.url)) {
     return Promise.reject(new Error("Refusing to download an installer over an insecure URL."));
   }
-  if (!isAllowedInstallerAsset(asset)) {
+  if (!isAllowedInstallerAsset(asset, maxInstallerSizeMb)) {
     return Promise.reject(new Error("Refusing to download an installer from an untrusted release URL."));
   }
 
@@ -659,24 +688,56 @@ function downloadUpdate(asset, onProgress) {
   // the shared temp folder is predictable, so any other process running as this user
   // could pre-create or swap the file between this download and runInstaller() and
   // have MultiTerm execute it for them.
-  const target = path.join(fs.mkdtempSync(path.join(tempDir, "multiterm-update-")), safeName);
+  const downloadDir = fs.mkdtempSync(path.join(tempDir, "multiterm-update-"));
+  const target = path.join(downloadDir, safeName);
+  const expectedSize = Number(asset.size);
+  const expectedDigest = String(asset.digest).toLowerCase();
+  const maxInstallerSize = installerSizeLimitBytes(maxInstallerSizeMb);
 
   return openHttpsStream(asset.url, { accept: "application/octet-stream" }).then((response) => (
     new Promise((resolve, reject) => {
-      const total = Number(response.headers?.["content-length"]) || Number(asset.size) || 0;
+      const responseSize = Number(response.headers?.["content-length"]);
+      const total = Number.isFinite(responseSize) && responseSize > 0 ? responseSize : expectedSize;
+      if (total > maxInstallerSize || (responseSize > 0 && responseSize !== expectedSize)) {
+        response.resume();
+        fs.rm(downloadDir, { recursive: true, force: true }, () => {
+          reject(new Error("The installer download size does not match trusted release metadata."));
+        });
+        return;
+      }
+
       let received = 0;
+      let settled = false;
+      const hash = crypto.createHash("sha256");
       const file = fs.createWriteStream(target);
       const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        try { response.unpipe?.(file); } catch { /* stream already detached */ }
         try { file.destroy(); } catch { /* already closed */ }
-        fs.unlink(target, () => reject(err));
+        fs.rm(downloadDir, { recursive: true, force: true }, () => reject(err));
       };
       response.on("data", (chunk) => {
         received += chunk.length;
+        if (received > maxInstallerSize || received > expectedSize) {
+          fail(new Error("The installer download exceeded trusted release metadata."));
+          return;
+        }
+        hash.update(chunk);
         if (typeof onProgress === "function") onProgress({ received, total });
       });
       response.on("error", fail);
       file.on("error", fail);
-      file.on("finish", () => resolve(target));
+      file.on("finish", () => {
+        if (settled) return;
+        const actualDigest = `sha256:${hash.digest("hex")}`;
+        if (received !== expectedSize || actualDigest !== expectedDigest) {
+          fail(new Error("The installer failed SHA-256 integrity verification."));
+          return;
+        }
+        settled = true;
+        resolve(target);
+      });
       response.pipe(file);
     })
   ));
@@ -725,7 +786,7 @@ function registerUpdateIpc() {
     }
   });
 
-  ipcMain.handle("multiterm:download-update", async (event, asset) => {
+  ipcMain.handle("multiterm:download-update", async (event, asset, maxInstallerSizeMb) => {
     assertTrustedIpcSender(event);
     let lastEmit = 0;
     try {
@@ -735,7 +796,7 @@ function registerUpdateIpc() {
         if (total && received < total && now - lastEmit < 150) return;
         lastEmit = now;
         sendUpdateProgress({ received, total });
-      });
+      }, maxInstallerSizeMb);
       sendUpdateProgress({ received: 1, total: 1, done: true });
       const started = runInstaller(file);
       if (started) {
@@ -830,6 +891,8 @@ module.exports = {
   fetchLatestRelease,
   checkForUpdate,
   isAllowedInstallerAsset,
+  installerSizeLimitBytes,
+  DEFAULT_MAX_INSTALLER_SIZE_MB,
   downloadUpdate,
   runInstaller,
   sendUpdateProgress,
@@ -840,6 +903,7 @@ module.exports = {
   __setElectron,
   formatError,
   isInternalUrl,
+  isAllowedExternalUrl,
   isTrustedIpcSender,
   getMainWindow: () => mainWindow,
   getTray: () => tray,

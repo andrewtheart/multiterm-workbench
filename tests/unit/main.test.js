@@ -17,6 +17,7 @@
  */
 
 const { EventEmitter } = require("node:events");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
@@ -287,6 +288,15 @@ describe("createWindow", () => {
     expect(main.isInternalUrl(null)).toBe(false);
   });
 
+  it("allows only HTTPS URLs to leave the Electron window", () => {
+    expect(main.isAllowedExternalUrl("https://example.com/path")).toBe(true);
+    expect(main.isAllowedExternalUrl("http://example.com/path")).toBe(false);
+    expect(main.isAllowedExternalUrl("file:///C:/Windows/System32/calc.exe")).toBe(false);
+    expect(main.isAllowedExternalUrl("ms-settings:privacy")).toBe(false);
+    expect(main.isAllowedExternalUrl("not a URL")).toBe(false);
+    expect(main.isAllowedExternalUrl(null)).toBe(false);
+  });
+
   it("creates the window, routes external links, and clears on close", () => {
     main.createWindow();
     const win = main.getMainWindow();
@@ -297,6 +307,11 @@ describe("createWindow", () => {
     expect(openHandler({ url: "http://localhost:3177/x" })).toEqual({ action: "allow" });
     expect(openHandler({ url: "https://example.com" })).toEqual({ action: "deny" });
     expect(electron.shell.openExternal).toHaveBeenCalledWith("https://example.com");
+
+    electron.shell.openExternal.mockClear();
+    expect(openHandler({ url: "file:///C:/Windows/System32/calc.exe" })).toEqual({ action: "deny" });
+    expect(openHandler({ url: "ms-settings:privacy" })).toEqual({ action: "deny" });
+    expect(electron.shell.openExternal).not.toHaveBeenCalled();
 
     const closedHandler = win.on.mock.calls.find(([e]) => e === "closed")[1];
     closedHandler();
@@ -955,6 +970,18 @@ describe("administrator elevation IPC", () => {
 });
 
 describe("update checker", () => {
+  function digestFor(data) {
+    return `sha256:${crypto.createHash("sha256").update(data).digest("hex")}`;
+  }
+
+  function installerAsset({
+    data = Buffer.alloc(1),
+    name = "setup.exe",
+    url = "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+  } = {}) {
+    return { digest: digestFor(data), name, size: data.length, url };
+  }
+
   function makeResponse({ status = 200, headers = {}, body } = {}) {
     const response = new EventEmitter();
     response.statusCode = status;
@@ -996,7 +1023,7 @@ describe("update checker", () => {
     published_at: "2026-01-01T00:00:00Z",
     assets: [
       { name: "notes.txt", browser_download_url: "https://example.com/notes.txt", size: 1 },
-      { name: "MultiTerm-Setup-9.9.9.exe", browser_download_url: "https://example.com/setup.exe", size: 4096 }
+      { name: "MultiTerm-Setup-9.9.9.exe", browser_download_url: "https://example.com/setup.exe", size: 4096, digest: `sha256:${"a".repeat(64)}` }
     ]
   });
 
@@ -1020,9 +1047,9 @@ describe("update checker", () => {
       const asset = main.pickInstallerAsset([
         { name: "portable.zip", browser_download_url: "https://example.com/p.zip", size: 1 },
         { name: "extra.exe", browser_download_url: "https://example.com/extra.exe", size: 2 },
-        { name: "MultiTerm-Setup-1.0.0.exe", browser_download_url: "https://example.com/setup.exe", size: 3 }
+        { name: "MultiTerm-Setup-1.0.0.exe", browser_download_url: "https://example.com/setup.exe", size: 3, digest: `sha256:${"a".repeat(64)}` }
       ]);
-      expect(asset).toEqual({ name: "MultiTerm-Setup-1.0.0.exe", url: "https://example.com/setup.exe", size: 3 });
+      expect(asset).toEqual({ digest: `sha256:${"a".repeat(64)}`, name: "MultiTerm-Setup-1.0.0.exe", url: "https://example.com/setup.exe", size: 3 });
     });
 
     it("falls back to any executable and returns null when there is none", () => {
@@ -1149,6 +1176,7 @@ describe("update checker", () => {
     beforeEach(() => {
       // The real call would create a directory on disk; keep it deterministic.
       vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => `${prefix}a1b2c3`);
+      vi.spyOn(fs, "rm").mockImplementation((_path, _options, callback) => callback());
     });
 
     it("rejects assets that are missing, insecure, or outside the project releases", async () => {
@@ -1159,9 +1187,15 @@ describe("update checker", () => {
         name: "other.exe",
         url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
       })).rejects.toThrow(/untrusted/);
+      await expect(main.downloadUpdate({
+        name: "setup.exe",
+        size: 1,
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+      })).rejects.toThrow(/untrusted/);
     });
 
     it("streams the installer to disk and reports progress", async () => {
+      const data = Buffer.alloc(10);
       const response = makeResponse({ headers: { "content-length": "10" } });
       response.pipe = vi.fn();
       stubHttps(() => response);
@@ -1172,16 +1206,17 @@ describe("update checker", () => {
 
       const progress = [];
       const pending = main.downloadUpdate(
-        {
+        installerAsset({
+          data,
           name: "MultiTerm Setup.exe",
-          url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/MultiTerm%20Setup.exe",
-          size: 10
-        },
+          url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/MultiTerm%20Setup.exe"
+        }),
         (payload) => progress.push(payload)
       );
 
       await new Promise((resolve) => setTimeout(resolve, 0));
-      response.emit("data", Buffer.alloc(4));
+      response.emit("data", data.subarray(0, 4));
+      response.emit("data", data.subarray(4));
       file.emit("finish");
 
       const target = await pending;
@@ -1190,7 +1225,7 @@ describe("update checker", () => {
       // ...and it lands in a per-download directory, not straight in the temp root.
       expect(fs.mkdtempSync).toHaveBeenCalledWith(expect.stringContaining("multiterm-update-"));
       expect(target).toContain("multiterm-update-a1b2c3");
-      expect(progress).toEqual([{ received: 4, total: 10 }]);
+      expect(progress).toEqual([{ received: 4, total: 10 }, { received: 10, total: 10 }]);
     });
 
     it("uses Electron's temp folder, a default name, and tolerates no progress callback", async () => {
@@ -1201,12 +1236,14 @@ describe("update checker", () => {
       file.destroy = vi.fn();
       vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
 
+      const data = Buffer.alloc(7);
       const pending = main.downloadUpdate({
+        digest: digestFor(data),
+        size: data.length,
         url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe",
-        size: 7
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
-      response.emit("data", Buffer.alloc(7));
+      response.emit("data", data);
       file.emit("finish");
 
       await expect(pending).resolves.toBe("C:\\ElectronTemp\\multiterm-update-a1b2c3\\MultiTerm-Setup.exe");
@@ -1221,18 +1258,14 @@ describe("update checker", () => {
       const file = new EventEmitter();
       file.destroy = vi.fn();
       vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
-      const unlink = vi.spyOn(fs, "unlink").mockImplementation((_path, cb) => cb());
 
-      const pending = main.downloadUpdate({
-        name: "setup.exe",
-        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
-      });
+      const pending = main.downloadUpdate(installerAsset());
       await new Promise((resolve) => setTimeout(resolve, 0));
       response.emit("error", new Error("socket hang up"));
 
       await expect(pending).rejects.toThrow(/socket hang up/);
       expect(file.destroy).toHaveBeenCalled();
-      expect(unlink).toHaveBeenCalled();
+      expect(fs.rm).toHaveBeenCalled();
     });
 
     it("still removes a partial download when closing the file throws", async () => {
@@ -1241,17 +1274,48 @@ describe("update checker", () => {
       const file = new EventEmitter();
       file.destroy = vi.fn(() => { throw new Error("already closed"); });
       vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
-      const unlink = vi.spyOn(fs, "unlink").mockImplementation((_path, cb) => cb());
 
-      const pending = main.downloadUpdate({
-        name: "setup.exe",
-        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
-      });
+      const pending = main.downloadUpdate(installerAsset());
       await new Promise((resolve) => setTimeout(resolve, 0));
       file.emit("error", new Error("disk full"));
 
       await expect(pending).rejects.toThrow("disk full");
-      expect(unlink).toHaveBeenCalled();
+      expect(fs.rm).toHaveBeenCalled();
+    });
+
+    it("rejects oversized, truncated, and digest-mismatched installers", async () => {
+      await expect(main.downloadUpdate({
+        digest: `sha256:${"a".repeat(64)}`,
+        name: "setup.exe",
+        size: 2 * 1024 * 1024,
+        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+      }, undefined, 1))
+        .rejects.toThrow(/untrusted/);
+
+      const truncatedResponse = makeResponse({ headers: { "content-length": "2" } });
+      stubHttps(() => truncatedResponse);
+      const truncatedFile = new EventEmitter();
+      truncatedFile.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValueOnce(truncatedFile);
+      const truncated = main.downloadUpdate(installerAsset({ data: Buffer.alloc(1) }));
+      const truncatedAssertion = expect(truncated).rejects.toThrow(/size does not match/);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await truncatedAssertion;
+
+      vi.restoreAllMocks();
+      vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => `${prefix}a1b2c3`);
+      vi.spyOn(fs, "rm").mockImplementation((_path, _options, callback) => callback());
+      const response = makeResponse({ headers: { "content-length": "1" } });
+      stubHttps(() => response);
+      const file = new EventEmitter();
+      file.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+      const pending = main.downloadUpdate({ ...installerAsset(), digest: `sha256:${"f".repeat(64)}` });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      response.emit("data", Buffer.alloc(1));
+      file.emit("finish");
+      await expect(pending).rejects.toThrow(/SHA-256/);
+      expect(fs.rm).toHaveBeenCalled();
     });
   });
 
@@ -1345,11 +1409,7 @@ describe("update checker", () => {
       vi.spyOn(Date, "now").mockReturnValueOnce(1000).mockReturnValue(1100);
       main.registerUpdateIpc();
 
-      const pending = handlerFor("multiterm:download-update")(trustedIpcEvent(), {
-        name: "setup.exe",
-        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe",
-        size: 10
-      });
+      const pending = handlerFor("multiterm:download-update")(trustedIpcEvent(), installerAsset({ data: Buffer.alloc(10) }));
       await vi.runAllTicks();
       await Promise.resolve();
       response.emit("data", Buffer.alloc(4));
@@ -1379,11 +1439,10 @@ describe("update checker", () => {
       electron.shell.openPath = vi.fn(() => { throw new Error("blocked"); });
       main.registerUpdateIpc();
 
-      const pending = handlerFor("multiterm:download-update")(trustedIpcEvent(), {
-        name: "setup.exe",
-        url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
-      });
+      const data = Buffer.alloc(1);
+      const pending = handlerFor("multiterm:download-update")(trustedIpcEvent(), installerAsset({ data }));
       await new Promise((resolve) => setTimeout(resolve, 0));
+      response.emit("data", data);
       file.emit("finish");
 
       await expect(pending).resolves.toMatchObject({

@@ -51,7 +51,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
   await expect(api.isElevated()).resolves.toBe("result");
   await expect(api.restartAsAdmin()).resolves.toBe("result");
   await expect(api.checkForUpdate()).resolves.toBe("result");
-  await expect(api.downloadUpdate({ name: "setup.exe" })).resolves.toBe("result");
+  await expect(api.downloadUpdate({ name: "setup.exe" }, 512)).resolves.toBe("result");
   await expect(api.openReleasePage("https://github.com/example/release")).resolves.toBe("result");
 
   expect(ipcRenderer.invoke.mock.calls).toEqual([
@@ -60,7 +60,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
     ["multiterm:is-elevated"],
     ["multiterm:relaunch-as-admin"],
     ["multiterm:check-update"],
-    ["multiterm:download-update", { name: "setup.exe" }],
+    ["multiterm:download-update", { name: "setup.exe" }, 512],
     ["multiterm:open-release", "https://github.com/example/release"]
   ]);
 

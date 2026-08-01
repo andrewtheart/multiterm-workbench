@@ -21,10 +21,17 @@ describe("installed bridge security", () => {
   it("rejects HTTP requests whose Host header is not a loopback literal", () => {
     // Without this, a DNS-rebinding page reaches the bridge as a same-origin
     // client and the Origin check above never fires.
-    expect(bridgeScript).toContain("!this.allowRemote && !this.IsAllowedHttpHost(context.Request)");
+    expect(bridgeScript).toContain("if (!this.IsAllowedHttpHost(context.Request))");
     expect(bridgeScript).toContain('this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8")');
     expect(bridgeScript).toContain("private bool IsAllowedHttpHost(HttpListenerRequest request)");
     expect(bridgeScript).toContain("return this.IsLoopbackHostLiteral(hostUri.Host);");
+  });
+
+  it("fails closed when remote mode or a non-loopback bind is requested", () => {
+    expect(bridgeScript).toContain('if ($AllowRemote.IsPresent -or $env:ALLOW_REMOTE -eq "1")');
+    expect(bridgeScript).toContain('throw "Remote mode is no longer supported');
+    expect(bridgeScript).toContain('if ($HostName -notin @("127.0.0.1", "localhost", "::1", "[::1]"))');
+    expect(bridgeScript).not.toContain("private readonly bool allowRemote;");
   });
 
   it("caps concurrent clients and sessions", () => {

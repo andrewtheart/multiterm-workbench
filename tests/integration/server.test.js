@@ -137,16 +137,6 @@ describe("HTTP server", () => {
     expect(res.body).toBe("Forbidden");
   });
 
-  it("allows any Host once remote access is explicitly enabled", async () => {
-    app.__setAllowRemote(true);
-    try {
-      const res = await requestWithHost(baseUrl, "/health", "multiterm.example.net");
-      expect(res.status).toBe(200);
-    } finally {
-      app.__setAllowRemote(false);
-    }
-  });
-
   it("accepts a real WebSocket client and answers list", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${new URL(baseUrl).port}/ws`);
     const messages = [];

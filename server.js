@@ -28,7 +28,6 @@ const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3177);
-let allowRemote = process.env.ALLOW_REMOTE === "1";
 const publicDir = path.join(__dirname, "public");
 const maxMessageSize = 1024 * 1024;
 // Concurrency ceilings. These are not access control -- the loopback bind and the
@@ -271,7 +270,7 @@ const server = http.createServer((request, response) => {
 
   // Anti-DNS-rebinding. Skipped when remote access is explicitly opted into, since
   // remote clients legitimately reach the bridge under some other hostname.
-  if (!allowRemote && !isAllowedHttpHost(request.headers.host)) {
+  if (!isAllowedHttpHost(request.headers.host)) {
     response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return;
@@ -308,14 +307,14 @@ server.on("upgrade", (request, socket) => {
     return;
   }
 
-  if (!allowRemote && !isLocalAddress(socket.remoteAddress)) {
+  if (!isLocalAddress(socket.remoteAddress)) {
     socket.destroy();
     return;
   }
 
   // Reject cross-site WebSocket handshakes (CSWSH). Skipped when remote access is
   // explicitly opted into, since remote clients legitimately carry other origins.
-  if (!allowRemote && !isAllowedWebSocketOrigin(request.headers.origin, request.headers.host)) {
+  if (!isAllowedWebSocketOrigin(request.headers.origin, request.headers.host)) {
     socket.destroy();
     return;
   }
@@ -405,6 +404,12 @@ server.on("upgrade", (request, socket) => {
 function start(callback, overridePort, overrideHost) {
   const listenPort = overridePort === undefined ? port : overridePort;
   const listenHost = overrideHost === undefined ? host : overrideHost;
+  if (process.env.ALLOW_REMOTE === "1") {
+    throw new Error("ALLOW_REMOTE is no longer supported because the bridge does not provide remote authentication or TLS.");
+  }
+  if (!isLoopbackBindHost(listenHost)) {
+    throw new Error("MultiTerm may listen only on a loopback host.");
+  }
   server.listen(listenPort, listenHost, () => {
     const address = server.address();
     const boundPort = address && typeof address === "object" ? address.port : listenPort;
@@ -447,10 +452,6 @@ if (require.main === module) {
   start();
 }
 
-function __setAllowRemote(value) {
-  allowRemote = value;
-}
-
 function __setMemStatsEnabled(value) {
   memStatsEnabled = Boolean(value);
 }
@@ -468,7 +469,6 @@ module.exports = {
   maxClients,
   maxSessions,
   updatePreferencesMaxSize,
-  __setAllowRemote,
   __setMemStatsEnabled,
   getPathname,
   setSecurityHeaders,
@@ -2194,4 +2194,9 @@ const LOOPBACK_ADDRESSES = ["127.0.0.1", "::1", "::ffff:127.0.0.1"];
 
 function isLocalAddress(address) {
   return LOOPBACK_ADDRESSES.includes(address);
+}
+
+function isLoopbackBindHost(value) {
+  const normalized = String(value || "").replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }
