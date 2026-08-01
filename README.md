@@ -78,13 +78,11 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
   </tr>
   <tr>
-    <td align="center" width="50%" colspan="1">
-      <h3>📝 PID-bound notes + recovered notes</h3>
-      Keep context beside each terminal process. Notes from a process that exits remain available in Recovered notes.
-    </td>
-    <td align="center" width="50%" colspan="2">
-      <h3>📥 Per-terminal command queues</h3>
-      Stage commands or long prompts, then quick-dequeue into the active terminal without pressing Enter. Queues from ended processes remain reusable.
+    <td align="center" width="100%" colspan="3">
+      <h3>📝 PID-bound notes and command queues</h3>
+      Keep context beside each terminal process and stage commands or long prompts, then quick-dequeue them into the terminal without pressing Enter. When a process exits its notes move to Recovered notes and its queue stays reusable, so you can hand both to a replacement terminal.
+      <br /><br />
+      <img src="docs/images/notes-command-queue.png" alt="Terminal notes and command queue dialog showing PID-bound notes and three staged commands" width="900" />
     </td>
   </tr>
   <tr>

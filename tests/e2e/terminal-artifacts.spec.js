@@ -173,4 +173,39 @@ test.describe("Terminal notes and command queue", () => {
     });
     expect(sent).toEqual([{ type: "input", id: ids[1], data: "echo recovered-command" }]);
   });
+
+  // The row is laid out with `display: grid`, which outranks the browser's own
+  // rule for the `hidden` attribute. Without an explicit override it stayed on
+  // screen for live terminals, offering an empty "insert into" picker that made
+  // no sense next to a process that is still running.
+  test("only offers an unparented destination when the queue has no process", async ({ page }) => {
+    await reset(page, 2);
+    const ids = await page.evaluate(() => [...state.terminals.keys()]);
+    await page.locator("#terminalArtifactsToggle").click();
+    await page.locator("#terminalArtifactsTarget").selectOption(ids[0]);
+
+    await expect(page.locator("#terminalNotesSection")).toBeVisible();
+    await expect(page.locator("#unparentedTargetRow")).toBeHidden();
+
+    await page.evaluate((id) => handleBridgeMessage({ type: "exited", id, code: 0 }), ids[0]);
+    await expect(page.locator("#terminalArtifactsTarget")).toHaveValue("__unparented__");
+    await expect(page.locator("#unparentedTargetRow")).toBeVisible();
+    await expect(page.locator("#terminalNotesSection")).toBeHidden();
+  });
+
+  // Guards the whole surface against the same CSS mistake: any class that sets
+  // `display` without an accompanying `[hidden]` rule silently defeats the
+  // attribute, and the element keeps rendering while the code believes it is gone.
+  test("every element marked hidden is actually not displayed", async ({ page }) => {
+    await reset(page, 1);
+    await page.locator("#terminalArtifactsToggle").click();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+
+    const rendered = await page.evaluate(() =>
+      [...document.querySelectorAll("[hidden]")]
+        .filter((el) => getComputedStyle(el).display !== "none")
+        .map((el) => el.id || el.className || el.tagName.toLowerCase())
+    );
+    expect(rendered).toEqual([]);
+  });
 });

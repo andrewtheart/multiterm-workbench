@@ -2238,6 +2238,10 @@ body.header-hidden .status-hint kbd,
   grid-template-columns: max-content minmax(0, 1fr);
 }
 
+.unparented-target[hidden] {
+  display: none;
+}
+
 .terminal-artifacts-target {
   border-bottom: 1px solid var(--border);
   margin-top: 16px;
