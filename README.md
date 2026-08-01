@@ -1,10 +1,17 @@
-# MultiTerm Workbench
+<h1 align="center">
+  <img src="public/icon-192.png" alt="MultiTerm Workbench icon" width="96" align="middle">
+  &nbsp;MultiTerm Workbench
+</h1>
 
 A Windows terminal workspace for people who run many shells at once — PowerShell,
 Command Prompt, and WSL together, with broadcast input, cross-terminal search, and
 layouts from auto-fit grids to a free-form canvas.
 
 **⬇️ [Download the latest MultiTerm Workbench installer](https://github.com/andrewtheart/multiterm-workbench/releases/latest)** — or browse all [releases](https://github.com/andrewtheart/multiterm-workbench/releases).
+
+<p align="center">
+  <img src="docs/images/workbench-grid.png" alt="MultiTerm Workbench showing six live PowerShell terminals in an auto-fit grid" width="1200">
+</p>
 
 ## Why MultiTerm?
 
@@ -66,9 +73,23 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
   </tr>
   <tr>
-    <td align="center" width="100%" colspan="3">
+    <td align="center" width="33%">
       <h3>📊 Per-terminal bridge and process statistics</h3>
       Right-click a terminal for its keystrokes, bridge bytes, current CPU, and current memory, or right-click blank workspace for totals and a comparison of every active terminal.
+    </td>
+    <td align="center" width="33%">
+      <h3>🔗 Attach running WSL tmux sessions</h3>
+      Discover tmux servers across installed WSL distributions and connect an existing session as another live MultiTerm client without restarting its shell or changing its current work.
+    </td>
+    <td align="center" width="33%">
+      <h3>❓ Built-in generated help</h3>
+      Open the top-right question-mark button for navigable, theme-aware guidance generated from the repository's canonical <code>HELP.md</code>.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>🔒 Locked down by default</h3>
+      Both bridges refuse non-loopback binds and enforce exact <code>Origin</code> and <code>Host</code> checks. Electron runs the renderer sandboxed with no Node access, elevated relays use one-time authentication, and updates require HTTPS plus exact size and SHA-256 verification before launch.
     </td>
   </tr>
   <tr>
@@ -81,28 +102,10 @@ layouts from auto-fit grids to a free-form canvas.
   </tr>
   <tr>
     <td align="center" width="100%" colspan="3">
-      <h3>🔗 Attach running WSL tmux sessions</h3>
-      Discover tmux servers across installed WSL distributions and connect an existing session as another live MultiTerm client without restarting its shell or changing its current work.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="100%" colspan="3">
       <h3>📝 PID-bound notes and command queues</h3>
       Keep context beside each terminal process and stage commands or long prompts, then quick-dequeue them into the terminal without pressing Enter. When a process exits its notes move to Recovered notes and its queue stays reusable, so you can hand both to a replacement terminal.
       <br /><br />
       <img src="docs/images/notes-command-queue.png" alt="Terminal notes and command queue dialog showing PID-bound notes and three staged commands" width="900" />
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="100%" colspan="3">
-      <h3>❓ Built-in generated help</h3>
-      Open the top-right question-mark button for navigable, theme-aware guidance generated from the repository's canonical <code>HELP.md</code>.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="100%" colspan="3">
-      <h3>🔒 Locked down by default</h3>
-      The terminal bridge listens on loopback only and checks both <code>Origin</code> and <code>Host</code>, so no web page can reach your shells. The renderer runs sandboxed with context isolation and no Node access, elevated terminals need a one-time token, and updates arrive over HTTPS pinned to the official GitHub release.
     </td>
   </tr>
 </table>
