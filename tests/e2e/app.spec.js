@@ -938,15 +938,18 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(expected.selection).toContain("ctrl-a-selection-marker");
     await page.keyboard.press("Control+a");
 
-    await expect.poll(() => page.evaluate((id) => {
+    await expect.poll(() => page.evaluate(({ id, baseline }) => {
       const terminal = state.terminals.get(id);
+      const selection = terminal.term.getSelection();
       return {
         activeId: state.activeId,
-        selection: terminal.term.getSelection()
+        baselineSelected: selection.includes(baseline),
+        markerSelected: selection.includes("ctrl-a-selection-marker")
       };
-    }, expected.id)).toEqual({
+    }, { id: expected.id, baseline: expected.selection })).toEqual({
       activeId: expected.id,
-      selection: expected.selection
+      baselineSelected: true,
+      markerSelected: true
     });
 
     await page.evaluate((id) => state.terminals.get(id).term.clearSelection(), expected.id);
