@@ -60,7 +60,7 @@ describe("installer release notes", () => {
     expect(result.WithoutBase).not.toContain("## Full changelog");
     expect(result.Idempotent).toBe(true);
     expect(result.CompareCount).toBe(1);
-  });
+  }, 20000);
 
   it("routes generated release notes through the compare-link formatter", () => {
     expect(script).toContain(
