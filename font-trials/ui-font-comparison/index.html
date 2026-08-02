@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MultiTerm UI Font Trials</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101419;
+      --surface: #171d24;
+      --surface-high: #1e2630;
+      --border: #35414e;
+      --text: #edf2f7;
+      --muted: #9cabb9;
+      --accent: #51d6b7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(145deg, #101419, #151b22 55%, #101419);
+      color: var(--text);
+      font-family: Aptos, "Segoe UI", sans-serif;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+    header, main { width: min(866px, calc(100% - 32px)); margin-inline: auto; }
+    header { padding: 40px 0 26px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0 0 8px; font-size: 30px; font-weight: 650; }
+    header p { margin: 0; color: var(--muted); max-width: 72ch; line-height: 1.5; }
+    .shortlist { padding: 22px 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .shortlist strong { margin-right: 4px; }
+    .pick { padding: 6px 9px; border: 1px solid var(--border); background: var(--surface-high); color: var(--text); border-radius: 4px; }
+    .pick:first-of-type { border-color: #3a9f88; }
+    .gallery { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; padding-bottom: 48px; }
+    figure { margin: 0; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; overflow: hidden; }
+    figure a { display: block; background: #11151a; }
+    img { display: block; width: 100%; height: auto; }
+    figcaption { display: flex; justify-content: space-between; gap: 16px; padding: 11px 13px; border-top: 1px solid var(--border); }
+    figcaption span:last-child { color: var(--muted); }
+    footer { color: var(--muted); border-top: 1px solid var(--border); padding: 18px 0 30px; }
+    @media (max-width: 760px) {
+      header, main { width: min(100% - 20px, 866px); }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MultiTerm UI font trials</h1>
+    <p>Fifteen locally rendered UI font and size combinations captured from the live app. Terminal typography remained unchanged at Cascadia Mono, 14 px.</p>
+  </header>
+  <main>
+    <section class="shortlist" aria-label="Suggested shortlist">
+      <strong>Suggested shortlist</strong>
+      <span class="pick">Aptos 12.5 px</span>
+      <span class="pick">Segoe UI Variable 12.5 px</span>
+      <span class="pick">Bahnschrift 12.5 px</span>
+      <span class="pick">Tahoma 12.5 px</span>
+    </section>
+    <section class="gallery" aria-label="Font comparison screenshots">
+      <figure><a href="01-aptos-12-5.png"><img src="01-aptos-12-5.png" alt="MultiTerm UI in Aptos at 12.5 pixels"></a><figcaption><strong>01 · Aptos</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="02-aptos-display-13.png"><img src="02-aptos-display-13.png" alt="MultiTerm UI in Aptos Display at 13 pixels"></a><figcaption><strong>02 · Aptos Display</strong><span>13 px</span></figcaption></figure>
+      <figure><a href="03-segoe-variable-12-5.png"><img src="03-segoe-variable-12-5.png" alt="MultiTerm UI in Segoe UI Variable Text at 12.5 pixels"></a><figcaption><strong>03 · Segoe UI Variable</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="04-segoe-ui-13.png"><img src="04-segoe-ui-13.png" alt="MultiTerm UI in Segoe UI at 13 pixels"></a><figcaption><strong>04 · Segoe UI</strong><span>13 px</span></figcaption></figure>
+      <figure><a href="05-bahnschrift-12-5.png"><img src="05-bahnschrift-12-5.png" alt="MultiTerm UI in Bahnschrift at 12.5 pixels"></a><figcaption><strong>05 · Bahnschrift</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="06-calibri-13.png"><img src="06-calibri-13.png" alt="MultiTerm UI in Calibri at 13 pixels"></a><figcaption><strong>06 · Calibri</strong><span>13 px</span></figcaption></figure>
+      <figure><a href="07-candara-13.png"><img src="07-candara-13.png" alt="MultiTerm UI in Candara at 13 pixels"></a><figcaption><strong>07 · Candara</strong><span>13 px</span></figcaption></figure>
+      <figure><a href="08-corbel-13.png"><img src="08-corbel-13.png" alt="MultiTerm UI in Corbel at 13 pixels"></a><figcaption><strong>08 · Corbel</strong><span>13 px</span></figcaption></figure>
+      <figure><a href="09-trebuchet-ms-12-5.png"><img src="09-trebuchet-ms-12-5.png" alt="MultiTerm UI in Trebuchet MS at 12.5 pixels"></a><figcaption><strong>09 · Trebuchet MS</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="10-verdana-12.png"><img src="10-verdana-12.png" alt="MultiTerm UI in Verdana at 12 pixels"></a><figcaption><strong>10 · Verdana</strong><span>12 px</span></figcaption></figure>
+      <figure><a href="11-tahoma-12-5.png"><img src="11-tahoma-12-5.png" alt="MultiTerm UI in Tahoma at 12.5 pixels"></a><figcaption><strong>11 · Tahoma</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="12-arial-nova-12-5.png"><img src="12-arial-nova-12-5.png" alt="MultiTerm UI in Arial Nova at 12.5 pixels"></a><figcaption><strong>12 · Arial Nova</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="13-century-gothic-12-5.png"><img src="13-century-gothic-12-5.png" alt="MultiTerm UI in Century Gothic at 12.5 pixels"></a><figcaption><strong>13 · Century Gothic</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="14-franklin-gothic-12-5.png"><img src="14-franklin-gothic-12-5.png" alt="MultiTerm UI in Franklin Gothic Medium at 12.5 pixels"></a><figcaption><strong>14 · Franklin Gothic Medium</strong><span>12.5 px</span></figcaption></figure>
+      <figure><a href="15-cambria-13.png"><img src="15-cambria-13.png" alt="MultiTerm UI in Cambria at 13 pixels"></a><figcaption><strong>15 · Cambria</strong><span>13 px</span></figcaption></figure>
+    </section>
+    <footer>Click any screenshot for the original PNG. Captured at an 864 × 540 CSS viewport.</footer>
+  </main>
+</body>
+</html>

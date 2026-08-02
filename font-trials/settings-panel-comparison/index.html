@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MultiTerm Settings Panel Typography Trials</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101419;
+      --surface: #171d24;
+      --surface-high: #1e2630;
+      --border: #35414e;
+      --text: #edf2f7;
+      --muted: #9cabb9;
+      --accent: #51d6b7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(145deg, #101419, #151b22 55%, #101419);
+      color: var(--text);
+      font-family: Aptos, "Segoe UI", sans-serif;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+    header, main { width: min(1012px, calc(100% - 32px)); margin-inline: auto; }
+    header { padding: 36px 0 24px; border-bottom: 1px solid var(--border); }
+    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 650; }
+    header p { margin: 0; color: var(--muted); max-width: 76ch; line-height: 1.5; }
+    .shortlist { padding: 20px 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .shortlist strong { margin-right: 4px; }
+    .pick { padding: 6px 9px; border: 1px solid var(--border); background: var(--surface-high); border-radius: 4px; }
+    .pick:first-of-type { border-color: #3a9f88; }
+    .gallery { display: grid; grid-template-columns: repeat(3, 300px); gap: 24px 22px; padding-bottom: 48px; }
+    figure { margin: 0; border: 1px solid var(--border); background: var(--surface); border-radius: 6px; overflow: hidden; }
+    figure a { display: block; background: #11151a; }
+    img { display: block; width: 300px; height: 500px; }
+    figcaption { min-height: 74px; padding: 10px 12px 11px; border-top: 1px solid var(--border); }
+    figcaption strong { display: block; margin-bottom: 4px; }
+    figcaption span { color: var(--muted); font-size: 13px; line-height: 1.4; }
+    footer { color: var(--muted); border-top: 1px solid var(--border); padding: 18px 0 30px; }
+    @media (max-width: 1000px) {
+      header, main { width: min(656px, calc(100% - 24px)); }
+      .gallery { grid-template-columns: repeat(2, 300px); }
+    }
+    @media (max-width: 660px) {
+      header, main { width: min(300px, calc(100% - 20px)); }
+      h1 { font-size: 23px; }
+      .gallery { grid-template-columns: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Settings panel typography trials</h1>
+    <p>Twelve locally rendered heading treatments. Only the accordion labels change; the rest of MultiTerm and terminal typography remain untouched.</p>
+  </header>
+  <main>
+    <section class="shortlist" aria-label="Suggested shortlist">
+      <strong>Suggested shortlist</strong>
+      <span class="pick">02 · Segoe UI title case</span>
+      <span class="pick">04 · Aptos title case</span>
+      <span class="pick">06 · Tahoma title case</span>
+    </section>
+    <section class="gallery" aria-label="Settings panel typography screenshots">
+      <figure><a href="01-current-baseline.png"><img src="01-current-baseline.png" alt="Current MultiTerm settings headings in uppercase Segoe UI"></a><figcaption><strong>01 · Current baseline</strong><span>Segoe UI · 11 px · 700 · uppercase · 0.8 px tracking</span></figcaption></figure>
+      <figure><a href="02-segoe-title-12.png"><img src="02-segoe-title-12.png" alt="MultiTerm settings headings in title case Segoe UI"></a><figcaption><strong>02 · Segoe UI title case</strong><span>12 px · 600 · no tracking</span></figcaption></figure>
+      <figure><a href="03-segoe-soft-12-5.png"><img src="03-segoe-soft-12-5.png" alt="MultiTerm settings headings in softer title case Segoe UI"></a><figcaption><strong>03 · Segoe UI soft</strong><span>12.5 px · 500 · no tracking</span></figcaption></figure>
+      <figure><a href="04-aptos-title-12-5.png"><img src="04-aptos-title-12-5.png" alt="MultiTerm settings headings in title case Aptos"></a><figcaption><strong>04 · Aptos title case</strong><span>12.5 px · 600 · no tracking</span></figcaption></figure>
+      <figure><a href="05-aptos-quiet-12.png"><img src="05-aptos-quiet-12.png" alt="MultiTerm settings headings in quieter title case Aptos"></a><figcaption><strong>05 · Aptos quiet</strong><span>12 px · 500 · 0.1 px tracking</span></figcaption></figure>
+      <figure><a href="06-tahoma-title-12.png"><img src="06-tahoma-title-12.png" alt="MultiTerm settings headings in title case Tahoma"></a><figcaption><strong>06 · Tahoma title case</strong><span>12 px · 600 · no tracking</span></figcaption></figure>
+      <figure><a href="07-calibri-title-13.png"><img src="07-calibri-title-13.png" alt="MultiTerm settings headings in title case Calibri"></a><figcaption><strong>07 · Calibri title case</strong><span>13 px · 600 · no tracking</span></figcaption></figure>
+      <figure><a href="08-corbel-title-12-5.png"><img src="08-corbel-title-12-5.png" alt="MultiTerm settings headings in title case Corbel"></a><figcaption><strong>08 · Corbel title case</strong><span>12.5 px · 600 · no tracking</span></figcaption></figure>
+      <figure><a href="09-bahnschrift-quiet-12.png"><img src="09-bahnschrift-quiet-12.png" alt="MultiTerm settings headings in quieter title case Bahnschrift"></a><figcaption><strong>09 · Bahnschrift quiet</strong><span>12 px · 500 · 0.1 px tracking</span></figcaption></figure>
+      <figure><a href="10-trebuchet-title-12.png"><img src="10-trebuchet-title-12.png" alt="MultiTerm settings headings in title case Trebuchet MS"></a><figcaption><strong>10 · Trebuchet MS title case</strong><span>12 px · 600 · no tracking</span></figcaption></figure>
+      <figure><a href="11-arial-nova-title-12.png"><img src="11-arial-nova-title-12.png" alt="MultiTerm settings headings in title case Arial Nova"></a><figcaption><strong>11 · Arial Nova title case</strong><span>12 px · 600 · 0.1 px tracking</span></figcaption></figure>
+      <figure><a href="12-segoe-compact-caps.png"><img src="12-segoe-compact-caps.png" alt="MultiTerm settings headings in compact uppercase Segoe UI"></a><figcaption><strong>12 · Segoe UI compact caps</strong><span>11.5 px · 600 · uppercase · 0.25 px tracking</span></figcaption></figure>
+    </section>
+    <footer>Click any panel for its original PNG. Every capture uses the same 300 × 500 frame.</footer>
+  </main>
+</body>
+</html>

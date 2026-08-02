@@ -239,16 +239,22 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "columns");
   });
 
-  test("uses the status-bar typography across the UI without changing terminal text", async () => {
+  test("uses the selected UI typography without changing terminal text", async () => {
     await setNative("#fontSize", "14", "input");
     const typography = await page.evaluate(() => {
       const body = getComputedStyle(document.body);
+      const settingsToggle = getComputedStyle(document.querySelector(".settings-group-toggle"));
       const status = getComputedStyle(document.querySelector(".status-bar"));
       const topbar = getComputedStyle(document.querySelector(".topbar"));
       const terminal = state.terminals.values().next().value;
       return {
         bodyFamily: body.fontFamily,
         bodySize: body.fontSize,
+        settingsFamily: settingsToggle.fontFamily,
+        settingsSize: settingsToggle.fontSize,
+        settingsWeight: settingsToggle.fontWeight,
+        settingsTracking: settingsToggle.letterSpacing,
+        settingsTransform: settingsToggle.textTransform,
         statusFamily: status.fontFamily,
         statusSize: status.fontSize,
         topbarFamily: topbar.fontFamily,
@@ -259,8 +265,15 @@ test.describe("MultiTerm Workbench UI", () => {
 
     expect(typography.bodyFamily).toBe(typography.statusFamily);
     expect(typography.topbarFamily).toBe(typography.statusFamily);
-    expect(typography.bodySize).toBe("12px");
-    expect(typography.topbarSize).toBe("12px");
+    expect(typography.bodyFamily).toContain("Segoe UI");
+    expect(typography.bodyFamily).not.toContain("Segoe UI Variable Text");
+    expect(typography.bodySize).toBe("13px");
+    expect(typography.topbarSize).toBe("13px");
+    expect(typography.settingsFamily).toBe(typography.bodyFamily);
+    expect(typography.settingsSize).toBe("11.5px");
+    expect(typography.settingsWeight).toBe("600");
+    expect(typography.settingsTracking).toBe("0.25px");
+    expect(typography.settingsTransform).toBe("uppercase");
     expect(typography.statusSize).toBe("12px");
     expect(typography.terminalSize).toBe(14);
   });

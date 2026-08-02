@@ -41,7 +41,7 @@
   --sidecar-width: 300px;
 
   /* Typography */
-  --ui-font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  --ui-font: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
   --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
 
   /* Elevation (Material tonal shadows) */
@@ -145,7 +145,7 @@ body {
     var(--bg);
   color: var(--text);
   font-family: var(--ui-font);
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.1px;
   transition: background var(--dur) var(--ease-standard), color var(--dur) var(--ease-standard);
 }
@@ -757,10 +757,10 @@ body.sidecar-hidden .control-panel {
   border-radius: 0;
   color: var(--muted);
   display: flex;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 11.5px;
+  font-weight: 600;
   justify-content: space-between;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.25px;
   min-height: 42px;
   padding: 0 4px;
   text-align: left;
