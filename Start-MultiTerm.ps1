@@ -2772,6 +2772,7 @@ namespace MultiTerm.PowerShellBridge
                 + ",\"token\":" + Json.Quote(token)
                 + ",\"bridgePid\":" + Process.GetCurrentProcess().Id
                 + ",\"shellFile\":" + Json.Quote(shell.File)
+                + ",\"shellArguments\":" + Json.Quote(shell.Arguments)
                 + ",\"shellLabel\":" + Json.Quote(shell.Label)
                 + ",\"cwd\":" + Json.Quote(cwd)
                 + ",\"cols\":" + cols
@@ -3780,15 +3781,25 @@ namespace MultiTerm.PowerShellBridge
         {
             if (value == "powershell")
             {
-                return new ShellInfo("powershell.exe", "Windows PowerShell");
+                return new ShellInfo("powershell.exe", " -NoLogo -NoExit", "Windows PowerShell");
+            }
+
+            if (value == "cmd")
+            {
+                return new ShellInfo("cmd.exe", String.Empty, "Command Prompt");
+            }
+
+            if (value == "wsl")
+            {
+                return new ShellInfo("wsl.exe", String.Empty, "WSL");
             }
 
             if (!this.CommandExists("pwsh.exe"))
             {
-                return new ShellInfo("powershell.exe", "Windows PowerShell");
+                return new ShellInfo("powershell.exe", " -NoLogo -NoExit", "Windows PowerShell");
             }
 
-            return new ShellInfo("pwsh.exe", "PowerShell 7");
+            return new ShellInfo("pwsh.exe", " -NoLogo -NoExit", "PowerShell 7");
         }
 
         private bool CommandExists(string fileName)
@@ -3918,13 +3929,16 @@ namespace MultiTerm.PowerShellBridge
 
     internal sealed class ShellInfo
     {
-        public ShellInfo(string file, string label)
+        public ShellInfo(string file, string arguments, string label)
         {
             this.File = file;
+            this.Arguments = arguments;
             this.Label = label;
         }
 
         public string File { get; private set; }
+
+        public string Arguments { get; private set; }
 
         public string Label { get; private set; }
     }
@@ -4608,7 +4622,7 @@ namespace MultiTerm.PowerShellBridge
                 startupInfo.lpAttributeList = attributeList;
 
                 Native.PROCESS_INFORMATION processInformation;
-                string commandLine = Json.QuoteCommandLine(this.Shell.File) + " -NoLogo -NoExit";
+                string commandLine = Json.QuoteCommandLine(this.Shell.File) + this.Shell.Arguments;
                 bool started = Native.CreateProcessW(null, commandLine, IntPtr.Zero, IntPtr.Zero, false, Native.EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, this.Cwd, ref startupInfo, out processInformation);
                 if (!started)
                 {
@@ -4794,7 +4808,10 @@ namespace MultiTerm.PowerShellBridge
                     return 4;
                 }
 
-                ShellInfo shell = new ShellInfo(Json.Get(config, "shellFile"), Json.Get(config, "shellLabel"));
+                ShellInfo shell = new ShellInfo(
+                    Json.Get(config, "shellFile"),
+                    Json.Get(config, "shellArguments"),
+                    Json.Get(config, "shellLabel"));
                 session = new TerminalSession(
                     Json.Get(config, "id"),
                     Json.Get(config, "title"),
