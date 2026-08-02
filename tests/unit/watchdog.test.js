@@ -31,6 +31,7 @@ const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), 
     expect(watchdog).toContain('$rendererClients = [int]$health.rendererClients');
     expect(watchdog).toContain('$sessionCount = [int]$health.sessions');
     expect(watchdog).toContain('[bool]$health.watchdogSuppressed');
+    expect(watchdog).toContain('$pollMilliseconds = 10000');
     expect(watchdog).toContain('$rendererGraceSeconds = 12');
   });
 
@@ -52,7 +53,9 @@ const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), 
   });
 
   it("is offered by Setup as a per-user startup agent and stopped on uninstall", () => {
-    expect(installer).toMatch(/Name: "watchdog"[^\r\n]+Flags: checkedonce/);
+    const watchdogTask = installer.match(/^Name: "watchdog"[^\r\n]+$/m);
+    expect(watchdogTask).toBeTruthy();
+    expect(watchdogTask[0]).not.toMatch(/Flags:\s*(?:checkedonce|unchecked)/);
     expect(installer).toContain('Source: "{#RepoRoot}\\scripts\\MultiTerm-Watchdog.ps1"; DestDir: "{app}\\Watchdog"');
     expect(installer).toContain('Name: "{userstartup}\\MultiTerm Watchdog"');
     expect(installer).toMatch(/MultiTerm-Watchdog\.ps1"" -Stop[^\r\n]+RunOnceId: "StopMultiTermWatchdog"/);

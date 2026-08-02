@@ -25,7 +25,7 @@ if ($Stop) {
 $multiTermDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)) "MultiTerm"
 $instanceDirectory = Join-Path $multiTermDirectory "Instances"
 $logPath = Join-Path $multiTermDirectory "watchdog.log"
-$pollMilliseconds = 2000
+$pollMilliseconds = 10000
 $rendererGraceSeconds = 12
 $healthFailureThreshold = 3
 $states = @{}
