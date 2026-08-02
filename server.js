@@ -24,6 +24,7 @@ const path = require("node:path");
 const net = require("node:net");
 const childProcess = require("node:child_process");
 const pty = require("@homebridge/node-pty-prebuilt-multiarch");
+const terminalMessaging = require("./public/terminal-messaging");
 const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
 
 const host = process.env.HOST || "127.0.0.1";
@@ -36,11 +37,64 @@ const maxMessageSize = 1024 * 1024;
 // same-user process) can exhaust the machine. Both sit far above real usage.
 const maxClients = 32;
 const maxSessions = 64;
+const maxTerminalMessages = 500;
+const maxTerminalMessageStoreBytes = 4 * 1024 * 1024;
 const updatePreferencesMaxSize = 4096;
 const websocketAcceptHash = ["sha", "1"].join("");
 
 const sessions = new Map();
 const clients = new Set();
+const terminalMessages = new Map();
+let instanceFilePath = null;
+let terminalMessageMaxBytes = 64 * 1024;
+let terminalInboxCapacity = 500;
+let watchdogSuppressed = false;
+
+function getInstanceDirectory() {
+  const localAppData = process.env.LOCALAPPDATA;
+  return localAppData ? path.join(localAppData, "MultiTerm", "Instances") : null;
+}
+
+function registerInstance(boundHost, boundPort) {
+  const directory = getInstanceDirectory();
+  if (!directory) return null;
+
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+    const filePath = path.join(directory, `${process.pid}.json`);
+    const temporaryPath = `${filePath}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+    const record = {
+      app: "MultiTerm Workbench",
+      bridgeType: "electron",
+      ownerPid: Number(process.env.MULTITERM_UI_OWNER_PID) || 0,
+      pid: process.pid,
+      port: boundPort,
+      scriptPath: path.join(__dirname, "server.js"),
+      startedAt: new Date().toISOString(),
+      url: `http://${boundHost}:${boundPort}/`
+    };
+    fs.writeFileSync(temporaryPath, JSON.stringify(record), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporaryPath, filePath);
+    instanceFilePath = filePath;
+    return filePath;
+  } catch (error) {
+    console.warn(`[bridge] Could not register this bridge instance: ${error.message}`);
+    return null;
+  }
+}
+
+function unregisterInstance() {
+  const filePath = instanceFilePath;
+  instanceFilePath = null;
+  if (!filePath) return;
+  try {
+    fs.unlinkSync(filePath);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.warn(`[bridge] Could not remove this bridge instance record: ${error.message}`);
+    }
+  }
+}
 
 // JavaScript dependencies are expressed as small capability objects rather than
 // nominal interfaces. Tests can provide the same one-method contract without
@@ -111,6 +165,22 @@ function getOutputCoalesceMs() {
 function applyClientConfig(client, message) {
   const applied = setOutputCoalesceMs(message.outputCoalesceMs);
   client.send({ type: "config", outputCoalesceMs: applied });
+}
+
+function applyCommunicationConfig(client, message) {
+  const requestedKb = Math.round(Number(message.terminalMessageMaxKb));
+  const requestedCapacity = Math.round(Number(message.terminalInboxCapacity));
+  if (Number.isSafeInteger(requestedKb) && requestedKb > 0 && requestedKb <= 1024) {
+    terminalMessageMaxBytes = requestedKb * 1024;
+  }
+  if (Number.isSafeInteger(requestedCapacity) && requestedCapacity >= 0 && requestedCapacity <= 2147483647) {
+    terminalInboxCapacity = requestedCapacity;
+  }
+  client.send({
+    type: "communicationConfig",
+    terminalInboxCapacity,
+    terminalMessageMaxKb: terminalMessageMaxBytes / 1024
+  });
 }
 
 function hasPendingOutput(session) {
@@ -281,6 +351,16 @@ const server = http.createServer((request, response) => {
     return;
   }
 
+  if (pathname === "/shutdown") {
+    handleShutdownRequest(request, response);
+    return;
+  }
+
+  if (pathname === "/watchdog/keep") {
+    handleWatchdogKeepRequest(request, response);
+    return;
+  }
+
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.writeHead(405, { Allow: "GET, HEAD" });
     response.end("Method not allowed");
@@ -289,8 +369,13 @@ const server = http.createServer((request, response) => {
 
   if (pathname === "/health") {
     sendJsonResponse(response, 200, {
+      app: "MultiTerm Workbench",
       ok: true,
+      pid: process.pid,
+      port: server.address()?.port || port,
       sessions: sessions.size,
+      rendererClients: countRendererClients(),
+      watchdogSuppressed,
       cwd: process.cwd()
     });
     return;
@@ -298,6 +383,42 @@ const server = http.createServer((request, response) => {
 
   serveStaticFile(pathname, response, request.method === "HEAD");
 });
+
+function handleShutdownRequest(request, response, stop = shutdown) {
+  if (request.method !== "POST") {
+    response.writeHead(405, { Allow: "POST", "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Method not allowed");
+    return false;
+  }
+  if (!isLocalAddress(request.socket?.remoteAddress)
+      || request.headers["x-multiterm-request"] !== "Launcher") {
+    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Forbidden");
+    return false;
+  }
+
+  sendJsonResponse(response, 200, { ok: true, stopping: true });
+  setTimeout(stop, 150).unref?.();
+  return true;
+}
+
+function handleWatchdogKeepRequest(request, response) {
+  if (request.method !== "POST") {
+    response.writeHead(405, { Allow: "POST", "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Method not allowed");
+    return false;
+  }
+  if (!isLocalAddress(request.socket?.remoteAddress)
+      || request.headers["x-multiterm-request"] !== "Launcher") {
+    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Forbidden");
+    return false;
+  }
+
+  watchdogSuppressed = true;
+  sendJsonResponse(response, 200, { ok: true, watchdogSuppressed: true });
+  return true;
+}
 
 server.on("upgrade", (request, socket) => {
   const pathname = getPathname(request.url);
@@ -337,7 +458,6 @@ server.on("upgrade", (request, socket) => {
     socket.destroy();
     return;
   }
-
   const accept = crypto
     // RFC 6455 requires SHA-1 for the WebSocket accept header.
     .createHash(websocketAcceptHash)
@@ -355,6 +475,7 @@ server.on("upgrade", (request, socket) => {
 
   const client = {
     buffer: Buffer.alloc(0),
+    renderer: false,
     socket,
     send(message) {
       client.sendFrame(encodeFrame(JSON.stringify(message)));
@@ -401,6 +522,8 @@ server.on("upgrade", (request, socket) => {
   socket.on("error", () => clients.delete(client));
 });
 
+server.on("close", unregisterInstance);
+
 function start(callback, overridePort, overrideHost) {
   const listenPort = overridePort === undefined ? port : overridePort;
   const listenHost = overrideHost === undefined ? host : overrideHost;
@@ -413,6 +536,7 @@ function start(callback, overridePort, overrideHost) {
   server.listen(listenPort, listenHost, () => {
     const address = server.address();
     const boundPort = address && typeof address === "object" ? address.port : listenPort;
+    registerInstance(listenHost, boundPort);
     console.log(`MultiTerm bridge running on ${listenHost}:${boundPort}`);
     console.log("PowerShell sessions are available only to this local machine by default.");
     if (typeof callback === "function") {
@@ -468,12 +592,19 @@ module.exports = {
   maxMessageSize,
   maxClients,
   maxSessions,
+  maxTerminalMessages,
+  maxTerminalMessageStoreBytes,
   updatePreferencesMaxSize,
   __setMemStatsEnabled,
   getPathname,
   setSecurityHeaders,
   serveStaticFile,
   sendJsonResponse,
+  getInstanceDirectory,
+  registerInstance,
+  unregisterInstance,
+  handleShutdownRequest,
+  handleWatchdogKeepRequest,
   getUpdatePreferencesPath,
   normalizeUpdatePreferences,
   readUpdatePreferences,
@@ -482,6 +613,7 @@ module.exports = {
   readFrames,
   encodeFrame,
   handleClientMessage,
+  countRendererClients,
   createSession,
   writeSession,
   rememberSize,
@@ -494,6 +626,7 @@ module.exports = {
   setOutputCoalesceMs,
   getOutputCoalesceMs,
   applyClientConfig,
+  applyCommunicationConfig,
   queueSessionOutput,
   scheduleOutputFlush,
   flushSessionOutput,
@@ -502,6 +635,7 @@ module.exports = {
   killAllSessions,
   closeSessions,
   endSessionInput,
+  terminalMessages,
   isSessionRunning,
   shutdown,
   handleProcessExit,
@@ -558,7 +692,13 @@ module.exports = {
   startMemStats,
   stopMemStats,
   handleUncaughtException,
-  handleUnhandledRejection
+  handleUnhandledRejection,
+  sendTerminalMessage,
+  listTerminalMessages,
+  actOnTerminalMessage,
+  terminalMessageInsertText,
+  terminalMessageStoreBytes,
+  expireTerminalMessagesForSession
 };
 
 function getPathname(rawUrl) {
@@ -825,6 +965,13 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
   }
 
   switch (message.type) {
+    case "rendererPresence":
+      client.renderer = true;
+      watchdogSuppressed = false;
+      break;
+    case "watchdogKeepBridge":
+      watchdogSuppressed = true;
+      break;
     case "create":
       createSession(client, message, dependencies);
       break;
@@ -873,10 +1020,163 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     case "statistics":
       requestStatistics(client, message);
       break;
+    case "communicationConfig":
+      applyCommunicationConfig(client, message);
+      break;
+    case "messageSend":
+      sendTerminalMessage(client, message);
+      break;
+    case "messageList":
+      listTerminalMessages(client, message);
+      break;
+    case "messageAction":
+      actOnTerminalMessage(client, message);
+      break;
     default:
       client.send({ type: "error", message: `Unsupported message type: ${message.type}` });
       break;
   }
+}
+
+function countRendererClients() {
+  let count = 0;
+  for (const client of clients) {
+    if (client.renderer) count += 1;
+  }
+  return count;
+}
+
+function terminalInboxCount(targetId) {
+  let count = 0;
+  for (const message of terminalMessages.values()) {
+    if (message.targetId === targetId && message.state === "pending") count += 1;
+  }
+  return count;
+}
+
+function terminalMessageStoreBytes() {
+  let bytes = 0;
+  for (const message of terminalMessages.values()) {
+    bytes += terminalMessaging.utf8ByteLength(JSON.stringify(message));
+  }
+  return bytes;
+}
+
+function expireTerminalMessagesForSession(targetId) {
+  const ids = [];
+  for (const [id, message] of terminalMessages) {
+    if (message.targetId !== targetId) continue;
+    terminalMessages.delete(id);
+    ids.push(id);
+  }
+  if (ids.length) broadcast({ type: "terminalMessagesExpired", ids, state: "expired" });
+  return ids;
+}
+
+function sendTerminalMessage(client, request) {
+  const requestId = typeof request.requestId === "string" ? request.requestId : "";
+  const normalized = terminalMessaging.normalizeMessageRequest(request, terminalMessageMaxBytes);
+  if (!normalized.ok) {
+    client.send({ type: "messageError", requestId, message: normalized.error });
+    return;
+  }
+
+  const source = sessions.get(normalized.value.sourceId);
+  const target = sessions.get(normalized.value.targetId);
+  if (!isSessionRunning(source) || source.closing || !isSessionRunning(target) || target.closing) {
+    client.send({ type: "messageError", requestId, message: "Both message terminals must be live." });
+    return;
+  }
+  if (target.elevated) {
+    client.send({ type: "messageError", requestId, message: "Terminal messages cannot target an elevated relay until confirmed delivery is supported." });
+    return;
+  }
+  if (normalized.value.persist) {
+    client.send({ type: "messageError", requestId, message: "Durable terminal messages are not enabled yet." });
+    return;
+  }
+  if (terminalInboxCapacity > 0 && terminalInboxCount(target.id) >= terminalInboxCapacity) {
+    client.send({ type: "messageError", requestId, message: "The target terminal inbox is full under the configured capacity." });
+    return;
+  }
+
+  const terminalMessage = {
+    createdAt: new Date().toISOString(),
+    id: crypto.randomUUID(),
+    kind: normalized.value.kind,
+    path: normalized.value.path,
+    persist: false,
+    sourceId: source.id,
+    sourceTitle: source.title,
+    state: "pending",
+    status: normalized.value.status,
+    targetId: target.id,
+    targetTitle: target.title,
+    text: normalized.value.text
+  };
+  const storedBytes = terminalMessaging.utf8ByteLength(JSON.stringify(terminalMessage));
+  if (terminalMessages.size >= maxTerminalMessages
+      || terminalMessageStoreBytes() + storedBytes > maxTerminalMessageStoreBytes) {
+    client.send({ type: "messageError", requestId, message: "The terminal message store has reached its global safety limit." });
+    return;
+  }
+  terminalMessages.set(terminalMessage.id, terminalMessage);
+  broadcast({ type: "terminalMessage", message: terminalMessage });
+  client.send({ type: "messageSent", requestId, message: terminalMessage });
+}
+
+function listTerminalMessages(client, request) {
+  const requestId = typeof request.requestId === "string" ? request.requestId : "";
+  client.send({
+    type: "terminalMessages",
+    requestId,
+    messages: [...terminalMessages.values()].filter((message) => message.state === "pending")
+  });
+}
+
+function terminalMessageInsertText(message) {
+  if (message.kind === "path") return message.path;
+  if (message.kind === "status") return message.text || message.status;
+  return message.text;
+}
+
+function actOnTerminalMessage(client, request) {
+  const requestId = typeof request.requestId === "string" ? request.requestId : "";
+  const id = typeof request.id === "string" ? request.id : "";
+  const action = typeof request.action === "string" ? request.action : "";
+  const terminalMessage = terminalMessages.get(id);
+  if (!terminalMessage || terminalMessage.state !== "pending") {
+    client.send({ type: "messageError", requestId, message: "That terminal message is no longer pending." });
+    return;
+  }
+
+  if (action === "insert") {
+    const target = sessions.get(terminalMessage.targetId);
+    const data = terminalMessageInsertText(terminalMessage);
+    if (!isSessionRunning(target) || target.closing || !data) {
+      client.send({ type: "messageError", requestId, message: "The target terminal is unavailable." });
+      return;
+    }
+    const insert = terminalMessaging.validateTerminalInsertText(data);
+    if (!insert.ok) {
+      client.send({ type: "messageError", requestId, message: insert.error });
+      return;
+    }
+    if (!writeSession(target.id, insert.value)) {
+      client.send({ type: "messageError", requestId, message: "The target terminal is unavailable." });
+      return;
+    }
+    terminalMessage.state = "inserted";
+  } else if (action === "dismiss") {
+    terminalMessage.state = "dismissed";
+  } else {
+    client.send({ type: "messageError", requestId, message: "Unsupported terminal message action." });
+    return;
+  }
+
+  terminalMessages.delete(id);
+  broadcast({ type: "terminalMessageChanged", id, state: terminalMessage.state });
+  client.send({ type: "messageActionResult", requestId, id, state: terminalMessage.state });
 }
 
 function createSession(client, options, dependencies = defaultSessionDependencies) {
@@ -964,6 +1264,7 @@ function createSession(client, options, dependencies = defaultSessionDependencie
     session.exited = true;
     flushSessionOutput(session);
     closeLog(session);
+    expireTerminalMessagesForSession(id);
     sessions.delete(id);
     broadcast({ type: "exited", id, code: exitCode, signal });
     scheduleMemStats(1500);
@@ -979,13 +1280,19 @@ function createSession(client, options, dependencies = defaultSessionDependencie
 
 function writeSession(id, data) {
   const session = sessions.get(id);
-  if (!session || typeof data !== "string") return;
+  if (!session || typeof data !== "string") return false;
 
   if (isSessionRunning(session)) {
-    session.keystrokesIn += data.length;
-    session.bytesIn += Buffer.byteLength(data, "utf8");
-    session.terminal.write(data);
+    try {
+      session.terminal.write(data);
+      session.keystrokesIn += data.length;
+      session.bytesIn += Buffer.byteLength(data, "utf8");
+      return true;
+    } catch {
+      return false;
+    }
   }
+  return false;
 }
 
 function rememberSize(id, cols, rows) {
@@ -1628,6 +1935,7 @@ function finishElevatedSession(session, code) {
     session.exited = true;
     flushSessionOutput(session);
     closeLog(session);
+    expireTerminalMessagesForSession(session.id);
     sessions.delete(session.id);
     broadcast({ type: "exited", id: session.id, code, signal: null });
     scheduleMemStats(1500);
@@ -1670,7 +1978,12 @@ function describeElevationError(detail) {
 
 function shutdown() {
   stopMemStats();
-  closeSessions(true);
+  const shutdownWaitMs = Math.max(
+    SHUTDOWN_MAX_WAIT_MS,
+    Math.max(0, sessions.size - 1) * SESSION_TEARDOWN_STAGGER_MS
+      + SESSION_EXIT_GRACE_MS + SESSION_INTERRUPT_GRACE_MS + 1000
+  );
+  killAllSessions();
   server.close(() => {
     if (sessions.size === 0) {
       process.exit(0);
@@ -1682,7 +1995,7 @@ function shutdown() {
   // Sessions now close on a stagger, so poll until they have actually drained
   // instead of exiting on a fixed timer and falling through to the force-kill in
   // handleProcessExit, which is exactly the crash-prone path we are avoiding.
-  const deadline = Date.now() + SHUTDOWN_MAX_WAIT_MS;
+  const deadline = Date.now() + shutdownWaitMs;
   const drain = setInterval(() => {
     if (sessions.size > 0 && Date.now() < deadline) return;
     clearInterval(drain);

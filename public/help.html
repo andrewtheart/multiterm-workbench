@@ -308,7 +308,7 @@
       padding-left: 20px;
     }
 
-    h1, h2, h3 {
+    h1, h2, h3, h4 {
       line-height: 1.25;
       scroll-margin-top: 18px;
     }
@@ -326,6 +326,11 @@
 
     h3 {
       margin-top: 28px;
+    }
+
+    h4 {
+      margin: 26px 0 8px;
+      font-size: 1rem;
     }
 
     p, li {
@@ -396,6 +401,29 @@
       color: var(--muted);
     }
 
+    figure {
+      margin: 18px 0 26px;
+    }
+
+    figure img,
+    p > img:only-child {
+      display: block;
+      width: auto;
+      max-width: 100%;
+      height: auto;
+      margin-inline: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #111318;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
+    }
+
+    figcaption {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
     @media (max-width: 680px) {
       body {
         padding: 20px 16px 40px;
@@ -429,6 +457,12 @@
 <li><a href="#pid-bound-notes" id="toc-pid-bound-notes">PID-bound notes</a></li>
 <li><a href="#command-queues" id="toc-command-queues">Command queues</a></li>
 </ul></li>
+<li><a href="#terminal-messaging" id="toc-terminal-messaging">Terminal messaging</a>
+<ul>
+<li><a href="#developer-examples-by-message-kind" id="toc-developer-examples-by-message-kind">Developer examples by message kind</a></li>
+<li><a href="#receiver-review-workflow" id="toc-receiver-review-workflow">Receiver review workflow</a></li>
+<li><a href="#terminal-connections" id="toc-terminal-connections">Terminal connections</a></li>
+</ul></li>
 <li><a href="#search-broadcast-and-input" id="toc-search-broadcast-and-input">Search, broadcast, and input</a>
 <ul>
 <li><a href="#search" id="toc-search">Search</a></li>
@@ -440,7 +474,10 @@
 <li><a href="#statistics" id="toc-statistics">Statistics</a></li>
 <li><a href="#logging" id="toc-logging">Logging</a></li>
 </ul></li>
-<li><a href="#notifications-tray-and-closing" id="toc-notifications-tray-and-closing">Notifications, tray, and closing</a></li>
+<li><a href="#notifications-tray-and-closing" id="toc-notifications-tray-and-closing">Notifications, tray, and closing</a>
+<ul>
+<li><a href="#optional-watchdog" id="toc-optional-watchdog">Optional watchdog</a></li>
+</ul></li>
 <li><a href="#windows-integration" id="toc-windows-integration">Windows integration</a>
 <ul>
 <li><a href="#file-explorer" id="toc-file-explorer">File Explorer</a></li>
@@ -496,6 +533,15 @@
 <li>move the terminal to another page; or</li>
 <li>minimize, maximize, recolor, rename, or close the pane.</li>
 </ul>
+<p>The terminal context menu organizes these actions into two columns of named groups. Its search field is focused immediately, so you can type an action name without an extra click. Press <kbd>Down</kbd> or <kbd>Tab</kbd> to enter the filtered results, then use the arrow keys and Enter. On narrow windows the groups collapse to one column.</p>
+<h4 id="custom-context-menu-shortcuts">Custom context-menu shortcuts</h4>
+<p>Open a terminal's context menu and select the keyboard button beside Search to edit shortcuts in place. Select <strong>Set</strong> beside an executable action, then press either:</p>
+<ul>
+<li>one plain digit from <kbd>1</kbd> through <kbd>9</kbd>; or</li>
+<li>a key combined with <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, <kbd>Shift</kbd>, or <kbd>Meta</kbd>.</li>
+</ul>
+<p>Each exact shortcut belongs to one action. Assigning an occupied digit or chord moves it from the previous action and reports the change in the capture strip. To replace a shortcut, select its keycap and press the new combination. Press unmodified Delete or Backspace while capturing to clear it, or Escape to cancel.</p>
+<p>Mappings are stored in the current browser profile and survive reloads. A plain digit activates immediately while the focused menu search is empty; modifier combinations work anywhere in the open menu. Operating-system or browser-reserved combinations may be intercepted before MultiTerm receives them, so prefer chords that the host does not already own.</p>
 <p>Drag a pane by its title bar to reorder it. Layouts with a primary pane use the active terminal as the primary pane.</p>
 <h3 id="administrator-terminals">Administrator terminals</h3>
 <p>Use <strong>New Administrator terminal</strong> to elevate only a new terminal, or <strong>Restart as Administrator</strong> to relaunch the complete workspace elevated. Windows displays a UAC prompt before elevation.</p>
@@ -586,6 +632,51 @@
 <li>Reorder or remove items from the queue manager.</li>
 </ul>
 <p>If a terminal exits while commands remain, its queue moves to <strong>Unparented queues</strong>. Unparented commands remain reusable and can be inserted into another live terminal.</p>
+<h2 id="terminal-messaging">Terminal messaging</h2>
+<p>Open <strong>Terminal messages</strong> from the header, choose two live terminals in the current MultiTerm instance, and send a structured handoff. A terminal's right-click <strong>Send to terminal...</strong> action opens the same composer with that terminal selected as the sender.</p>
+<p>Terminal messages are most useful when the destination is busy, on another page, or receiving context from a terminal or agent programmatically. They preserve the selected source context, message kind, destination, and timestamp while requiring the receiver to approve insertion. When both terminals are visible and you only need to type a one-off command, direct terminal input is usually faster.</p>
+<p>Message kinds include commands/prompts, text/summaries, file or folder paths, status/readiness, tasks, and results. Received messages remain in the bridge-owned inbox until you:</p>
+<ul>
+<li>choose <strong>Insert</strong>, which types the content into the target terminal without pressing Enter; or</li>
+<li>choose <strong>Dismiss</strong>, which removes it without touching the terminal.</li>
+</ul>
+<p>Messages are rendered as literal text and are never executed automatically. Insert revalidates the stored content and rejects terminal control characters, including Enter, tab, escape sequences, DEL, and C1 controls. A message stays pending if the target cannot accept the write, and messages expire when their target session exits. The selected source terminal is context, not authenticated sender identity.</p>
+<p>Per-pane Administrator terminals are not message targets yet because their relay cannot confirm that the elevated PTY accepted an Insert. MultiTerm rejects that route instead of reporting an ambiguous success.</p>
+<p>This first version routes messages between live terminals and connected windows in one running MultiTerm instance. Durable/offline delivery, stable aliases, shell/agent CLI senders, cross-instance routing, replies, and explicitly confirmed automation rules are planned but are not enabled yet.</p>
+<p>The <strong>Communication</strong> settings control message size and pending inbox capacity. Capacity <code>0</code> disables the per-terminal quota, but the bridge always caps the shared store at 500 pending messages or 4 MiB. Both settings are stored with the existing user settings and enforced by either bridge.</p>
+<h3 id="developer-examples-by-message-kind">Developer examples by message kind</h3>
+<p>Each kind records the same route and timestamp, but choosing the closest kind makes the receiver's inbox easier to scan.</p>
+<h4 id="command-or-prompt-reproduce-a-failing-test">Command or prompt: reproduce a failing test</h4>
+<p>A failed CI or test terminal can stage the exact focused command in a clean reproduction shell: <code>npm run test:e2e -- --grep "checkout flow"</code>. The receiver can inspect or edit flags before choosing <strong>Insert</strong>, and must still press Enter explicitly to run it.</p>
+<p><img src="help-images/terminal-message-command.png" alt="A command handoff from Failed tests to Repro shell with a focused Playwright command" /></p>
+<h4 id="text-or-summary-pass-concise-debugging-context">Text or summary: pass concise debugging context</h4>
+<p>Use <strong>Text or summary</strong> when raw logs are too noisy. An API log terminal can tell a debugging shell: <code>Checkout returns 500 after inventory reservation; request ID req-7f31.</code> The request ID and failure stage survive as structured context without pasting a whole log stream.</p>
+<p><img src="help-images/terminal-message-text.png" alt="A text summary handoff from API logs to Debug shell describing a checkout failure" /></p>
+<h4 id="file-or-folder-path-point-to-an-artifact">File or folder path: point to an artifact</h4>
+<p>Use <strong>File or folder path</strong> for a trace, coverage report, build output, generated migration, or repository folder. A test runner can hand the investigation shell <code>D:\shop-app\test-results\checkout-flow\trace.zip</code> without risking shell metacharacters or accidental execution.</p>
+<p><img src="help-images/terminal-message-path.png" alt="A path handoff from Test runner to Debug shell containing a Playwright trace archive" /></p>
+<h4 id="status-or-readiness-coordinate-dependent-processes">Status or readiness: coordinate dependent processes</h4>
+<p>Use <strong>Status or readiness</strong> when one terminal is waiting on another service. An API terminal can announce <code>ready</code> with <code>API listening on http://localhost:8000; migrations applied.</code> The frontend developer immediately knows both the endpoint and the prerequisite state.</p>
+<p><img src="help-images/terminal-message-status.png" alt="A ready status handoff from API server to Frontend dev" /></p>
+<h4 id="task-delegate-bounded-work">Task: delegate bounded work</h4>
+<p>Use <strong>Task</strong> for a concrete assignment to another developer shell or agent: <code>Investigate the flaky checkout test. Reproduce first; do not change authentication code.</code> Including the constraint prevents a broad fix from drifting into security-sensitive code.</p>
+<p><img src="help-images/terminal-message-task.png" alt="A task handoff from Code review to Worker shell with scope and constraints" /></p>
+<h4 id="result-return-an-outcome-and-changed-path">Result: return an outcome and changed path</h4>
+<p>Use <strong>Result</strong> to close the loop. A worker can report <code>Fixed a stale cart-state race; all 18 checkout tests pass.</code> and attach <code>D:\shop-app\src\checkout\cart-store.ts</code>. The reviewing terminal gets both the conclusion and the file to inspect.</p>
+<p><img src="help-images/terminal-message-result.png" alt="A result handoff from Worker shell to Code review with a passing test summary and source path" /></p>
+<h3 id="receiver-review-workflow">Receiver review workflow</h3>
+<p>The receiver sees the source, destination, kind, timestamp, and literal payload together. <strong>Insert</strong> writes into the intended target without Enter; <strong>Dismiss</strong> removes the handoff without touching the terminal. This is the approval boundary that makes a handoff safer than remotely injecting input.</p>
+<p><img src="help-images/terminal-message-inbox.png" alt="The terminal message inbox showing a pending test command with Insert and Dismiss controls" /></p>
+<h3 id="terminal-connections">Terminal connections</h3>
+<p>Pending handoffs draw a dashed amber circle-to-arrow connector from the selected source context to the target pane. The connector disappears when the handoff is inserted, dismissed, or expires. Multiple pending handoffs on the same route share one connector with a count.</p>
+<p>For example, a command handed from <strong>Frontend dev</strong> to <strong>API server</strong> produces a temporary amber route while the API terminal still has an inbox item to review.</p>
+<p><img src="help-images/terminal-connection-pending.png" alt="Two developer terminals joined by a dashed amber pending-handoff connector" /></p>
+<p>To keep a directional connection visible without sending a message, choose the source and target in <strong>Terminal messages</strong>, then select <strong>Link terminals</strong>. Explicit links use a solid cyan diamond-to-arrow connector. Remove one with <strong>Unlink</strong> in the Connections list. Links persist across reloads in the local browser profile, synchronize to other same-origin MultiTerm windows, and are removed when either terminal session ends. Workspace connectors appear only when both endpoint panes are visible; the dialog topology shows the current routes and provides the management controls.</p>
+<p>A useful persistent link is <strong>Frontend dev</strong> to <strong>API server</strong> during feature work: it records the direction in which UI findings, endpoint questions, and reproduction commands normally travel without sending anything by itself.</p>
+<p><img src="help-images/terminal-connection-link.png" alt="Frontend dev and API server terminals joined by a solid cyan saved link" /></p>
+<p>Hover or select a workspace connector to reveal <strong>Send message</strong>. This opens the handoff composer with that connector's source and destination already selected; the message still goes to the receiver's inbox and never executes automatically.</p>
+<p><img src="help-images/terminal-connection-send-action.png" alt="The saved Frontend dev to API server connector showing its Send message hover action" /></p>
+<p>An explicit link is visual metadata only. It does not authenticate either terminal, grant shell access, deliver data, or run commands.</p>
 <h2 id="search-broadcast-and-input">Search, broadcast, and input</h2>
 <h3 id="search">Search</h3>
 <ul>
@@ -605,13 +696,18 @@
 <p>Use <strong>Log to file...</strong> from a terminal context menu to capture output. Stop logging from the same menu, then use <strong>Reveal last log</strong> or <strong>Reveal log folder</strong> to locate the file.</p>
 <h2 id="notifications-tray-and-closing">Notifications, tray, and closing</h2>
 <p>Settings can notify you about terminal activity, inactivity, or the terminal bell. Browser notification permission may be required.</p>
-<p>In the installed desktop app, closing the window asks whether to:</p>
+<p>In the Electron desktop app, closing the window asks whether to:</p>
 <ul>
 <li>keep MultiTerm running in the system tray;</li>
-<li>quit the app; or</li>
+<li>quit the UI but keep its bridge and terminal sessions running;</li>
+<li>quit and close the bridge; or</li>
 <li>cancel and return to the workspace.</li>
 </ul>
-<p>The <strong>Keep shell sessions alive when closing</strong> setting determines whether quitting ends terminal processes. Use the tray icon to show or quit MultiTerm later.</p>
+<p>Choosing <strong>Quit &amp; close bridge</strong> warns that all associated terminal sessions and in-progress commands will end. MultiTerm first sends <code>exit</code> to each shell. A busy command that does not exit during the grace period receives terminal Ctrl+C, followed by another <code>exit</code>; force termination is the last resort. Tray <strong>Quit MultiTerm</strong> opens the same decision instead of bypassing it.</p>
+<h3 id="optional-watchdog">Optional watchdog</h3>
+<p>Setup offers the <strong>MultiTerm watchdog</strong> as a recommended optional task. It installs a lightweight per-user background agent that starts when you sign in, monitors every registered MultiTerm bridge, and detects bridges that are unresponsive or have live terminal sessions after their last app window disconnects. After a reconnect grace period, it asks whether to keep that bridge running or close it gracefully. Declining once suppresses repeat prompts until a MultiTerm UI reconnects.</p>
+<p>The watchdog is a per-user agent rather than a Windows Service because Windows services run in Session 0 and cannot safely display dialogs in the signed-in user's desktop session. It does not require administrator privileges. Its rotating diagnostic log is <code>%LOCALAPPDATA%\MultiTerm\watchdog.log</code>.</p>
+<p>Windows does not provide one universal <code>SIGTERM</code> equivalent for arbitrary applications. For console sessions, MultiTerm uses terminal Ctrl+C (<code>ETX</code>, analogous to <code>SIGINT</code>) as the cooperative interrupt, together with the shell's <code>exit</code> command. On Linux, the graceful termination signal you may remember is usually <code>SIGTERM</code>.</p>
 <h2 id="windows-integration">Windows integration</h2>
 <h3 id="file-explorer">File Explorer</h3>
 <p>The installer can add both:</p>
@@ -626,6 +722,7 @@
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>multiterm <span class="st">&quot;C:\src\my-project&quot;</span></span></code></pre></div>
 <p>Each normal installed, CLI, or taskbar launch requests an independent app instance with its own bridge port, browser profile, state record, and log. Multiple installed instances can therefore run concurrently.</p>
 <h2 id="settings">Settings</h2>
+<p>Every settings group starts collapsed. Select a group header or its chevron to expand it. The search box remains at the top of the panel while you scroll and filters individual settings by labels, option names, descriptions, placeholders, and control names. Matching groups expand temporarily; clearing the search restores the groups you had open before searching. Select <strong>Show all</strong> to clear any filter and expand every group; select <strong>Collapse all</strong> to close them again.</p>
 <p>Settings cover:</p>
 <ul>
 <li>app and terminal color themes;</li>

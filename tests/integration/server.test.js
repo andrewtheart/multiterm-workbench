@@ -104,6 +104,7 @@ describe("HTTP server", () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body).toHaveProperty("sessions");
+    expect(body).toHaveProperty("rendererClients");
   });
 
   it("serves the index page", async () => {

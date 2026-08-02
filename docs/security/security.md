@@ -204,6 +204,21 @@ clamp the interval, and write through a random temporary file before rename.
 The marker is a CSRF signal, not a secret; Host validation is what prevents a
 DNS-rebound page from becoming same-origin and adding it.
 
+Bridge lifecycle controls follow the same principle. `/shutdown` and
+`/watchdog/keep` accept only loopback `POST` requests carrying
+`x-multiterm-request: Launcher`; navigation and remote-source requests fail
+closed. The header is not authentication against another process running as the
+same user. Electron main uses `/watchdog/keep` and waits for its response before
+quitting while terminals remain, so renderer teardown cannot race suppression
+persistence.
+
+Each bridge atomically writes a discovery record beneath
+`%LOCALAPPDATA%\MultiTerm\Instances`. The per-user watchdog accepts a record only
+when its PID, port, loopback URL, process start time, and `/health` identity agree.
+Records are discovery hints, not authority: they are user-writable and every
+control decision must be revalidated against the live endpoint. The watchdog is
+an interactive per-user agent, not a privileged Windows Service.
+
 Ceilings are availability controls, not access control. Accepted clients still
 share one session pool, and there is no per-client quota or request-rate limit.
 
@@ -299,6 +314,18 @@ newline normalization and bracketed-paste framing work when the terminal enables
 mode 2004. Right-click auto-run modes display an explicit first-use warning.
 
 Do not describe raw typing or clipboard paste as sanitized.
+
+### Terminal message handoffs
+
+The initial terminal messaging feature is bridge-owned and same-instance only. Both bridges validate kind, live/non-closing source and target sessions, required fields, and the user-configured UTF-8 payload size before storing a pending message. Per-target inbox capacity is user-configured; `0` disables that quota, but an invariant global ceiling of 500 pending records or 4 MiB always bounds bridge memory and list responses.
+
+The renderer builds inbox rows with DOM/text APIs and creates body DOM only while the inbox is open. The only PTY action is an explicit receiver **Insert**. At that final PTY boundary, both bridges revalidate the stored text and reject C0/C1 controls, including CR/LF, tab, ESC, and DEL. The record is consumed only after the target confirms a write; a failed write leaves it pending. Target exit expires pending records and broadcasts their removal, preventing a later session that reuses the same ID from inheriting a stale handoff. **Dismiss** never writes to the shell.
+
+The source terminal is sender-selected context, not authenticated provenance. The UI labels it accordingly. Durable delivery and automatic execution are rejected rather than partially implemented. Future CLI attribution, cross-instance routing, and automation rules require separate capability and consent controls.
+
+Per-pane elevated terminals use a relay whose current input protocol has no positive PTY-write acknowledgment. Both bridges therefore reject terminal messages targeting an elevated relay instead of consuming a record after an ambiguous socket write. Direct input keeps its existing relay behavior; enabling message Insert requires an acknowledged helper protocol in both implementations.
+
+Directional GUI links are renderer-only visual metadata stored in `multiterm.terminalLinks`. Loaded records are capped, require two distinct bridge-shaped session IDs, and are pruned unless both sessions are live. Link labels and route rows use DOM/text APIs. A link does not alter bridge authorization, write to a PTY, imply authenticated provenance, or cause message delivery.
 
 ### App-composed commands are one visible line
 

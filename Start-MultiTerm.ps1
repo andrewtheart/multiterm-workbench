@@ -709,6 +709,37 @@ namespace MultiTerm.PowerShellBridge
         }
     }
 
+    internal sealed class TerminalMessage
+    {
+        public string Id;
+        public string Kind;
+        public string Text;
+        public string Path;
+        public string Status;
+        public string SourceId;
+        public string SourceTitle;
+        public string TargetId;
+        public string TargetTitle;
+        public string CreatedAt;
+        public string State;
+
+        public string ToJson()
+        {
+            return "{\"id\":" + Json.Quote(this.Id)
+                + ",\"kind\":" + Json.Quote(this.Kind)
+                + ",\"text\":" + Json.Quote(this.Text)
+                + ",\"path\":" + Json.Quote(this.Path)
+                + ",\"status\":" + Json.Quote(this.Status)
+                + ",\"sourceId\":" + Json.Quote(this.SourceId)
+                + ",\"sourceTitle\":" + Json.Quote(this.SourceTitle)
+                + ",\"targetId\":" + Json.Quote(this.TargetId)
+                + ",\"targetTitle\":" + Json.Quote(this.TargetTitle)
+                + ",\"createdAt\":" + Json.Quote(this.CreatedAt)
+                + ",\"persist\":false"
+                + ",\"state\":" + Json.Quote(this.State) + "}";
+        }
+    }
+
     public sealed class BridgeServer
     {
         private sealed class OutputBatch
@@ -734,6 +765,12 @@ namespace MultiTerm.PowerShellBridge
         private const string AppUserModelId = "MultiTerm.Workbench";
         private readonly ConcurrentDictionary<string, BridgeClient> clients = new ConcurrentDictionary<string, BridgeClient>();
         private readonly ConcurrentDictionary<string, TerminalSession> sessions = new ConcurrentDictionary<string, TerminalSession>();
+        private readonly object terminalMessageLock = new object();
+        private readonly Dictionary<string, TerminalMessage> terminalMessages = new Dictionary<string, TerminalMessage>(StringComparer.Ordinal);
+        private int terminalMessageMaxBytes = 64 * 1024;
+        private int terminalInboxCapacity = 500;
+        private const int MaxTerminalMessages = 500;
+        private const int MaxTerminalMessageStoreBytes = 4 * 1024 * 1024;
         private readonly ConcurrentDictionary<string, OutputBatch> outputBatches = new ConcurrentDictionary<string, OutputBatch>();
         private int outputCoalesceMs = 8;
 
@@ -759,6 +796,7 @@ namespace MultiTerm.PowerShellBridge
         private BridgeConsoleDashboard consoleDashboard;
         private string instanceFilePath;
         private volatile bool stopping;
+        private volatile bool watchdogSuppressed;
 
         // Absolute path of this script, set from PowerShell at startup. Administrator
         // terminals re-launch it elevated (-ElevatedHost) to own the high-integrity
@@ -929,6 +967,16 @@ namespace MultiTerm.PowerShellBridge
                 }
             }
 
+            if (graceful)
+            {
+                this.WaitForSessionsToExit(6000);
+                foreach (TerminalSession session in this.sessions.Values)
+                {
+                    session.Kill();
+                }
+                this.WaitForSessionsToExit(1000);
+            }
+
             foreach (BridgeClient client in this.clients.Values)
             {
                 client.Close();
@@ -940,6 +988,16 @@ namespace MultiTerm.PowerShellBridge
                 try { this.listener.Close(); } catch { }
             }
             this.UnregisterInstance();
+        }
+
+        private void WaitForSessionsToExit(int timeoutMilliseconds)
+        {
+            int waited = 0;
+            while (!this.sessions.IsEmpty && waited < timeoutMilliseconds)
+            {
+                Thread.Sleep(50);
+                waited += 50;
+            }
         }
 
         private void RegisterInstance()
@@ -955,6 +1013,7 @@ namespace MultiTerm.PowerShellBridge
                 string path = Path.Combine(directory, processId.ToString(CultureInfo.InvariantCulture) + ".json");
                 string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 string state = "{\"app\":\"MultiTerm Workbench\",\"pid\":" + processId
+                    + ",\"bridgeType\":\"installed\""
                     + ",\"port\":" + this.port
                     + ",\"url\":" + Json.Quote(this.Url)
                     + ",\"startedAt\":" + Json.Quote(DateTime.UtcNow.ToString("o"))
@@ -1048,6 +1107,29 @@ namespace MultiTerm.PowerShellBridge
                     return;
                 }
 
+                if (path == "/watchdog/keep")
+                {
+                    if (context.Request.HttpMethod != "POST")
+                    {
+                        context.Response.Headers["Allow"] = "POST";
+                        this.SendText(context.Response, 405, "Method not allowed", "text/plain; charset=utf-8");
+                        return;
+                    }
+
+                    if (
+                        !context.Request.IsLocal ||
+                        context.Request.Headers["X-MultiTerm-Request"] != "Launcher"
+                    )
+                    {
+                        this.SendText(context.Response, 403, "Forbidden", "text/plain; charset=utf-8");
+                        return;
+                    }
+
+                    this.watchdogSuppressed = true;
+                    this.SendText(context.Response, 200, "{\"ok\":true,\"watchdogSuppressed\":true}", "application/json; charset=utf-8");
+                    return;
+                }
+
                 // File Explorer launches use a fresh PowerShell process. If a
                 // bridge is already running, that process forwards the selected
                 // folder here instead of attempting to own a second listener.
@@ -1107,9 +1189,16 @@ namespace MultiTerm.PowerShellBridge
 
                 if (path == "/health")
                 {
+                    int rendererClients = 0;
+                    foreach (BridgeClient client in this.clients.Values)
+                    {
+                        if (client.IsRenderer) rendererClients++;
+                    }
                     string body = "{\"ok\":true,\"app\":\"MultiTerm Workbench\",\"pid\":"
                         + Process.GetCurrentProcess().Id + ",\"port\":" + this.port
                         + ",\"sessions\":" + this.sessions.Count
+                        + ",\"rendererClients\":" + rendererClients
+                        + ",\"watchdogSuppressed\":" + (this.watchdogSuppressed ? "true" : "false")
                         + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + "}";
                     this.SendText(context.Response, 200, body, "application/json; charset=utf-8");
                     return;
@@ -2166,7 +2255,16 @@ namespace MultiTerm.PowerShellBridge
             }
 
             string type = Json.Get(message, "type");
-            if (type == "create")
+            if (type == "rendererPresence")
+            {
+                client.IsRenderer = true;
+                this.watchdogSuppressed = false;
+            }
+            else if (type == "watchdogKeepBridge")
+            {
+                this.watchdogSuppressed = true;
+            }
+            else if (type == "create")
             {
                 this.CreateSession(client, message);
             }
@@ -2243,10 +2341,283 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.RequestStatistics(client, message);
             }
+            else if (type == "communicationConfig")
+            {
+                this.ApplyCommunicationConfig(client, message);
+            }
+            else if (type == "messageSend")
+            {
+                this.SendTerminalMessage(client, message);
+            }
+            else if (type == "messageList")
+            {
+                this.ListTerminalMessages(client, message);
+            }
+            else if (type == "messageAction")
+            {
+                this.ActOnTerminalMessage(client, message);
+            }
             else
             {
                 client.Send("{\"type\":\"error\",\"message\":\"Unsupported message type: " + Json.Escape(type) + "\"}");
             }
+        }
+
+        private void ApplyCommunicationConfig(BridgeClient client, Dictionary<string, string> message)
+        {
+            int requestedKb = Json.GetInt(message, "terminalMessageMaxKb", this.terminalMessageMaxBytes / 1024);
+            int requestedCapacity = Json.GetInt(message, "terminalInboxCapacity", this.terminalInboxCapacity);
+            if (requestedKb > 0 && requestedKb <= 1024)
+            {
+                this.terminalMessageMaxBytes = requestedKb * 1024;
+            }
+            if (requestedCapacity >= 0)
+            {
+                this.terminalInboxCapacity = requestedCapacity;
+            }
+            client.Send("{\"type\":\"communicationConfig\",\"terminalInboxCapacity\":"
+                + this.terminalInboxCapacity + ",\"terminalMessageMaxKb\":"
+                + (this.terminalMessageMaxBytes / 1024) + "}");
+        }
+
+        private static bool IsTerminalMessageKind(string kind)
+        {
+            return kind == "command" || kind == "text" || kind == "path"
+                || kind == "status" || kind == "task" || kind == "result";
+        }
+
+        private static bool ContainsTerminalControl(string value)
+        {
+            if (String.IsNullOrEmpty(value)) return false;
+            foreach (char character in value)
+            {
+                if (character <= '\u001f' || (character >= '\u007f' && character <= '\u009f')) return true;
+            }
+            return false;
+        }
+
+        private int TerminalInboxCount(string targetId)
+        {
+            int count = 0;
+            foreach (TerminalMessage message in this.terminalMessages.Values)
+            {
+                if (message.TargetId == targetId && message.State == "pending") count++;
+            }
+            return count;
+        }
+
+        private int TerminalMessageStoreBytes()
+        {
+            int bytes = 0;
+            foreach (TerminalMessage message in this.terminalMessages.Values)
+            {
+                bytes += Encoding.UTF8.GetByteCount(message.ToJson());
+            }
+            return bytes;
+        }
+
+        private void ExpireTerminalMessagesForSession(string targetId)
+        {
+            List<string> ids = new List<string>();
+            lock (this.terminalMessageLock)
+            {
+                foreach (KeyValuePair<string, TerminalMessage> entry in this.terminalMessages)
+                {
+                    if (entry.Value.TargetId == targetId) ids.Add(entry.Key);
+                }
+                foreach (string id in ids) this.terminalMessages.Remove(id);
+            }
+            if (ids.Count == 0) return;
+
+            StringBuilder builder = new StringBuilder("[");
+            for (int index = 0; index < ids.Count; index++)
+            {
+                if (index > 0) builder.Append(',');
+                builder.Append(Json.Quote(ids[index]));
+            }
+            builder.Append(']');
+            this.Broadcast("{\"type\":\"terminalMessagesExpired\",\"ids\":" + builder + ",\"state\":\"expired\"}");
+        }
+
+        private void SendTerminalMessage(BridgeClient client, Dictionary<string, string> request)
+        {
+            string requestId = Json.Get(request, "requestId");
+            string sourceId = Json.Get(request, "sourceId");
+            string targetId = Json.Get(request, "targetId");
+            string kind = Json.Get(request, "kind").Trim().ToLowerInvariant();
+            string text = Json.Get(request, "text").Trim();
+            string messagePath = Json.Get(request, "path").Trim();
+            string status = Json.Get(request, "status").Trim().ToLowerInvariant();
+            TerminalSession source;
+            TerminalSession target;
+
+            if (!IsTerminalMessageKind(kind))
+            {
+                this.SendMessageError(client, requestId, "Unsupported terminal message kind.");
+                return;
+            }
+            if (String.IsNullOrEmpty(sourceId) || String.IsNullOrEmpty(targetId) || sourceId == targetId)
+            {
+                this.SendMessageError(client, requestId, "Choose two different live terminal sessions.");
+                return;
+            }
+            if ((kind == "path" && String.IsNullOrEmpty(messagePath))
+                || (kind == "status" && String.IsNullOrEmpty(status))
+                || (kind != "path" && kind != "status" && String.IsNullOrEmpty(text)))
+            {
+                this.SendMessageError(client, requestId, "The terminal message is missing its required content.");
+                return;
+            }
+            if (Encoding.UTF8.GetByteCount(kind + "\n" + text + "\n" + messagePath + "\n" + status) > this.terminalMessageMaxBytes)
+            {
+                this.SendMessageError(client, requestId, "Terminal message exceeds the configured size limit.");
+                return;
+            }
+            if (String.Equals(Json.Get(request, "persist"), "true", StringComparison.OrdinalIgnoreCase))
+            {
+                this.SendMessageError(client, requestId, "Durable terminal messages are not enabled yet.");
+                return;
+            }
+            if (!this.sessions.TryGetValue(sourceId, out source) || !source.IsAvailable
+                || !this.sessions.TryGetValue(targetId, out target) || !target.IsAvailable)
+            {
+                this.SendMessageError(client, requestId, "Both message terminals must be live.");
+                return;
+            }
+            if (target.IsRemote)
+            {
+                this.SendMessageError(client, requestId, "Terminal messages cannot target an elevated relay until confirmed delivery is supported.");
+                return;
+            }
+
+            TerminalMessage terminalMessage;
+            lock (this.terminalMessageLock)
+            {
+                if (!this.sessions.TryGetValue(sourceId, out source) || !source.IsAvailable
+                    || !this.sessions.TryGetValue(targetId, out target) || !target.IsAvailable)
+                {
+                    this.SendMessageError(client, requestId, "Both message terminals must be live.");
+                    return;
+                }
+                if (target.IsRemote)
+                {
+                    this.SendMessageError(client, requestId, "Terminal messages cannot target an elevated relay until confirmed delivery is supported.");
+                    return;
+                }
+                if (this.terminalInboxCapacity > 0 && this.TerminalInboxCount(targetId) >= this.terminalInboxCapacity)
+                {
+                    this.SendMessageError(client, requestId, "The target terminal inbox is full under the configured capacity.");
+                    return;
+                }
+                terminalMessage = new TerminalMessage
+                {
+                    Id = Guid.NewGuid().ToString("D"),
+                    Kind = kind,
+                    Text = text,
+                    Path = messagePath,
+                    Status = status,
+                    SourceId = source.Id,
+                    SourceTitle = source.Title,
+                    TargetId = target.Id,
+                    TargetTitle = target.Title,
+                    CreatedAt = DateTime.UtcNow.ToString("o"),
+                    State = "pending"
+                };
+                int storedBytes = Encoding.UTF8.GetByteCount(terminalMessage.ToJson());
+                if (this.terminalMessages.Count >= MaxTerminalMessages
+                    || this.TerminalMessageStoreBytes() + storedBytes > MaxTerminalMessageStoreBytes)
+                {
+                    this.SendMessageError(client, requestId, "The terminal message store has reached its global safety limit.");
+                    return;
+                }
+                this.terminalMessages[terminalMessage.Id] = terminalMessage;
+            }
+
+            string messageJson = terminalMessage.ToJson();
+            this.Broadcast("{\"type\":\"terminalMessage\",\"message\":" + messageJson + "}");
+            client.Send("{\"type\":\"messageSent\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"message\":" + messageJson + "}");
+        }
+
+        private void ListTerminalMessages(BridgeClient client, Dictionary<string, string> request)
+        {
+            StringBuilder builder = new StringBuilder("[");
+            lock (this.terminalMessageLock)
+            {
+                bool first = true;
+                foreach (TerminalMessage message in this.terminalMessages.Values)
+                {
+                    if (message.State != "pending") continue;
+                    if (!first) builder.Append(',');
+                    first = false;
+                    builder.Append(message.ToJson());
+                }
+            }
+            builder.Append(']');
+            client.Send("{\"type\":\"terminalMessages\",\"requestId\":"
+                + Json.Quote(Json.Get(request, "requestId")) + ",\"messages\":" + builder + "}");
+        }
+
+        private void ActOnTerminalMessage(BridgeClient client, Dictionary<string, string> request)
+        {
+            string requestId = Json.Get(request, "requestId");
+            string id = Json.Get(request, "id");
+            string action = Json.Get(request, "action");
+            TerminalMessage message;
+            TerminalSession target = null;
+            string data = null;
+
+            lock (this.terminalMessageLock)
+            {
+                if (!this.terminalMessages.TryGetValue(id, out message) || message.State != "pending")
+                {
+                    this.SendMessageError(client, requestId, "That terminal message is no longer pending.");
+                    return;
+                }
+                if (action == "insert")
+                {
+                    data = message.Kind == "path" ? message.Path
+                        : message.Kind == "status" ? (String.IsNullOrEmpty(message.Text) ? message.Status : message.Text)
+                        : message.Text;
+                    if (!this.sessions.TryGetValue(message.TargetId, out target) || !target.IsAvailable || String.IsNullOrEmpty(data))
+                    {
+                        this.SendMessageError(client, requestId, "The target terminal is unavailable.");
+                        return;
+                    }
+                    if (ContainsTerminalControl(data))
+                    {
+                        this.SendMessageError(client, requestId, "Terminal messages containing control characters cannot be inserted safely.");
+                        return;
+                    }
+                    if (!target.TryWrite(data))
+                    {
+                        this.SendMessageError(client, requestId, "The target terminal is unavailable.");
+                        return;
+                    }
+                    message.State = "inserted";
+                }
+                else if (action == "dismiss")
+                {
+                    message.State = "dismissed";
+                }
+                else
+                {
+                    this.SendMessageError(client, requestId, "Unsupported terminal message action.");
+                    return;
+                }
+                this.terminalMessages.Remove(id);
+            }
+
+            this.Broadcast("{\"type\":\"terminalMessageChanged\",\"id\":" + Json.Quote(id)
+                + ",\"state\":" + Json.Quote(message.State) + "}");
+            client.Send("{\"type\":\"messageActionResult\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"id\":" + Json.Quote(id) + ",\"state\":" + Json.Quote(message.State) + "}");
+        }
+
+        private void SendMessageError(BridgeClient client, string requestId, string message)
+        {
+            client.Send("{\"type\":\"messageError\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"message\":" + Json.Quote(message) + "}");
         }
 
         private void CreateSession(BridgeClient client, Dictionary<string, string> options)
@@ -2283,6 +2654,7 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.FlushSessionOutput(id);
                 this.RemoveSessionOutputBatch(id);
+                this.ExpireTerminalMessagesForSession(id);
                 TerminalSession removed;
                 this.sessions.TryRemove(id, out removed);
                 this.Log("info", "Session exited: " + id + " (code " + exitCode + ")");
@@ -2544,6 +2916,7 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.FlushSessionOutput(id);
                 this.RemoveSessionOutputBatch(id);
+                this.ExpireTerminalMessagesForSession(id);
                 TerminalSession removed;
                 this.sessions.TryRemove(id, out removed);
                 this.Log("info", "Administrator session exited: " + id + " (code " + exitCode + ")");
@@ -3500,6 +3873,8 @@ namespace MultiTerm.PowerShellBridge
 
         public WebSocket Socket { get; private set; }
 
+        public bool IsRenderer { get; set; }
+
         public bool Send(string message)
         {
             if (this.Socket.State != WebSocketState.Open)
@@ -3664,6 +4039,7 @@ namespace MultiTerm.PowerShellBridge
         private IntPtr processHandle = IntPtr.Zero;
         private IntPtr threadHandle = IntPtr.Zero;
         private volatile bool exited;
+        private volatile bool closing;
 
         // Set for administrator terminals, whose pseudo-console lives in an elevated helper
         // process. Input, resize and kill are forwarded over this socket instead of touching
@@ -3716,6 +4092,10 @@ namespace MultiTerm.PowerShellBridge
         public long KeystrokesIn { get { return Interlocked.Read(ref this.keystrokesIn); } }
 
         public long KeystrokesOut { get { return Interlocked.Read(ref this.keystrokesOut); } }
+
+        public bool IsAvailable { get { return !this.exited && !this.closing; } }
+
+        public bool IsRemote { get { return this.remote; } }
 
         // Absolute path of the file this session is currently logging to, or null when
         // logging is off. Read by the message loop to answer logStart/logStop.
@@ -3951,29 +4331,38 @@ namespace MultiTerm.PowerShellBridge
             this.WriteCore(data, true);
         }
 
-        private void WriteCore(string data, bool countTraffic)
+        public bool TryWrite(string data)
+        {
+            lock (this.inputLock)
+            {
+                if (!this.IsAvailable) return false;
+                return this.WriteCore(data, true);
+            }
+        }
+
+        private bool WriteCore(string data, bool countTraffic)
         {
             if (this.exited || String.IsNullOrEmpty(data))
             {
-                return;
+                return false;
             }
 
             byte[] bytes = Encoding.UTF8.GetBytes(data);
-            if (countTraffic)
-            {
-                Interlocked.Add(ref this.keystrokesIn, data.Length);
-                Interlocked.Add(ref this.bytesIn, bytes.Length);
-            }
 
             if (this.remote)
             {
-                this.SendRemote("{\"type\":\"input\",\"data\":" + Json.Quote(data) + "}");
-                return;
+                if (!this.SendRemote("{\"type\":\"input\",\"data\":" + Json.Quote(data) + "}")) return false;
+                if (countTraffic)
+                {
+                    Interlocked.Add(ref this.keystrokesIn, data.Length);
+                    Interlocked.Add(ref this.bytesIn, bytes.Length);
+                }
+                return true;
             }
 
             if (this.inputStream == null)
             {
-                return;
+                return false;
             }
 
             lock (this.inputLock)
@@ -3982,8 +4371,14 @@ namespace MultiTerm.PowerShellBridge
                 {
                     this.inputStream.Write(bytes, 0, bytes.Length);
                     this.inputStream.Flush();
+                    if (countTraffic)
+                    {
+                        Interlocked.Add(ref this.keystrokesIn, data.Length);
+                        Interlocked.Add(ref this.bytesIn, bytes.Length);
+                    }
+                    return true;
                 }
-                catch { }
+                catch { return false; }
             }
         }
 
@@ -4020,7 +4415,12 @@ namespace MultiTerm.PowerShellBridge
             // A shell sitting at its prompt exits well inside the first grace window, but one
             // busy in a foreground command ignores "exit" entirely until it is interrupted.
             // Force-kill is the last resort, never the first move.
-            this.WriteCore("exit\r", false);
+            lock (this.inputLock)
+            {
+                if (this.closing) return;
+                this.closing = true;
+                this.WriteCore("exit\r", false);
+            }
             Task.Delay(2500).ContinueWith(delegate
             {
                 if (this.exited)
@@ -4074,17 +4474,19 @@ namespace MultiTerm.PowerShellBridge
             this.StartRemoteLoop();
         }
 
-        private void SendRemote(string payload)
+        private bool SendRemote(string payload)
         {
             lock (this.remoteWriteLock)
             {
                 try
                 {
                     this.remoteWriter.WriteLine(payload);
+                    return true;
                 }
                 catch
                 {
                     // The helper is gone; the read loop will settle the session.
+                    return false;
                 }
             }
         }

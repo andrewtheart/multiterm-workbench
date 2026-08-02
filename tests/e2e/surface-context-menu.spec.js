@@ -315,6 +315,253 @@ test.describe("Surface context menu", () => {
     await expect(menu).toBeHidden();
   });
 
+  test("groups the terminal menu into searchable responsive columns", async ({ page }) => {
+    try {
+      await page.goto("http://127.0.0.1:3199/");
+      await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+      const openTerminalMenu = async () => {
+        const screen = page.locator(".terminal-screen").first();
+        const box = await screen.boundingBox();
+        expect(box).not.toBeNull();
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
+        await expect(page.locator("#contextMenu")).toBeVisible();
+      };
+
+      await openTerminalMenu();
+      const menu = page.locator("#contextMenu");
+      const search = menu.locator(".ctx-menu-search-input");
+      await expect(search).toBeFocused();
+      expect(await menu.locator(".ctx-group-title").allTextContents()).toEqual(expect.arrayContaining([
+        "Clipboard",
+        "Find & context",
+        "Tools & automation",
+        "Session"
+      ]));
+
+      const desktopGrid = await menu.locator(".ctx-group-column").evaluateAll((columns) => {
+        const visible = columns.map((column) => column.getBoundingClientRect());
+        return {
+          firstLeft: visible[0].left,
+          firstTop: visible[0].top,
+          secondLeft: visible[1].left,
+          secondTop: visible[1].top
+        };
+      });
+      expect(desktopGrid.secondLeft).toBeGreaterThan(desktopGrid.firstLeft + 100);
+      expect(Math.abs(desktopGrid.secondTop - desktopGrid.firstTop)).toBeLessThan(2);
+
+      await search.fill("send to terminal");
+      await expect(menu.locator(".ctx-item:visible")).toHaveCount(1);
+      await expect(menu.locator(".ctx-item:visible")).toContainText("Send to terminal");
+      await expect(menu.locator(".ctx-group:visible")).toHaveCount(1);
+
+      await search.fill("no action has this name");
+      await expect(menu.locator(".ctx-search-empty")).toBeVisible();
+      await search.fill("");
+      await search.press("ArrowDown");
+      await expect(menu.locator(".ctx-item.is-key-focus")).toHaveCount(1);
+
+      await page.setViewportSize({ width: 640, height: 720 });
+      await page.evaluate(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const terminal = state.terminals.values().next().value;
+        showContextMenu(320, 240, terminal, "");
+      });
+      await expect(menu).toBeVisible();
+      const mobileLayout = await page.evaluate(() => {
+        const menuRect = document.querySelector("#contextMenu").getBoundingClientRect();
+        const columns = getComputedStyle(document.querySelector(".ctx-groups")).gridTemplateColumns;
+        return {
+          columns,
+          insideViewport: menuRect.left >= 0 && menuRect.right <= innerWidth,
+          overflow: document.documentElement.scrollWidth > innerWidth
+        };
+      });
+      expect(mobileLayout.columns.trim().split(/\s+/)).toHaveLength(1);
+      expect(mobileLayout.insideViewport).toBe(true);
+      expect(mobileLayout.overflow).toBe(false);
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
+  });
+
+  test("autofocuses search consistently for body and header right-clicks", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => { state.settings.rightClickAction = "menu"; });
+
+    const menu = page.locator("#contextMenu");
+    const search = menu.locator(".ctx-menu-search-input");
+    const screen = page.locator(".terminal-screen").first();
+    const paneBar = page.locator(".pane-bar").first();
+    const rightClickAndCheck = async (target, position) => {
+      await target.click({ button: "right", position });
+      await expect(menu).toBeVisible();
+      await expect(search).toBeFocused();
+      await page.evaluate(() => hideContextMenu());
+    };
+
+    const screenBox = await screen.boundingBox();
+    const barBox = await paneBar.boundingBox();
+    for (let index = 0; index < 5; index += 1) {
+      await rightClickAndCheck(screen, { x: screenBox.width / 2, y: screenBox.height / 2 });
+      await rightClickAndCheck(paneBar, { x: 10, y: Math.min(10, barBox.height / 2) });
+    }
+
+    await screen.click({ button: "right" });
+    await page.keyboard.type("stat");
+    await expect(search).toHaveValue("stat");
+    await expect(search).toBeFocused();
+    await expect(menu.locator(".ctx-item:visible")).toContainText(["Terminal statistics", "Git status"]);
+
+    const searchChrome = await search.evaluate((input) => {
+      const inputStyle = getComputedStyle(input);
+      const wrapperStyle = getComputedStyle(input.closest(".ctx-menu-search"));
+      return {
+        inputBorderWidth: inputStyle.borderWidth,
+        inputBorderRadius: inputStyle.borderRadius,
+        inputOutlineStyle: inputStyle.outlineStyle,
+        inputBoxShadow: inputStyle.boxShadow,
+        wrapperBorderWidth: wrapperStyle.borderWidth,
+        wrapperBoxShadow: wrapperStyle.boxShadow
+      };
+    });
+    expect(searchChrome).toMatchObject({
+      inputBorderWidth: "0px",
+      inputBorderRadius: "0px",
+      inputOutlineStyle: "none",
+      inputBoxShadow: "none",
+      wrapperBorderWidth: "1px"
+    });
+    expect(searchChrome.wrapperBoxShadow).not.toBe("none");
+  });
+
+  test("opens the warm terminal menu without a full-page icon scan or backdrop blur", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const result = await page.evaluate(() => {
+      const terminal = state.terminals.values().next().value;
+      const outsideIcon = document.createElement("i");
+      outsideIcon.id = "context-menu-icon-scope-probe";
+      outsideIcon.dataset.lucide = "activity";
+      document.body.append(outsideIcon);
+
+      const timings = [];
+      for (let index = 0; index < 25; index += 1) {
+        const started = performance.now();
+        showContextMenu(120, 120, terminal, "");
+        timings.push(performance.now() - started);
+        hideContextMenu();
+      }
+      timings.sort((left, right) => left - right);
+      showContextMenu(120, 120, terminal, "");
+      const style = getComputedStyle(elements.contextMenu);
+      const snapshot = {
+        backdropFilter: style.backdropFilter,
+        menuIcons: elements.contextMenu.querySelectorAll("svg[data-lucide]").length,
+        outsideIconUnresolved: outsideIcon.tagName === "I" && outsideIcon.isConnected,
+        p95: timings[Math.floor(timings.length * 0.95)]
+      };
+      hideContextMenu();
+      outsideIcon.remove();
+      return snapshot;
+    });
+
+    expect(result.menuIcons).toBeGreaterThan(20);
+    expect(result.outsideIconUnresolved).toBe(true);
+    expect(result.backdropFilter).toBe("none");
+    expect(result.p95).toBeLessThan(20);
+  });
+
+  test("assigns, reassigns, persists, activates, and clears custom menu shortcuts", async ({ page }) => {
+    const menu = page.locator("#contextMenu");
+    const openTerminalMenu = async () => {
+      await page.evaluate(() => {
+        const terminal = state.terminals.values().next().value;
+        showContextMenu(120, 120, terminal, "");
+      });
+      await expect(menu).toBeVisible();
+      await expect(menu.locator(".ctx-menu-search-input")).toBeFocused();
+    };
+    const edit = async () => {
+      await menu.locator(".ctx-shortcut-edit-toggle").click();
+      await expect(menu).toHaveClass(/is-shortcut-editing/);
+    };
+    const setShortcut = async (actionId, shortcut) => {
+      await menu.locator(`[data-shortcut-id="${actionId}"] .ctx-shortcut-set`).click();
+      await expect(menu.locator(".ctx-shortcut-capture")).toHaveClass(/is-capturing/);
+      await page.keyboard.press(shortcut);
+    };
+
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const sanitized = await page.evaluate(() => {
+      localStorage.setItem("multiterm.contextMenuShortcuts", JSON.stringify({
+        "terminal.notes": { key: "3" },
+        "terminal.send-message": { key: "3" },
+        "terminal.close": { key: "x" },
+        "_invalid-action": { ctrl: true, key: "k" }
+      }));
+      return [...loadContextMenuShortcuts()].map(([actionId, binding]) => [actionId, contextShortcutSignature(binding)]);
+    });
+    expect(sanitized).toEqual([["terminal.notes", "3"]]);
+    await page.evaluate(() => {
+      contextMenuShortcuts.clear();
+      saveContextMenuShortcuts();
+    });
+
+    try {
+      await openTerminalMenu();
+      await edit();
+      await setShortcut("terminal.send-message", "7");
+      await expect(menu.locator('[data-shortcut-id="terminal.send-message"] .ctx-shortcut-set')).toHaveText("7");
+
+      await setShortcut("terminal.notes", "7");
+      await expect(menu.locator(".ctx-shortcut-capture")).toContainText("removed it from Send to terminal");
+      await expect(menu.locator('[data-shortcut-id="terminal.send-message"] .ctx-shortcut-set')).toHaveText("Set");
+      await expect(menu.locator('[data-shortcut-id="terminal.notes"] .ctx-shortcut-set')).toHaveText("7");
+
+      await setShortcut("terminal.send-message", "Control+Alt+M");
+      await expect(menu.locator('[data-shortcut-id="terminal.send-message"] .ctx-shortcut-set')).toHaveText("Ctrl+Alt+M");
+      await menu.locator(".ctx-shortcut-edit-toggle").click();
+      await expect(menu.locator('[data-shortcut-id="terminal.notes"] .ctx-shortcut-key')).toHaveText("7");
+      await expect(menu.locator('[data-shortcut-id="terminal.send-message"] .ctx-shortcut-key')).toHaveText("Ctrl+Alt+M");
+
+      const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.contextMenuShortcuts")));
+      expect(stored["terminal.notes"]).toMatchObject({ key: "7", ctrl: false, alt: false, shift: false, meta: false });
+      expect(stored["terminal.send-message"]).toMatchObject({ key: "m", ctrl: true, alt: true, shift: false, meta: false });
+
+      await page.keyboard.press("Control+Alt+M");
+      await expect(page.locator("#terminalMessagesOverlay")).toBeVisible();
+      await page.locator("#terminalMessagesClose").click();
+      await expect(page.locator("#terminalMessagesOverlay")).toBeHidden();
+
+      await openTerminalMenu();
+      await page.keyboard.press("7");
+      await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+      await page.locator("#terminalArtifactsClose").click();
+      await expect(page.locator("#terminalArtifactsOverlay")).toBeHidden();
+
+      await page.reload();
+      await expect(page.locator("#statusConn")).toHaveText("Connected");
+      await openTerminalMenu();
+      await expect(menu.locator('[data-shortcut-id="terminal.notes"] .ctx-shortcut-key')).toHaveText("7");
+      await edit();
+      await menu.locator('[data-shortcut-id="terminal.notes"] .ctx-shortcut-set').click();
+      await page.keyboard.press("Delete");
+      await expect(menu.locator('[data-shortcut-id="terminal.notes"] .ctx-shortcut-set')).toHaveText("Set");
+      expect(await page.evaluate(() => contextMenuShortcuts.has("terminal.notes"))).toBe(false);
+    } finally {
+      await page.evaluate(() => {
+        contextMenuShortcuts.clear();
+        saveContextMenuShortcuts();
+        hideContextMenu();
+      });
+    }
+  });
+
   test("preserves and copies a TUI selection when right-click opens the menu", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -322,9 +569,22 @@ test.describe("Surface context menu", () => {
     const selected = await page.evaluate(async () => {
       const terminal = state.terminals.get(state.activeId);
       const marker = "tui-selection-marker";
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
       await new Promise((resolve) => terminal.term.write(`\r\n${marker}`, resolve));
       const buffer = terminal.term.buffer.active;
-      terminal.term.select(0, buffer.baseY + buffer.cursorY, marker.length);
+      let markerRow = -1;
+      let markerColumn = -1;
+      for (let row = buffer.length - 1; row >= 0; row -= 1) {
+        const line = buffer.getLine(row)?.translateToString(true) || "";
+        const column = line.indexOf(marker);
+        if (column >= 0) {
+          markerRow = row;
+          markerColumn = column;
+          break;
+        }
+      }
+      if (markerRow < 0) throw new Error("TUI selection marker was not rendered");
+      terminal.term.select(markerColumn, markerRow, marker.length);
       const selection = terminal.term.getSelection();
 
       // A left-button pointerup is how a real drag snapshots the completed
@@ -770,8 +1030,9 @@ test.describe("Surface context menu", () => {
       terminal.titleInput.value = "Renamed terminal";
     });
 
-    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.locator(".terminal-screen").first().click();
     await page.evaluate(() => { window.__statisticsReturnFocus = document.activeElement; });
+    await page.locator(".terminal-screen").first().click({ button: "right" });
     await page.locator("#contextMenu .ctx-item", { hasText: "Terminal statistics\u2026" }).click();
 
     const overlay = page.locator("#statisticsOverlay");

@@ -38,6 +38,35 @@ describe("in-app help", () => {
       .toBeLessThan(installerBuildScript.indexOf("Conservatively commit pending changes"));
   });
 
+  it("ships terminal messaging examples and rewrites their generated image paths", () => {
+    const helpSource = read("HELP.md");
+    const generatedHelp = read(path.join("public", "help.html"));
+    const buildScript = read(path.join("scripts", "build-help.ps1"));
+    const imageFilter = read(path.join("scripts", "help-image-paths.lua"));
+    const screenshots = [
+      "terminal-message-command.png",
+      "terminal-message-text.png",
+      "terminal-message-path.png",
+      "terminal-message-status.png",
+      "terminal-message-task.png",
+      "terminal-message-result.png",
+      "terminal-message-inbox.png",
+      "terminal-connection-pending.png",
+      "terminal-connection-link.png",
+      "terminal-connection-send-action.png"
+    ];
+
+    expect(helpSource).toContain("### Developer examples by message kind");
+    expect(buildScript).toContain("--lua-filter=$imageFilterPath");
+    expect(imageFilter).toContain('local sourcePrefix = "public/help-images/"');
+    expect(generatedHelp).not.toContain('src="public/help-images/');
+    for (const screenshot of screenshots) {
+      expect(fs.statSync(path.join(repoRoot, "public", "help-images", screenshot)).size).toBeGreaterThan(0);
+      expect(helpSource).toContain(`public/help-images/${screenshot}`);
+      expect(generatedHelp).toContain(`src="help-images/${screenshot}"`);
+    }
+  });
+
   it("exposes a visible question-mark button and the help modal", () => {
     const index = read(path.join("public", "index.html"));
 

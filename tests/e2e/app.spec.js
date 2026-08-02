@@ -115,6 +115,105 @@ test.describe("MultiTerm Workbench UI", () => {
     }
   });
 
+  test("keeps scrollable dropdowns open while their option list scrolls", async () => {
+    await page.locator("#settings-group-layout").click();
+    const input = page.locator("#layoutMode").locator("xpath=..").locator(".combobox-input");
+    await input.click();
+    const list = page.locator(".combobox-list:not([hidden])");
+    await expect(list).toBeVisible();
+    await expect(input).toHaveAttribute("aria-expanded", "true");
+
+    const dimensions = await list.evaluate((element) => {
+      element.scrollTop = 0;
+      return { clientHeight: element.clientHeight, scrollHeight: element.scrollHeight };
+    });
+    expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
+    const box = await list.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 360);
+
+    await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await expect(input).toHaveAttribute("aria-expanded", "true");
+    await expect(list).toBeVisible();
+
+    await page.mouse.wheel(0, 10000);
+    await expect.poll(() => list.evaluate((element) => element.scrollTop + element.clientHeight))
+      .toBe(dimensions.scrollHeight);
+    await page.mouse.wheel(0, 360);
+    await expect(input).toHaveAttribute("aria-expanded", "true");
+    await expect(list).toBeVisible();
+
+    await page.evaluate(() => window.dispatchEvent(new Event("scroll")));
+    await expect(input).toHaveAttribute("aria-expanded", "false");
+    await expect(list).toBeHidden();
+    await page.locator("#settings-group-layout").click();
+  });
+
+  test("collapses, expands, and filters settings groups", async () => {
+    const groups = page.locator(".settings-group-toggle");
+    await expect(groups).toHaveCount(9);
+    for (let index = 0; index < await groups.count(); index += 1) {
+      await expect(groups.nth(index)).toHaveAttribute("aria-expanded", "false");
+    }
+    await expect(page.locator(".settings-group-body:not([hidden])")).toHaveCount(0);
+
+    const appearance = page.locator("#settings-group-appearance");
+    await appearance.click();
+    await expect(appearance).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#settings-body-appearance")).toBeVisible();
+
+    const panel = page.locator(".control-panel");
+    await panel.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    const sticky = await page.evaluate(() => ({
+      panelTop: document.querySelector(".control-panel").getBoundingClientRect().top,
+      toolbarTop: document.querySelector(".settings-panel-toolbar").getBoundingClientRect().top
+    }));
+    expect(Math.abs(sticky.toolbarTop - sticky.panelTop)).toBeLessThan(1);
+
+    await page.locator("#settingsSearch").fill("startup");
+    await expect(page.locator("#settings-group-session")).toBeVisible();
+    await expect(page.locator("#settings-group-session")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#startupCommand")).toBeVisible();
+    await expect(page.locator("#settings-group-appearance")).toBeHidden();
+    await expect(page.locator(".settings-filter-item:not([hidden])")).toHaveCount(1);
+
+    await page.locator("#settingsSearch").press("Escape");
+    await expect(page.locator("#settingsSearch")).toHaveValue("");
+    await expect(appearance).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#settings-group-session")).toHaveAttribute("aria-expanded", "false");
+
+    await setNative("#layoutMode", "auto", "change");
+    await page.locator("#settingsSearch").fill("primary");
+    await expect(page.locator("#focusWidth")).toBeVisible();
+    await page.locator("#settingsSearch").press("Escape");
+
+    await page.locator("#settingsSearch").fill("dynamic search needle");
+    await expect(page.locator(".settings-filter-empty")).toHaveText("No matching settings.");
+    await page.evaluate(() => addSnippet("Dynamic Search Needle", "echo dynamic-settings-search"));
+    await expect(page.locator("#settings-group-snippets")).toBeVisible();
+    await expect(page.locator("#settings-group-snippets")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#snippetList .snippet-row", { hasText: "Dynamic Search Needle" })).toBeVisible();
+    await page.evaluate(() => {
+      const index = state.settings.snippets.findIndex((snippet) => snippet.name === "Dynamic Search Needle");
+      removeSnippet(index);
+    });
+    await expect(page.locator(".settings-filter-empty")).toHaveText("No matching settings.");
+
+    await page.locator("#settingsShowAll").click();
+    await expect(page.locator("#settingsSearch")).toHaveValue("");
+    await expect(page.locator("#settingsShowAll")).toHaveText("Collapse all");
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(9);
+
+    await page.locator("#settingsSearch").fill("startup");
+    await page.locator("#settingsShowAll").click();
+    await expect(page.locator("#settingsSearch")).toHaveValue("");
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(9);
+
+    await page.locator("#settingsShowAll").click();
+    await expect(page.locator("#settingsShowAll")).toHaveText("Show all");
+    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(9);
+  });
+
   test("adds terminals and runs a command", async () => {
     await page.locator("#addTerminal").click();
     await expect(page.locator("#statusSessions")).toHaveText("2 sessions");
@@ -138,6 +237,32 @@ test.describe("MultiTerm Workbench UI", () => {
     await setNative("#fontSize", "16", "input");
     await expect(page.locator("#fontSizeValue")).toHaveText("16px");
     await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "columns");
+  });
+
+  test("uses the status-bar typography across the UI without changing terminal text", async () => {
+    await setNative("#fontSize", "14", "input");
+    const typography = await page.evaluate(() => {
+      const body = getComputedStyle(document.body);
+      const status = getComputedStyle(document.querySelector(".status-bar"));
+      const topbar = getComputedStyle(document.querySelector(".topbar"));
+      const terminal = state.terminals.values().next().value;
+      return {
+        bodyFamily: body.fontFamily,
+        bodySize: body.fontSize,
+        statusFamily: status.fontFamily,
+        statusSize: status.fontSize,
+        topbarFamily: topbar.fontFamily,
+        topbarSize: topbar.fontSize,
+        terminalSize: terminal.term.options.fontSize
+      };
+    });
+
+    expect(typography.bodyFamily).toBe(typography.statusFamily);
+    expect(typography.topbarFamily).toBe(typography.statusFamily);
+    expect(typography.bodySize).toBe("12px");
+    expect(typography.topbarSize).toBe("12px");
+    expect(typography.statusSize).toBe("12px");
+    expect(typography.terminalSize).toBe(14);
   });
 
   test("status-bar font zoom buttons adjust font size", async () => {
@@ -914,6 +1039,7 @@ test.describe("MultiTerm Workbench UI", () => {
   });
 
   test("saves and restores a workspace", async () => {
+    await page.locator("#settings-group-workspaces").click();
     await page.locator("#workspaceName").fill("My Layout");
     await page.locator("#workspaceSave").click();
     await expect(page.locator("#workspaceSelect option", { hasText: "My Layout" })).toHaveCount(1);
@@ -925,6 +1051,7 @@ test.describe("MultiTerm Workbench UI", () => {
     });
     await page.evaluate(() => document.querySelector("#workspaceRestore").click());
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.locator("#settings-group-workspaces").click();
   });
 
   test("exercises the full settings panel", async () => {

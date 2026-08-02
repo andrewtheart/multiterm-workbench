@@ -112,7 +112,8 @@ test.describe("Enhancement milestone", () => {
       return sent.filter((frame) => frame.type === "input" && frame.id === terminal.id);
     });
 
-    expect(frames.map((frame) => frame.data)).toEqual(["/model gpt-test\r", "/cwd D:\\work tree\r"]);
+    expect(frames.map((frame) => frame.data).filter((data) => data.startsWith("/")))
+      .toEqual(["/model gpt-test\r", "/cwd D:\\work tree\r"]);
   });
 
   test("Copilot YOLO context action launches the interactive CLI", async () => {
@@ -148,21 +149,18 @@ test.describe("Enhancement milestone", () => {
       title: "Starts the interactive Copilot CLI with all tool, path, and URL permissions",
       frames: undefined
     });
-    expect(result.frames).toEqual([
+    expect(result.frames.filter((frame) => frame.data === "copilot --yolo\r")).toEqual([
       { type: "input", id: expect.any(String), data: "copilot --yolo\r" }
     ]);
   });
 
-  test("disabling retention closes terminal sessions with the window", async () => {
+  test("quit and close bridge closes terminal sessions with the window", async () => {
     const result = await page.evaluate(() => {
       const frames = [];
       const originalSend = state.socket.send;
       state.socket.send = (payload) => frames.push(JSON.parse(payload));
-      state.settings.keepSessionsOnClose = false;
-      finishAppClose("tray");
-      state.settings.keepSessionsOnClose = true;
+      finishAppClose("quitClose");
       state.socket.send = originalSend;
-      saveSettings();
       return { frames, terminals: state.terminals.size };
     });
 

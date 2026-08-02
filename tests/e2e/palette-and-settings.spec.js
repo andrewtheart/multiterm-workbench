@@ -733,6 +733,7 @@ test.describe("Command palette — every option works", () => {
       elements.layoutMode.value = "rows";
       applySettings();
     });
+    await page.locator("#settings-group-workspaces").click();
     await page.locator("#workspaceName").fill("PaletteWS");
     await page.locator("#workspaceSave").click();
 
@@ -760,6 +761,7 @@ test.describe("Command palette — every option works", () => {
       }
       document.querySelector("#workspaceDelete").click();
     });
+    await page.locator("#settings-group-workspaces").click();
   });
 
   test("destructive: close active then close all", async () => {
@@ -837,6 +839,14 @@ test.describe("Settings panel — every control has its expected effect", () => 
     const domClick = (selector) => page.evaluate((s) => document.querySelector(s).click(), selector);
 
     const setting = (key) => page.evaluate((k) => state.settings[k], key);
+    const openSettingsGroup = async (name) => {
+      const button = page.locator(`#settings-group-${name}`);
+      if (await button.getAttribute("aria-expanded") !== "true") await button.click();
+    };
+    const closeSettingsGroup = async (name) => {
+      const button = page.locator(`#settings-group-${name}`);
+      if (await button.getAttribute("aria-expanded") === "true") await button.click();
+    };
     const termOpt = (name) =>
       page.evaluate((n) => {
         const t = [...state.terminals.values()][0];
@@ -1268,6 +1278,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
     test("Snippets: add via the form appears in the list + palette, remove reverses it", async () => {
       const before = await page.locator("#snippetList .snippet-row").count();
 
+      await openSettingsGroup("snippets");
       await page.locator("#snippetName").fill("E2E Snip");
       await page.locator("#snippetCommand").fill("echo e2e");
       await page.locator("#snippetAdd").click();
@@ -1286,6 +1297,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
       await expect(page.locator("#snippetList .snippet-row")).toHaveCount(before);
       labels = await page.evaluate(() => getCommands().map((c) => c.label));
       expect(labels).not.toContain("Snippet: E2E Snip");
+      await closeSettingsGroup("snippets");
     });
 
     // ---- Layout action buttons --------------------------------------------
@@ -1294,10 +1306,12 @@ test.describe("Settings panel — every control has its expected effect", () => 
       await setNative("#layoutMode", "columns", "change");
       await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "columns");
 
+      await openSettingsGroup("actions");
       await page.locator("#fitAll").click(); // must not throw
 
       await page.locator("#resetLayout").click();
       await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "auto");
+      await closeSettingsGroup("actions");
     });
 
     // ---- Chrome toggle buttons --------------------------------------------
@@ -1366,6 +1380,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
       await setNative("#layoutMode", "rows", "change");
       await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "rows");
 
+      await openSettingsGroup("workspaces");
       await page.locator("#workspaceName").fill("E2E WS");
       await page.locator("#workspaceSave").click();
       await expect(page.locator('#workspaceSelect option[value="E2E WS"]')).toHaveCount(1);
@@ -1383,6 +1398,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
       await expect(page.locator('#workspaceSelect option[value="E2E WS"]')).toHaveCount(0);
 
       await setNative("#layoutMode", "auto", "change"); // leave tidy
+      await closeSettingsGroup("workspaces");
     });
 
     test("completeness: no uncaught page errors across the settings suite", async () => {
@@ -1390,13 +1406,13 @@ test.describe("Settings panel — every control has its expected effect", () => 
     });
 });
 
-// The X-close -> "dock to system tray" confirmation modal. Playwright drives the
+// The X-close / tray-Quit bridge-disposition modal. Playwright drives the
 // renderer against the bridge with NO Electron host, so window.multiterm is
 // undefined here. We stub it to capture the decision the renderer would send to
 // the main process, then exercise the same entry point (requestAppClose) the IPC
 // "close-request" listener calls, asserting the modal, the persisted setting, and
 // the emitted decision for each path.
-test.describe("Close-to-tray confirmation modal", () => {
+test.describe("Close and bridge confirmation modal", () => {
   let context;
   let page;
   const pageErrors = [];
@@ -1444,9 +1460,11 @@ test.describe("Close-to-tray confirmation modal", () => {
     expect(await overlayHidden()).toBe(false);
     // Nothing decided until the user picks a button.
     expect(await lastDecision()).toBeUndefined();
-    // Informative copy + both actions are present.
-    await expect(page.locator("#closeConfirmText")).toContainText("system tray");
+    // Informative copy + every disposition is present.
+    await expect(page.locator("#closeConfirmText")).toContainText("in-progress command");
+    await expect(page.locator("#closeConfirmText")).toContainText("interrupted and then terminated");
     await expect(page.locator("#closeConfirmTray")).toBeVisible();
+    await expect(page.locator("#closeConfirmKeep")).toBeVisible();
     await expect(page.locator("#closeConfirmQuit")).toBeVisible();
     // Tidy up.
     await page.keyboard.press("Escape");
@@ -1473,28 +1491,41 @@ test.describe("Close-to-tray confirmation modal", () => {
     expect(await closeAction()).toBe("ask");
   });
 
-  test("Quit with 'remember' persists closeAction=quit", async () => {
+  test("remembering applies only to safe tray minimization", async () => {
     await reset("ask");
     await page.evaluate(() => requestAppClose());
     await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
     await page.locator("#closeConfirmRemember").check();
-    await page.locator("#closeConfirmQuit").click();
+    await page.locator("#closeConfirmTray").click();
     await expect(page.locator("#closeConfirmOverlay")).toBeHidden();
-    expect(await lastDecision()).toBe("quit");
-    expect(await closeAction()).toBe("quit");
+    expect(await lastDecision()).toBe("tray");
+    expect(await closeAction()).toBe("tray");
   });
 
-  test("a remembered choice skips the modal and decides immediately", async () => {
+  test("a remembered tray choice skips only a window-close modal", async () => {
     await reset("tray");
     await page.evaluate(() => requestAppClose());
     // No modal — the decision goes straight through.
     expect(await overlayHidden()).toBe(true);
     expect(await lastDecision()).toBe("tray");
 
+    await reset("tray");
+    await page.evaluate(() => requestAppClose("tray"));
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    await expect(page.locator("#closeConfirmTray")).toBeHidden();
+    await expect(page.locator("#closeConfirmRememberRow")).toBeHidden();
+    await expect(page.locator("#closeConfirmKeep")).toBeVisible();
+    await expect(page.locator("#closeConfirmQuit")).toBeVisible();
+    await page.locator("#closeConfirmKeep").click();
+    expect(await lastDecision()).toBe("quitKeep");
+  });
+
+  test("legacy remembered quit values ask instead of silently closing sessions", async () => {
     await reset("quit");
     await page.evaluate(() => requestAppClose());
-    expect(await overlayHidden()).toBe(true);
-    expect(await lastDecision()).toBe("quit");
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    expect(await lastDecision()).toBeUndefined();
+    await page.keyboard.press("Escape");
   });
 
   test("completeness: no uncaught page errors across the close-modal suite", async () => {

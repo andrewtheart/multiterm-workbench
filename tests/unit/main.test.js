@@ -73,6 +73,23 @@ function makeChild() {
   return child;
 }
 
+function sendHealthyResponse(callback, overrides = {}) {
+  const response = new EventEmitter();
+  response.statusCode = 200;
+  response.resume = vi.fn();
+  response.setEncoding = vi.fn();
+  callback(response);
+  process.nextTick(() => {
+    response.emit("data", JSON.stringify({
+      app: "MultiTerm Workbench",
+      pid: 1234,
+      port: 3177,
+      ...overrides
+    }));
+    response.emit("end");
+  });
+}
+
 function makeWindow() {
   return {
     webContents: {
@@ -138,7 +155,10 @@ describe("startServer", () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
       main.startServer();
-      expect(childProcess.spawn).toHaveBeenCalledWith("node.exe", expect.arrayContaining([expect.stringContaining("server.js")]), expect.objectContaining({ env: expect.objectContaining({ PORT: expect.any(String) }) }));
+      expect(childProcess.spawn).toHaveBeenCalledWith("node.exe", expect.arrayContaining([expect.stringContaining("server.js")]), expect.objectContaining({ env: expect.objectContaining({
+        MULTITERM_UI_OWNER_PID: String(process.pid),
+        PORT: expect.any(String)
+      }) }));
       const child = main.getServerProcess();
       child.stdout.emit("data", Buffer.from("hello"));
       child.stderr.emit("data", Buffer.from("warn"));
@@ -236,10 +256,22 @@ describe("waitForServer", () => {
     vi.spyOn(http, "get").mockImplementation((opts, cb) => {
       const req = new EventEmitter();
       req.destroy = vi.fn();
-      cb({ resume: vi.fn() });
+      sendHealthyResponse(cb);
       return req;
     });
     await expect(main.waitForServer()).resolves.toBeUndefined();
+  });
+
+  it("rejects a health response without a valid bridge PID", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(1000).mockReturnValue(999999);
+    vi.spyOn(http, "get").mockImplementation((opts, cb) => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      sendHealthyResponse(cb, { pid: 0 });
+      return req;
+    });
+    await expect(main.waitForServer()).rejects.toThrow("did not become ready");
   });
 
   it("rejects after the deadline passes on repeated errors", async () => {
@@ -259,12 +291,12 @@ describe("waitForServer", () => {
     let attempt = 0;
     vi.spyOn(http, "get").mockImplementation((opts, cb) => {
       const req = new EventEmitter();
-      req.destroy = vi.fn();
+      req.destroy = vi.fn((error) => process.nextTick(() => req.emit("error", error)));
       attempt += 1;
       if (attempt === 1) {
         process.nextTick(() => req.emit("timeout"));
       } else {
-        cb({ resume: vi.fn() });
+        sendHealthyResponse(cb);
       }
       return req;
     });
@@ -396,7 +428,7 @@ describe("tray + close-to-tray", () => {
     vi.spyOn(http, "get").mockImplementation((opts, cb) => {
       const req = new EventEmitter();
       req.destroy = vi.fn();
-      cb({ resume: vi.fn() });
+      sendHealthyResponse(cb);
       return req;
     });
     return main.onReady();
@@ -426,13 +458,15 @@ describe("tray + close-to-tray", () => {
     expect(win.show).toHaveBeenCalled();
   });
 
-  it("quits from the tray menu bypassing the close interception", async () => {
+  it("opens the same close decision from the tray menu", async () => {
     await bootReady();
     const template = electron.Menu.buildFromTemplate.mock.calls[0][0];
     const quitItem = template.find((item) => item.label === "Quit MultiTerm");
+    const win = main.getMainWindow();
     quitItem.click();
-    expect(electron.app.isQuiting).toBe(true);
-    expect(electron.app.quit).toHaveBeenCalled();
+    expect(win.show).toHaveBeenCalled();
+    expect(win.webContents.send).toHaveBeenCalledWith("multiterm:close-request", "tray");
+    expect(electron.app.quit).not.toHaveBeenCalled();
   });
 
   it("intercepts the window close and asks the renderer instead of quitting", () => {
@@ -442,7 +476,7 @@ describe("tray + close-to-tray", () => {
     const event = { preventDefault: vi.fn() };
     closeHandler(event);
     expect(event.preventDefault).toHaveBeenCalled();
-    expect(win.webContents.send).toHaveBeenCalledWith("multiterm:close-request");
+    expect(win.webContents.send).toHaveBeenCalledWith("multiterm:close-request", "window");
   });
 
   it("allows the close through when the app is already quitting", () => {
@@ -466,7 +500,7 @@ describe("tray + close-to-tray", () => {
     expect(win.hide).toHaveBeenCalled();
   });
 
-  it("registers a close-response listener that hides, quits, or stays", async () => {
+  it("registers a close-response listener that hides, keeps the bridge, or stays", async () => {
     await bootReady();
     const onCall = electron.ipcMain.on.mock.calls.find(([e]) => e === "multiterm:close-response");
     expect(onCall).toBeTruthy();
@@ -477,8 +511,26 @@ describe("tray + close-to-tray", () => {
     listener(event, "tray");
     expect(win.hide).toHaveBeenCalled();
 
-    listener(event, "quit");
+    const keepResponse = new EventEmitter();
+    keepResponse.statusCode = 200;
+    keepResponse.resume = vi.fn();
+    const keepRequest = new EventEmitter();
+    keepRequest.end = vi.fn(() => {
+      http.request.mock.calls.at(-1)[1](keepResponse);
+    });
+    keepRequest.destroy = vi.fn();
+    vi.spyOn(http, "request").mockReturnValue(keepRequest);
+
+    listener(event, "quitKeep");
     expect(electron.app.isQuiting).toBe(true);
+    expect(http.request).toHaveBeenCalledWith(expect.objectContaining({
+      method: "POST",
+      path: "/watchdog/keep",
+      headers: { "X-MultiTerm-Request": "Launcher" }
+    }), expect.any(Function));
+    expect(electron.app.quit).not.toHaveBeenCalled();
+
+    keepResponse.emit("end");
     expect(electron.app.quit).toHaveBeenCalled();
 
     win.hide.mockClear();
@@ -486,6 +538,29 @@ describe("tray + close-to-tray", () => {
     listener(event, "cancel");
     expect(win.hide).not.toHaveBeenCalled();
     expect(electron.app.quit).not.toHaveBeenCalled();
+  });
+
+  it("requests graceful bridge shutdown before destructive quit", () => {
+    const response = new EventEmitter();
+    response.statusCode = 200;
+    response.resume = vi.fn();
+    const request = new EventEmitter();
+    request.end = vi.fn(() => {
+      http.request.mock.calls[0][1](response);
+      response.emit("end");
+    });
+    request.destroy = vi.fn();
+    vi.spyOn(http, "request").mockReturnValue(request);
+    main.startServer();
+
+    main.quitApp(true);
+
+    expect(http.request).toHaveBeenCalledWith(expect.objectContaining({
+      method: "POST",
+      path: "/shutdown",
+      headers: { "X-MultiTerm-Request": "Launcher" }
+    }), expect.any(Function));
+    expect(electron.app.quit).toHaveBeenCalled();
   });
 
   it("restores and focuses the window for notification clicks", async () => {
@@ -528,10 +603,13 @@ describe("tray + close-to-tray", () => {
 
 describe("onReady", () => {
   it("boots the server and window on success", async () => {
+    let attempts = 0;
     vi.spyOn(http, "get").mockImplementation((opts, cb) => {
       const req = new EventEmitter();
       req.destroy = vi.fn();
-      cb({ resume: vi.fn() });
+      attempts += 1;
+      if (attempts === 1) process.nextTick(() => req.emit("error", new Error("not started")));
+      else sendHealthyResponse(cb);
       return req;
     });
     await main.onReady();
@@ -544,6 +622,20 @@ describe("onReady", () => {
     electron.BrowserWindow.getAllWindows.mockReturnValue([{}]);
     activate();
     expect(electron.BrowserWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses a detached MultiTerm bridge instead of spawning into its port", async () => {
+    vi.spyOn(http, "get").mockImplementation((opts, cb) => {
+      const req = new EventEmitter();
+      req.destroy = vi.fn();
+      sendHealthyResponse(cb);
+      return req;
+    });
+
+    await main.onReady();
+
+    expect(childProcess.spawn).not.toHaveBeenCalled();
+    expect(main.getMainWindow()).not.toBeNull();
   });
 
   it("shows an error and quits when the bridge never becomes ready", async () => {
@@ -733,7 +825,7 @@ describe("registerScriptPicker (via onReady)", () => {
     vi.spyOn(http, "get").mockImplementation((opts, cb) => {
       const req = new EventEmitter();
       req.destroy = vi.fn();
-      cb({ resume: vi.fn() });
+      sendHealthyResponse(cb);
       return req;
     });
     return main.onReady();

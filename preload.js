@@ -33,9 +33,9 @@ contextBridge.exposeInMainWorld("multiterm", {
   // renderer decides via a modal and replies with respondClose.
   onCloseRequest: (handler) => {
     if (typeof handler !== "function") return;
-    ipcRenderer.on("multiterm:close-request", () => handler());
+    ipcRenderer.on("multiterm:close-request", (_event, source) => handler(source));
   },
-  // Reports the user's close decision: "tray", "quit", or "cancel".
+  // Reports the user's close decision: tray, quitKeep, quitClose, or cancel.
   respondClose: (action) => ipcRenderer.send("multiterm:close-response", action),
   // Restores and focuses the Electron window when a desktop notification is clicked.
   focusWindow: () => ipcRenderer.send("multiterm:focus-window"),

@@ -86,6 +86,11 @@ without measured justification:
    native dialogs, and elevated terminal relays. These responsibilities are
    broader than simply serving terminal I/O.
 
+   Bridge ownership also includes atomic per-user discovery records, renderer
+   presence, optional watchdog health checks, protected keep/shutdown controls,
+   and staged terminal teardown. Electron can detach from and later reuse its
+   compatible bridge instead of treating the child process handle as ownership.
+
 7. **Limited performance pressure**
 
    MultiTerm's practical bottlenecks are shell startup and terminal rendering,

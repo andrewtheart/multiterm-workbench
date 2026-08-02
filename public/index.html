@@ -35,6 +35,7 @@
     <script defer src="vendor/addon-webgl.js"></script>
     <script defer src="vendor/lucide.js"></script>
     <script defer src="input-detection.js"></script>
+    <script defer src="terminal-messaging.js"></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -101,6 +102,10 @@
               <i data-lucide="notebook-tabs"></i>
               <span id="terminalArtifactsBadge" class="artifact-toggle-badge" hidden>0</span>
             </button>
+            <button id="terminalMessagesToggle" class="icon-button message-toggle" type="button" title="Terminal messages" aria-label="Terminal messages">
+              <i data-lucide="messages-square"></i>
+              <span id="terminalMessagesBadge" class="message-toggle-badge" hidden>0</span>
+            </button>
             <button id="themeToggle" class="icon-button" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
               <i data-lucide="moon"></i>
             </button>
@@ -134,6 +139,14 @@
 
       <div class="workbench">
         <aside class="control-panel" aria-label="Terminal layout controls">
+          <div class="settings-panel-toolbar">
+            <label class="settings-search">
+              <i data-lucide="search" aria-hidden="true"></i>
+              <input id="settingsSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search settings" aria-label="Search settings">
+            </label>
+            <button id="settingsShowAll" type="button" aria-pressed="false">Show all</button>
+          </div>
+
           <section class="control-section">
             <h2>Appearance</h2>
             <label class="control-row">
@@ -365,6 +378,19 @@
           </section>
 
           <section class="control-section">
+            <h2>Communication</h2>
+            <label class="control-row">
+              <span title="Largest structured terminal message accepted by either bridge.">Message size (KB)</span>
+              <input id="terminalMessageMaxKb" type="number" min="1" max="1024" step="1" inputmode="numeric">
+            </label>
+            <label class="control-row">
+              <span title="Pending messages retained per terminal by the bridge. 0 disables this per-terminal quota; global safety limits still apply.">Inbox capacity</span>
+              <input id="terminalInboxCapacity" type="number" min="0" max="2147483647" step="1" inputmode="numeric">
+            </label>
+            <p class="settings-note">Global limit: 500 pending messages or 4 MiB.</p>
+          </section>
+
+          <section class="control-section">
             <h2>Snippets</h2>
             <div id="snippetList" class="snippet-list"></div>
             <div class="snippet-add">
@@ -438,6 +464,30 @@
             </button>
           </div>
           <div id="terminalHost" class="terminal-host" data-layout="auto"></div>
+          <svg id="terminalConnectionsOverlay" class="terminal-connections-overlay" aria-label="Terminal connections">
+            <defs>
+              <marker id="workspaceLinkStart" class="connector-marker-link" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+                <path d="M5 1 9 5 5 9 1 5Z"></path>
+              </marker>
+              <marker id="workspaceLinkEnd" class="connector-marker-link" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+                <path d="M1 1 9 5 1 9Z"></path>
+              </marker>
+              <marker id="workspacePendingStart" class="connector-marker-pending" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+                <circle cx="5" cy="5" r="3"></circle>
+              </marker>
+              <marker id="workspacePendingEnd" class="connector-marker-pending" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+                <path d="M1 1 9 5 1 9"></path>
+              </marker>
+            </defs>
+            <g id="terminalConnectionPaths"></g>
+          </svg>
+          <div id="terminalConnectorAction" class="terminal-connector-action" hidden>
+            <span id="terminalConnectorLabel"></span>
+            <button id="terminalConnectorSend" type="button">
+              <i data-lucide="messages-square"></i>
+              <span>Send message</span>
+            </button>
+          </div>
           <div id="snapPreview" class="snap-preview" aria-hidden="true"></div>
         </main>
       </div>
@@ -650,17 +700,18 @@
     <div id="closeConfirmOverlay" class="palette-overlay" hidden>
       <div class="palette confirm" role="alertdialog" aria-modal="true" aria-labelledby="closeConfirmTitle" aria-describedby="closeConfirmText">
         <div class="confirm-head">
-          <i data-lucide="minimize-2"></i>
+          <i data-lucide="triangle-alert"></i>
           <h2 id="closeConfirmTitle">Close MultiTerm</h2>
         </div>
-        <p id="closeConfirmText" class="confirm-body">MultiTerm will keep running in the system tray when you close this window, so your terminal sessions stay alive. Reopen it any time from the tray icon, or quit completely to end every session.</p>
-        <label class="confirm-remember toggle-row">
+        <p id="closeConfirmText" class="confirm-body"></p>
+        <label id="closeConfirmRememberRow" class="confirm-remember toggle-row">
           <input id="closeConfirmRemember" type="checkbox">
-          <span>Remember my choice and don't ask again</span>
+          <span>Always minimize window closes to the tray</span>
         </label>
         <div class="confirm-actions">
-          <button id="closeConfirmQuit" type="button" class="confirm-cancel">Quit MultiTerm</button>
-          <button id="closeConfirmTray" type="button" class="confirm-proceed">Minimize to tray</button>
+          <button id="closeConfirmTray" type="button" class="confirm-cancel">Keep in tray</button>
+          <button id="closeConfirmKeep" type="button" class="confirm-cancel">Quit, keep terminals</button>
+          <button id="closeConfirmQuit" type="button" class="confirm-danger">Quit &amp; close bridge</button>
         </div>
       </div>
     </div>
@@ -708,6 +759,111 @@
           <button id="updateLater" type="button" class="confirm-cancel">Later</button>
           <button id="updateInstall" type="button" class="confirm-proceed">Download &amp; install</button>
         </div>
+      </div>
+    </div>
+
+    <div id="terminalMessagesOverlay" class="palette-overlay" hidden>
+      <div class="palette terminal-messages" role="dialog" aria-modal="true" aria-labelledby="terminalMessagesTitle" aria-describedby="terminalMessagesSubtitle">
+        <div class="terminal-messages-head">
+          <i data-lucide="messages-square"></i>
+          <div>
+            <h2 id="terminalMessagesTitle">Terminal messages</h2>
+            <p id="terminalMessagesSubtitle">Send structured handoffs. Received content is never run automatically.</p>
+          </div>
+          <button id="terminalMessagesClose" class="icon-button" type="button" title="Close" aria-label="Close terminal messages">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+
+        <aside class="message-handoff-guide" aria-label="When to use terminal messages">
+          <i data-lucide="route"></i>
+          <div>
+            <strong>Best for handoffs</strong>
+            <p>Stage work when the destination is busy, on another page, or receiving context from an agent. If both terminals are visible and you only need to type a command, direct input is faster.</p>
+            <div class="message-handoff-facts">
+              <span><i data-lucide="history"></i>Source, kind, and time stay attached</span>
+              <span><i data-lucide="shield-check"></i>The receiver approves Insert</span>
+              <span><i data-lucide="corner-down-left"></i>Insert never presses Enter</span>
+            </div>
+          </div>
+        </aside>
+
+        <section class="message-composer" aria-labelledby="messageComposerTitle">
+          <h3 id="messageComposerTitle">Stage a handoff</h3>
+          <div class="message-route">
+            <label>
+              <span title="Sender-selected context, not authenticated identity.">Source context</span>
+              <select id="messageSource" aria-label="Message source context terminal"></select>
+            </label>
+            <i data-lucide="arrow-right" aria-hidden="true"></i>
+            <label>
+              <span>To</span>
+              <select id="messageTarget" aria-label="Message target terminal"></select>
+            </label>
+            <label>
+              <span>Kind</span>
+              <select id="messageKind" aria-label="Message kind">
+                <option value="command">Command or prompt</option>
+                <option value="text">Text or summary</option>
+                <option value="path">File or folder path</option>
+                <option value="status">Status or readiness</option>
+                <option value="task">Task</option>
+                <option value="result">Result</option>
+              </select>
+            </label>
+          </div>
+          <label id="messageTextRow" class="message-field">
+            <span>Message</span>
+            <textarea id="messageText" rows="3" spellcheck="true" placeholder="Enter a command, handoff, summary, task, or result"></textarea>
+          </label>
+          <label id="messagePathRow" class="message-field" hidden>
+            <span>Path</span>
+            <input id="messagePath" type="text" spellcheck="false" autocomplete="off" placeholder="C:\path\to\artifact">
+          </label>
+          <label id="messageStatusRow" class="message-field" hidden>
+            <span>Status</span>
+            <input id="messageStatus" type="text" spellcheck="false" autocomplete="off" placeholder="ready, busy, succeeded, or failed">
+          </label>
+          <p id="messageComposerError" class="message-error" role="alert" hidden></p>
+          <div class="message-compose-actions">
+            <span id="messageSafetyNote">The destination receives this in its inbox for review.</span>
+            <button id="messageLinkAdd" class="icon-button" type="button" title="Link selected terminals" aria-label="Link selected terminals">
+              <i data-lucide="link-2"></i>
+            </button>
+            <button id="messageSend" class="primary-action" type="button">
+              <i data-lucide="send"></i>
+              <span>Send to inbox</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="message-connections" aria-labelledby="messageConnectionsTitle">
+          <div class="message-connections-head">
+            <div>
+              <h3 id="messageConnectionsTitle">Connections</h3>
+              <p>Hover a workspace arrow to send with its route preselected.</p>
+            </div>
+            <div class="message-connection-legend" aria-label="Connection legend">
+              <span><i class="connection-swatch is-link"></i>Saved route</span>
+              <span><i class="connection-swatch is-pending"></i>Inbox waiting</span>
+            </div>
+          </div>
+          <svg id="messageConnectionsMap" class="message-connections-map" role="img" aria-label="Terminal connection topology"></svg>
+          <div id="messageConnectionsList" class="message-connections-list"></div>
+          <p id="messageConnectionsEmpty" class="artifact-empty">No terminal connections.</p>
+        </section>
+
+        <div class="message-inbox-head">
+          <div>
+            <h3>Inbox</h3>
+            <p>Pending handoffs for live terminals in this MultiTerm instance.</p>
+          </div>
+          <button id="terminalMessagesRefresh" class="icon-button" type="button" title="Refresh inbox" aria-label="Refresh inbox">
+            <i data-lucide="refresh-cw"></i>
+          </button>
+        </div>
+        <div id="terminalMessagesList" class="terminal-messages-list"></div>
+        <p id="terminalMessagesEmpty" class="artifact-empty">No pending terminal messages.</p>
       </div>
     </div>
 
@@ -800,7 +956,7 @@
       </div>
     </div>
 
-    <div id="contextMenu" class="context-menu" role="menu" hidden></div>
+    <div id="contextMenu" class="context-menu" role="menu" tabindex="-1" hidden></div>
     <div id="contextSubmenu" class="context-menu context-submenu" role="menu" hidden></div>
     <template id="paneTemplate">
       <article class="terminal-pane">

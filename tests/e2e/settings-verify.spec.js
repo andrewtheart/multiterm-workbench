@@ -53,6 +53,10 @@ test.describe("Settings panel verification", () => {
   }, { selector, value, eventName });
 
   const setting = (key) => page.evaluate((key) => state.settings[key], key);
+  const openSettingsGroup = async (name) => {
+    const button = page.locator(`#settings-group-${name}`);
+    if (await button.getAttribute("aria-expanded") !== "true") await button.click();
+  };
   const firstTermOption = (opt) => page.evaluate((opt) => {
     const t = [...state.terminals.values()][0];
     return t ? t.term.options[opt] : null;
@@ -248,6 +252,7 @@ test.describe("Settings panel verification", () => {
 
   test("snippet add + remove", async () => {
     const before = await page.evaluate(() => (state.settings.snippets || []).length);
+    await openSettingsGroup("snippets");
     await page.fill("#snippetName", "E2E snip");
     await page.fill("#snippetCommand", "Write-Host e2e");
     await page.locator("#snippetAdd").click();

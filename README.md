@@ -399,9 +399,10 @@ sequenceDiagram
 
 **Client → bridge** messages: `create`, `listTmux`, `input`, `resize`, `kill`, `killAll`,
 `logStart` / `logStop`, `reveal`, `openPath`, `pickScript`, `elevate`, `list`,
-`memstats`, `statistics`. **Bridge → client** messages: `welcome` (session catalog
+`memstats`, `statistics`, `communicationConfig`, `messageSend`, `messageList`, and
+`messageAction`. **Bridge → client** messages: `welcome` (session catalog
 on connect), `created`, `output`, `exited`, `createFailed`, `sessions`,
-`memstats`, `statistics`, and `error`. On reconnect the bridge re-announces the sessions it kept alive via
+`memstats`, `statistics`, terminal-message events/results, and `error`. On reconnect the bridge re-announces the sessions it kept alive via
 `welcome`, and the front-end re-adopts each pane instead of respawning it.
 
 > **Both bridges must stay in lock-step.** Every client → bridge message type is
@@ -585,6 +586,24 @@ the current user's running MultiTerm instances and waits for them to exit. If
 an instance cannot stop within 15 seconds, Setup asks you to close it and retry
 instead of continuing over live files.
 
+Setup also offers a recommended optional **MultiTerm watchdog** task. It installs
+a per-user background agent in the user's Startup folder, without requiring
+administrator privileges. The agent validates registered bridges through their
+loopback health endpoints, warns when a live bridge repeatedly stops responding,
+and detects a bridge with terminal sessions after its last renderer disconnects.
+After a reconnect grace period it asks whether to keep those sessions running or
+close the bridge. It is intentionally not a Windows Service: services run in
+Session 0 and cannot safely present dialogs on the signed-in user's desktop.
+
+Closing the Electron window or choosing **Quit MultiTerm** from its tray uses one
+decision dialog. The user can keep the UI in the tray, quit only the UI while its
+bridge and terminals continue, or quit and close the bridge. Destructive shutdown
+first asks each shell to `exit`; a command still running after the grace period
+receives terminal Ctrl+C (`ETX`, analogous to `SIGINT`) and another `exit`, with
+force termination used only as the final fallback. Windows has no universal
+equivalent to Unix `SIGTERM`; on Linux, `SIGTERM` is the usual graceful process
+termination signal.
+
 Each Start Menu, desktop, taskbar, or bare `multiterm` launch starts an
 independent instance. The first instance normally uses port 3177 and concurrent
 instances atomically claim the next available ports. Terminal processes,
@@ -735,6 +754,7 @@ point the checker at a fork.
 - The top-right **?** opens generated in-app help. `Ctrl+/` opens the compact shortcut reference; `Ctrl+Shift+P` or F1 opens the searchable command palette.
 - The top search box runs the same buffer search as `Ctrl+Shift+F` — every match is highlighted in place and a counter shows the running total — and additionally hides panes with nothing to show. Panes reappear (already highlighted) the moment your evolving query matches them again, or when matching output arrives. Enter/Shift+Enter walk the matches, Escape clears the filter. A pane also survives the filter when its title, working directory, shell, or status matches. `Ctrl+Shift+E` focuses the box.
 - Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.
+- Settings groups start collapsed to keep the side panel compact. Its sticky search filters individual controls and temporarily expands matching groups; clearing restores the previous group state. **Show all** clears the filter and expands every group, then changes to **Collapse all**.
 - The bottom-left workspace buttons hide or restore the top header and layout sidecar for more terminal space.
 - The bottom-left trash button closes every terminal pane and tells the bridge to kill all running shell sessions.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
@@ -747,6 +767,7 @@ point the checker at a fork.
 - Hover (or keyboard-focus) the **memory chip** at the far left of the status bar to expand a live reading of how much RAM MultiTerm and its terminals are using, alongside system totals. It refreshes about every 4 seconds while open and stops as soon as you move away, so the (fairly expensive) Windows process probe only runs when you are actually looking. The reading is Windows-only; elsewhere the chip reports `unavailable`. Set `MEMSTATS=1` on the bridge to restore the old always-on 10-second broadcast instead.
 - Right-click inside a terminal and choose **Terminal statistics…** to inspect its cumulative input/output character units, UTF-8 payload bytes transferred through the bridge, and current CPU/memory for the shell's full process tree. Right-click blank workspace and choose **All terminal statistics…** for aggregate totals plus a per-terminal table. CPU is a point-in-time sample; use **Refresh** to sample it again.
 - Open notes and the command queue from the notebook button in the header, or split into **Notes…** and **Command queue** on a pane's right-click menu. Notes stay attached to that specific terminal process and move to **Recovered notes** when it exits. Each process also has a persistent queue for staging commands or long prompts. Hover **Command queue** in the context menu to pick a staged command (most recent first) and dequeue it in one click, use the pane's queue icon or `Ctrl+Shift+Q` to dequeue the next item immediately, or open the full manager to choose any item; every path inserts without pressing Enter. Queues from ended processes move to the reusable **Unparented queue**, where you can choose any live terminal as the destination.
+- Use the header **Terminal messages** inbox or a pane's **Send to terminal…** context action to hand commands, summaries, paths, status, tasks, or results to another live terminal in the same instance. Messages stay bridge-owned until the receiver explicitly inserts them without Enter or dismisses them; nothing runs automatically. Pending routes appear as dashed amber circle-to-arrow workspace connectors. Create persistent directional GUI links from the same source/target controls; those render as solid cyan diamond-to-arrow connectors, survive reloads while both sessions live, and can be removed from the dialog topology. Insert rejects terminal controls at the final PTY boundary, target exit expires stale handoffs, and the shared store is capped at 500 records or 4 MiB. Message size and per-terminal capacity are configurable under **Communication**.
 - The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.
 - **Selecting text inside a full-screen TUI** (Copilot CLI, vim, htop, lazygit) works the same as in a plain shell. Those programs turn on mouse tracking, which normally hands every gesture to the application and leaves nothing for the terminal to copy; MultiTerm keeps drags for itself so a highlight can be copied with `Ctrl+Shift+C` or the right-click **Copy**. Plain clicks are still delivered to the program, so its buttons and menus behave as usual. Hold **Alt** while dragging to give the whole gesture to the program instead (for its own selection or drag handles), or **Shift** to use xterm's native selection.
 

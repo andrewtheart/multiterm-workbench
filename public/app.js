@@ -60,6 +60,8 @@ const defaultSettings = {
   ],
   startupCommand: "",
   syncInput: false,
+  terminalInboxCapacity: 500,
+  terminalMessageMaxKb: 64,
   theme: "ember"
 };
 
@@ -77,6 +79,7 @@ const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 const COPILOT_YOLO_COMMAND = "copilot --yolo";
+const terminalMessaging = window.TerminalMessaging;
 
 // xterm reports focus changes back to the shell as data when the application
 // enables DECSET 1004 (which ConPTY does): ESC [ I on focus in, ESC [ O on
@@ -252,6 +255,24 @@ const elements = {
   minWidth: document.querySelector("#minWidth"),
   minWidthValue: document.querySelector("#minWidthValue"),
   minimizedDock: document.querySelector("#minimizedDock"),
+  messageComposerError: document.querySelector("#messageComposerError"),
+  messageConnectionsEmpty: document.querySelector("#messageConnectionsEmpty"),
+  messageConnectionsList: document.querySelector("#messageConnectionsList"),
+  messageConnectionsMap: document.querySelector("#messageConnectionsMap"),
+  terminalConnectorAction: document.querySelector("#terminalConnectorAction"),
+  terminalConnectorLabel: document.querySelector("#terminalConnectorLabel"),
+  terminalConnectorSend: document.querySelector("#terminalConnectorSend"),
+  messageKind: document.querySelector("#messageKind"),
+  messageLinkAdd: document.querySelector("#messageLinkAdd"),
+  messagePath: document.querySelector("#messagePath"),
+  messagePathRow: document.querySelector("#messagePathRow"),
+  messageSend: document.querySelector("#messageSend"),
+  messageSource: document.querySelector("#messageSource"),
+  messageStatus: document.querySelector("#messageStatus"),
+  messageStatusRow: document.querySelector("#messageStatusRow"),
+  messageTarget: document.querySelector("#messageTarget"),
+  messageText: document.querySelector("#messageText"),
+  messageTextRow: document.querySelector("#messageTextRow"),
   maxInstallerSizeMb: document.querySelector("#maxInstallerSizeMb"),
   notifyActivity: document.querySelector("#notifyActivity"),
   notifySilence: document.querySelector("#notifySilence"),
@@ -271,8 +292,12 @@ const elements = {
   tmuxAttachRefresh: document.querySelector("#tmuxAttachRefresh"),
   tmuxAttachStatus: document.querySelector("#tmuxAttachStatus"),
   closeConfirmOverlay: document.querySelector("#closeConfirmOverlay"),
+  closeConfirmTitle: document.querySelector("#closeConfirmTitle"),
+  closeConfirmText: document.querySelector("#closeConfirmText"),
   closeConfirmRemember: document.querySelector("#closeConfirmRemember"),
+  closeConfirmRememberRow: document.querySelector("#closeConfirmRememberRow"),
   closeConfirmTray: document.querySelector("#closeConfirmTray"),
+  closeConfirmKeep: document.querySelector("#closeConfirmKeep"),
   closeConfirmQuit: document.querySelector("#closeConfirmQuit"),
   paneGap: document.querySelector("#paneGap"),
   paneGapValue: document.querySelector("#paneGapValue"),
@@ -292,6 +317,8 @@ const elements = {
   scrollOnOutput: document.querySelector("#scrollOnOutput"),
   scrollbackInfinite: document.querySelector("#scrollbackInfinite"),
   scrollbackLines: document.querySelector("#scrollbackLines"),
+  settingsSearch: document.querySelector("#settingsSearch"),
+  settingsShowAll: document.querySelector("#settingsShowAll"),
   silenceSeconds: document.querySelector("#silenceSeconds"),
   snippetAdd: document.querySelector("#snippetAdd"),
   snippetCommand: document.querySelector("#snippetCommand"),
@@ -299,6 +326,7 @@ const elements = {
   snippetName: document.querySelector("#snippetName"),
   shellSelect: document.querySelector("#shellSelect"),
   snapPreview: document.querySelector("#snapPreview"),
+  stage: document.querySelector(".stage"),
   shortcutsClose: document.querySelector("#shortcutsClose"),
   shortcutsOverlay: document.querySelector("#shortcutsOverlay"),
   startupCommand: document.querySelector("#startupCommand"),
@@ -342,6 +370,17 @@ const elements = {
   terminalArtifactsSubtitle: document.querySelector("#terminalArtifactsSubtitle"),
   terminalArtifactsTarget: document.querySelector("#terminalArtifactsTarget"),
   terminalArtifactsToggle: document.querySelector("#terminalArtifactsToggle"),
+  terminalInboxCapacity: document.querySelector("#terminalInboxCapacity"),
+  terminalMessageMaxKb: document.querySelector("#terminalMessageMaxKb"),
+  terminalMessagesBadge: document.querySelector("#terminalMessagesBadge"),
+  terminalMessagesClose: document.querySelector("#terminalMessagesClose"),
+  terminalMessagesEmpty: document.querySelector("#terminalMessagesEmpty"),
+  terminalMessagesList: document.querySelector("#terminalMessagesList"),
+  terminalMessagesOverlay: document.querySelector("#terminalMessagesOverlay"),
+  terminalMessagesRefresh: document.querySelector("#terminalMessagesRefresh"),
+  terminalMessagesToggle: document.querySelector("#terminalMessagesToggle"),
+  terminalConnectionPaths: document.querySelector("#terminalConnectionPaths"),
+  terminalConnectionsOverlay: document.querySelector("#terminalConnectionsOverlay"),
   terminalNotesIdentity: document.querySelector("#terminalNotesIdentity"),
   terminalNotesInput: document.querySelector("#terminalNotesInput"),
   terminalNotesSaved: document.querySelector("#terminalNotesSaved"),
@@ -371,6 +410,8 @@ const state = {
   activeId: null,
   activePageId: null,
   bridgeClosingDown: false,
+  closeDisposition: "",
+  closeRequestSource: "window",
   findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false },
   appElevated: false,
   broadcastScope: "all",
@@ -388,6 +429,10 @@ const state = {
   statistics: { terminalId: null, loading: false, requestGeneration: 0, returnFocus: null },
   terminalArtifacts: loadTerminalArtifacts(),
   terminalArtifactsHub: { returnFocus: null, savedTimer: 0 },
+  terminalMessages: new Map(),
+  terminalMessagesHub: { returnFocus: null },
+  terminalLinks: loadTerminalLinks(),
+  terminalConnections: { actionHideTimer: 0, animationFrame: 0, animationUntil: 0, frame: 0, mutationObserver: null, resizeObserver: null },
   terminalPages: loadTerminalPages(),
   terminalSearch: "",
   terminals: new Map(),
@@ -464,6 +509,7 @@ window.addEventListener("unhandledrejection", (event) => {
 
 window.addEventListener("DOMContentLoaded", () => {
   log.info("app", `MultiTerm ${APP_VERSION} starting`);
+  initializeSettingsPanel();
   bindControls();
   applyVersion();
   applySettings();
@@ -480,6 +526,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindUpdateDialog();
   bindStatisticsDialog();
   bindTerminalArtifactsHub();
+  bindTerminalMessages();
   bindMemStatus();
   bindGlobalShortcuts();
   bindFindAll();
@@ -511,7 +558,7 @@ window.addEventListener("beforeunload", () => {
   saveSettings();
   saveManualLayouts();
   saveSessionSnapshot();
-  if (!state.settings.keepSessionsOnClose) {
+  if (state.closeDisposition !== "quitKeep" && !state.settings.keepSessionsOnClose) {
     recoverAllTerminalArtifacts("application quit");
     sendBridge({ type: "killAll" });
   }
@@ -546,6 +593,8 @@ function bindControls() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
+  elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
   state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
     state.settings.maxInstallerSizeMb,
     elements.maxInstallerSizeMb
@@ -666,6 +715,8 @@ function bindControls() {
   bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
   bindSetting(elements.outputCoalesceMs, "outputCoalesceMs", "change", clampOutputCoalesceMs);
   bindSetting(elements.outputBacklogKb, "outputBacklogKb", "change", clampOutputBacklogKb);
+  bindSetting(elements.terminalMessageMaxKb, "terminalMessageMaxKb", "change", clampTerminalMessageMaxKb);
+  bindSetting(elements.terminalInboxCapacity, "terminalInboxCapacity", "change", clampTerminalInboxCapacity);
   bindSetting(elements.maxInstallerSizeMb, "maxInstallerSizeMb", "change", normalizeInstallerSizeMb);
   bindSetting(elements.notifyActivity, "notifyActivity", "change", (_, element) => element.checked);
   bindSetting(elements.notifySilence, "notifySilence", "change", (_, element) => element.checked);
@@ -750,6 +801,8 @@ function bindSetting(element, key, eventName, transform) {
     }
     if (key === "outputCoalesceMs") {
       sendBridgeConfig();
+    } else if (key === "terminalMessageMaxKb" || key === "terminalInboxCapacity") {
+      sendCommunicationConfig();
     }
     applySettings();
     saveSettings();
@@ -763,12 +816,22 @@ function sendBridgeConfig() {
   sendBridge({ type: "config", outputCoalesceMs: Number(state.settings.outputCoalesceMs) });
 }
 
+function sendCommunicationConfig() {
+  sendBridge({
+    type: "communicationConfig",
+    terminalInboxCapacity: Number(state.settings.terminalInboxCapacity),
+    terminalMessageMaxKb: Number(state.settings.terminalMessageMaxKb)
+  });
+}
+
 // Both performance limits are free-text number inputs, so a typo ("", "1e9",
 // "-5") has to be folded back to something the bridge and the flush path can
 // actually run with — and written back into the field so the value on screen is
 // the value in force.
 const OUTPUT_COALESCE_MS_BOUNDS = { min: 0, max: 100, fallback: 8 };
 const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
+const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
+const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 };
 const INSTALLER_SIZE_MB_FALLBACK = 256;
 
 function clampSettingNumber(value, element, bounds) {
@@ -786,6 +849,14 @@ function clampOutputCoalesceMs(value, element) {
 
 function clampOutputBacklogKb(value, element) {
   return clampSettingNumber(value, element, OUTPUT_BACKLOG_KB_BOUNDS);
+}
+
+function clampTerminalMessageMaxKb(value, element) {
+  return clampSettingNumber(value, element, TERMINAL_MESSAGE_KB_BOUNDS);
+}
+
+function clampTerminalInboxCapacity(value, element) {
+  return clampSettingNumber(value, element, TERMINAL_INBOX_CAPACITY_BOUNDS);
 }
 
 function normalizeInstallerSizeMb(value, element) {
@@ -820,7 +891,9 @@ function connectBridge(locationProtocol = window.location.protocol) {
     state.reconnectAttempts = 0;
     setBridgeStatus("Bridge connected", "online");
     log.info("bridge", wasReconnecting ? "WebSocket reconnected" : "WebSocket connected");
+    sendBridge({ type: "rendererPresence" });
     sendBridgeConfig();
+    sendCommunicationConfig();
     updateTerminalActions();
     for (const terminal of state.terminals.values()) {
       if (!terminal.remoteRequested && terminal.status !== "live") {
@@ -876,6 +949,50 @@ function scheduleReconnect() {
 }
 
 function handleBridgeMessage(message) {
+  if (message.type === "terminalMessage") {
+    ingestTerminalMessage(message.message);
+    return;
+  }
+
+  if (message.type === "terminalMessages") {
+    state.terminalMessages.clear();
+    for (const entry of Array.isArray(message.messages) ? message.messages : []) {
+      const normalized = normalizeIncomingTerminalMessage(entry);
+      if (normalized) state.terminalMessages.set(normalized.id, normalized);
+    }
+    updateTerminalMessageIndicators();
+    renderTerminalMessages();
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "terminalMessageChanged") {
+    state.terminalMessages.delete(message.id);
+    updateTerminalMessageIndicators();
+    renderTerminalMessages();
+    return;
+  }
+
+  if (message.type === "terminalMessagesExpired") {
+    for (const id of Array.isArray(message.ids) ? message.ids : []) state.terminalMessages.delete(id);
+    updateTerminalMessageIndicators();
+    renderTerminalMessages();
+    return;
+  }
+
+  if (message.type === "messageSent" || message.type === "messageActionResult" || message.type === "messageError") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "communicationConfig") {
+    log.debug("bridge", "Communication limits applied", {
+      terminalInboxCapacity: message.terminalInboxCapacity,
+      terminalMessageMaxKb: message.terminalMessageMaxKb
+    });
+    return;
+  }
+
   if (message.type === "log") {
     ingestServerLog(message);
     return;
@@ -967,6 +1084,8 @@ function handleBridgeMessage(message) {
       openFolderInNewTerminal(folder);
     }
     recoverStaleTerminalArtifacts(known);
+    pruneTerminalLinks();
+    requestTerminalMessages();
 
     return;
   }
@@ -1121,6 +1240,7 @@ function handleBridgeMessage(message) {
     terminal.logging = false;
     setTerminalStatus(terminal, "exited", "dead");
     setAwaitingInput(terminal, false);
+    removeTerminalLinksForSession(message.id);
     orphanTerminalArtifacts(terminal, "process exited");
     log.info("session", `Session exited: ${terminal.titleInput.value}`, { id: message.id, code: message.code ?? message.signal ?? "closed" });
     writelnTerminal(terminal, "");
@@ -1169,6 +1289,7 @@ function reattachExistingSession(terminal, session) {
   setTerminalStatus(terminal, session.pid != null ? `pid ${session.pid}` : "live", "live");
   updateTerminalSearchVisibility(terminal);
   scheduleFit(terminal);
+  scheduleTerminalConnections();
   log.info("session", `Session reattached: ${terminal.titleInput.value}`, { id: terminal.id, pid: session.pid });
 }
 
@@ -1180,6 +1301,7 @@ function markSessionLostWhileOffline(terminal) {
   terminal.logging = false;
   setTerminalStatus(terminal, "exited", "dead");
   setAwaitingInput(terminal, false);
+  removeTerminalLinksForSession(terminal.id);
   orphanTerminalArtifacts(terminal, "process ended while disconnected");
   writelnTerminal(terminal, "");
   writelnTerminal(terminal, "\x1b[31mSession ended while the bridge was disconnected.\x1b[0m");
@@ -1303,6 +1425,7 @@ function addTerminal(options = {}) {
   terminal.observer = new ResizeObserver(() => {
     updatePaneDensity(terminal);
     scheduleFit(terminal);
+    scheduleTerminalConnections();
   });
   state.terminals.set(id, terminal);
   syncTerminalArtifacts(terminal);
@@ -1642,6 +1765,7 @@ function bindPaneControls(terminal) {
     if (state.terminalArtifacts.terminals[terminal.id]) syncTerminalArtifacts(terminal);
     refreshTerminalSearchText(terminal);
     updateTerminalSearchVisibility(terminal);
+    updateTerminalConnectionViews();
     saveSessionSnapshot();
   });
 
@@ -1861,12 +1985,14 @@ function liftPane(pane, drag, x, y) {
   drag.tx += x - (rect.left + drag.grabX);
   drag.ty += y - (rect.top + drag.grabY);
   pane.style.transform = `translate(${drag.tx}px, ${drag.ty}px)`;
+  scheduleTerminalConnections();
 }
 
 function clearPaneLift(pane, drag) {
   drag.tx = 0;
   drag.ty = 0;
   pane.style.transform = "";
+  scheduleTerminalConnections();
 }
 
 function paneUnderPoint(x, y, exclude) {
@@ -1953,6 +2079,7 @@ function animatePaneShuffle(before, exclude) {
     pane.style.transition = "";
     pane.style.transform = "";
   }
+  trackTerminalConnectionAnimation(240);
 }
 
 // Grid order is DOM order, but the session snapshot is written from the terminal
@@ -2167,6 +2294,7 @@ function disposeTerminal(terminal) {
   if (state.zoomedId === id) {
     state.zoomedId = null;
   }
+  removeTerminalLinksForSession(id);
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
@@ -2204,6 +2332,7 @@ function minimizeTerminal(id) {
 
   terminal.minimized = true;
   terminal.pane.classList.add("is-minimized");
+  scheduleTerminalConnections();
   rebalanceWebglRenderers();
   log.info("terminal", `Terminal minimized: ${terminal.titleInput.value}`, { id });
   if (state.snap?.id === id) {
@@ -2246,6 +2375,7 @@ function restoreTerminal(id) {
 
   terminal.minimized = false;
   terminal.pane.classList.remove("is-minimized");
+  scheduleTerminalConnections();
   log.info("terminal", `Terminal restored: ${terminal.titleInput.value}`, { id });
   updateMinimizedDock();
   renderPager();
@@ -3025,6 +3155,7 @@ function setTerminalSearchHidden(terminal, hidden) {
   if (hidden === wasHidden) return false;
   terminal.pane.classList.toggle("is-search-hidden", hidden);
   if (!hidden) scheduleFit(terminal);
+  scheduleTerminalConnections();
   return true;
 }
 
@@ -3505,6 +3636,7 @@ function applyManualLayout(terminal, layout) {
   terminal.pane.style.setProperty("--manual-y", `${layout.y}px`);
   terminal.pane.style.setProperty("--manual-w", `${layout.w}px`);
   terminal.pane.style.setProperty("--manual-h", `${layout.h}px`);
+  scheduleTerminalConnections();
 }
 
 function syncManualLayout(terminal) {
@@ -4119,6 +4251,7 @@ function getCommands() {
     { label: "Broadcast command…", hint: "Ctrl+Shift+B", run: () => toggleBroadcast(true) },
     { label: "Dequeue next command", hint: "Ctrl+Shift+Q", run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
     { label: "Terminal notes & command queue…", run: () => openTerminalArtifacts(state.activeId) },
+    { label: "Send to terminal…", run: () => openTerminalMessages(state.activeId) },
     { label: "Paste into active terminal", hint: "Ctrl+Shift+V", run: pasteIntoActive },
     { label: "Maximize / restore active pane", hint: "Ctrl+Shift+X", run: () => toggleZoomPane(state.activeId) },
     { label: "Browse & run script in active terminal\u2026", run: () => browseAndRunScript(state.activeId) },
@@ -5268,6 +5401,7 @@ function applyZoom() {
     scheduleFit(terminal);
   }
   rebalanceWebglRenderers();
+  scheduleTerminalConnections();
 }
 
 // The header button doubles as the restore control while a pane is maximized, so
@@ -5404,6 +5538,7 @@ function renderSnippets() {
     empty.className = "snippet-empty";
     empty.textContent = "No snippets yet.";
     host.append(empty);
+    if (elements.settingsSearch?.value) applySettingsFilter();
     return;
   }
 
@@ -5430,6 +5565,7 @@ function renderSnippets() {
     host.append(row);
   });
   refreshIcons();
+  if (elements.settingsSearch?.value) applySettingsFilter();
 }
 
 /* ---------------- Session logging --------------- */
@@ -5657,9 +5793,10 @@ function bindRightClickWarning() {
 
 // Entry point invoked when the user tries to close the window (relayed from the
 // Electron main process). Honors a remembered choice, otherwise asks first.
-function requestAppClose() {
+function requestAppClose(source = "window") {
+  state.closeRequestSource = source === "tray" ? "tray" : "window";
   const action = state.settings.closeAction;
-  if (action === "tray" || action === "quit") {
+  if (state.closeRequestSource === "window" && action === "tray") {
     finishAppClose(action);
     return;
   }
@@ -5668,11 +5805,19 @@ function requestAppClose() {
 
 function openCloseConfirm() {
   if (!elements.closeConfirmOverlay) return;
+  const count = state.terminals.size;
+  const sessionLabel = `${count} terminal session${count === 1 ? "" : "s"}`;
+  const fromTray = state.closeRequestSource === "tray";
+  elements.closeConfirmTitle.textContent = fromTray ? "Quit MultiTerm?" : "Close MultiTerm?";
+  elements.closeConfirmText.textContent = `${sessionLabel} ${count === 1 ? "is" : "are"} connected to this bridge. `
+    + "Keeping the bridge leaves every terminal and in-progress command running. Closing the bridge first asks each terminal to exit cleanly; commands still running after the grace period are interrupted and then terminated.";
+  elements.closeConfirmTray.hidden = fromTray;
+  elements.closeConfirmRememberRow.hidden = fromTray;
   elements.closeConfirmRemember.checked = false;
   elements.closeConfirmOverlay.hidden = false;
   window.requestAnimationFrame(() => {
     elements.closeConfirmOverlay.classList.add("is-open");
-    elements.closeConfirmTray.focus();
+    (fromTray ? elements.closeConfirmKeep : elements.closeConfirmTray).focus();
   });
   refreshIcons();
 }
@@ -5688,7 +5833,7 @@ function closeCloseConfirm() {
 // Picks tray/quit from the modal, optionally remembering it for next time.
 function chooseCloseAction(action) {
   if (elements.closeConfirmRemember && elements.closeConfirmRemember.checked
-      && (action === "tray" || action === "quit")) {
+      && state.closeRequestSource === "window" && action === "tray") {
     state.settings.closeAction = action;
     saveSettings();
   }
@@ -5704,7 +5849,8 @@ function cancelAppClose() {
 
 // Relays the decision to the Electron main process. No-op in a plain browser.
 function finishAppClose(action) {
-  if (action !== "cancel" && !state.settings.keepSessionsOnClose) {
+  state.closeDisposition = action;
+  if (action === "quitClose") {
     closeAllTerminals();
   }
   try {
@@ -5715,7 +5861,8 @@ function finishAppClose(action) {
 function bindCloseConfirm() {
   if (!elements.closeConfirmOverlay) return;
   elements.closeConfirmTray.addEventListener("click", () => chooseCloseAction("tray"));
-  elements.closeConfirmQuit.addEventListener("click", () => chooseCloseAction("quit"));
+  elements.closeConfirmKeep.addEventListener("click", () => chooseCloseAction("quitKeep"));
+  elements.closeConfirmQuit.addEventListener("click", () => chooseCloseAction("quitClose"));
   elements.closeConfirmOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.closeConfirmOverlay) cancelAppClose();
   });
@@ -5727,7 +5874,7 @@ function bindCloseConfirm() {
   });
   // When running under Electron, the main process asks us before closing.
   try {
-    window.multiterm?.onCloseRequest?.(() => requestAppClose());
+    window.multiterm?.onCloseRequest?.((source) => requestAppClose(source));
   } catch { /* not running under Electron */ }
 }
 
@@ -5851,6 +5998,7 @@ function applyPageVisibility() {
     if (wasHidden && !hidden) scheduleFit(terminal);
   }
   rebalanceWebglRenderers();
+  scheduleTerminalConnections();
 }
 
 function setActivePage(id, options = {}) {
@@ -6127,6 +6275,7 @@ function refreshWorkspaceSelect(selected) {
     option.disabled = true;
     option.selected = true;
     elements.workspaceSelect.append(option);
+    if (elements.settingsSearch?.value) applySettingsFilter();
     return;
   }
 
@@ -6140,6 +6289,7 @@ function refreshWorkspaceSelect(selected) {
     elements.workspaceSelect.value = selected;
   }
   refreshComboboxes();
+  if (elements.settingsSearch?.value) applySettingsFilter();
 }
 
 function saveWorkspace(rawName) {
@@ -6269,6 +6419,8 @@ function syncControlsFromSettings() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
+  elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
   state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
     state.settings.maxInstallerSizeMb,
     elements.maxInstallerSizeMb
@@ -7076,6 +7228,862 @@ function bindTerminalArtifactsHub() {
     saveTerminalArtifacts();
     renderRecoveredNotes();
     refreshIcons();
+  });
+}
+
+/* ---------------- Terminal messaging --------------- */
+
+function terminalLinkKey(sourceId, targetId) {
+  return `${sourceId}->${targetId}`;
+}
+
+function loadTerminalLinks() {
+  try {
+    const stored = localStorage.getItem("multiterm.terminalLinks") || "[]";
+    if (stored.length > 1024 * 1024) return new Map();
+    const raw = JSON.parse(stored);
+    const links = new Map();
+    for (const value of (Array.isArray(raw) ? raw : []).slice(0, 4096)) {
+      if (!value || typeof value !== "object") continue;
+      const sourceId = typeof value.sourceId === "string" ? value.sourceId : "";
+      const targetId = typeof value.targetId === "string" ? value.targetId : "";
+      if (!/^[a-zA-Z0-9_-]{8,80}$/.test(sourceId)
+          || !/^[a-zA-Z0-9_-]{8,80}$/.test(targetId)
+          || sourceId === targetId) continue;
+      const link = {
+        createdAt: typeof value.createdAt === "string" ? value.createdAt.slice(0, 64) : new Date().toISOString(),
+        sourceId,
+        targetId
+      };
+      links.set(terminalLinkKey(sourceId, targetId), link);
+    }
+    return links;
+  } catch {
+    return new Map();
+  }
+}
+
+function saveTerminalLinks() {
+  try {
+    localStorage.setItem("multiterm.terminalLinks", JSON.stringify([...state.terminalLinks.values()]));
+  } catch (error) {
+    log.warn("messages", "Could not persist terminal links", { error: String(error) });
+  }
+}
+
+function removeTerminalLinksForSession(id) {
+  let changed = false;
+  for (const [key, link] of state.terminalLinks) {
+    if (link.sourceId !== id && link.targetId !== id) continue;
+    state.terminalLinks.delete(key);
+    changed = true;
+  }
+  if (changed) {
+    saveTerminalLinks();
+    updateTerminalConnectionViews();
+  }
+  return changed;
+}
+
+function pruneTerminalLinks() {
+  let changed = false;
+  for (const [key, link] of state.terminalLinks) {
+    const source = state.terminals.get(link.sourceId);
+    const target = state.terminals.get(link.targetId);
+    if (source?.status === "live" && target?.status === "live") continue;
+    state.terminalLinks.delete(key);
+    changed = true;
+  }
+  if (changed) saveTerminalLinks();
+  updateTerminalConnectionViews();
+  return changed;
+}
+
+function addSelectedTerminalLink() {
+  const sourceId = elements.messageSource.value;
+  const targetId = elements.messageTarget.value;
+  const source = state.terminals.get(sourceId);
+  const target = state.terminals.get(targetId);
+  if (source?.status !== "live" || target?.status !== "live" || sourceId === targetId) {
+    toast("Choose two different live terminals to link", "error", 2400);
+    return false;
+  }
+  const key = terminalLinkKey(sourceId, targetId);
+  if (state.terminalLinks.has(key)) {
+    toast("Those terminals are already linked in that direction", "info", 2200);
+    return false;
+  }
+  state.terminalLinks.set(key, { createdAt: new Date().toISOString(), sourceId, targetId });
+  saveTerminalLinks();
+  updateTerminalConnectionViews();
+  updateMessageLinkAction();
+  toast("Terminal link created", "success", 1600);
+  return true;
+}
+
+function removeTerminalLink(key) {
+  if (!state.terminalLinks.delete(key)) return false;
+  saveTerminalLinks();
+  updateTerminalConnectionViews();
+  updateMessageLinkAction();
+  toast("Terminal link removed", "info", 1600);
+  return true;
+}
+
+function terminalConnectionRoutes() {
+  const routes = [...state.terminalLinks.entries()].map(([key, link]) => ({
+    ...link,
+    count: 0,
+    key,
+    type: "link"
+  }));
+  const pending = new Map();
+  for (const message of state.terminalMessages.values()) {
+    const key = terminalLinkKey(message.sourceId, message.targetId);
+    const existing = pending.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      pending.set(key, {
+        count: 1,
+        key,
+        sourceId: message.sourceId,
+        sourceTitle: message.sourceTitle,
+        targetId: message.targetId,
+        targetTitle: message.targetTitle,
+        type: "pending"
+      });
+    }
+  }
+  return routes.concat([...pending.values()]);
+}
+
+function routesWithOffsets(routes) {
+  const totals = new Map();
+  for (const route of routes) totals.set(route.key, (totals.get(route.key) || 0) + 1);
+  const indexes = new Map();
+  return routes.map((route) => {
+    const index = indexes.get(route.key) || 0;
+    indexes.set(route.key, index + 1);
+    return { ...route, offset: (index - (totals.get(route.key) - 1) / 2) * 12 };
+  });
+}
+
+function connectorPathGeometry(sourceRect, targetRect, originRect, offset = 0, endpointInset = 0) {
+  const sourceX = (sourceRect.left + sourceRect.right) / 2 - originRect.left;
+  const sourceY = (sourceRect.top + sourceRect.bottom) / 2 - originRect.top;
+  const targetX = (targetRect.left + targetRect.right) / 2 - originRect.left;
+  const targetY = (targetRect.top + targetRect.bottom) / 2 - originRect.top;
+  const deltaX = targetX - sourceX;
+  const deltaY = targetY - sourceY;
+  let startX;
+  let startY;
+  let endX;
+  let endY;
+  let control1X;
+  let control1Y;
+  let control2X;
+  let control2Y;
+
+  if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+    const direction = deltaX >= 0 ? 1 : -1;
+    startX = (direction > 0 ? sourceRect.right - endpointInset : sourceRect.left + endpointInset) - originRect.left;
+    endX = (direction > 0 ? targetRect.left + endpointInset : targetRect.right - endpointInset) - originRect.left;
+    startY = sourceY + offset;
+    endY = targetY + offset;
+    const bend = Math.max(32, Math.abs(endX - startX) * 0.42);
+    control1X = startX + direction * bend;
+    control2X = endX - direction * bend;
+    control1Y = startY;
+    control2Y = endY;
+  } else {
+    const direction = deltaY >= 0 ? 1 : -1;
+    startY = (direction > 0 ? sourceRect.bottom - endpointInset : sourceRect.top + endpointInset) - originRect.top;
+    endY = (direction > 0 ? targetRect.top + endpointInset : targetRect.bottom - endpointInset) - originRect.top;
+    startX = sourceX + offset;
+    endX = targetX + offset;
+    const bend = Math.max(32, Math.abs(endY - startY) * 0.42);
+    control1Y = startY + direction * bend;
+    control2Y = endY - direction * bend;
+    control1X = startX;
+    control2X = endX;
+  }
+
+  return {
+    d: `M ${startX} ${startY} C ${control1X} ${control1Y}, ${control2X} ${control2Y}, ${endX} ${endY}`,
+    midX: (startX + endX) / 2,
+    midY: (startY + endY) / 2
+  };
+}
+
+function createConnectionSvgElement(name, attributes = {}, text = "") {
+  const element = document.createElementNS(elements.terminalConnectionsOverlay.namespaceURI, name);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
+  if (text) element.textContent = text;
+  return element;
+}
+
+function appendDialogConnectorDefinitions(svg) {
+  const definitions = createConnectionSvgElement("defs");
+  const marker = (id, className, end, shape) => {
+    const value = createConnectionSvgElement("marker", {
+      id,
+      class: className,
+      viewBox: "0 0 10 10",
+      refX: end ? 9 : 5,
+      refY: 5,
+      markerWidth: 10,
+      markerHeight: 10,
+      orient: "auto"
+    });
+    value.append(shape);
+    definitions.append(value);
+  };
+  marker("dialogLinkStart", "connector-marker-link", false,
+    createConnectionSvgElement("path", { d: "M5 1 9 5 5 9 1 5Z" }));
+  marker("dialogLinkEnd", "connector-marker-link", true,
+    createConnectionSvgElement("path", { d: "M1 1 9 5 1 9Z" }));
+  marker("dialogPendingStart", "connector-marker-pending", false,
+    createConnectionSvgElement("circle", { cx: 5, cy: 5, r: 3 }));
+  marker("dialogPendingEnd", "connector-marker-pending", true,
+    createConnectionSvgElement("path", { d: "M1 1 9 5 1 9" }));
+  svg.append(definitions);
+}
+
+function routeTerminalTitle(id, fallback = "Terminal") {
+  return state.terminals.get(id)?.titleInput.value || fallback || id;
+}
+
+function terminalConnectionRouteId(route) {
+  return `${route.type}:${route.key}`;
+}
+
+function clearTerminalConnectorActionTimer() {
+  window.clearTimeout(state.terminalConnections.actionHideTimer);
+  state.terminalConnections.actionHideTimer = 0;
+}
+
+function positionTerminalConnectorAction(geometry) {
+  const action = elements.terminalConnectorAction;
+  if (!action || !elements.stage) return;
+  const stageWidth = elements.stage.getBoundingClientRect().width;
+  const halfWidth = Math.max(90, action.offsetWidth / 2);
+  action.style.left = `${Math.max(halfWidth + 12, Math.min(stageWidth - halfWidth - 12, geometry.midX))}px`;
+  action.style.top = `${geometry.midY}px`;
+  action.dataset.side = geometry.midY < 72 ? "below" : "above";
+}
+
+function hideTerminalConnectorAction() {
+  clearTerminalConnectorActionTimer();
+  const action = elements.terminalConnectorAction;
+  if (!action) return;
+  action.hidden = true;
+  delete action.dataset.routeId;
+  delete action.dataset.sourceId;
+  delete action.dataset.targetId;
+}
+
+function scheduleTerminalConnectorActionHide() {
+  clearTerminalConnectorActionTimer();
+  state.terminalConnections.actionHideTimer = window.setTimeout(hideTerminalConnectorAction, 160);
+}
+
+function showTerminalConnectorAction(hitPath) {
+  const action = elements.terminalConnectorAction;
+  if (!action || !hitPath) return;
+  const sourceId = hitPath.dataset.sourceId;
+  const targetId = hitPath.dataset.targetId;
+  if (state.terminals.get(sourceId)?.status !== "live" || state.terminals.get(targetId)?.status !== "live") return;
+  clearTerminalConnectorActionTimer();
+  action.dataset.routeId = hitPath.dataset.routeId;
+  action.dataset.sourceId = sourceId;
+  action.dataset.targetId = targetId;
+  elements.terminalConnectorLabel.textContent = `${routeTerminalTitle(sourceId)} \u2192 ${routeTerminalTitle(targetId)}`;
+  action.hidden = false;
+  positionTerminalConnectorAction({
+    midX: Number(hitPath.dataset.midX),
+    midY: Number(hitPath.dataset.midY)
+  });
+}
+
+function openTerminalMessagesForConnector() {
+  const action = elements.terminalConnectorAction;
+  const sourceId = action?.dataset.sourceId;
+  const targetId = action?.dataset.targetId;
+  if (!sourceId || !targetId) return;
+  hideTerminalConnectorAction();
+  openTerminalMessages(sourceId, targetId);
+  elements.messageText.focus();
+}
+
+function renderWorkspaceTerminalConnections() {
+  const overlay = elements.terminalConnectionsOverlay;
+  const pathGroup = elements.terminalConnectionPaths;
+  if (!overlay || !pathGroup || !elements.stage) return;
+  pathGroup.textContent = "";
+  const stageRect = elements.stage.getBoundingClientRect();
+  overlay.setAttribute("viewBox", `0 0 ${Math.max(1, stageRect.width)} ${Math.max(1, stageRect.height)}`);
+  const activeRouteId = elements.terminalConnectorAction?.hidden
+    ? ""
+    : elements.terminalConnectorAction.dataset.routeId;
+  let activeRouteRendered = false;
+  let rendered = 0;
+
+  for (const route of routesWithOffsets(terminalConnectionRoutes())) {
+    const source = state.terminals.get(route.sourceId);
+    const target = state.terminals.get(route.targetId);
+    if (!source?.pane || !target?.pane || source.pane.offsetParent === null || target.pane.offsetParent === null) continue;
+    const geometry = connectorPathGeometry(
+      source.pane.getBoundingClientRect(),
+      target.pane.getBoundingClientRect(),
+      stageRect,
+      route.offset,
+      24
+    );
+    const path = createConnectionSvgElement("path", {
+      class: `terminal-connector-path is-${route.type}`,
+      d: geometry.d,
+      "data-connector-type": route.type,
+      "data-source-id": route.sourceId,
+      "data-target-id": route.targetId
+    });
+    pathGroup.append(path);
+    const routeId = terminalConnectionRouteId(route);
+    pathGroup.append(createConnectionSvgElement("path", {
+      class: "terminal-connector-hit",
+      d: geometry.d,
+      "data-mid-x": geometry.midX,
+      "data-mid-y": geometry.midY,
+      "data-route-id": routeId,
+      "data-source-id": route.sourceId,
+      "data-target-id": route.targetId,
+      role: "button",
+      tabindex: 0,
+      "aria-label": `Show message action from ${routeTerminalTitle(route.sourceId, route.sourceTitle)} to ${routeTerminalTitle(route.targetId, route.targetTitle)}`
+    }));
+    if (routeId === activeRouteId) {
+      activeRouteRendered = true;
+      positionTerminalConnectorAction(geometry);
+    }
+    if (route.type === "pending" && route.count > 1) {
+      pathGroup.append(createConnectionSvgElement("text", {
+        class: "terminal-connector-count",
+        x: geometry.midX,
+        y: geometry.midY - 6
+      }, String(route.count)));
+    }
+    rendered += 1;
+  }
+  overlay.hidden = rendered === 0;
+  if (activeRouteId && !activeRouteRendered) hideTerminalConnectorAction();
+}
+
+function renderMessageConnectionMap(routes) {
+  const svg = elements.messageConnectionsMap;
+  if (!svg) return;
+  svg.textContent = "";
+  appendDialogConnectorDefinitions(svg);
+  const connectedIds = new Set(routes.flatMap((route) => [route.sourceId, route.targetId]));
+  const terminals = [...state.terminals.values()]
+    .filter((terminal) => connectedIds.has(terminal.id) && terminal.status === "live")
+    .slice(0, 12);
+  if (routes.length === 0 || terminals.length < 2) {
+    svg.hidden = true;
+    return;
+  }
+
+  const width = 680;
+  const columns = Math.min(4, terminals.length);
+  const rows = Math.ceil(terminals.length / columns);
+  const height = Math.max(120, rows * 70 + 30);
+  svg.hidden = false;
+  svg.style.height = `${Math.min(260, height)}px`;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const positions = new Map();
+  const nodeWidth = Math.min(130, width / columns - 24);
+
+  terminals.forEach((terminal, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = (column + 0.5) * (width / columns);
+    const y = 35 + row * 70;
+    positions.set(terminal.id, {
+      bottom: y + 18,
+      left: x - nodeWidth / 2,
+      right: x + nodeWidth / 2,
+      top: y - 18
+    });
+  });
+
+  for (const route of routesWithOffsets(routes)) {
+    const sourceRect = positions.get(route.sourceId);
+    const targetRect = positions.get(route.targetId);
+    if (!sourceRect || !targetRect) continue;
+    const geometry = connectorPathGeometry(sourceRect, targetRect, { left: 0, top: 0 }, route.offset / 2);
+    svg.append(createConnectionSvgElement("path", {
+      class: `message-map-${route.type}`,
+      d: geometry.d,
+      "data-map-connector-type": route.type
+    }));
+    if (route.type === "pending" && route.count > 1) {
+      svg.append(createConnectionSvgElement("text", {
+        class: "message-map-count",
+        x: geometry.midX,
+        y: geometry.midY - 5
+      }, String(route.count)));
+    }
+  }
+
+  for (const terminal of terminals) {
+    const rect = positions.get(terminal.id);
+    const x = (rect.left + rect.right) / 2;
+    const y = (rect.top + rect.bottom) / 2;
+    const group = createConnectionSvgElement("g", { class: "message-map-node", "data-map-terminal-id": terminal.id });
+    group.append(createConnectionSvgElement("rect", {
+      x: rect.left,
+      y: rect.top,
+      width: rect.right - rect.left,
+      height: rect.bottom - rect.top,
+      rx: 4
+    }));
+    const title = terminal.titleInput.value || "Terminal";
+    group.append(createConnectionSvgElement("text", { x, y: y + 4 }, title.length > 18 ? `${title.slice(0, 17)}\u2026` : title));
+    svg.append(group);
+  }
+}
+
+function renderMessageConnections() {
+  if (!elements.messageConnectionsList || !elements.terminalMessagesOverlay.classList.contains("is-open")) return;
+  const routes = terminalConnectionRoutes();
+  elements.messageConnectionsList.textContent = "";
+  elements.messageConnectionsEmpty.hidden = routes.length > 0;
+  renderMessageConnectionMap(routes);
+
+  for (const route of routes) {
+    const row = document.createElement("div");
+    row.className = "message-connection-row";
+    const swatch = document.createElement("i");
+    swatch.className = `connection-swatch is-${route.type}`;
+    const label = document.createElement("span");
+    const sourceTitle = routeTerminalTitle(route.sourceId, route.sourceTitle);
+    const targetTitle = routeTerminalTitle(route.targetId, route.targetTitle);
+    label.textContent = route.type === "pending"
+      ? `${sourceTitle} \u2192 ${targetTitle} \u00b7 ${route.count} pending`
+      : `${sourceTitle} \u2192 ${targetTitle}`;
+    row.append(swatch, label);
+    if (route.type === "link") {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "icon-button";
+      remove.dataset.terminalUnlink = route.key;
+      remove.title = "Remove terminal link";
+      remove.setAttribute("aria-label", `Remove link from ${sourceTitle} to ${targetTitle}`);
+      const icon = document.createElement("i");
+      icon.dataset.lucide = "unlink-2";
+      remove.append(icon);
+      row.append(remove);
+    } else {
+      row.append(document.createElement("span"));
+    }
+    elements.messageConnectionsList.append(row);
+  }
+  refreshIcons(elements.messageConnectionsList);
+}
+
+function scheduleTerminalConnections() {
+  if (state.terminalConnections.frame) return;
+  state.terminalConnections.frame = window.requestAnimationFrame(() => {
+    state.terminalConnections.frame = 0;
+    renderWorkspaceTerminalConnections();
+  });
+}
+
+function trackTerminalConnectionAnimation(duration) {
+  if (terminalConnectionRoutes().length === 0) return;
+  state.terminalConnections.animationUntil = Math.max(
+    state.terminalConnections.animationUntil,
+    performance.now() + duration
+  );
+  if (state.terminalConnections.animationFrame) return;
+  const renderFrame = (time) => {
+    renderWorkspaceTerminalConnections();
+    if (time < state.terminalConnections.animationUntil) {
+      state.terminalConnections.animationFrame = window.requestAnimationFrame(renderFrame);
+    } else {
+      state.terminalConnections.animationFrame = 0;
+      scheduleTerminalConnections();
+    }
+  };
+  state.terminalConnections.animationFrame = window.requestAnimationFrame(renderFrame);
+}
+
+function updateTerminalConnectionViews() {
+  scheduleTerminalConnections();
+  renderMessageConnections();
+}
+
+function updateMessageLinkAction() {
+  if (!elements.messageLinkAdd) return;
+  const sourceId = elements.messageSource.value;
+  const targetId = elements.messageTarget.value;
+  const valid = sourceId && targetId && sourceId !== targetId
+    && state.terminals.get(sourceId)?.status === "live"
+    && state.terminals.get(targetId)?.status === "live";
+  const linked = valid && state.terminalLinks.has(terminalLinkKey(sourceId, targetId));
+  elements.messageLinkAdd.disabled = !valid || linked;
+  elements.messageLinkAdd.title = linked
+    ? "Selected terminals are already linked"
+    : valid ? "Link selected terminals" : "Choose two different live terminals to link";
+}
+
+function bindTerminalConnectionGeometry() {
+  elements.host.addEventListener("scroll", scheduleTerminalConnections, { passive: true });
+  state.terminalConnections.resizeObserver = new ResizeObserver(scheduleTerminalConnections);
+  state.terminalConnections.resizeObserver.observe(elements.stage);
+  state.terminalConnections.resizeObserver.observe(elements.host);
+  state.terminalConnections.mutationObserver = new MutationObserver(scheduleTerminalConnections);
+  state.terminalConnections.mutationObserver.observe(elements.host, {
+    attributes: true,
+    attributeFilter: ["class", "style", "data-layout", "data-snap-edge"],
+    childList: true,
+    subtree: false
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== "multiterm.terminalLinks") return;
+    state.terminalLinks = loadTerminalLinks();
+    updateTerminalConnectionViews();
+  });
+  window.addEventListener("resize", scheduleTerminalConnections);
+  scheduleTerminalConnections();
+}
+
+function liveMessageTerminals() {
+  return [...state.terminals.values()].filter((terminal) => terminal.status === "live");
+}
+
+function messageTerminalLabel(terminal) {
+  return `${terminal.titleInput.value || "Terminal"} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : terminal.id}`;
+}
+
+function refreshMessageRoutes(preferredSourceId = null, preferredTargetId = null) {
+  const terminals = liveMessageTerminals();
+  const sourceId = preferredSourceId || elements.messageSource.value || state.activeId;
+  const targetId = preferredTargetId || elements.messageTarget.value;
+  elements.messageSource.textContent = "";
+  elements.messageTarget.textContent = "";
+
+  for (const terminal of terminals) {
+    const sourceOption = document.createElement("option");
+    sourceOption.value = terminal.id;
+    sourceOption.textContent = messageTerminalLabel(terminal);
+    elements.messageSource.append(sourceOption);
+
+    const targetOption = document.createElement("option");
+    targetOption.value = terminal.id;
+    targetOption.textContent = messageTerminalLabel(terminal);
+    elements.messageTarget.append(targetOption);
+  }
+
+  if (terminals.some((terminal) => terminal.id === sourceId)) elements.messageSource.value = sourceId;
+  const availableTargets = terminals.filter((terminal) => terminal.id !== elements.messageSource.value);
+  elements.messageTarget.textContent = "";
+  for (const terminal of availableTargets) {
+    const option = document.createElement("option");
+    option.value = terminal.id;
+    option.textContent = messageTerminalLabel(terminal);
+    elements.messageTarget.append(option);
+  }
+  if (availableTargets.some((terminal) => terminal.id === targetId)) elements.messageTarget.value = targetId;
+  elements.messageSend.disabled = terminals.length < 2;
+  elements.messageSend.title = terminals.length < 2 ? "Open at least two live terminals to send a message" : "Send terminal message";
+  updateMessageLinkAction();
+}
+
+function updateMessageComposerFields() {
+  const kind = elements.messageKind.value;
+  elements.messagePathRow.hidden = kind !== "path" && kind !== "result";
+  elements.messageStatusRow.hidden = kind !== "status";
+  elements.messageTextRow.hidden = kind === "path";
+  elements.messageText.required = kind !== "path" && kind !== "status";
+  elements.messagePath.required = kind === "path";
+  elements.messageStatus.required = kind === "status";
+}
+
+function setMessageComposerError(message = "") {
+  elements.messageComposerError.textContent = message;
+  elements.messageComposerError.hidden = !message;
+}
+
+function normalizeIncomingTerminalMessage(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (typeof value.id !== "string" || !terminalMessaging.MESSAGE_KINDS.includes(value.kind)) return null;
+  if (typeof value.sourceId !== "string" || typeof value.targetId !== "string") return null;
+  return {
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
+    id: value.id,
+    kind: value.kind,
+    path: typeof value.path === "string" ? value.path : "",
+    persist: Boolean(value.persist),
+    sourceId: value.sourceId,
+    sourceTitle: typeof value.sourceTitle === "string" ? value.sourceTitle : "Terminal",
+    state: "pending",
+    status: typeof value.status === "string" ? value.status : "",
+    targetId: value.targetId,
+    targetTitle: typeof value.targetTitle === "string" ? value.targetTitle : "Terminal",
+    text: typeof value.text === "string" ? value.text : ""
+  };
+}
+
+function ingestTerminalMessage(value, notify = true) {
+  const message = normalizeIncomingTerminalMessage(value);
+  if (!message) return false;
+  const isNew = !state.terminalMessages.has(message.id);
+  state.terminalMessages.set(message.id, message);
+  updateTerminalMessageIndicators();
+  renderTerminalMessages();
+  if (notify && isNew && state.terminals.has(message.targetId)) {
+    toast(`Message context ${message.sourceTitle} to ${message.targetTitle}`, "info", 2800);
+  }
+  return true;
+}
+
+function updateTerminalMessageIndicators() {
+  const count = state.terminalMessages.size;
+  elements.terminalMessagesBadge.hidden = count === 0;
+  elements.terminalMessagesBadge.textContent = count > 99 ? "99+" : String(count);
+  const label = count ? `Terminal messages: ${count} pending` : "Terminal messages";
+  elements.terminalMessagesToggle.title = label;
+  elements.terminalMessagesToggle.setAttribute("aria-label", label);
+  updateTerminalConnectionViews();
+}
+
+function terminalMessageContent(message) {
+  if (message.kind === "path") return message.path;
+  if (message.kind === "status") return [message.status, message.text].filter(Boolean).join(": ");
+  return [message.text, message.path].filter(Boolean).join("\n");
+}
+
+function renderTerminalMessages() {
+  if (!elements.terminalMessagesList) return;
+  if (!elements.terminalMessagesOverlay.classList.contains("is-open")) return;
+  const messages = [...state.terminalMessages.values()]
+    .sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+  elements.terminalMessagesList.textContent = "";
+  elements.terminalMessagesEmpty.hidden = messages.length > 0;
+
+  for (const message of messages) {
+    const item = document.createElement("article");
+    item.className = "terminal-message-item";
+    item.dataset.messageId = message.id;
+
+    const copy = document.createElement("div");
+    copy.className = "terminal-message-copy";
+    const meta = document.createElement("span");
+    meta.className = "terminal-message-meta";
+    meta.textContent = `Context: ${message.sourceTitle} \u2192 ${message.targetTitle} \u00b7 ${message.kind} \u00b7 ${artifactTimeLabel(message.createdAt)}`;
+    const content = document.createElement("div");
+    content.className = `terminal-message-content${message.kind === "path" ? " terminal-message-path" : ""}`;
+    content.textContent = terminalMessageContent(message);
+    copy.append(meta, content);
+
+    const actions = document.createElement("div");
+    actions.className = "terminal-message-actions";
+    const insert = document.createElement("button");
+    insert.type = "button";
+    insert.dataset.messageAction = "insert";
+    insert.textContent = "Insert";
+    insert.title = "Insert into the target terminal without pressing Enter";
+    insert.disabled = state.terminals.get(message.targetId)?.status !== "live";
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.dataset.messageAction = "dismiss";
+    dismiss.textContent = "Dismiss";
+    actions.append(insert, dismiss);
+    item.append(copy, actions);
+    elements.terminalMessagesList.append(item);
+  }
+}
+
+async function requestTerminalMessages() {
+  if (!state.socketReady) return null;
+  return requestBridge({ type: "messageList" }, { timeout: 12000 });
+}
+
+async function sendComposedTerminalMessage() {
+  setMessageComposerError();
+  const request = {
+    kind: elements.messageKind.value,
+    path: elements.messagePath.value,
+    persist: false,
+    sourceId: elements.messageSource.value,
+    status: elements.messageStatus.value,
+    targetId: elements.messageTarget.value,
+    text: elements.messageText.value
+  };
+  const normalized = terminalMessaging.normalizeMessageRequest(
+    request,
+    Number(state.settings.terminalMessageMaxKb) * 1024
+  );
+  if (!normalized.ok) {
+    setMessageComposerError(normalized.error);
+    return false;
+  }
+
+  const response = await requestBridge({ type: "messageSend", ...normalized.value }, { timeout: 12000 });
+  if (!response || response.type === "messageError") {
+    setMessageComposerError(response?.message || "The terminal message could not be sent.");
+    return false;
+  }
+  elements.messageText.value = "";
+  elements.messagePath.value = "";
+  elements.messageStatus.value = "";
+  toast("Terminal message sent", "success", 1800);
+  return true;
+}
+
+async function actOnRenderedTerminalMessage(id, action) {
+  const message = state.terminalMessages.get(id);
+  if (!message) return false;
+  const response = await requestBridge({ type: "messageAction", id, action }, { timeout: 12000 });
+  if (!response || response.type === "messageError") {
+    toast(response?.message || "The terminal message action failed.", "error", 2600);
+    return false;
+  }
+  state.terminalMessages.delete(id);
+  updateTerminalMessageIndicators();
+  renderTerminalMessages();
+  if (action === "insert") {
+    const target = state.terminals.get(message.targetId);
+    closeTerminalMessages({ restoreFocus: false });
+    if (target) focusTerminalAfterQueueInsert(target, { closeArtifacts: false });
+  }
+  return true;
+}
+
+function openTerminalMessages(sourceId = null, targetId = null) {
+  if (!elements.terminalMessagesOverlay) return;
+  closePalette();
+  hideContextMenu();
+  state.terminalMessagesHub.returnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  refreshMessageRoutes(sourceId, targetId);
+  updateMessageComposerFields();
+  setMessageComposerError();
+  document.querySelector(".app-shell").inert = true;
+  elements.terminalMessagesOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.terminalMessagesOverlay.classList.add("is-open");
+    renderTerminalMessages();
+    renderMessageConnections();
+  });
+  requestTerminalMessages();
+  elements.messageSource.focus();
+}
+
+function closeTerminalMessages({ restoreFocus = true } = {}) {
+  if (!elements.terminalMessagesOverlay) return;
+  const returnFocus = state.terminalMessagesHub.returnFocus;
+  state.terminalMessagesHub.returnFocus = null;
+  elements.terminalMessagesOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    if (!elements.terminalMessagesOverlay.classList.contains("is-open")) {
+      elements.terminalMessagesOverlay.hidden = true;
+      document.querySelector(".app-shell").inert = false;
+      if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    }
+  }, 150);
+}
+
+function terminalMessagesFocusableElements() {
+  return [...elements.terminalMessagesOverlay.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )].filter((element) => !element.hidden && element.offsetParent !== null);
+}
+
+function bindTerminalMessages() {
+  if (!elements.terminalMessagesOverlay) return;
+  bindTerminalConnectionGeometry();
+  elements.terminalConnectionPaths.addEventListener("pointerover", (event) => {
+    const hitPath = event.target.closest?.(".terminal-connector-hit");
+    if (hitPath) showTerminalConnectorAction(hitPath);
+  });
+  elements.terminalConnectionPaths.addEventListener("pointerout", (event) => {
+    if (event.target.closest?.(".terminal-connector-hit")) scheduleTerminalConnectorActionHide();
+  });
+  elements.terminalConnectionPaths.addEventListener("focusin", (event) => {
+    const hitPath = event.target.closest?.(".terminal-connector-hit");
+    if (hitPath) showTerminalConnectorAction(hitPath);
+  });
+  elements.terminalConnectionPaths.addEventListener("focusout", (event) => {
+    if (event.target.closest?.(".terminal-connector-hit")) scheduleTerminalConnectorActionHide();
+  });
+  elements.terminalConnectionPaths.addEventListener("click", (event) => {
+    const hitPath = event.target.closest?.(".terminal-connector-hit");
+    if (!hitPath) return;
+    showTerminalConnectorAction(hitPath);
+    elements.terminalConnectorSend.focus({ preventScroll: true });
+  });
+  elements.terminalConnectionPaths.addEventListener("keydown", (event) => {
+    const hitPath = event.target.closest?.(".terminal-connector-hit");
+    if (!hitPath || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    showTerminalConnectorAction(hitPath);
+    elements.terminalConnectorSend.focus({ preventScroll: true });
+  });
+  elements.terminalConnectorAction.addEventListener("pointerenter", clearTerminalConnectorActionTimer);
+  elements.terminalConnectorAction.addEventListener("pointerleave", scheduleTerminalConnectorActionHide);
+  elements.terminalConnectorSend.addEventListener("click", openTerminalMessagesForConnector);
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target.closest?.(".terminal-connector-hit, .terminal-connector-action")) return;
+    hideTerminalConnectorAction();
+  });
+  updateTerminalMessageIndicators();
+  elements.terminalMessagesToggle.addEventListener("click", () => openTerminalMessages(state.activeId));
+  elements.terminalMessagesClose.addEventListener("click", () => closeTerminalMessages());
+  elements.terminalMessagesRefresh.addEventListener("click", requestTerminalMessages);
+  elements.terminalMessagesOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.terminalMessagesOverlay) closeTerminalMessages();
+  });
+  elements.terminalMessagesOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeTerminalMessages();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = terminalMessagesFocusableElements();
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  elements.messageSource.addEventListener("change", () => refreshMessageRoutes(elements.messageSource.value));
+  elements.messageTarget.addEventListener("change", updateMessageLinkAction);
+  elements.messageKind.addEventListener("change", updateMessageComposerFields);
+  elements.messageLinkAdd.addEventListener("click", addSelectedTerminalLink);
+  elements.messageSend.addEventListener("click", sendComposedTerminalMessage);
+  elements.messageText.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.ctrlKey && !event.isComposing) {
+      event.preventDefault();
+      sendComposedTerminalMessage();
+    }
+  });
+  elements.terminalMessagesList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-message-action]");
+    const item = button?.closest("[data-message-id]");
+    if (button && item) actOnRenderedTerminalMessage(item.dataset.messageId, button.dataset.messageAction);
+  });
+  elements.messageConnectionsList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-terminal-unlink]");
+    if (button) removeTerminalLink(button.dataset.terminalUnlink);
   });
 }
 
@@ -8006,25 +9014,27 @@ function buildMoveToPageItems(terminal) {
   const items = others.map((page) => ({
     label: `Move to ${page.name}`,
     icon: "corner-up-right",
+    shortcutId: `terminal.move-page:${page.id}`,
     run: () => moveTerminalToPage(terminal.id, page.id)
   }));
   items.push({
     label: "Move to new page",
     icon: "plus",
+    shortcutId: "terminal.move-new-page",
     run: () => {
       const id = addPage({ activate: false });
       moveTerminalToPage(terminal.id, id);
     }
   });
-  return [{ separator: true }, ...items];
+  return items;
 }
 
 function buildLoggingMenuItems(terminal) {
   if (!terminal.logging) {
     return [
-      { label: "Log to file\u2026", icon: "file-text", run: () => toggleLogging(terminal) },
+      { label: "Log to file\u2026", icon: "file-text", shortcutId: "terminal.logging.toggle", run: () => toggleLogging(terminal) },
       ...(terminal.logPath
-        ? [{ label: "Reveal last log", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }]
+        ? [{ label: "Reveal last log", icon: "folder-search", shortcutId: "terminal.logging.reveal-last", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }]
         : [])
     ];
   }
@@ -8043,7 +9053,7 @@ function buildLoggingMenuItems(terminal) {
         { text: "(Stop logging)", className: "ctx-muted", run: () => toggleLogging(terminal) }
       ]
     },
-    { label: "Reveal log folder", icon: "folder-search", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }
+    { label: "Reveal log folder", icon: "folder-search", shortcutId: "terminal.logging.reveal-folder", run: () => sendBridge({ type: "reveal", path: terminal.logPath }) }
   ];
 }
 
@@ -8086,10 +9096,20 @@ function buildCommandQueueMenuItem(terminal) {
   return {
     label: "Command queue",
     icon: "list-ordered",
+    shortcutId: "terminal.command-queue",
     title: "Insert a queued command, or open the queue manager",
     submenu: submenu.length ? submenu : [{ info: true, icon: "inbox", label: "No queued commands" }],
     run: () => openTerminalArtifacts(terminal.id)
   };
+}
+
+function stableContextActionToken(value) {
+  let hash = 2166136261;
+  for (const character of String(value)) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
@@ -8098,28 +9118,32 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const snippetItems = (state.settings.snippets || []).slice(0, 8).map((snippet) => ({
     label: snippet.name || snippet.command,
     icon: "terminal",
+    shortcutId: `terminal.snippet:${stableContextActionToken(`${snippet.name || ""}\n${snippet.command || ""}`)}`,
     run: () => runSnippet(terminal.id, snippet)
   }));
 
   const items = [
-    { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
-    { label: "Copy all output", icon: "copy", run: () => { terminal.term.clearSelection(); copyTerminalOutput(terminal.id); } },
-    { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", run: () => pasteIntoTerminal(terminal.id) },
-    { label: "Select all", hint: "Ctrl+A", icon: "text-select", run: () => terminal.term.selectAll() },
-    { separator: true },
-    { label: "Find\u2026", hint: "Ctrl+F", icon: "search", run: () => openFind(terminal) },
-    { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", run: openFindAll },
-    { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", run: () => clearTerminal(terminal.id) },
-    { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", run: () => toggleZoomPane(terminal.id) },
-    { label: "Terminal statistics\u2026", icon: "activity", run: () => openStatistics(terminal.id) },
-    { label: "Notes\u2026", icon: "notebook-pen", run: () => openTerminalArtifacts(terminal.id) },
+    { group: "Clipboard" },
+    { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", shortcutId: "terminal.copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
+    { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { terminal.term.clearSelection(); copyTerminalOutput(terminal.id); } },
+    { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
+    { label: "Select all", hint: "Ctrl+A", icon: "text-select", shortcutId: "terminal.select-all", run: () => terminal.term.selectAll() },
+    { group: "Find & context" },
+    { label: "Find\u2026", hint: "Ctrl+F", icon: "search", shortcutId: "terminal.find", run: () => openFind(terminal) },
+    { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", shortcutId: "terminal.find-all", run: openFindAll },
+    { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", shortcutId: "terminal.clear", run: () => clearTerminal(terminal.id) },
+    { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", shortcutId: "terminal.zoom", run: () => toggleZoomPane(terminal.id) },
+    { label: "Terminal statistics\u2026", icon: "activity", shortcutId: "terminal.statistics", run: () => openStatistics(terminal.id) },
+    { label: "Notes\u2026", icon: "notebook-pen", shortcutId: "terminal.notes", run: () => openTerminalArtifacts(terminal.id) },
+    { label: "Send to terminal\u2026", icon: "messages-square", shortcutId: "terminal.send-message", run: () => openTerminalMessages(terminal.id) },
     buildCommandQueueMenuItem(terminal),
-    { separator: true },
-    { label: "Open folder", icon: "folder-open", run: () => revealTerminalCwd(terminal) },
-    { label: "New terminal here", icon: "folder-plus", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
+    { group: "Tools & automation" },
+    { label: "Open folder", icon: "folder-open", shortcutId: "terminal.open-folder", run: () => revealTerminalCwd(terminal) },
+    { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
     {
       label: "Launch Copilot CLI (YOLO)",
       icon: "bot",
+      shortcutId: "terminal.copilot-yolo",
       title: "Starts the interactive Copilot CLI with all tool, path, and URL permissions",
       run: () => launchCopilotCli(terminal)
     },
@@ -8138,14 +9162,15 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       value: terminal.cwd || "",
       run: (value) => sendTerminalSlashCommand(terminal, "cwd", value)
     },
-    { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
-    { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScript(terminal.id) },
+    { label: "New Administrator terminal", icon: "shield", shortcutId: "terminal.new-admin", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
+    { label: "Run script\u2026", icon: "file-code", shortcutId: "terminal.run-script", run: () => browseAndRunScript(terminal.id) },
     ...buildLoggingMenuItems(terminal),
-    ...(snippetItems.length ? [{ separator: true }, ...snippetItems] : []),
-    { separator: true },
+    ...(snippetItems.length ? [{ group: "Snippets" }, ...snippetItems] : []),
+    { group: "Session" },
     {
       label: "Split (duplicate)",
       icon: "copy-plus",
+      shortcutId: "terminal.duplicate",
       run: () => addTerminal({
         reveal: true,
         runStartup: true,
@@ -8153,14 +9178,13 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         fontSizeOverride: terminal.fontSizeOverride
       })
     },
-    { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", run: () => restartSession(terminal.id) },
-    { label: "Cycle color", icon: "tag", run: () => cyclePaneColor(terminal) },
+    { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
+    { label: "Cycle color", icon: "tag", shortcutId: "terminal.cycle-color", run: () => cyclePaneColor(terminal) },
     ...buildMoveToPageItems(terminal),
-    { separator: true },
-    { label: "Close", hint: "Ctrl+Shift+W", icon: "x", danger: true, run: () => removeTerminal(terminal.id) }
+    { label: "Close", hint: "Ctrl+Shift+W", icon: "x", shortcutId: "terminal.close", danger: true, run: () => removeTerminal(terminal.id) }
   ];
 
-  renderContextMenu(items);
+  renderContextMenu(items, { grouped: true, searchable: true, shortcutEditor: true });
 }
 
 // The value arrives from a free-text field in the context menu, so it is filtered
@@ -8266,14 +9290,151 @@ function buildPaneOverflowMenu(terminal) {
   ]);
 }
 
-// Keyboard activation state for the open menu. Every actionable row earns a
-// letter mnemonic (underlined in its label) and, for the first nine, a 1-9
-// badge; arrow keys move a highlight, Enter/Space runs it, and pressing a
-// mnemonic or badge digit runs that row outright.
+const CONTEXT_SHORTCUT_STORAGE_KEY = "multiterm.contextMenuShortcuts";
+const CONTEXT_SHORTCUT_ID_PATTERN = /^[a-z0-9][a-z0-9:._-]{0,159}$/;
+const CONTEXT_SHORTCUT_MODIFIER_KEYS = new Set(["alt", "altgraph", "control", "meta", "shift"]);
+
+function normalizeContextShortcutKey(value) {
+  const rawKey = String(value || "");
+  const key = rawKey === " " ? "space" : rawKey.trim().toLowerCase();
+  if (!key || key.length > 32 || CONTEXT_SHORTCUT_MODIFIER_KEYS.has(key)) return null;
+  return key;
+}
+
+function normalizeContextShortcutBinding(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const key = normalizeContextShortcutKey(value.key);
+  if (!key) return null;
+  const binding = {
+    alt: Boolean(value.alt),
+    ctrl: Boolean(value.ctrl),
+    key,
+    meta: Boolean(value.meta),
+    shift: Boolean(value.shift)
+  };
+  const modified = binding.alt || binding.ctrl || binding.meta || binding.shift;
+  return modified || /^[1-9]$/.test(key) ? binding : null;
+}
+
+function contextShortcutFromEvent(event) {
+  if (!event || event.isComposing) return null;
+  const key = normalizeContextShortcutKey(event.key);
+  if (!key) return null;
+  return normalizeContextShortcutBinding({
+    alt: event.altKey,
+    ctrl: event.ctrlKey,
+    key,
+    meta: event.metaKey,
+    shift: event.shiftKey
+  });
+}
+
+function contextShortcutSignature(binding) {
+  const normalized = normalizeContextShortcutBinding(binding);
+  if (!normalized) return "";
+  return [normalized.ctrl ? "ctrl" : "", normalized.alt ? "alt" : "", normalized.shift ? "shift" : "", normalized.meta ? "meta" : "", normalized.key]
+    .filter(Boolean)
+    .join("+");
+}
+
+function contextShortcutKeyLabel(key) {
+  const labels = {
+    arrowdown: "Down",
+    arrowleft: "Left",
+    arrowright: "Right",
+    arrowup: "Up",
+    backspace: "Backspace",
+    delete: "Delete",
+    end: "End",
+    enter: "Enter",
+    escape: "Esc",
+    home: "Home",
+    pagedown: "Page Down",
+    pageup: "Page Up",
+    space: "Space",
+    tab: "Tab"
+  };
+  return labels[key] || (key.length === 1 ? key.toUpperCase() : key.replace(/^./, (character) => character.toUpperCase()));
+}
+
+function formatContextShortcut(binding) {
+  const normalized = normalizeContextShortcutBinding(binding);
+  if (!normalized) return "";
+  return [normalized.ctrl ? "Ctrl" : "", normalized.alt ? "Alt" : "", normalized.shift ? "Shift" : "", normalized.meta ? "Meta" : "", contextShortcutKeyLabel(normalized.key)]
+    .filter(Boolean)
+    .join("+");
+}
+
+function loadContextMenuShortcuts() {
+  try {
+    const stored = localStorage.getItem(CONTEXT_SHORTCUT_STORAGE_KEY);
+    if (!stored || stored.length > 32 * 1024) return new Map();
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+    const shortcuts = new Map();
+    const signatures = new Set();
+    for (const [actionId, value] of Object.entries(parsed).slice(0, 128)) {
+      if (!CONTEXT_SHORTCUT_ID_PATTERN.test(actionId)) continue;
+      const binding = normalizeContextShortcutBinding(value);
+      const signature = contextShortcutSignature(binding);
+      if (!binding || !signature || signatures.has(signature)) continue;
+      signatures.add(signature);
+      shortcuts.set(actionId, binding);
+    }
+    return shortcuts;
+  } catch {
+    return new Map();
+  }
+}
+
+function saveContextMenuShortcuts() {
+  try {
+    localStorage.setItem(CONTEXT_SHORTCUT_STORAGE_KEY, JSON.stringify(Object.fromEntries(contextMenuShortcuts)));
+  } catch (error) {
+    log.warn("context-menu", "Could not persist context-menu shortcuts", { error: String(error) });
+  }
+}
+
+function assignContextMenuShortcut(actionId, binding) {
+  const normalized = normalizeContextShortcutBinding(binding);
+  const signature = contextShortcutSignature(normalized);
+  if (!CONTEXT_SHORTCUT_ID_PATTERN.test(actionId) || !normalized || !signature) return null;
+  let displacedActionId = null;
+  for (const [otherActionId, otherBinding] of contextMenuShortcuts) {
+    if (otherActionId === actionId || contextShortcutSignature(otherBinding) !== signature) continue;
+    contextMenuShortcuts.delete(otherActionId);
+    displacedActionId = otherActionId;
+    break;
+  }
+  contextMenuShortcuts.set(actionId, normalized);
+  saveContextMenuShortcuts();
+  return displacedActionId;
+}
+
+function clearContextMenuShortcut(actionId) {
+  const removed = contextMenuShortcuts.delete(actionId);
+  if (removed) saveContextMenuShortcuts();
+  return removed;
+}
+
+let contextMenuShortcuts = loadContextMenuShortcuts();
+
+// Keyboard activation state for the open menu. Compact menus retain automatic
+// letter/number accelerators; the full terminal menu can additionally expose
+// persistent, user-assigned digit or modifier shortcuts.
 let ctxFocusables = [];
+let ctxAllFocusables = [];
 let ctxKeyIndex = -1;
+let ctxReturnFocus = null;
 const ctxByLetter = new Map();
 const ctxByNumber = new Map();
+const ctxByShortcut = new Map();
+let ctxRenderedItems = [];
+let ctxRenderOptions = {};
+let ctxShortcutCapture = null;
+let ctxShortcutEditing = false;
+let ctxShortcutStatus = "";
+let ctxSearchFocusRequest = 0;
 
 // A submenu-parent row (currently just "Command queue") hangs a second panel off
 // its right edge on hover. These track that panel's rows, keyboard highlight and
@@ -8284,6 +9445,65 @@ let subFocusables = [];
 let subKeyIndex = -1;
 let activeSubmenuParent = null;
 let submenuCloseTimer = 0;
+
+function runContextMenuAction(run, ...args) {
+  const returnFocus = ctxReturnFocus;
+  hideContextMenu();
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  run(...args);
+}
+
+function contextShortcutActionLabel(actionId) {
+  return ctxRenderedItems.find((item) => item.shortcutId === actionId)?.label || "another action";
+}
+
+function clampOpenContextMenu() {
+  const menu = elements.contextMenu;
+  if (menu.hidden) return;
+  const rect = menu.getBoundingClientRect();
+  const currentLeft = Number.parseFloat(menu.style.left) || 8;
+  const currentTop = Number.parseFloat(menu.style.top) || 8;
+  menu.style.left = `${Math.max(8, Math.min(currentLeft, window.innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(currentTop, window.innerHeight - rect.height - 8))}px`;
+}
+
+function rerenderOpenContextMenu({ focusSearch = true } = {}) {
+  const items = ctxRenderedItems;
+  const options = ctxRenderOptions;
+  renderContextMenu(items, options);
+  refreshIcons(elements.contextMenu);
+  clampOpenContextMenu();
+  const focusTarget = focusSearch
+    ? elements.contextMenu.querySelector(".ctx-menu-search-input")
+    : elements.contextMenu;
+  focusTarget?.focus({ preventScroll: true });
+}
+
+function toggleContextShortcutEditor() {
+  ctxShortcutEditing = !ctxShortcutEditing;
+  ctxShortcutCapture = null;
+  ctxShortcutStatus = ctxShortcutEditing
+    ? "Choose Set beside an action, then press 1-9 or a modifier shortcut."
+    : "";
+  rerenderOpenContextMenu();
+}
+
+function beginContextShortcutCapture(item) {
+  if (!item.shortcutId) return;
+  ctxShortcutCapture = { actionId: item.shortcutId, label: item.label };
+  const current = contextMenuShortcuts.get(item.shortcutId);
+  ctxShortcutStatus = current
+    ? `Press a replacement for ${item.label}. Delete clears ${formatContextShortcut(current)}; Esc cancels.`
+    : `Press 1-9 or a modifier + key for ${item.label}. Esc cancels.`;
+  rerenderOpenContextMenu({ focusSearch: false });
+}
+
+function cancelContextShortcutCapture() {
+  if (!ctxShortcutCapture) return;
+  ctxShortcutCapture = null;
+  ctxShortcutStatus = "Choose Set beside an action, then press 1-9 or a modifier shortcut.";
+  rerenderOpenContextMenu();
+}
 
 // Picks a unique, memorable accelerator letter for a label: word initials first
 // (so "Find in all terminals" prefers F, then I, A, T), then any remaining
@@ -8325,28 +9545,144 @@ function renderAccelLabel(text, index) {
   return label;
 }
 
-function renderContextMenu(items) {
+function renderContextMenu(items, { grouped = false, searchable = false, shortcutEditor = false } = {}) {
   hideContextSubmenu();
+  ctxRenderedItems = items;
+  ctxRenderOptions = { grouped, searchable, shortcutEditor };
+  if (!shortcutEditor) {
+    ctxShortcutCapture = null;
+    ctxShortcutEditing = false;
+    ctxShortcutStatus = "";
+  }
   elements.contextMenu.innerHTML = "";
+  elements.contextMenu.classList.toggle("is-grouped", grouped);
+  elements.contextMenu.classList.toggle("has-search", searchable);
+  elements.contextMenu.classList.toggle("is-shortcut-editing", shortcutEditor && ctxShortcutEditing);
   ctxFocusables = [];
+  ctxAllFocusables = [];
   ctxKeyIndex = -1;
   ctxByLetter.clear();
   ctxByNumber.clear();
+  ctxByShortcut.clear();
   ctxSubmenus.clear();
   elements.contextMenu.removeAttribute("aria-activedescendant");
   const usedLetters = new Set();
   let rowId = 0;
+  let itemContainer = elements.contextMenu;
+  let groupsRoot = null;
+  let groupColumns = null;
+  const groupColumnWeights = [0, 0];
 
-  for (const item of items) {
+  if (searchable) {
+    const toolbar = document.createElement("div");
+    toolbar.className = "ctx-menu-toolbar";
+    const search = document.createElement("label");
+    search.className = "ctx-menu-search";
+    const searchIcon = document.createElement("i");
+    searchIcon.dataset.lucide = "search";
+    const searchInput = document.createElement("input");
+    searchInput.className = "ctx-menu-search-input";
+    searchInput.type = "search";
+    searchInput.autocomplete = "off";
+    searchInput.spellcheck = false;
+    searchInput.placeholder = "Search terminal actions";
+    searchInput.setAttribute("aria-label", "Search terminal actions");
+    searchInput.addEventListener("input", () => filterContextMenu(searchInput.value));
+    search.append(searchIcon, searchInput);
+    toolbar.append(search);
+    if (shortcutEditor) {
+      const editShortcuts = document.createElement("button");
+      editShortcuts.type = "button";
+      editShortcuts.className = "ctx-shortcut-edit-toggle";
+      editShortcuts.title = ctxShortcutEditing ? "Finish editing shortcuts" : "Customize menu shortcuts";
+      editShortcuts.setAttribute("aria-label", editShortcuts.title);
+      editShortcuts.setAttribute("aria-pressed", String(ctxShortcutEditing));
+      const editIcon = document.createElement("i");
+      editIcon.dataset.lucide = ctxShortcutEditing ? "check" : "keyboard";
+      editShortcuts.append(editIcon);
+      editShortcuts.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleContextShortcutEditor();
+      });
+      toolbar.append(editShortcuts);
+    }
+    elements.contextMenu.append(toolbar);
+    if (shortcutEditor && ctxShortcutEditing) {
+      const capture = document.createElement("div");
+      capture.className = `ctx-shortcut-capture${ctxShortcutCapture ? " is-capturing" : ""}`;
+      capture.setAttribute("role", "status");
+      capture.setAttribute("aria-live", "polite");
+      const captureText = document.createElement("span");
+      captureText.textContent = ctxShortcutStatus;
+      capture.append(captureText);
+      if (ctxShortcutCapture) {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "ctx-shortcut-cancel";
+        cancel.title = "Cancel shortcut capture";
+        cancel.setAttribute("aria-label", cancel.title);
+        const cancelIcon = document.createElement("i");
+        cancelIcon.dataset.lucide = "x";
+        cancel.append(cancelIcon);
+        cancel.addEventListener("click", (event) => {
+          event.stopPropagation();
+          cancelContextShortcutCapture();
+        });
+        capture.append(cancel);
+      }
+      elements.contextMenu.append(capture);
+    }
+  }
+
+  if (grouped) {
+    groupsRoot = document.createElement("div");
+    groupsRoot.className = "ctx-groups";
+    groupColumns = [0, 1].map(() => {
+      const column = document.createElement("div");
+      column.className = "ctx-group-column";
+      groupsRoot.append(column);
+      return column;
+    });
+    elements.contextMenu.append(groupsRoot);
+    itemContainer = groupsRoot;
+  }
+
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+    const item = items[itemIndex];
+    if (item.group) {
+      let groupWeight = 0;
+      for (let nextIndex = itemIndex + 1; nextIndex < items.length && !items[nextIndex].group; nextIndex += 1) {
+        if (!items[nextIndex].separator) groupWeight += 1;
+      }
+      const columnIndex = groupColumnWeights[0] <= groupColumnWeights[1] ? 0 : 1;
+      groupColumnWeights[columnIndex] += groupWeight;
+      const group = document.createElement("section");
+      group.className = "ctx-group";
+      group.dataset.groupSearch = item.group.toLowerCase();
+      const title = document.createElement("h3");
+      title.className = "ctx-group-title";
+      title.textContent = item.group;
+      const body = document.createElement("div");
+      body.className = "ctx-group-body";
+      group.append(title, body);
+      (groupColumns?.[columnIndex] || groupsRoot || elements.contextMenu).append(group);
+      itemContainer = body;
+      continue;
+    }
     if (item.separator) {
       const sep = document.createElement("div");
       sep.className = "ctx-sep";
-      elements.contextMenu.append(sep);
+      itemContainer.append(sep);
       continue;
     }
 
     const el = document.createElement("div");
     el.className = `ctx-item${item.danger ? " danger" : ""}${item.info ? " ctx-info" : ""}`;
+    if (item.shortcutId) el.dataset.shortcutId = item.shortcutId;
+    el.dataset.searchText = [item.label, item.title, item.hint]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
     // An info row reports a fact rather than offering an action, so it is not a
     // menuitem and must not be reachable or announced as one.
     el.setAttribute("role", item.info ? "presentation" : "menuitem");
@@ -8376,8 +9712,7 @@ function renderContextMenu(items) {
           event.preventDefault();
           const value = input.value.trim();
           if (!value) return;
-          hideContextMenu();
-          item.run(value);
+          runContextMenuAction(item.run, value);
         } else if (event.key === "Escape") {
           event.preventDefault();
           hideContextMenu();
@@ -8385,7 +9720,7 @@ function renderContextMenu(items) {
       });
       field.append(caption, input);
       el.append(field);
-      elements.contextMenu.append(el);
+      itemContainer.append(el);
       continue;
     }
 
@@ -8410,20 +9745,23 @@ function renderContextMenu(items) {
         if (part.title) action.title = part.title;
         action.addEventListener("click", (event) => {
           event.stopPropagation();
-          hideContextMenu();
-          part.run();
+          runContextMenuAction(part.run);
         });
         label.append(action);
       }
       el.append(label);
-      elements.contextMenu.append(el);
+      itemContainer.append(el);
       continue;
     }
 
     // A plain row you can actually run is the only kind that earns an accelerator.
     const actionable = Boolean(item.run) && !item.disabled && !item.info;
+    const shortcutEligible = shortcutEditor && actionable && CONTEXT_SHORTCUT_ID_PATTERN.test(item.shortcutId || "");
+    const customBinding = shortcutEditor && item.shortcutId
+      ? contextMenuShortcuts.get(item.shortcutId)
+      : null;
     const accel = actionable ? assignAccelLetter(item.label, usedLetters) : null;
-    const number = actionable && ctxByNumber.size < 9 ? ctxByNumber.size + 1 : null;
+    const number = actionable && !shortcutEditor && ctxByNumber.size < 9 ? ctxByNumber.size + 1 : null;
 
     el.append(renderAccelLabel(item.label, accel ? accel.index : -1));
 
@@ -8433,7 +9771,7 @@ function renderContextMenu(items) {
 
     // The keyboard hint and the number badge share a right-aligned tail so they
     // never collide with the label; a submenu parent adds a chevron at the end.
-    if (item.hint || number != null || item.submenu) {
+    if (item.hint || number != null || item.submenu || customBinding || (ctxShortcutEditing && shortcutEligible)) {
       const accessories = document.createElement("span");
       accessories.className = "ctx-accessories";
       if (item.hint) {
@@ -8452,6 +9790,27 @@ function renderContextMenu(items) {
         badge.setAttribute("aria-hidden", "true");
         accessories.append(badge);
       }
+      if (ctxShortcutEditing && shortcutEligible) {
+        const shortcutButton = document.createElement("button");
+        shortcutButton.type = "button";
+        shortcutButton.className = "ctx-shortcut-set";
+        shortcutButton.textContent = customBinding ? formatContextShortcut(customBinding) : "Set";
+        shortcutButton.title = customBinding
+          ? `Change shortcut for ${item.label}`
+          : `Set shortcut for ${item.label}`;
+        shortcutButton.setAttribute("aria-label", shortcutButton.title);
+        shortcutButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          beginContextShortcutCapture(item);
+        });
+        accessories.append(shortcutButton);
+      } else if (customBinding) {
+        const shortcut = document.createElement("span");
+        shortcut.className = "ctx-shortcut-key";
+        shortcut.textContent = formatContextShortcut(customBinding);
+        shortcut.setAttribute("aria-label", `Custom shortcut ${shortcut.textContent}`);
+        accessories.append(shortcut);
+      }
       if (item.submenu) {
         const caret = document.createElement("span");
         caret.className = "ctx-submenu-caret";
@@ -8467,8 +9826,7 @@ function renderContextMenu(items) {
     if (actionable) {
       el.id = `ctx-item-${rowId++}`;
       el.addEventListener("click", () => {
-        hideContextMenu();
-        item.run();
+        runContextMenuAction(item.run);
       });
       // Keep the keyboard highlight in step with the pointer so the two input
       // modes never disagree about which row is current. A submenu parent also
@@ -8479,6 +9837,7 @@ function renderContextMenu(items) {
         else scheduleSubmenuClose();
       });
       ctxFocusables.push(el);
+      ctxAllFocusables.push(el);
       if (item.submenu) {
         el.setAttribute("aria-haspopup", "menu");
         el.setAttribute("aria-expanded", "false");
@@ -8492,10 +9851,44 @@ function renderContextMenu(items) {
         el.dataset.accelNum = String(number);
         ctxByNumber.set(String(number), el);
       }
+      if (customBinding) {
+        const signature = contextShortcutSignature(customBinding);
+        el.dataset.shortcutSignature = signature;
+        ctxByShortcut.set(signature, el);
+      }
     }
 
-    elements.contextMenu.append(el);
+    itemContainer.append(el);
   }
+
+  if (searchable) {
+    const empty = document.createElement("p");
+    empty.className = "ctx-search-empty";
+    empty.textContent = "No matching actions";
+    empty.hidden = true;
+    elements.contextMenu.append(empty);
+  }
+}
+
+function filterContextMenu(value) {
+  hideContextSubmenu();
+  const query = String(value || "").trim().toLowerCase();
+  let visibleRows = 0;
+  for (const group of elements.contextMenu.querySelectorAll(".ctx-group")) {
+    const groupMatches = Boolean(query) && group.dataset.groupSearch.includes(query);
+    let groupRows = 0;
+    for (const row of group.querySelectorAll(".ctx-item")) {
+      const visible = !query || groupMatches || row.dataset.searchText.includes(query);
+      row.hidden = !visible;
+      if (visible) groupRows += 1;
+    }
+    group.hidden = groupRows === 0;
+    visibleRows += groupRows;
+  }
+  ctxFocusables = ctxAllFocusables.filter((row) => !row.hidden && !row.closest(".ctx-group")?.hidden);
+  setContextFocus(-1);
+  const empty = elements.contextMenu.querySelector(".ctx-search-empty");
+  if (empty) empty.hidden = visibleRows > 0;
 }
 
 // Renders the rows of the hover submenu into its own panel. Kept separate from
@@ -8526,8 +9919,7 @@ function renderContextSubmenu(items) {
 
     if (item.run && !item.info) {
       el.addEventListener("click", () => {
-        hideContextMenu();
-        item.run();
+        runContextMenuAction(item.run);
       });
       el.addEventListener("pointerenter", () => setSubmenuFocus(subFocusables.indexOf(el)));
       subFocusables.push(el);
@@ -8555,7 +9947,7 @@ function openContextSubmenuFor(parentEl, items) {
   menu.style.top = "0px";
   // Swap the <i data-lucide> placeholders for real SVGs before measuring, for the
   // same width-accuracy reason the main menu does.
-  refreshIcons();
+  refreshIcons(menu);
 
   const parent = parentEl.getBoundingClientRect();
   const rect = menu.getBoundingClientRect();
@@ -8657,6 +10049,95 @@ function onContextMenuKeydown(event) {
     event.stopPropagation();
   };
 
+  if (ctxShortcutCapture) {
+    const hasModifier = event.ctrlKey || event.altKey || event.shiftKey || event.metaKey;
+    if (key === "Escape" && !hasModifier) {
+      cancelContextShortcutCapture();
+      stop();
+      return;
+    }
+    if ((key === "Delete" || key === "Backspace") && !hasModifier) {
+      const cleared = clearContextMenuShortcut(ctxShortcutCapture.actionId);
+      ctxShortcutStatus = cleared
+        ? `Cleared the shortcut for ${ctxShortcutCapture.label}.`
+        : `${ctxShortcutCapture.label} has no shortcut to clear.`;
+      ctxShortcutCapture = null;
+      rerenderOpenContextMenu();
+      stop();
+      return;
+    }
+    if (CONTEXT_SHORTCUT_MODIFIER_KEYS.has(String(key).toLowerCase())) {
+      stop();
+      return;
+    }
+    const binding = contextShortcutFromEvent(event);
+    if (!binding) {
+      ctxShortcutStatus = "Use 1-9 by itself, or hold Ctrl, Alt, Shift, or Meta with another key.";
+      rerenderOpenContextMenu({ focusSearch: false });
+      stop();
+      return;
+    }
+    const capture = ctxShortcutCapture;
+    const displacedActionId = assignContextMenuShortcut(capture.actionId, binding);
+    const formatted = formatContextShortcut(binding);
+    ctxShortcutCapture = null;
+    ctxShortcutStatus = displacedActionId
+      ? `Assigned ${formatted} to ${capture.label}; removed it from ${contextShortcutActionLabel(displacedActionId)}.`
+      : `Assigned ${formatted} to ${capture.label}.`;
+    rerenderOpenContextMenu();
+    stop();
+    return;
+  }
+
+  if (!ctxShortcutEditing) {
+    const binding = contextShortcutFromEvent(event);
+    const signature = contextShortcutSignature(binding);
+    const customTarget = signature ? ctxByShortcut.get(signature) : null;
+    const searchInput = event.target instanceof Element
+      ? event.target.closest(".ctx-menu-search-input")
+      : null;
+    const modified = binding && (binding.ctrl || binding.alt || binding.shift || binding.meta);
+    if (customTarget && (!searchInput || modified || searchInput.value === "")) {
+      customTarget.click();
+      stop();
+      return;
+    }
+  }
+
+  const pendingSearchInput = elements.contextMenu.querySelector(".ctx-menu-search-input");
+  if (pendingSearchInput
+      && event.target !== pendingSearchInput
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.metaKey
+      && key.length === 1) {
+    pendingSearchInput.value += key;
+    filterContextMenu(pendingSearchInput.value);
+    pendingSearchInput.focus({ preventScroll: true });
+    stop();
+    return;
+  }
+
+  if (event.target instanceof Element && event.target.closest(".ctx-menu-search-input")) {
+    if (key === "Escape") {
+      hideContextMenu();
+      stop();
+    } else if (key === "ArrowDown" || (key === "Tab" && !event.shiftKey)) {
+      elements.contextMenu.focus({ preventScroll: true });
+      setContextFocus(0);
+      stop();
+    } else if (key === "ArrowUp" || (key === "Tab" && event.shiftKey)) {
+      elements.contextMenu.focus({ preventScroll: true });
+      setContextFocus(ctxFocusables.length - 1);
+      stop();
+    } else if (key === "Enter") {
+      const target = ctxFocusables[ctxKeyIndex] || ctxFocusables[0];
+      if (target) target.click();
+      stop();
+    }
+    return;
+  }
+
   // Once the submenu holds the keyboard (entered with ArrowRight), it owns
   // navigation until ArrowLeft/Escape hands control back to the parent menu.
   if (!elements.contextSubmenu.hidden && subKeyIndex >= 0) {
@@ -8755,14 +10236,14 @@ function onContextMenuKeydown(event) {
   let target = null;
   if (key >= "1" && key <= "9") target = ctxByNumber.get(key);
   else if (/[a-z]/i.test(key)) target = ctxByLetter.get(key.toLowerCase());
-  if (target) target.click();
+  if (target && !target.hidden && !target.closest(".ctx-group")?.hidden) target.click();
   // Whether or not it matched, keep the keystroke from reaching the terminal.
   stop();
 }
 
 function showContextMenu(x, y, terminal, selection) {
   buildContextMenu(terminal, selection);
-  showBuiltContextMenu(x, y);
+  showBuiltContextMenu(x, y, { returnFocus: terminal.term.textarea || terminal.screen });
 }
 
 function showSurfaceContextMenu(x, y) {
@@ -8825,8 +10306,15 @@ function showSessionInfoMenu(terminal) {
   showBuiltContextMenu(rect.right, rect.top - 6, { alignRight: true, alignBottom: true });
 }
 
-function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } = {}) {
+function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false, returnFocus = null } = {}) {
   const menu = elements.contextMenu;
+  if (menu.hidden) {
+    ctxReturnFocus = returnFocus instanceof HTMLElement
+      ? returnFocus
+      : document.activeElement instanceof HTMLElement && !menu.contains(document.activeElement)
+      ? document.activeElement
+      : null;
+  }
   // The menu must be displayable to measure it, but must not paint at the
   // temporary 0,0 measurement position before its final coordinates are set.
   menu.classList.add("is-positioning");
@@ -8838,7 +10326,7 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } 
   // Placeholders occupy no width, so measuring first reports a menu ~16px
   // narrower than the one that ends up on screen, and every right/bottom-aligned
   // menu lands 16px off its anchor.
-  refreshIcons();
+  refreshIcons(menu);
 
   // x/y name the corner the menu should hang from: alignRight grows it leftward,
   // alignBottom grows it upward. Clamping still wins, so a menu anchored near an
@@ -8851,13 +10339,47 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false } 
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
   menu.classList.remove("is-positioning");
+  const searchInput = menu.querySelector(".ctx-menu-search-input");
+  if (searchInput) {
+    const focusRequest = ++ctxSearchFocusRequest;
+    const focusSearch = () => {
+      if (focusRequest !== ctxSearchFocusRequest || menu.hidden || !searchInput.isConnected) return true;
+      const active = document.activeElement;
+      if (active !== searchInput && menu.contains(active)) return true;
+      if (active instanceof HTMLElement && active !== document.body && active !== searchInput) {
+        active.blur();
+      }
+      searchInput.focus({ preventScroll: true });
+      searchInput.select();
+      return document.activeElement === searchInput;
+    };
+    let attempts = 0;
+    const retryFocus = () => {
+      if (focusSearch() || attempts >= 8) return;
+      attempts += 1;
+      window.setTimeout(retryFocus, 25);
+    };
+    // Chromium temporarily rejects programmatic focus after some right-click
+    // gestures. Retry for at most 200 ms, while the same menu stays open and no
+    // menu control has taken focus.
+    retryFocus();
+  }
 }
 
 function hideContextMenu() {
   hideContextSubmenu();
   if (!elements.contextMenu.hidden) {
+    ctxSearchFocusRequest += 1;
     elements.contextMenu.hidden = true;
     ctxKeyIndex = -1;
+    ctxFocusables = [];
+    ctxAllFocusables = [];
+    ctxReturnFocus = null;
+    ctxShortcutCapture = null;
+    ctxShortcutEditing = false;
+    ctxShortcutStatus = "";
+    ctxRenderedItems = [];
+    ctxRenderOptions = {};
     elements.contextMenu.removeAttribute("aria-activedescendant");
   }
   for (const button of elements.host.querySelectorAll('button[data-action="more"][aria-expanded="true"]')) {
@@ -8887,7 +10409,10 @@ function enhanceComboboxes() {
       comboSelects.push(select);
     }
   }
-  window.addEventListener("scroll", () => openCombo?.close(), true);
+  window.addEventListener("scroll", (event) => {
+    if (openCombo?.ownsScrollTarget(event.target)) return;
+    openCombo?.close();
+  }, true);
   window.addEventListener("resize", () => openCombo?.close());
   refreshIcons();
 }
@@ -9049,7 +10574,168 @@ function enhanceSelect(select) {
     }, 120);
   });
 
-  const api = { close, sync };
+  const api = {
+    close,
+    ownsScrollTarget: (target) => target === list || target instanceof Node && list.contains(target),
+    sync
+  };
   select._combo = api;
   sync();
+}
+
+const settingsPanelGroups = [];
+let settingsSearchSnapshot = null;
+
+function normalizeSettingsSearchText(value) {
+  return String(value || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function settingsItemSearchText(item) {
+  const parts = [item.textContent];
+  for (const element of item.querySelectorAll("[id], [title], [placeholder], [aria-label], [value]")) {
+    parts.push(
+      element.id,
+      element.getAttribute("title"),
+      element.getAttribute("placeholder"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("value")
+    );
+  }
+  return normalizeSettingsSearchText(parts.filter(Boolean).join(" "));
+}
+
+function setSettingsGroupExpanded(group, expanded) {
+  group.expanded = Boolean(expanded);
+  if (!group.expanded) openCombo?.close();
+  group.button.setAttribute("aria-expanded", String(group.expanded));
+  group.body.hidden = !group.expanded;
+}
+
+function updateSettingsShowAllButton() {
+  const searching = Boolean(normalizeSettingsSearchText(elements.settingsSearch.value));
+  const allExpanded = !searching && settingsPanelGroups.every((group) => group.expanded);
+  elements.settingsShowAll.textContent = allExpanded ? "Collapse all" : "Show all";
+  elements.settingsShowAll.setAttribute("aria-pressed", String(allExpanded));
+}
+
+function applySettingsFilter() {
+  openCombo?.close();
+  const query = normalizeSettingsSearchText(elements.settingsSearch.value);
+  elements.controlPanel.classList.toggle("is-settings-filtering", Boolean(query));
+  if (query && !settingsSearchSnapshot) {
+    settingsSearchSnapshot = new Map(settingsPanelGroups.map((group) => [group, group.expanded]));
+  }
+
+  if (!query) {
+    for (const group of settingsPanelGroups) {
+      group.section.hidden = false;
+      for (const item of group.items) {
+        item.hidden = false;
+        item.classList.remove("is-settings-match");
+      }
+      if (settingsSearchSnapshot) setSettingsGroupExpanded(group, settingsSearchSnapshot.get(group));
+    }
+    settingsSearchSnapshot = null;
+    elements.controlPanel.querySelector(".settings-filter-empty")?.remove();
+    updateSettingsShowAllButton();
+    return;
+  }
+
+  let matchCount = 0;
+  for (const group of settingsPanelGroups) {
+    const headingMatches = group.searchText.includes(query);
+    let groupMatches = 0;
+    for (const item of group.items) {
+      const matches = headingMatches || settingsItemSearchText(item).includes(query);
+      item.hidden = !matches;
+      item.classList.toggle("is-settings-match", matches);
+      if (matches) groupMatches += 1;
+    }
+    group.section.hidden = groupMatches === 0;
+    if (groupMatches > 0) {
+      matchCount += groupMatches;
+      setSettingsGroupExpanded(group, true);
+    }
+  }
+
+  let empty = elements.controlPanel.querySelector(".settings-filter-empty");
+  if (matchCount === 0) {
+    if (!empty) {
+      empty = document.createElement("p");
+      empty.className = "settings-filter-empty";
+      empty.textContent = "No matching settings.";
+      elements.settingsShowAll.closest(".settings-panel-toolbar").insertAdjacentElement("afterend", empty);
+    }
+  } else {
+    empty?.remove();
+  }
+  updateSettingsShowAllButton();
+}
+
+function toggleAllSettingsGroups() {
+  const wasSearching = Boolean(elements.settingsSearch.value);
+  if (wasSearching) {
+    elements.settingsSearch.value = "";
+    applySettingsFilter();
+  }
+  const expand = wasSearching || !settingsPanelGroups.every((group) => group.expanded);
+  for (const group of settingsPanelGroups) setSettingsGroupExpanded(group, expand);
+  updateSettingsShowAllButton();
+}
+
+function initializeSettingsPanel() {
+  const sections = [...elements.controlPanel.children].filter((child) => child.matches("section.control-section"));
+  sections.forEach((section, index) => {
+    const heading = section.querySelector(":scope > h2");
+    const label = heading?.textContent.trim() || (section.classList.contains("action-grid") ? "Actions" : `Settings ${index + 1}`);
+    const slug = label.toLocaleLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `group-${index + 1}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "settings-group-toggle";
+    button.id = `settings-group-${slug}`;
+    button.setAttribute("aria-expanded", "false");
+    const buttonLabel = document.createElement("span");
+    buttonLabel.textContent = label;
+    const chevron = document.createElement("i");
+    chevron.dataset.lucide = "chevron-down";
+    chevron.setAttribute("aria-hidden", "true");
+    button.append(buttonLabel, chevron);
+
+    const body = document.createElement("div");
+    body.className = "settings-group-body";
+    body.id = `settings-body-${slug}`;
+    body.hidden = true;
+    button.setAttribute("aria-controls", body.id);
+    const items = [...section.children].filter((child) => child !== heading);
+    for (const item of items) {
+      item.classList.add("settings-filter-item");
+      body.append(item);
+    }
+    heading?.remove();
+    section.append(button, body);
+
+    const group = {
+      body,
+      button,
+      expanded: false,
+      items,
+      searchText: normalizeSettingsSearchText(label),
+      section
+    };
+    settingsPanelGroups.push(group);
+    button.addEventListener("click", () => {
+      setSettingsGroupExpanded(group, !group.expanded);
+      updateSettingsShowAllButton();
+    });
+  });
+
+  elements.settingsSearch.addEventListener("input", applySettingsFilter);
+  elements.settingsSearch.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !elements.settingsSearch.value) return;
+    event.preventDefault();
+    elements.settingsSearch.value = "";
+    applySettingsFilter();
+  });
+  elements.settingsShowAll.addEventListener("click", toggleAllSettingsGroups);
+  updateSettingsShowAllButton();
 }

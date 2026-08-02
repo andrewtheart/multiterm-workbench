@@ -313,6 +313,79 @@ describe("sendJsonResponse", () => {
   });
 });
 
+describe("watchdog bridge control", () => {
+  it("accepts only local launcher shutdown requests", () => {
+    vi.useFakeTimers();
+    const stop = vi.fn();
+    const accepted = mockResponse();
+    expect(server.handleShutdownRequest(mockRequest({
+      method: "POST",
+      url: "/shutdown",
+      headers: { "x-multiterm-request": "Launcher" }
+    }), accepted, stop)).toBe(true);
+    expect(JSON.parse(accepted.body)).toMatchObject({ ok: true, stopping: true });
+    vi.advanceTimersByTime(150);
+    expect(stop).toHaveBeenCalledOnce();
+
+    const remote = mockResponse();
+    expect(server.handleShutdownRequest(mockRequest({
+      method: "POST",
+      remoteAddress: "203.0.113.5",
+      headers: { "x-multiterm-request": "Launcher" }
+    }), remote, stop)).toBe(false);
+    expect(remote.statusCode).toBe(403);
+
+    const navigated = mockResponse();
+    expect(server.handleShutdownRequest(mockRequest({ method: "GET", url: "/shutdown" }), navigated, stop)).toBe(false);
+    expect(navigated.statusCode).toBe(405);
+  });
+
+  it("accepts only local launcher watchdog suppression requests", () => {
+    const accepted = mockResponse();
+    expect(server.handleWatchdogKeepRequest(mockRequest({
+      method: "POST",
+      url: "/watchdog/keep",
+      headers: { "x-multiterm-request": "Launcher" }
+    }), accepted)).toBe(true);
+    expect(JSON.parse(accepted.body)).toEqual({ ok: true, watchdogSuppressed: true });
+
+    const remote = mockResponse();
+    expect(server.handleWatchdogKeepRequest(mockRequest({
+      method: "POST",
+      remoteAddress: "203.0.113.5",
+      headers: { "x-multiterm-request": "Launcher" }
+    }), remote)).toBe(false);
+    expect(remote.statusCode).toBe(403);
+
+    const navigated = mockResponse();
+    expect(server.handleWatchdogKeepRequest(mockRequest({ method: "GET", url: "/watchdog/keep" }), navigated)).toBe(false);
+    expect(navigated.statusCode).toBe(405);
+  });
+
+  it("writes and removes a per-user instance record", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-instance-"));
+    const original = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    try {
+      const filePath = server.registerInstance("127.0.0.1", 45678);
+      const record = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      expect(record).toMatchObject({
+        app: "MultiTerm Workbench",
+        bridgeType: "electron",
+        pid: process.pid,
+        port: 45678,
+        url: "http://127.0.0.1:45678/"
+      });
+      server.unregisterInstance();
+      expect(fs.existsSync(filePath)).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = original;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("setSecurityHeaders", () => {
   it("applies a restrictive browser policy without allowing inline scripts", () => {
     const res = mockResponse();
@@ -725,6 +798,16 @@ describe("handleClientMessage", () => {
   it("lists sessions", () => {
     server.handleClientMessage(client, JSON.stringify({ type: "list" }));
     expect(client.send).toHaveBeenCalledWith({ type: "sessions", sessions: [] });
+  });
+
+  it("marks renderer clients for watchdog presence checks", () => {
+    server.clients.add(client);
+    expect(server.countRendererClients()).toBe(0);
+
+    server.handleClientMessage(client, JSON.stringify({ type: "rendererPresence" }));
+
+    expect(client.renderer).toBe(true);
+    expect(server.countRendererClients()).toBe(1);
   });
 
   it("rejects unknown message types", () => {

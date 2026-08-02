@@ -71,6 +71,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "watchdog"; Description: "Install the MultiTerm watchdog (recommended; monitors bridges and asks before closing orphaned terminal sessions)"; GroupDescription: "Background monitoring:"; Flags: checkedonce
 Name: "explorercontext"; Description: "Add 'Open in MultiTerm' to File Explorer folder context menus (optional; Windows 11 requires administrator approval)"; GroupDescription: "File Explorer integration (select to enable):"; Flags: unchecked
 Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 'multiterm' command)"; GroupDescription: "Command-line integration (machine-wide Program Files installs only):"; Flags: unchecked; Check: IsProtectedSystemPathInstall
 
@@ -81,6 +82,7 @@ Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\{#MyScriptFile}"; Flags: dontcopy
 Source: "cli\multiterm.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "cli\Manage-SystemPath.ps1"; DestDir: "{app}\CLI"; Flags: ignoreversion
+Source: "{#RepoRoot}\scripts\MultiTerm-Watchdog.ps1"; DestDir: "{app}\Watchdog"; Flags: ignoreversion
 Source: "{#RepoRoot}\public\*"; DestDir: "{app}\public"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
@@ -102,8 +104,11 @@ Name: "{group}\Stop all {#MyAppName} instances"; Filename: "{sys}\WindowsPowerSh
 Name: "{group}\{#MyAppName} README"; Filename: "{app}\README.md"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Tasks: desktopicon
+Name: "{userstartup}\MultiTerm Watchdog"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\Watchdog\MultiTerm-Watchdog.ps1"""; WorkingDir: "{app}\Watchdog"; IconFilename: "{app}\MultiTerm.ico"; Tasks: watchdog; Comment: "Monitor MultiTerm bridges and ask before closing orphaned terminal sessions"
 
 [Run]
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\Watchdog\MultiTerm-Watchdog.ps1"" -Stop"; Flags: runhidden waituntilterminated; StatusMsg: "Refreshing the MultiTerm watchdog..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\Watchdog\MultiTerm-Watchdog.ps1"""; WorkingDir: "{app}\Watchdog"; Flags: runhidden nowait; Tasks: watchdog; StatusMsg: "Starting the MultiTerm watchdog..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Install -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: systempath; Check: IsProtectedSystemPathInstall; StatusMsg: "Adding MultiTerm to the system PATH..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Uninstall -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveSystemPath; StatusMsg: "Removing MultiTerm from the system PATH..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateInstallCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: explorercontext; MinVersion: 10.0.22000; StatusMsg: "Trusting the MultiTerm Explorer package..."
@@ -115,6 +120,7 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\Watchdog\MultiTerm-Watchdog.ps1"" -Stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopMultiTermWatchdog"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Uninstall -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldUninstallSystemPath; RunOnceId: "RemoveMultiTermSystemPath"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveMultiTermExplorerIntegration"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; RunOnceId: "RemoveMultiTermExplorerCertificate"

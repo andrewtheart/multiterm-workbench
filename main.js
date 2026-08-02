@@ -101,6 +101,7 @@ let elevationChecked = false;
 let mainWindow = null;
 let tray = null;
 let serverProcess = null;
+let bridgeHandledForQuit = false;
 // Timestamps of recent unexpected bridge restarts, used as a crash-loop guard so
 // a bridge that dies immediately over and over surfaces an error instead of
 // respawning forever.
@@ -120,12 +121,12 @@ function startServer() {
   const nodeExe = process.platform === "win32" ? "node.exe" : "node";
   serverProcess = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
     cwd: __dirname,
-    env: { ...process.env, HOST, PORT: String(PORT) },
-    stdio: ["ignore", "pipe", "pipe"]
+    detached: true,
+    env: { ...process.env, HOST, PORT: String(PORT), MULTITERM_UI_OWNER_PID: String(process.pid) },
+    stdio: "ignore",
+    windowsHide: true
   });
-
-  serverProcess.stdout.on("data", (d) => process.stdout.write(`[bridge] ${d}`));
-  serverProcess.stderr.on("data", (d) => process.stderr.write(`[bridge] ${d}`));
+  serverProcess.unref?.();
   serverProcess.on("error", (err) => {
     if (!app.isQuiting) {
       dialog.showErrorBox(
@@ -164,19 +165,95 @@ function stopServer() {
   }
 }
 
+function requestServerShutdown(callback) {
+  const child = serverProcess;
+
+  let finished = false;
+  const finish = (force) => {
+    if (finished) return;
+    finished = true;
+    if (force && child && !child.killed) child.kill();
+    serverProcess = null;
+    callback();
+  };
+  const request = http.request({
+    host: HOST,
+    port: PORT,
+    path: "/shutdown",
+    method: "POST",
+    headers: { "X-MultiTerm-Request": "Launcher" },
+    timeout: 3000
+  }, (response) => {
+    response.resume();
+    response.on("end", () => finish(response.statusCode !== 200));
+  });
+  request.on("timeout", () => request.destroy(new Error("Bridge shutdown timed out.")));
+  request.on("error", () => finish(true));
+  request.end();
+}
+
+function requestWatchdogSuppression(callback) {
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    callback();
+  };
+  const request = http.request({
+    host: HOST,
+    port: PORT,
+    path: "/watchdog/keep",
+    method: "POST",
+    headers: { "X-MultiTerm-Request": "Launcher" },
+    timeout: 2000
+  }, (response) => {
+    response.resume();
+    response.on("end", finish);
+  });
+  request.on("timeout", () => request.destroy(new Error("Bridge watchdog update timed out.")));
+  request.on("error", finish);
+  request.end();
+}
+
+function probeServer(timeoutMs = 500) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      resolve(ready);
+    };
+    const request = http.get({ host: HOST, port: PORT, path: "/health", timeout: timeoutMs }, (response) => {
+      let body = "";
+      response.setEncoding?.("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => {
+        try {
+          const health = JSON.parse(body);
+          finish(response.statusCode === 200
+            && health.app === "MultiTerm Workbench"
+            && Number.isSafeInteger(Number(health.pid))
+            && Number(health.pid) > 0
+            && Number(health.port) === PORT);
+        } catch {
+          finish(false);
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("Bridge health check timed out.")));
+    request.on("error", () => finish(false));
+  });
+}
+
 function waitForServer(timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
-    const attempt = () => {
-      const req = http.get({ host: HOST, port: PORT, path: "/health", timeout: 1000 }, (res) => {
-        res.resume();
+    const attempt = async () => {
+      if (await probeServer(1000)) {
         resolve();
-      });
-      req.on("error", retry);
-      req.on("timeout", () => {
-        req.destroy();
-        retry();
-      });
+        return;
+      }
+      retry();
     };
     const retry = () => {
       if (Date.now() > deadline) {
@@ -275,7 +352,7 @@ function createWindow() {
     event.preventDefault();
     const wc = mainWindow.webContents;
     if (wc && !wc.isDestroyed()) {
-      wc.send("multiterm:close-request");
+      wc.send("multiterm:close-request", "window");
     } else {
       // No renderer to ask — fall back to the safe default of docking to tray.
       // The user can still quit from the tray menu.
@@ -299,10 +376,25 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
-// Explicit, user-initiated quit: bypasses the tray-docking close interception.
-function quitApp() {
+function requestCloseDecision(source) {
+  showMainWindow();
+  const wc = mainWindow && mainWindow.webContents;
+  if (wc && !wc.isDestroyed()) wc.send("multiterm:close-request", source);
+}
+
+// Explicit, user-initiated quit after the renderer has made the bridge decision.
+function quitApp(closeBridge = true) {
   app.isQuiting = true;
-  app.quit();
+  bridgeHandledForQuit = true;
+  if (!closeBridge) {
+    requestWatchdogSuppression(() => {
+      serverProcess?.unref?.();
+      serverProcess = null;
+      app.quit();
+    });
+    return;
+  }
+  requestServerShutdown(() => app.quit());
 }
 
 // System-tray icon with Show / Quit actions, so a tray-docked app stays reachable.
@@ -313,7 +405,7 @@ function createTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Show MultiTerm", click: () => showMainWindow() },
     { type: "separator" },
-    { label: "Quit MultiTerm", click: () => quitApp() }
+    { label: "Quit MultiTerm", click: () => requestCloseDecision("tray") }
   ]));
   tray.on("click", () => showMainWindow());
   tray.on("double-click", () => showMainWindow());
@@ -322,8 +414,10 @@ function createTray() {
 
 // Applies the renderer's close decision: dock to tray, quit, or stay open.
 function handleCloseResponse(action) {
-  if (action === "quit") {
-    quitApp();
+  if (action === "quitClose") {
+    quitApp(true);
+  } else if (action === "quitKeep") {
+    quitApp(false);
   } else if (action === "tray") {
     if (mainWindow) mainWindow.hide();
   }
@@ -363,7 +457,8 @@ function registerClipboardIpc() {
 
 // Single-instance: focus the existing window instead of launching a second app.
 async function onReady() {
-  startServer();
+  const reusedBridge = await probeServer();
+  if (!reusedBridge) startServer();
   try {
     await waitForServer();
   } catch (err) {
@@ -854,7 +949,7 @@ function bootstrap() {
 
   app.on("before-quit", () => {
     app.isQuiting = true;
-    stopServer();
+    if (!bridgeHandledForQuit) stopServer();
     if (!tray) {
       /* no tray to tear down */
     } else {
@@ -874,8 +969,12 @@ module.exports = {
   waitForServer,
   createWindow,
   createTray,
+  requestCloseDecision,
   showMainWindow,
   quitApp,
+  requestServerShutdown,
+  requestWatchdogSuppression,
+  probeServer,
   handleCloseResponse,
   registerCloseHandler,
   registerClipboardIpc,
@@ -912,6 +1011,7 @@ module.exports = {
     mainWindow = null;
     tray = null;
     serverProcess = null;
+    bridgeHandledForQuit = false;
     serverRestarts = [];
     appIsElevated = false;
     elevationChecked = false;

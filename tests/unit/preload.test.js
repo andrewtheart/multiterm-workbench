@@ -85,6 +85,6 @@ test("registers close and progress callbacks and ignores invalid handlers", () =
   const progressListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:update-progress")[1];
   closeListener({}, "ignored");
   progressListener({}, { received: 5, total: 10 });
-  expect(close).toHaveBeenCalledWith();
+  expect(close).toHaveBeenCalledWith("ignored");
   expect(progress).toHaveBeenCalledWith({ received: 5, total: 10 });
 });

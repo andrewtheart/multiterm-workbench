@@ -85,13 +85,34 @@ The renderer is shared, but the bridge hot paths differ.
 | Broadcast encoding | One JSON/WebSocket frame reused across clients | Encodes and waits per client |
 | Renderer batching | Shared rAF/hidden-timer pipeline | Same shared renderer |
 | Memory/status sampling | PowerShell CIM subprocess | Native process enumeration/sampling |
-| Teardown | Graceful exit, interrupt, kill, 150 ms stagger | Serialized/staggered ConPTY closure |
-| Bridge recovery | Electron supervisor restarts the Node bridge | Owning launcher controls installed bridge lifetime |
+| Teardown | Shell exit, Ctrl+C, second exit, force fallback; 150 ms stagger | Same staged sequence; host waits for session exit before closing its listener |
+| Bridge recovery | Electron supervisor restarts the Node bridge and reuses a compatible detached bridge | Owning launcher and optional per-user watchdog monitor bridge lifetime |
 
 The installed bridge avoids node-pty's native ABI and teardown bugs and now
 coalesces burst output before WebSocket dispatch. It still performs encoding and
 synchronous send work per client, so one slow client can extend a broadcast loop.
 Protocol features and performance behavior must be checked in both implementations.
+
+The optional watchdog polls only registered bridge records and their small
+`/health` payloads. It does not inspect terminal output or sit in the PTY path.
+Electron probes `/health` once at startup so a bridge detached by **Quit and keep
+terminals** can be reused without a conflicting spawn. Destructive shutdown is
+bounded: the bridges allow cooperative shell exit, interrupt a still-busy
+foreground command, retry shell exit, then force only remaining sessions. The
+installed host remains alive until exit callbacks drain or the bounded fallback
+expires, preventing delayed continuation work from being abandoned.
+
+Terminal messaging is event-driven and bridge-owned. Sending, listing, inserting,
+and dismissing occur only on user or socket events; there is no polling and no work
+in PTY output callbacks. Payload size and per-target pending capacity are user-configured.
+The shared store is always bounded to 500 records or 4 MiB, and inbox bodies are
+rendered only while the messaging surface is in use.
+
+Workspace connection paths are SVG and pointer-transparent. Geometry updates are
+coalesced through one animation-frame callback triggered by stage/host resize,
+host scrolling, pane drag/layout/page/minimize/search changes, or route changes.
+The observer deliberately does not watch pane subtree class mutations, so PTY
+output and activity indicators cannot schedule connector work.
 
 ## End-to-end output pipeline
 

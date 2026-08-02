@@ -329,12 +329,11 @@ test.describe("Command queue context submenu", () => {
     await page.locator(".terminal-screen").first().click({ button: "right" });
     await expect(page.locator("#contextMenu")).toBeVisible();
 
-    // Drive the keyboard highlight onto the queue row without relying on how many
-    // rows precede it, then step into the submenu.
-    await page.evaluate(() => {
-      const index = ctxFocusables.findIndex((el) => el.textContent.includes("Command queue"));
-      setContextFocus(index);
-    });
+    const search = page.locator("#contextMenu .ctx-menu-search-input");
+    await expect(search).toBeFocused();
+    await search.fill("command queue");
+    await search.press("ArrowDown");
+    await expect(page.locator("#contextMenu .ctx-item.is-key-focus")).toContainText("Command queue");
     await page.keyboard.press("ArrowRight");
 
     const submenu = page.locator("#contextSubmenu");
