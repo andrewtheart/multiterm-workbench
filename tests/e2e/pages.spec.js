@@ -80,8 +80,12 @@ test.describe("Pages and the quick switcher", () => {
       state.pages = [{ id: "page-1", name: "Page 1" }];
       state.activePageId = "page-1";
       state.terminalPages = {};
+      state.settings.pagerCollapsed = false;
+      state.settings.pagerPlacement = "bottom";
       savePages();
       saveTerminalPages();
+      saveSettings();
+      applyPagerPlacement();
       renderPager();
     });
     for (let i = 0; i < paneCount; i += 1) {
@@ -110,6 +114,284 @@ test.describe("Pages and the quick switcher", () => {
     await expect(chips.nth(1).locator(".pager-count")).toHaveText("0");
     await expect(chips.nth(0)).toHaveClass(/is-active/);
     await expect(chips.nth(1)).not.toHaveClass(/is-active/);
+  });
+
+  test("opens a new page with quick key 1 and shows close controls on proper tabs", async () => {
+    await reset(1);
+    await page.evaluate(() => elements.pagerList.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 420,
+      clientY: 700
+    })));
+
+    const menuRows = page.locator("#contextMenu .ctx-item");
+    await expect(menuRows.first()).toContainText("Open new page");
+    await expect(menuRows.first()).toHaveAttribute("data-accel-num", "1");
+    await expect(menuRows.first().locator(".ctx-accel-num")).toHaveAttribute("data-num", "1");
+    await page.keyboard.press("1");
+
+    const tabs = page.locator(".pager-chip");
+    await expect(tabs).toHaveCount(2);
+    await expect(tabs.locator(".pager-close")).toHaveCount(2);
+    for (let index = 0; index < 2; index += 1) {
+      const tab = tabs.nth(index);
+      const close = tab.locator(".pager-close");
+      await expect(tab).toHaveAttribute("role", "tab");
+      await expect(close).toBeVisible();
+      await expect(close).toHaveText("\u00d7");
+      await expect(close).toHaveAttribute("aria-disabled", "false");
+      const positions = await tab.evaluate((element) => {
+        const name = element.querySelector(".pager-name").getBoundingClientRect();
+        const closeBox = element.querySelector(".pager-close").getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return { closeLeft: closeBox.left, nameRight: name.right, radius: style.borderRadius };
+      });
+      expect(positions.closeLeft).toBeGreaterThanOrEqual(positions.nameRight);
+      expect(positions.radius).not.toContain("999px");
+    }
+
+    await tabs.last().locator(".pager-close").click();
+    await expect(tabs).toHaveCount(1);
+    const lastClose = tabs.first().locator(".pager-close");
+    await expect(lastClose).toBeVisible();
+    await expect(lastClose).toHaveAttribute("aria-disabled", "true");
+    await lastClose.click({ force: true });
+    await expect(tabs).toHaveCount(1);
+
+    await page.evaluate(() => setPagerPlacement("left"));
+    const pagerBox = await page.locator("#pager").boundingBox();
+    await page.mouse.click(pagerBox.x + pagerBox.width / 2, pagerBox.y + pagerBox.height / 2, { button: "right" });
+    await expect(menuRows.first()).toContainText("Open new page");
+    await expect(menuRows.first()).toHaveAttribute("data-accel-num", "1");
+    await expect(tabs.first().locator(".pager-close")).toBeVisible();
+    await page.keyboard.press("Escape");
+  });
+
+  test("moves the pager around the workbench and collapses vertical panels", async () => {
+    await reset(2);
+    await page.evaluate(() => {
+      state.settings.sidecarHidden = false;
+      setPagerPlacement("bottom");
+      elements.pager.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 400,
+        clientY: 700
+      }));
+    });
+
+    const menu = page.locator("#contextMenu");
+    await expect(menu).toBeVisible();
+    await expect(menu.locator(".ctx-item")).toContainText([
+      "Open new page",
+      "Move pages to top",
+      "Move pages to bottom",
+      "Move pages to left",
+      "Move pages to right"
+    ]);
+    await page.keyboard.press("Escape");
+
+    const geometry = async (placement) => {
+      await page.evaluate((value) => setPagerPlacement(value), placement);
+      return page.evaluate(() => {
+        const box = (element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width };
+        };
+        return {
+          parent: elements.pager.parentElement.className,
+          pager: box(elements.pager),
+          settings: box(elements.controlPanel),
+          stage: box(elements.stage),
+          workbench: box(elements.workbench),
+          orientation: elements.pager.getAttribute("aria-orientation")
+        };
+      });
+    };
+
+    const top = await geometry("top");
+    expect(top.parent).toBe("app-shell");
+    expect(top.orientation).toBe("horizontal");
+    expect(top.pager.bottom).toBeLessThanOrEqual(top.workbench.top + 1);
+    expect(await page.evaluate(() => elements.pager.nextElementSibling === elements.workbench)).toBe(true);
+
+    const bottom = await geometry("bottom");
+    expect(bottom.parent).toBe("app-shell");
+    expect(bottom.pager.top).toBeGreaterThanOrEqual(bottom.workbench.bottom - 1);
+
+    const hiddenSidecarPadding = await page.evaluate(() => {
+      state.settings.sidecarHidden = true;
+      applySettings();
+      setPagerPlacement("top");
+      const top = {
+        paddingLeft: getComputedStyle(elements.pager).paddingLeft,
+        tabInset: elements.pagerList.querySelector(".pager-chip").getBoundingClientRect().left
+          - elements.pager.getBoundingClientRect().left
+      };
+      setPagerPlacement("bottom");
+      const bottom = {
+        paddingLeft: getComputedStyle(elements.pager).paddingLeft,
+        tabInset: elements.pagerList.querySelector(".pager-chip").getBoundingClientRect().left
+          - elements.pager.getBoundingClientRect().left
+      };
+      state.settings.sidecarHidden = false;
+      applySettings();
+      return { top, bottom };
+    });
+    expect(hiddenSidecarPadding.top.paddingLeft).toBe("10px");
+    expect(hiddenSidecarPadding.top.tabInset).toBeLessThan(20);
+    expect(hiddenSidecarPadding.bottom.paddingLeft).toBe("62px");
+    expect(hiddenSidecarPadding.bottom.tabInset).toBeGreaterThanOrEqual(62);
+
+    const left = await geometry("left");
+    expect(left.parent).toBe("workbench");
+    expect(left.orientation).toBe("vertical");
+    expect(Math.abs(left.settings.right - left.pager.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(left.pager.right - left.stage.left)).toBeLessThanOrEqual(1);
+    expect(left.pager.width).toBe(230);
+
+    const right = await geometry("right");
+    expect(right.parent).toBe("workbench");
+    expect(Math.abs(right.settings.right - right.stage.left)).toBeLessThanOrEqual(1);
+    expect(Math.abs(right.stage.right - right.pager.left)).toBeLessThanOrEqual(1);
+    await expect(page.locator("#pagerPlacement")).toHaveValue("right");
+
+    await page.locator("#pagerCollapse").click();
+    await expect(page.locator("#pager")).toBeHidden();
+    await expect(page.locator("#togglePager")).toBeVisible();
+    await page.locator("#togglePager").click();
+    await expect(page.locator("#pager")).toBeVisible();
+
+    await page.reload();
+    await expect(page.locator("body")).toHaveAttribute("data-pager-placement", "right");
+    await expect(page.locator("#pagerPlacement")).toHaveValue("right");
+    await expect(page.locator("#pager")).toHaveAttribute("aria-orientation", "vertical");
+    await expect(page.locator("#pager")).toBeVisible();
+
+    await page.setViewportSize({ width: 900, height: 800 });
+    const responsive = await page.evaluate(() => {
+      setPagerPlacement("left");
+      const box = (element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+      };
+      return {
+        pager: box(elements.pager),
+        settings: box(elements.controlPanel),
+        stage: box(elements.stage),
+        scrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth
+      };
+    });
+    expect(responsive.pager.top).toBeGreaterThanOrEqual(responsive.settings.bottom - 1);
+    expect(Math.abs(responsive.pager.right - responsive.stage.left)).toBeLessThanOrEqual(1);
+    expect(responsive.scrollWidth).toBeLessThanOrEqual(responsive.viewportWidth);
+
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.locator("#pagerCollapse").click();
+    const narrowRestore = await page.locator("#togglePager").boundingBox();
+    expect(narrowRestore.x).toBeGreaterThanOrEqual(0);
+    expect(narrowRestore.x + narrowRestore.width).toBeLessThanOrEqual(320);
+    await page.locator("#togglePager").click();
+
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const overlap = await page.evaluate(() => {
+      state.settings.sidecarHidden = true;
+      applySettings();
+      setPagerPlacement("left");
+      const first = elements.toggleSidecar.getBoundingClientRect();
+      const second = elements.pagerAdd.getBoundingClientRect();
+      const width = Math.max(0, Math.min(first.right, second.right) - Math.max(first.left, second.left));
+      const height = Math.max(0, Math.min(first.bottom, second.bottom) - Math.max(first.top, second.top));
+      return width * height;
+    });
+    expect(overlap).toBe(0);
+    await page.evaluate(() => {
+      state.settings.sidecarHidden = false;
+      applySettings();
+    });
+  });
+
+  test("persists page placement changed from the Layout side panel", async () => {
+    await reset(1);
+    await page.locator("#settings-group-layout").click();
+    const placementInput = page.locator("#pagerPlacement").locator("xpath=..").locator(".combobox-input");
+    await expect(placementInput).toBeVisible();
+    await expect(placementInput).toHaveValue("Bottom");
+    await placementInput.click();
+    await page.locator(".combobox-list:visible .combobox-option", { hasText: "Left" }).click();
+
+    await expect(page.locator("body")).toHaveAttribute("data-pager-placement", "left");
+    await expect(page.locator("#pagerPlacement")).toHaveValue("left");
+    await expect(placementInput).toHaveValue("Left");
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").pagerPlacement)).toBe("left");
+
+    await page.reload();
+    await expect(page.locator("body")).toHaveAttribute("data-pager-placement", "left");
+    await expect(page.locator("#pagerPlacement")).toHaveValue("left");
+
+    await page.evaluate(() => {
+      setPagerPlacement("top");
+    });
+    await expect(page.locator("#pagerPlacement")).toHaveValue("top");
+    await expect(page.locator("#pagerPlacement").locator("xpath=..").locator(".combobox-input")).toHaveValue("Top");
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").pagerPlacement)).toBe("top");
+  });
+
+  test("reorders pages by dragging on the pager axis and persists the order", async () => {
+    await reset(1);
+    await page.evaluate(() => {
+      addPage({ name: "Builds", activate: false });
+      addPage({ name: "Logs", activate: false });
+      setPagerPlacement("bottom");
+    });
+
+    const order = () => page.evaluate(() => state.pages.map((item) => item.name));
+    await page.locator(".pager-chip", { hasText: "Builds" }).focus();
+    await page.keyboard.press("Control+Shift+ArrowLeft");
+    await expect.poll(order).toEqual(["Builds", "Page 1", "Logs"]);
+    await page.keyboard.press("Control+Shift+ArrowRight");
+    await expect.poll(order).toEqual(["Page 1", "Builds", "Logs"]);
+
+    const cancelled = await page.evaluate(() => {
+      const source = elements.pagerList.querySelector('[data-page-id="page-1"]');
+      const target = [...elements.pagerList.querySelectorAll(".pager-chip")].find((chip) => chip.textContent.includes("Logs"));
+      const transfer = new DataTransfer();
+      source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
+      moveDraggedPage(target, false);
+      source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }));
+      return {
+        pages: state.pages.map((item) => item.name),
+        chips: [...elements.pagerList.querySelectorAll(".pager-name")].map((item) => item.textContent)
+      };
+    });
+    expect(cancelled.pages).toEqual(["Page 1", "Builds", "Logs"]);
+    expect(cancelled.chips).toEqual(cancelled.pages);
+
+    const logsBox = await page.locator(".pager-chip", { hasText: "Logs" }).boundingBox();
+    await page.locator(".pager-chip", { hasText: "Page 1" }).dragTo(
+      page.locator(".pager-chip", { hasText: "Logs" }),
+      { targetPosition: { x: logsBox.width - 2, y: logsBox.height / 2 } }
+    );
+    await expect.poll(order).toEqual(["Builds", "Logs", "Page 1"]);
+
+    await page.evaluate(() => setPagerPlacement("left"));
+    await page.locator(".pager-chip", { hasText: "Page 1" }).dragTo(
+      page.locator(".pager-chip", { hasText: "Builds" }),
+      { targetPosition: { x: 20, y: 2 } }
+    );
+    await expect.poll(order).toEqual(["Page 1", "Builds", "Logs"]);
+
+    await page.locator(".pager-chip", { hasText: "Logs" }).focus();
+    await page.keyboard.press("Control+Shift+ArrowUp");
+    await expect.poll(order).toEqual(["Page 1", "Logs", "Builds"]);
+    await page.keyboard.press("Control+Shift+ArrowDown");
+    await expect.poll(order).toEqual(["Page 1", "Builds", "Logs"]);
+
+    await page.reload();
+    await expect.poll(order).toEqual(["Page 1", "Builds", "Logs"]);
+    await expect(page.locator("body")).toHaveAttribute("data-pager-placement", "left");
   });
 
   test("switching pages hides panes without killing their sessions", async () => {

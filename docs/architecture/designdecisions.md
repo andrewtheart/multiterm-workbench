@@ -33,6 +33,7 @@ The proof of concept should implement only:
 - An HTTP/WebSocket endpoint compatible with the existing renderer protocol.
 - One PowerShell session using Windows ConPTY.
 - Terminal input, output, resize, exit, and shutdown.
+- Bridge-owned terminal titles synchronized across renderers and control consoles.
 - Repeated concurrent terminal creation and teardown.
 - Cleanup of shell processes after forced backend termination.
 

@@ -174,8 +174,9 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#settings-group-session")).toBeVisible();
     await expect(page.locator("#settings-group-session")).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator("#startupCommand")).toBeVisible();
+    await expect(page.locator("#restoreSession")).toBeVisible();
     await expect(page.locator("#settings-group-appearance")).toBeHidden();
-    await expect(page.locator(".settings-filter-item:not([hidden])")).toHaveCount(1);
+    await expect(page.locator(".settings-filter-item:not([hidden])")).toHaveCount(2);
 
     await page.locator("#settingsSearch").press("Escape");
     await expect(page.locator("#settingsSearch")).toHaveValue("");
@@ -212,6 +213,65 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsShowAll")).toHaveText("Show all");
     await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(9);
+  });
+
+  test("finds settings through comprehensive related terms without rescanning the DOM", async () => {
+    const search = page.locator("#settingsSearch");
+    await expect(search).toHaveAttribute("placeholder", "Search settings or related terms");
+    const missingAliases = await page.evaluate(() => [...document.querySelectorAll(
+      ".settings-group-body input[id], .settings-group-body select[id], .settings-group-body button[id]"
+    )].filter((control) => !SETTINGS_SEARCH_ALIASES[control.id]).map((control) => control.id));
+    expect(missingAliases).toEqual([]);
+    const cases = [
+      ["tabs dock", "#pagerPlacement"],
+      ["tile arrangement", "#layoutMode"],
+      ["caret shape", "#cursorStyle"],
+      ["clipboard shortcut", "#ctrlVPaste"],
+      ["tail output", "#scrollOnOutput"],
+      ["download ceiling", "#maxInstallerSizeMb"],
+      ["shells survive", "#keepSessionsOnClose"],
+      ["awaiting question", "#highlightInputPrompts"],
+      ["handoff quota", "#terminalInboxCapacity"],
+      ["macros", "#snippetList"],
+      ["projects snapshots", "#workspaceSelect"],
+      ["right click execute", "#rightClickAction"]
+    ];
+
+    for (const [query, selector] of cases) {
+      await search.fill(query);
+      const item = page.locator(`${selector}.settings-filter-item, .settings-filter-item:has(${selector})`);
+      const unrelated = page.locator(".settings-filter-item:has(#appTheme)");
+      await expect(item).toBeVisible();
+      await expect(unrelated).toBeHidden();
+    }
+
+    await search.fill("tabs");
+    const pagerPlacementItem = page.locator(".settings-filter-item:has(#pagerPlacement)");
+    await expect(pagerPlacementItem).toBeVisible();
+    await expect(page.locator(".settings-filter-item:not([hidden])")).toHaveCount(1);
+    const aliases = await pagerPlacementItem.getAttribute("data-search-aliases");
+    expect(aliases).toContain("tabs");
+
+    const itemDomScans = await page.evaluate(() => {
+      const original = Element.prototype.querySelectorAll;
+      let scans = 0;
+      Element.prototype.querySelectorAll = function (...args) {
+        if (this.classList?.contains("settings-filter-item")) scans += 1;
+        return original.apply(this, args);
+      };
+      try {
+        for (const query of ["tabs", "clipboard", "alerts", "layout", "workspace", "startup"]) {
+          elements.settingsSearch.value = query;
+          applySettingsFilter();
+        }
+      } finally {
+        Element.prototype.querySelectorAll = original;
+        elements.settingsSearch.value = "";
+        applySettingsFilter();
+      }
+      return scans;
+    });
+    expect(itemDomScans).toBe(0);
   });
 
   test("adds terminals and runs a command", async () => {
@@ -514,7 +574,9 @@ test.describe("MultiTerm Workbench UI", () => {
       "Find…Ctrl+F",
       "Duplicate"
     ]);
-    await expect(menu.locator(".ctx-item", { hasText: "Move left" })).toHaveAttribute("aria-disabled", "true");
+    const disabledMove = menu.locator(".ctx-item", { hasText: "Move left" });
+    await expect(disabledMove).toHaveAttribute("aria-disabled", "true");
+    await expect(disabledMove).toHaveAttribute("draggable", "true");
 
     await menu.locator(".ctx-item", { hasText: "Move right" }).click();
     await expect(page.locator(".terminal-pane").nth(1)).toHaveAttribute("data-id", firstId);
@@ -553,6 +615,138 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(menu.locator(".ctx-item")).toHaveText(["Find…Ctrl+F", "Duplicate"]);
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
+  });
+
+  test("customizes terminal header actions by drag scope and remembers the choice", async () => {
+    await setNative("#columnCount", "1", "input");
+    await setNative("#headerActionDragScope", "ask", "change");
+
+    const panes = page.locator(".terminal-pane");
+    if ((await panes.count()) < 2) await page.locator("#addTerminal").click();
+    const firstPane = panes.first();
+    const firstId = await firstPane.getAttribute("data-id");
+    const more = firstPane.locator('[data-action="more"]');
+    const flyout = page.locator("#headerActionScopeFlyout");
+
+    await firstPane.locator('[data-action="clear"]').dragTo(more);
+    await expect(flyout).toBeVisible();
+    await expect(flyout.locator('input[value="all"]')).toBeChecked();
+    await flyout.locator("#headerActionScopeApply").click();
+    await expect.poll(() => panes.locator('[data-action="clear"]').evaluateAll((buttons) => (
+      buttons.every((button) => button.dataset.headerPlacement === "menu")
+    ))).toBe(true);
+
+    await more.click();
+    const menu = page.locator("#contextMenu");
+    const clearMenuAction = menu.locator('.ctx-item[data-header-action="clear"]');
+    await expect(clearMenuAction).toBeVisible();
+    await clearMenuAction.dragTo(firstPane.locator(".pane-actions"));
+    await expect(flyout).toBeVisible();
+    await flyout.locator('input[value="terminal"]').check();
+    await flyout.locator("#headerActionScopeApply").click();
+    await expect(firstPane.locator('[data-action="clear"]')).toHaveAttribute("data-header-placement", "header");
+    await expect(panes.nth(1).locator('[data-action="clear"]')).toHaveAttribute("data-header-placement", "menu");
+
+    const savedOverride = await page.evaluate((terminalId) => {
+      const snapshot = JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]");
+      return snapshot.find((terminal) => terminal.id === terminalId)?.headerActionOverrides?.clear;
+    }, firstId);
+    expect(savedOverride).toBe("header");
+
+    await page.evaluate(() => {
+      const group = document.querySelector("#settings-group-workspaces");
+      if (group.getAttribute("aria-expanded") !== "true") group.click();
+    });
+    await page.locator("#workspaceName").fill("Header action placement");
+    await page.locator("#workspaceSave").click();
+    const workspaceOverride = await page.evaluate(() => {
+      const workspaces = JSON.parse(localStorage.getItem("multiterm.workspaces") || "{}");
+      return workspaces["Header action placement"]?.terminals?.[0]?.headerActionOverrides?.clear;
+    });
+    expect(workspaceOverride).toBe("header");
+    await page.locator("#workspaceDelete").click();
+
+    const paneCountBeforeDuplicate = await panes.count();
+    await more.click();
+    await menu.locator('.ctx-item[data-header-action="duplicate"]').click();
+    await expect(panes.last().locator('[data-action="clear"]')).toHaveAttribute("data-header-placement", "header");
+    await panes.last().locator('[data-action="close"]').click();
+    await expect(panes).toHaveCount(paneCountBeforeDuplicate);
+    await expect.poll(() => page.evaluate(() => new Promise((resolve, reject) => {
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+      const timeout = setTimeout(() => {
+        socket.close();
+        reject(new Error("Timed out reading bridge sessions"));
+      }, 2000);
+      socket.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type !== "welcome") return;
+        clearTimeout(timeout);
+        socket.close();
+        resolve(message.sessions.length);
+      });
+      socket.addEventListener("error", () => {
+        clearTimeout(timeout);
+        reject(new Error("Could not read bridge sessions"));
+      });
+    }))).toBe(paneCountBeforeDuplicate);
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const restoredFirst = page.locator(`.terminal-pane[data-id="${firstId}"]`);
+    await expect(restoredFirst.locator('[data-action="clear"]')).toHaveAttribute("data-header-placement", "header");
+    const secondPane = page.locator(`.terminal-pane:not([data-id="${firstId}"])`).first();
+    await secondPane.scrollIntoViewIfNeeded();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await secondPane.locator('[data-action="more"]').click();
+    const restoredClearMenuAction = menu.locator('.ctx-item[data-header-action="clear"]');
+    await expect(restoredClearMenuAction).toBeVisible();
+    await page.evaluate((terminalId) => {
+      const source = document.querySelector('#contextMenu .ctx-item[data-header-action="clear"]');
+      const target = document.querySelector(`.terminal-pane[data-id="${terminalId}"] .pane-actions`);
+      const dataTransfer = new DataTransfer();
+      source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer }));
+      target.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer }));
+      target.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }));
+      source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
+    }, await secondPane.getAttribute("data-id"));
+    await expect(flyout.locator('input[value="all"]')).toBeChecked();
+    await flyout.locator("#headerActionScopeApply").click();
+    await expect.poll(() => page.locator('.terminal-pane [data-action="clear"]').evaluateAll((buttons) => (
+      buttons.every((button) => button.dataset.headerPlacement === "header")
+    ))).toBe(true);
+
+    await restoredFirst.locator('[data-action="copy"]').dragTo(restoredFirst.locator('[data-action="more"]'));
+    await flyout.locator('input[value="terminal"]').check();
+    await flyout.locator("#headerActionScopeRemember").check();
+    await flyout.locator("#headerActionScopeApply").click();
+    await expect(page.locator("#headerActionDragScope")).toHaveValue("terminal");
+
+    await restoredFirst.locator('[data-action="restart"]').dragTo(restoredFirst.locator('[data-action="more"]'));
+    await expect(flyout).toBeHidden();
+    await expect(restoredFirst.locator('[data-action="restart"]')).toHaveAttribute("data-header-placement", "menu");
+    await expect(secondPane.locator('[data-action="restart"]')).toHaveAttribute("data-header-placement", "header");
+
+    await setNative("#headerActionDragScope", "ask", "change");
+    await page.addInitScript(() => {
+      if (localStorage.getItem("multiterm.testHeaderActionCleanup") !== "1") return;
+      const snapshot = JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]");
+      for (const terminal of snapshot) {
+        if (!terminal.headerActionOverrides) continue;
+        delete terminal.headerActionOverrides.copy;
+        delete terminal.headerActionOverrides.restart;
+      }
+      localStorage.setItem("multiterm.lastSession", JSON.stringify(snapshot));
+      localStorage.removeItem("multiterm.testHeaderActionCleanup");
+    });
+    await page.evaluate(() => localStorage.setItem("multiterm.testHeaderActionCleanup", "1"));
+    await page.reload();
+    await expect(page.locator("#headerActionDragScope")).toHaveValue("ask");
+    await expect(page.locator(`.terminal-pane[data-id="${firstId}"] [data-action="copy"]`)).toHaveAttribute("data-header-placement", "header");
+    await page.locator("#terminalHost").evaluate((host) => { host.scrollTop = 0; });
   });
 
   test("maximize button overlays the other panes and toggles back", async () => {
@@ -659,6 +853,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("saves the terminal title and exits edit mode when Enter is pressed", async () => {
     const title = page.locator(".terminal-pane").first().locator(".pane-title");
+    const terminalId = await page.locator(".terminal-pane").first().getAttribute("data-id");
     const original = await title.inputValue();
 
     await title.fill("  Build Logs  ");
@@ -670,6 +865,26 @@ test.describe("MultiTerm Workbench UI", () => {
       const snapshot = JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]");
       return snapshot[0]?.title;
     })).toBe("Build Logs");
+    await expect.poll(() => page.evaluate((id) => new Promise((resolve, reject) => {
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+      const timeout = setTimeout(() => {
+        socket.close();
+        reject(new Error("Timed out reading bridge title"));
+      }, 2000);
+      socket.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type !== "welcome") return;
+        clearTimeout(timeout);
+        const session = message.sessions.find((entry) => entry.id === id);
+        socket.close();
+        resolve(session?.title || null);
+      });
+      socket.addEventListener("error", () => {
+        clearTimeout(timeout);
+        reject(new Error("Could not read bridge title"));
+      });
+    }), terminalId)).toBe("Build Logs");
 
     await title.fill(original);
     await title.press("Enter");

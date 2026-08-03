@@ -616,6 +616,7 @@ module.exports = {
   countRendererClients,
   createSession,
   writeSession,
+  renameSession,
   rememberSize,
   killSession,
   killSessionPty,
@@ -984,6 +985,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     case "resize":
       rememberSize(message.id, message.cols, message.rows);
       break;
+    case "title":
+      renameSession(message.id, message.title);
+      break;
     case "kill":
       killSession(message.id);
       break;
@@ -1293,6 +1297,15 @@ function writeSession(id, data) {
     }
   }
   return false;
+}
+
+function renameSession(id, value) {
+  const session = sessions.get(id);
+  const title = typeof value === "string" ? value.trim() : "";
+  if (!session || !title) return false;
+  session.title = title;
+  broadcast({ type: "title", id, title });
+  return true;
 }
 
 function rememberSize(id, cols, rows) {

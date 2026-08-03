@@ -21,26 +21,109 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "../..");
 const bridgeScript = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), "utf8");
+const rendererScript = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
 const installer = fs.readFileSync(path.join(root, "installer", "MultiTerm.iss"), "utf8");
 const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+const terminalGuiReadme = fs.readFileSync(path.join(root, "lib", "terminal-gui", "README.md"), "utf8");
 
 describe("PowerShell bridge control dashboard", () => {
   it("renders the requested warning, streaming logs, and selectable terminal grid", () => {
     expect(bridgeScript).toContain("internal sealed class BridgeConsoleDashboard");
-    expect(bridgeScript).toContain('this.Row("NOTICE", "Logs (streaming)", "Terminals (select to terminate)"');
-    expect(bridgeScript).toContain('"Closing this console"');
-    expect(bridgeScript).toContain('"will terminate every"');
-    expect(bridgeScript).toContain('"THIS INSTANCE."');
+    expect(bridgeScript).toContain("using Terminal.Gui;");
+    expect(bridgeScript).toContain("Application.Init();");
+    expect(bridgeScript).toContain('Console.Title = "MultiTerm Bridge Control Console - "');
+    expect(bridgeScript).toContain('Title = "MultiTerm Bridge Control Console"');
+    expect(bridgeScript).not.toContain('Title = "MultiTerm Control Console"');
+    expect(bridgeScript).toContain('Title = "NOTICE"');
+    expect(bridgeScript).toContain('Title = "Logs (streaming)"');
+    expect(bridgeScript).toContain('Title = "Terminals"');
+    expect(bridgeScript).toContain("internal sealed class DashboardLogView : View");
+    expect(bridgeScript).toContain("this.logView = new DashboardLogView()");
+    expect(bridgeScript).toContain("Closing this console will terminate every terminal session in THIS INSTANCE.");
     expect(bridgeScript).toContain('"pid " + session.Pid');
+    expect(bridgeScript).not.toContain("Console.SetCursorPosition");
+    expect(bridgeScript).not.toContain("private string BuildFrame");
   });
 
-  it("uses arrow selection and Enter to request only the selected session exit", () => {
-    expect(bridgeScript).toContain("key.Key == ConsoleKey.UpArrow");
-    expect(bridgeScript).toContain("key.Key == ConsoleKey.DownArrow");
-    expect(bridgeScript).toContain("key.Key == ConsoleKey.Enter");
-    expect(bridgeScript).toContain("this.terminateSession(id)");
-    expect(bridgeScript).toMatch(/Control console requested termination[\s\S]*this\.KillSession\(id\)/);
+  it("emphasizes the shutdown warning and color-codes structured log segments", () => {
+    expect(bridgeScript).toContain("internal sealed class DashboardNoticeView : View");
+    expect(bridgeScript).toContain('Terminal.Gui.Attribute.Make(Color.BrightRed, Color.Gray)');
+    expect(bridgeScript).toContain('driver.AddStr(NStack.ustring.Make("!"));');
+    expect(bridgeScript).toContain('Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Gray)');
+    expect(bridgeScript).toContain('TimestampAttribute = Terminal.Gui.Attribute.Make(Color.Black, Color.Gray)');
+    expect(bridgeScript).toContain('InfoAttribute = Terminal.Gui.Attribute.Make(Color.DarkGray, Color.Gray)');
+    expect(bridgeScript).toContain('WarningAttribute = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Gray)');
+    expect(bridgeScript).toContain('ErrorAttribute = Terminal.Gui.Attribute.Make(Color.BrightRed, Color.Gray)');
+    expect(bridgeScript).toContain('HelpAttribute = Terminal.Gui.Attribute.Make(Color.Black, Color.Gray)');
+    expect(bridgeScript).toContain('Math.Max(warningLines.Count + 1, height - HelpLines.Length)');
+    expect(bridgeScript).toContain('return "ERR";');
+    expect(bridgeScript).toContain('return "WARN";');
+  });
+
+  it("uses the native list selection and Enter to request only the selected session exit", () => {
+    expect(bridgeScript).toContain("this.sessionList = new ListView()");
+    expect(bridgeScript).toContain("this.sessionList.OpenSelectedItem +=");
+    expect(bridgeScript).toContain("this.terminateSession(this.displayedSessions[index].Id)");
+    expect(bridgeScript).toContain('new StatusItem(Key.CtrlMask | Key.Q, "~^Q~ Stop", this.ConfirmStop');
+    expect(bridgeScript).toMatch(/Bridge control console requested termination[\s\S]*this\.KillSession\(id\)/);
     expect(bridgeScript).toMatch(/private void KillSession\(string id\)[\s\S]*session\.RequestExit\(\)/);
+  });
+
+  it("surfaces frontend health, uptime, recovery, and log controls", () => {
+    expect(bridgeScript).toContain('"UP " + FormatUptime');
+    expect(bridgeScript).toContain('"UI ONLINE" : "UI OFFLINE"');
+    expect(bridgeScript).toContain('this.statusBar.SetNeedsDisplay();');
+    expect(bridgeScript).toContain('new StatusItem(Key.F2, "~F2~ Open UI", this.OpenFrontend');
+    expect(bridgeScript).toContain('new StatusItem(Key.F3, "~F3~ Clear", this.ClearLogs');
+    expect(bridgeScript).toContain('new StatusItem(Key.F4, "~F4~ Logs: all", this.CycleLogFilter');
+    expect(bridgeScript).toContain('new StatusItem(Key.F5, "~F5~ Pause", this.ToggleLogPause');
+    expect(bridgeScript).toContain('this.openFrontend();');
+    expect(bridgeScript).toContain('this.logs.Clear();');
+    expect(bridgeScript).toContain('this.logFilter = "warnings";');
+    expect(bridgeScript).toContain('this.logFilter = "errors";');
+    expect(bridgeScript).toContain('this.logPaused = !this.logPaused;');
+    expect(bridgeScript).toContain('if (!this.logPaused && !String.Equals(nextLogText');
+    expect(bridgeScript).toContain('int choice = MessageBox.Query(');
+    expect(bridgeScript).toContain('"Keep running"');
+    expect(bridgeScript).toContain('"Stop instance"');
+  });
+
+  it("shows live details for the selected terminal", () => {
+    expect(bridgeScript).toContain('Text = "Selected terminal"');
+    expect(bridgeScript).toContain('private static string SessionDetails(DashboardSessionInfo session)');
+    expect(bridgeScript).toContain('"\\nPID " + session.Pid + " | " + session.Shell');
+    expect(bridgeScript).toContain('FormatBytes(session.BytesIn)');
+    expect(bridgeScript).toContain('"\\nLogging " + (session.IsLogging ? "ON" : "off")');
+    for (const field of ["Shell", "Cwd", "Cols", "Rows", "BytesIn", "BytesOut", "KeystrokesIn", "KeystrokesOut", "IsLogging"]) {
+      expect(bridgeScript).toContain(`${field} = session.${field}`);
+    }
+  });
+
+  it("synchronizes GUI title changes into bridge-owned TUI state", () => {
+    expect(rendererScript).toContain('sendBridge({ type: "title", id: terminal.id, title });');
+    expect(rendererScript).toContain('if (message.type === "title")');
+    expect(rendererScript).toContain('commitTerminalTitle(terminal, message.title, false)');
+    expect(rendererScript).toMatch(/function startMinChipRename[\s\S]*commitTerminalTitle\(terminal, name\)/);
+    expect(bridgeScript).toContain('else if (type == "title")');
+    expect(bridgeScript).toContain('session.Rename(title);');
+    expect(bridgeScript).toContain('this.Broadcast("{\\"type\\":\\"title\\"');
+    expect(bridgeScript).toContain('public void Rename(string title)');
+  });
+
+  it("packages the pinned Terminal.Gui runtime without requiring a developer pack", () => {
+    for (const file of ["Terminal.Gui.dll", "NStack.dll", "System.Management.dll", "netstandard.dll"]) {
+      expect(fs.existsSync(path.join(root, "lib", "terminal-gui", file))).toBe(true);
+      expect(terminalGuiReadme).toContain(file);
+    }
+    expect(terminalGuiReadme).toContain("Terminal.Gui` | 1.19.0");
+    expect(terminalGuiReadme).toContain("Microsoft.NETFramework.ReferenceAssemblies.net472` | 1.0.3");
+    expect(installer).toContain('Source: "{#RepoRoot}\\lib\\terminal-gui\\*.dll"; DestDir: "{app}\\lib\\terminal-gui"');
+  });
+
+  it("keeps the isolated app profile local and suppresses browser sync promotions", () => {
+    expect(bridgeScript).toContain('+ " --disable-sync"');
+    expect(bridgeScript).toContain('+ " --no-first-run --no-default-browser-check"');
+    expect(bridgeScript).not.toMatch(/--guest|--incognito/);
   });
 
   it("launches installed app shortcuts with the visible dashboard while Stop stays hidden", () => {
@@ -83,7 +166,7 @@ describe("PowerShell bridge control dashboard", () => {
     expect(bridgeScript).toContain('\\"app\\":\\"MultiTerm Workbench\\"');
     expect(bridgeScript).toContain('? profileRoot');
     expect(bridgeScript).toContain('Path.Combine(profileRoot, "Instances", this.port.ToString(CultureInfo.InvariantCulture))');
-    expect(bridgeScript).toContain("Ctrl+Q stops this instance");
+    expect(bridgeScript).toContain('"~^Q~ Stop"');
   });
 
   it("persists update consent outside port-specific browser profiles", () => {
@@ -96,9 +179,15 @@ describe("PowerShell bridge control dashboard", () => {
   });
 
   it("documents the close warning and keyboard controls and remains Windows PowerShell 5.1 safe", () => {
-    expect(readme).toContain("Closing the control console also ends");
+    expect(readme).toMatch(/Closing the bridge\s+control console also ends/);
+    expect(readme).toMatch(/MultiTerm Bridge Control\s+Console/);
     expect(readme).toContain("Up/Down arrows to select a terminal and Enter");
-    expect(readme).toContain("Ctrl+Q stops the bridge and all sessions");
+    expect(readme).toMatch(/Ctrl\+Q opens a\s+confirmation/);
+    expect(readme).toContain("F2 reopens the frontend");
+    expect(readme).toContain("F4 cycles the log filter");
+    expect(readme).toContain("F5 pauses or resumes log updates");
+    expect(readme).toMatch(/selected\s+terminal's shell, PID, dimensions/);
+    expect(readme).toMatch(/Terminal\.Gui\s+framework/);
     expect([...bridgeScript].every((character) => character.charCodeAt(0) <= 127)).toBe(true);
   });
 });

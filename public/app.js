@@ -32,6 +32,8 @@ const defaultSettings = {
   fontSize: 14,
   gap: 10,
   headerHidden: false,
+  headerActionDragScope: "ask",
+  headerActionsInMenu: ["find", "duplicate"],
   highlightInputPrompts: true,
   keepSessionsOnClose: true,
   layout: "auto",
@@ -43,6 +45,8 @@ const defaultSettings = {
   outputBacklogKb: 1024,
   outputCoalesceMs: 8,
   paneHeight: 320,
+  pagerCollapsed: false,
+  pagerPlacement: "bottom",
   cleanCopilotClipboard: true,
   restoreSession: false,
   rightClickAction: "menu",
@@ -67,11 +71,86 @@ const defaultSettings = {
 
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
+const SETTINGS_SEARCH_ALIASES = Object.freeze({
+  appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
+  fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
+  cursorStyle: "caret insertion point beam bar block underline pointer shape",
+  cursorBlink: "caret flashing flash pulse animation animate",
+  layoutMode: "arrangement arrange tiling tile panes splits split grid mosaic stack strip rail master carousel spotlight bento canvas automatic",
+  pagerPlacement: "pages page tabs tab tabbar tab-bar navigation navigator pagebar page-bar pager position placement location dock docking top bottom left right side sidebar",
+  minWidth: "minimum pane terminal tile width size horizontal narrow responsive compact",
+  columnCount: "number columns grid across horizontal panes tiles count",
+  rowCount: "number rows grid down vertical panes tiles count",
+  paneHeight: "terminal pane tile height vertical size dimension",
+  focusWidth: "primary main master focus featured pane width ratio percentage",
+  paneGap: "spacing space gutter margin padding between panes tiles separation",
+  fontSize: "text size type scale zoom terminal typography larger smaller",
+  terminalTheme: "terminal console colors colours color scheme palette background foreground contrast appearance",
+  compactChrome: "dense compact chrome ui toolbar header controls small spacing slim",
+  syncInput: "broadcast keyboard keys keystrokes mirror mirrored linked simultaneous type typing all terminals panes",
+  ctrlVPaste: "clipboard paste keyboard shortcut control ctrl v insert",
+  cleanCopilotClipboard: "copilot clipboard copy borders pipes ascii formatting cleanup clean markdown table",
+  rightClickAction: "right click right-click mouse secondary context menu paste run execute",
+  headerActionDragScope: "header toolbar buttons actions drag drop customize overflow hamburger menu scope all every terminal pane remember ask",
+  scrollbackLines: "terminal history output buffer retention lines backscroll transcript",
+  scrollbackInfinite: "unlimited infinite terminal history output buffer no limit scrollback",
+  scrollOnOutput: "follow tail auto scroll autoscroll bottom new output terminal",
+  outputCoalesceMs: "performance output batching batch coalesce grouping bridge chunks messages latency throttle delay milliseconds pty",
+  outputBacklogKb: "performance output buffer queue backlog burst memory ram renderer pending kilobytes kb",
+  maxInstallerSizeMb: "updater update download installer package maximum max size limit ceiling security megabytes mb",
+  keepSessionsOnClose: "keep preserve survive terminals sessions shells processes bridge background detach close quit exit window alive",
+  restoreSession: "restore reopen remember previous last session startup launch restart terminals workspace resume",
+  autoUpdateChecks: "automatic updates updater check releases versions upgrade background scheduled",
+  updateCheckIntervalHours: "update frequency cadence schedule interval timer hours polling check updater",
+  bellNotify: "bell beep ding sound terminal notification notifications alert alerts audible",
+  copyOnSelect: "selection selected highlight mouse clipboard copy automatically auto",
+  highlightInputPrompts: "awaiting input prompt prompts question questions badge glow attention detect detection interactive highlight",
+  notifyActivity: "activity busy background output notification notifications alert alerts terminal change",
+  notifySilence: "idle quiet silence inactivity completion done notification notifications alert alerts terminal",
+  silenceSeconds: "idle quiet silence inactivity timeout delay seconds threshold completion",
+  startupCommand: "startup cmd command run execute launch new terminal initialization init shell profile",
+  terminalMessageMaxKb: "communication message messages handoff transfer payload maximum max size limit kb kilobytes terminal",
+  terminalInboxCapacity: "communication inbox queue pending handoff handoffs messages capacity quota limit per terminal retained",
+  snippetList: "snippets snippet macros macro templates template favorites favourite commands quick actions automation saved commands",
+  snippetName: "snippet macro template favorite favourite label title name",
+  snippetCommand: "snippet macro template command script run execute automation",
+  snippetAdd: "snippet macro template add create new save command",
+  fitAll: "fit resize refit arrange terminals panes layout maximize fill screen",
+  resetLayout: "reset restore defaults default layout arrangement positions clear undo",
+  workspaceSelect: "workspace workspaces project projects profile profiles layout layouts preset presets snapshot snapshots saved session sessions",
+  workspaceName: "workspace project profile layout preset snapshot name create new",
+  workspaceSave: "workspace project profile layout preset snapshot save store remember capture",
+  workspaceRestore: "workspace project profile layout preset snapshot restore load open apply",
+  workspaceDelete: "workspace project profile layout preset snapshot delete remove forget"
+});
+
 // Pane width (px) below which the secondary header actions (move left/right,
 // cycle label color, duplicate) collapse into the per-pane overflow menu. Below
 // roughly this width the full button row starts squeezing the title field, so
 // the actions move into the menu rather than crowding or hiding the title.
 const PANE_OVERFLOW_WIDTH = 600;
+const HEADER_ACTION_IDS = [
+  "move-left", "move-right", "find", "clear", "copy", "color", "restart",
+  "dequeue", "artifacts", "minimize", "focus", "maximize", "duplicate", "close"
+];
+const HEADER_ACTION_ID_SET = new Set(HEADER_ACTION_IDS);
+const DEFAULT_HEADER_ACTIONS_IN_MENU = ["find", "duplicate"];
+const HEADER_ACTIONS = Object.freeze({
+  "move-left": { label: "Move left", icon: "arrow-left" },
+  "move-right": { label: "Move right", icon: "arrow-right" },
+  find: { label: "Find\u2026", icon: "search", hint: "Ctrl+F" },
+  clear: { label: "Clear", icon: "eraser" },
+  copy: { label: "Copy output", icon: "copy" },
+  color: { label: "Cycle label color", icon: "tag" },
+  restart: { label: "Restart", icon: "rotate-cw", hint: "Ctrl+Shift+R" },
+  dequeue: { label: "Run next queued command", icon: "list-start" },
+  artifacts: { label: "Notes & command queue", icon: "notebook-tabs" },
+  minimize: { label: "Minimize", icon: "minus" },
+  focus: { label: "Focus", icon: "panel-left-close" },
+  maximize: { label: "Maximize", icon: "maximize-2" },
+  duplicate: { label: "Duplicate", icon: "copy-plus" },
+  close: { label: "Close", icon: "x", hint: "Ctrl+Shift+W", danger: true }
+});
 
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.54";
@@ -189,6 +268,7 @@ const themes = {
 
 const elements = {
   addTerminal: document.querySelector("#addTerminal"),
+  appShell: document.querySelector(".app-shell"),
   attachTmux: document.querySelector("#attachTmux"),
   appTheme: document.querySelector("#appTheme"),
   aboutClose: document.querySelector("#aboutClose"),
@@ -235,6 +315,13 @@ const elements = {
   fontFamily: document.querySelector("#fontFamily"),
   fontSize: document.querySelector("#fontSize"),
   fontSizeValue: document.querySelector("#fontSizeValue"),
+  headerActionScopeApply: document.querySelector("#headerActionScopeApply"),
+  headerActionScopeCancel: document.querySelector("#headerActionScopeCancel"),
+  headerActionScopeFlyout: document.querySelector("#headerActionScopeFlyout"),
+  headerActionScopeRemember: document.querySelector("#headerActionScopeRemember"),
+  headerActionScopeText: document.querySelector("#headerActionScopeText"),
+  headerActionScopeTitle: document.querySelector("#headerActionScopeTitle"),
+  headerActionDragScope: document.querySelector("#headerActionDragScope"),
   helpToggle: document.querySelector("#helpToggle"),
   helpDocToggle: document.querySelector("#helpDocToggle"),
   helpDocClose: document.querySelector("#helpDocClose"),
@@ -278,10 +365,13 @@ const elements = {
   notifySilence: document.querySelector("#notifySilence"),
   outputBacklogKb: document.querySelector("#outputBacklogKb"),
   outputCoalesceMs: document.querySelector("#outputCoalesceMs"),
+  pagerPlacement: document.querySelector("#pagerPlacement"),
   paletteInput: document.querySelector("#paletteInput"),
   paletteList: document.querySelector("#paletteList"),
   paletteOverlay: document.querySelector("#paletteOverlay"),
+  pager: document.querySelector("#pager"),
   pagerAdd: document.querySelector("#pagerAdd"),
+  pagerCollapse: document.querySelector("#pagerCollapse"),
   pagerList: document.querySelector("#pagerList"),
   quickSwitchInput: document.querySelector("#quickSwitchInput"),
   quickSwitchList: document.querySelector("#quickSwitchList"),
@@ -390,6 +480,7 @@ const elements = {
   toastHost: document.querySelector("#toastHost"),
   toggleHeader: document.querySelector("#toggleHeader"),
   toggleHeaderTop: document.querySelector("#toggleHeaderTop"),
+  togglePager: document.querySelector("#togglePager"),
   toggleSidecar: document.querySelector("#toggleSidecar"),
   toggleSidecarTop: document.querySelector("#toggleSidecarTop"),
   recoveredNotesEmpty: document.querySelector("#recoveredNotesEmpty"),
@@ -400,11 +491,14 @@ const elements = {
   workspaceName: document.querySelector("#workspaceName"),
   workspaceRestore: document.querySelector("#workspaceRestore"),
   workspaceSave: document.querySelector("#workspaceSave"),
-  workspaceSelect: document.querySelector("#workspaceSelect")
+  workspaceSelect: document.querySelector("#workspaceSelect"),
+  workbench: document.querySelector(".workbench")
 };
 
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const palette = { open: false, index: 0, items: [] };
+let draggedHeaderAction = null;
+let pendingHeaderActionMove = null;
 
 const state = {
   activeId: null,
@@ -511,6 +605,7 @@ window.addEventListener("DOMContentLoaded", () => {
   log.info("app", `MultiTerm ${APP_VERSION} starting`);
   initializeSettingsPanel();
   bindControls();
+  bindHeaderActionCustomization();
   applyVersion();
   applySettings();
   enhanceComboboxes();
@@ -566,6 +661,7 @@ window.addEventListener("beforeunload", () => {
 
 function bindControls() {
   elements.layoutMode.value = state.settings.layout;
+  elements.pagerPlacement.value = normalizedPagerPlacement();
   elements.minWidth.value = state.settings.minWidth;
   elements.columnCount.value = state.settings.columns;
   elements.rowCount.value = state.settings.rows;
@@ -576,6 +672,7 @@ function bindControls() {
   elements.terminalTheme.value = state.settings.theme;
   elements.appTheme.value = state.settings.appTheme;
   elements.fontFamily.value = state.settings.fontFamily;
+  elements.headerActionDragScope.value = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
   elements.cursorStyle.value = state.settings.cursorStyle;
   elements.cursorBlink.checked = state.settings.cursorBlink;
   elements.compactChrome.checked = state.settings.compactChrome;
@@ -687,6 +784,7 @@ function bindControls() {
   elements.toggleHeaderTop.addEventListener("click", () => toggleChrome("headerHidden"));
   elements.toggleSidecarTop.addEventListener("click", () => toggleChrome("sidecarHidden"));
   elements.shellSelect.addEventListener("change", updateStatusBar);
+  elements.pagerPlacement.addEventListener("change", () => setPagerPlacement(elements.pagerPlacement.value));
 
   bindSetting(elements.layoutMode, "layout", "change", (value) => value);
   bindSetting(elements.minWidth, "minWidth", "input", Number);
@@ -699,6 +797,7 @@ function bindControls() {
   bindSetting(elements.terminalTheme, "theme", "change", (value) => value);
   bindSetting(elements.appTheme, "appTheme", "change", (value) => value);
   bindSetting(elements.fontFamily, "fontFamily", "change", (value) => value);
+  bindSetting(elements.headerActionDragScope, "headerActionDragScope", "change", normalizeHeaderActionDragScope);
   bindSetting(elements.cursorStyle, "cursorStyle", "change", (value) => value);
   bindSetting(elements.cursorBlink, "cursorBlink", "change", (_, element) => element.checked);
   bindSetting(elements.compactChrome, "compactChrome", "change", (_, element) => element.checked);
@@ -949,6 +1048,12 @@ function scheduleReconnect() {
 }
 
 function handleBridgeMessage(message) {
+  if (message.type === "title") {
+    const terminal = state.terminals.get(message.id);
+    if (terminal) commitTerminalTitle(terminal, message.title, false);
+    return;
+  }
+
   if (message.type === "terminalMessage") {
     ingestTerminalMessage(message.message);
     return;
@@ -1065,6 +1170,7 @@ function handleBridgeMessage(message) {
               cwd: meta.cwd,
               color: meta.color,
               fontSizeOverride: meta.fontSizeOverride,
+              headerActionOverrides: meta.headerActionOverrides,
               tmux: meta.tmux
             });
             if (meta.minimized && restored) minimizeTerminal(restored.id);
@@ -1102,6 +1208,9 @@ function handleBridgeMessage(message) {
     terminal.startedAt = message.startedAt || new Date().toISOString();
     terminal.remoteRequested = true;
     terminal.status = "live";
+    if (message.title !== terminal.titleInput.value) {
+      sendBridge({ type: "title", id: terminal.id, title: terminal.titleInput.value });
+    }
     syncTerminalArtifacts(terminal);
     if (message.elevated) {
       terminal.elevated = true;
@@ -1382,6 +1491,7 @@ function addTerminal(options = {}) {
     elevated,
     fitAddon,
     fontSizeOverride,
+    headerActionOverrides: normalizeHeaderActionOverrides(savedMeta?.headerActionOverrides ?? options.headerActionOverrides),
     fontZoomIndicator,
     fontZoomIndicatorTimer: 0,
     fontZoomWheelDelta: 0,
@@ -1434,6 +1544,7 @@ function addTerminal(options = {}) {
   terminal.observer.observe(screen);
   terminal.observer.observe(pane);
   bindPaneControls(terminal);
+  applyHeaderActionPlacement(terminal);
   bindPaneDrag(terminal);
   bindPaneFind(terminal);
   applyPaneColor(terminal);
@@ -1759,14 +1870,200 @@ function bindTuiDragSelection(terminal, element) {
   }, true);
 }
 
+function headerActionPlacement(terminal, action) {
+  const override = terminal.headerActionOverrides[action];
+  if (override) return override;
+  return state.settings.headerActionsInMenu.includes(action) ? "menu" : "header";
+}
+
+function applyHeaderActionPlacement(terminal) {
+  for (const action of HEADER_ACTION_IDS) {
+    const button = terminal.pane.querySelector(`.pane-actions button[data-action="${action}"]`);
+    if (!button) continue;
+    const placement = headerActionPlacement(terminal, action);
+    button.draggable = true;
+    button.dataset.headerPlacement = placement;
+    button.classList.toggle("is-user-menu-action", placement === "menu");
+  }
+}
+
+function clearHeaderActionDragStyles() {
+  for (const element of document.querySelectorAll(".is-action-dragging, .is-header-action-drop-target")) {
+    element.classList.remove("is-action-dragging", "is-header-action-drop-target");
+  }
+}
+
+function startHeaderActionDrag(event, terminalId, action, sourceElement) {
+  if (!HEADER_ACTION_ID_SET.has(action) || !state.terminals.has(terminalId)) {
+    event.preventDefault();
+    return;
+  }
+  draggedHeaderAction = { terminalId, action };
+  sourceElement.classList.add("is-action-dragging");
+  if (event.dataTransfer) {
+    const payload = JSON.stringify(draggedHeaderAction);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-multiterm-header-action", payload);
+    event.dataTransfer.setData("text/plain", payload);
+  }
+}
+
+function finishHeaderActionDrag() {
+  clearHeaderActionDragStyles();
+  draggedHeaderAction = null;
+}
+
+function setHeaderActionPlacement(terminalId, action, placement, scope) {
+  const terminal = state.terminals.get(terminalId);
+  if (!terminal || !HEADER_ACTION_ID_SET.has(action)) return;
+
+  if (scope === "all") {
+    const menuActions = new Set(state.settings.headerActionsInMenu);
+    if (placement === "menu") menuActions.add(action);
+    else menuActions.delete(action);
+    state.settings.headerActionsInMenu = HEADER_ACTION_IDS.filter((candidate) => menuActions.has(candidate));
+    for (const current of state.terminals.values()) {
+      delete current.headerActionOverrides[action];
+      applyHeaderActionPlacement(current);
+    }
+    saveSettings();
+  } else {
+    const globalPlacement = state.settings.headerActionsInMenu.includes(action) ? "menu" : "header";
+    if (placement === globalPlacement) delete terminal.headerActionOverrides[action];
+    else terminal.headerActionOverrides[action] = placement;
+    applyHeaderActionPlacement(terminal);
+  }
+
+  saveSessionSnapshot();
+  const destination = placement === "menu" ? "menu" : "header";
+  toast(`${HEADER_ACTIONS[action].label.replace("\u2026", "")} moved to ${destination}`, "success", 1800);
+}
+
+function closeHeaderActionScopeFlyout({ restoreFocus = false } = {}) {
+  const focusTarget = pendingHeaderActionMove?.focusTarget;
+  elements.headerActionScopeFlyout.hidden = true;
+  pendingHeaderActionMove = null;
+  if (restoreFocus && focusTarget?.isConnected) focusTarget.focus({ preventScroll: true });
+}
+
+function positionHeaderActionScopeFlyout(anchorRect) {
+  const flyout = elements.headerActionScopeFlyout;
+  const rect = flyout.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - 8));
+  const below = anchorRect.bottom + 8;
+  const top = below + rect.height <= window.innerHeight - 8
+    ? below
+    : Math.max(8, anchorRect.top - rect.height - 8);
+  flyout.style.left = `${left}px`;
+  flyout.style.top = `${top}px`;
+}
+
+function showHeaderActionScopeFlyout(terminal, action, placement, anchor) {
+  const destination = placement === "menu" ? "the hamburger menu" : "the terminal header";
+  const label = HEADER_ACTIONS[action].label.replace("\u2026", "");
+  const anchorRect = anchor.getBoundingClientRect();
+  pendingHeaderActionMove = { terminalId: terminal.id, action, placement, focusTarget: anchor };
+  elements.headerActionScopeTitle.textContent = `Move ${label}`;
+  elements.headerActionScopeText.textContent = `Move this action to ${destination}?`;
+  elements.headerActionScopeFlyout.querySelector('input[name="headerActionScope"][value="all"]').checked = true;
+  elements.headerActionScopeRemember.checked = false;
+  hideContextMenu();
+  elements.headerActionScopeFlyout.hidden = false;
+  refreshIcons(elements.headerActionScopeFlyout);
+  positionHeaderActionScopeFlyout(anchorRect);
+  elements.headerActionScopeApply.focus({ preventScroll: true });
+}
+
+function requestHeaderActionPlacement(terminal, action, placement, anchor) {
+  if (headerActionPlacement(terminal, action) === placement) {
+    hideContextMenu();
+    return;
+  }
+  const rememberedScope = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
+  if (rememberedScope !== "ask") {
+    hideContextMenu();
+    setHeaderActionPlacement(terminal.id, action, placement, rememberedScope);
+    return;
+  }
+  showHeaderActionScopeFlyout(terminal, action, placement, anchor);
+}
+
+function bindHeaderActionCustomization() {
+  elements.headerActionScopeCancel.addEventListener("click", () => closeHeaderActionScopeFlyout({ restoreFocus: true }));
+  elements.headerActionScopeApply.addEventListener("click", () => {
+    if (!pendingHeaderActionMove) return;
+    const move = pendingHeaderActionMove;
+    const selected = elements.headerActionScopeFlyout.querySelector('input[name="headerActionScope"]:checked')?.value || "all";
+    if (elements.headerActionScopeRemember.checked) {
+      state.settings.headerActionDragScope = selected;
+      elements.headerActionDragScope.value = selected;
+      elements.headerActionDragScope._combo?.sync();
+      saveSettings();
+    }
+    closeHeaderActionScopeFlyout();
+    setHeaderActionPlacement(move.terminalId, move.action, move.placement, selected);
+  });
+  elements.headerActionScopeFlyout.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeHeaderActionScopeFlyout({ restoreFocus: true });
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!elements.headerActionScopeFlyout.hidden && !elements.headerActionScopeFlyout.contains(event.target)) {
+      closeHeaderActionScopeFlyout();
+    }
+  }, true);
+}
+
+function runHeaderAction(terminal, action) {
+  if (action === "close") {
+    removeTerminal(terminal.id);
+  } else if (action === "focus") {
+    clearSnapLayout(false);
+    state.settings.layout = "focus";
+    elements.layoutMode.value = "focus";
+    setPrimaryTerminal(terminal.id);
+    setActiveTerminal(terminal.id);
+    applySettings();
+    saveSettings();
+    revealTerminal(terminal);
+    terminal.term.focus();
+  } else if (action === "clear") {
+    clearTerminal(terminal.id);
+  } else if (action === "copy") {
+    copyTerminalOutput(terminal.id);
+  } else if (action === "color") {
+    cyclePaneColor(terminal);
+  } else if (action === "find") {
+    openFind(terminal);
+  } else if (action === "restart") {
+    restartSession(terminal.id);
+  } else if (action === "dequeue") {
+    dequeueNextTerminalCommand(terminal);
+  } else if (action === "artifacts") {
+    openTerminalArtifacts(terminal.id);
+  } else if (action === "maximize") {
+    toggleZoomPane(terminal.id);
+  } else if (action === "minimize") {
+    minimizeTerminal(terminal.id);
+  } else if (action === "duplicate") {
+    addTerminal({
+      reveal: true,
+      runStartup: true,
+      title: `${terminal.titleInput.value} copy`,
+      fontSizeOverride: terminal.fontSizeOverride,
+      headerActionOverrides: { ...terminal.headerActionOverrides }
+    });
+  } else if (action === "move-left") {
+    moveTerminal(terminal.id, -1);
+  } else if (action === "move-right") {
+    moveTerminal(terminal.id, 1);
+  }
+}
+
 function bindPaneControls(terminal) {
   terminal.titleInput.addEventListener("change", () => {
-    terminal.titleInput.value = terminal.titleInput.value.trim() || "PowerShell";
-    if (state.terminalArtifacts.terminals[terminal.id]) syncTerminalArtifacts(terminal);
-    refreshTerminalSearchText(terminal);
-    updateTerminalSearchVisibility(terminal);
-    updateTerminalConnectionViews();
-    saveSessionSnapshot();
+    commitTerminalTitle(terminal, terminal.titleInput.value);
   });
 
   terminal.titleInput.addEventListener("keydown", (event) => {
@@ -1776,61 +2073,50 @@ function bindPaneControls(terminal) {
     terminal.titleInput.blur();
   });
 
-  terminal.pane.querySelector(".pane-actions").addEventListener("click", (event) => {
+  const paneActions = terminal.pane.querySelector(".pane-actions");
+  paneActions.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
 
     const action = button.dataset.action;
-    if (action === "close") {
-      removeTerminal(terminal.id);
-    } else if (action === "focus") {
-      clearSnapLayout(false);
-      state.settings.layout = "focus";
-      elements.layoutMode.value = "focus";
-      setPrimaryTerminal(terminal.id);
-      setActiveTerminal(terminal.id);
-      applySettings();
-      saveSettings();
-      // Switching to Focus-rail layout and marking the pane active does not move
-      // DOM keyboard focus into the terminal — the click leaves focus on the
-      // Focus button (or blurs to <body>), so keystrokes keep flowing to
-      // whichever terminal was focused before. Focus the pane's terminal so
-      // typing lands in the pane the user just chose to focus.
-      revealTerminal(terminal);
-      terminal.term.focus();
-    } else if (action === "clear") {
-      clearTerminal(terminal.id);
-    } else if (action === "copy") {
-      copyTerminalOutput(terminal.id);
-    } else if (action === "color") {
-      cyclePaneColor(terminal);
-    } else if (action === "find") {
-      openFind(terminal);
-    } else if (action === "restart") {
-      restartSession(terminal.id);
-    } else if (action === "dequeue") {
-      dequeueNextTerminalCommand(terminal);
-    } else if (action === "artifacts") {
-      openTerminalArtifacts(terminal.id);
-    } else if (action === "maximize") {
-      toggleZoomPane(terminal.id);
-    } else if (action === "more") {
+    if (action === "more") {
       setActiveTerminal(terminal.id);
       showPaneOverflowMenu(button, terminal);
-    } else if (action === "minimize") {
-      minimizeTerminal(terminal.id);
-    } else if (action === "duplicate") {
-      addTerminal({
-        reveal: true,
-        runStartup: true,
-        title: `${terminal.titleInput.value} copy`,
-        fontSizeOverride: terminal.fontSizeOverride
-      });
-    } else if (action === "move-left") {
-      moveTerminal(terminal.id, -1);
-    } else if (action === "move-right") {
-      moveTerminal(terminal.id, 1);
+    } else if (HEADER_ACTION_ID_SET.has(action)) {
+      runHeaderAction(terminal, action);
     }
+  });
+
+  paneActions.addEventListener("dragstart", (event) => {
+    const button = event.target.closest("button[data-action]");
+    const action = button?.dataset.action;
+    if (!button || !HEADER_ACTION_ID_SET.has(action)) return;
+    startHeaderActionDrag(event, terminal.id, action, button);
+  });
+  paneActions.addEventListener("dragend", finishHeaderActionDrag);
+  paneActions.addEventListener("dragover", (event) => {
+    if (!draggedHeaderAction || draggedHeaderAction.terminalId !== terminal.id) return;
+    const more = event.target.closest('button[data-action="more"]');
+    const destination = more ? "menu" : "header";
+    if (headerActionPlacement(terminal, draggedHeaderAction.action) === destination) return;
+    event.preventDefault();
+    clearHeaderActionDragStyles();
+    (more || paneActions).classList.add("is-header-action-drop-target");
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  });
+  paneActions.addEventListener("dragleave", (event) => {
+    if (paneActions.contains(event.relatedTarget)) return;
+    clearHeaderActionDragStyles();
+  });
+  paneActions.addEventListener("drop", (event) => {
+    if (!draggedHeaderAction || draggedHeaderAction.terminalId !== terminal.id) return;
+    const more = event.target.closest('button[data-action="more"]');
+    const destination = more ? "menu" : "header";
+    if (headerActionPlacement(terminal, draggedHeaderAction.action) === destination) return;
+    event.preventDefault();
+    const action = draggedHeaderAction.action;
+    clearHeaderActionDragStyles();
+    requestHeaderActionPlacement(terminal, action, destination, more || paneActions);
   });
 
   // The elapsed time in the tooltip is only correct at the instant it is built,
@@ -1848,6 +2134,19 @@ function bindPaneControls(terminal) {
     setActiveTerminal(terminal.id);
     showSessionInfoMenu(terminal);
   });
+}
+
+function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
+  if (!terminal) return;
+  const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : "PowerShell";
+  terminal.titleInput.value = title;
+  if (state.terminalArtifacts.terminals[terminal.id]) syncTerminalArtifacts(terminal);
+  refreshTerminalSearchText(terminal);
+  updateTerminalSearchVisibility(terminal);
+  updateTerminalConnectionViews();
+  updateMinimizedDock();
+  saveSessionSnapshot();
+  if (notifyBridge) sendBridge({ type: "title", id: terminal.id, title });
 }
 
 function bindPaneDrag(terminal) {
@@ -2527,10 +2826,7 @@ function startMinChipRename(chip, terminal) {
     // progress" guard doesn't skip its own commit re-render.
     input.remove();
     if (commit) {
-      terminal.titleInput.value = name;
-      refreshTerminalSearchText(terminal);
-      updateTerminalSearchVisibility(terminal);
-      saveSessionSnapshot();
+      commitTerminalTitle(terminal, name);
     }
     updateMinimizedDock();
   };
@@ -3365,6 +3661,7 @@ function applySettings() {
   applyAppTheme();
   document.body.classList.toggle("header-hidden", state.settings.headerHidden);
   document.body.classList.toggle("sidecar-hidden", state.settings.sidecarHidden);
+  applyPagerPlacement();
   elements.host.dataset.layout = state.settings.layout;
   elements.controlPanel.dataset.mode = state.settings.layout;
   elements.host.classList.toggle("compact", state.settings.compactChrome);
@@ -3784,10 +4081,29 @@ function formatBytes(bytes) {
 
 function loadSettings() {
   try {
-    return { ...defaultSettings, ...JSON.parse(localStorage.getItem("multiterm.settings") || "{}") };
+    const settings = { ...defaultSettings, ...JSON.parse(localStorage.getItem("multiterm.settings") || "{}") };
+    settings.headerActionDragScope = normalizeHeaderActionDragScope(settings.headerActionDragScope);
+    settings.headerActionsInMenu = normalizeHeaderActionsInMenu(settings.headerActionsInMenu);
+    return settings;
   } catch {
     return { ...defaultSettings };
   }
+}
+
+function normalizeHeaderActionDragScope(value) {
+  return value === "all" || value === "terminal" ? value : "ask";
+}
+
+function normalizeHeaderActionsInMenu(value) {
+  const source = Array.isArray(value) ? value : DEFAULT_HEADER_ACTIONS_IN_MENU;
+  return HEADER_ACTION_IDS.filter((action) => source.includes(action));
+}
+
+function normalizeHeaderActionOverrides(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([action, placement]) => (
+    HEADER_ACTION_ID_SET.has(action) && (placement === "header" || placement === "menu")
+  )));
 }
 
 function saveSettings() {
@@ -4892,7 +5208,10 @@ function restartSession(id) {
     title: terminal.titleInput.value,
     shell: terminal.shell,
     cwd: terminal.cwd,
+    color: terminal.color,
     fontSizeOverride: terminal.fontSizeOverride,
+    headerActionOverrides: { ...terminal.headerActionOverrides },
+    pageId: terminal.pageId,
     tmux: terminal.tmux
   };
   const anchor = terminal.pane.nextElementSibling;
@@ -4904,7 +5223,10 @@ function restartSession(id) {
     title: meta.title,
     shell: meta.shell,
     cwd: meta.cwd,
+    color: meta.color,
     fontSizeOverride: meta.fontSizeOverride,
+    headerActionOverrides: meta.headerActionOverrides,
+    pageId: meta.pageId,
     tmux: meta.tmux
   });
   if (next && anchor && anchor.parentElement === elements.host) {
@@ -5538,7 +5860,7 @@ function renderSnippets() {
     empty.className = "snippet-empty";
     empty.textContent = "No snippets yet.";
     host.append(empty);
-    if (elements.settingsSearch?.value) applySettingsFilter();
+    invalidateSettingsSearchItem(host);
     return;
   }
 
@@ -5565,7 +5887,7 @@ function renderSnippets() {
     host.append(row);
   });
   refreshIcons();
-  if (elements.settingsSearch?.value) applySettingsFilter();
+  invalidateSettingsSearchItem(host);
 }
 
 /* ---------------- Session logging --------------- */
@@ -6116,6 +6438,121 @@ function cyclePage(direction) {
   setActivePage(state.pages[next].id);
 }
 
+const PAGER_PLACEMENTS = new Set(["top", "bottom", "left", "right"]);
+
+function normalizedPagerPlacement(value = state.settings.pagerPlacement) {
+  return PAGER_PLACEMENTS.has(value) ? value : "bottom";
+}
+
+function isVerticalPager() {
+  const placement = normalizedPagerPlacement();
+  return placement === "left" || placement === "right";
+}
+
+function applyPagerPlacement() {
+  const placement = normalizedPagerPlacement();
+  const vertical = placement === "left" || placement === "right";
+  const collapsed = vertical && Boolean(state.settings.pagerCollapsed);
+  state.settings.pagerPlacement = placement;
+  elements.pagerPlacement.value = placement;
+  elements.pagerPlacement._combo?.sync();
+
+  document.body.dataset.pagerPlacement = placement;
+  document.body.classList.toggle("pager-panel-collapsed", collapsed);
+  elements.pager.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
+
+  if (vertical) {
+    if (placement === "left") elements.workbench.insertBefore(elements.pager, elements.stage);
+    else elements.workbench.append(elements.pager);
+  } else if (placement === "top") {
+    elements.appShell.insertBefore(elements.pager, elements.workbench);
+  } else {
+    elements.appShell.insertBefore(elements.pager, document.querySelector(".status-bar"));
+  }
+
+  const edge = placement === "right" ? "right" : "left";
+  elements.pagerCollapse.innerHTML = `<i data-lucide="panel-${edge}-close"></i>`;
+  elements.togglePager.innerHTML = `<i data-lucide="panel-${edge}-open"></i>`;
+  elements.pager.setAttribute("aria-hidden", String(collapsed));
+  elements.pagerCollapse.setAttribute("aria-expanded", String(!collapsed));
+  elements.togglePager.setAttribute("aria-expanded", String(!collapsed));
+  refreshIcons(elements.pager);
+  refreshIcons(elements.togglePager);
+  window.requestAnimationFrame(() => fitAllTerminals());
+}
+
+function setPagerPlacement(placement) {
+  const next = normalizedPagerPlacement(placement);
+  state.settings.pagerPlacement = next;
+  state.settings.pagerCollapsed = false;
+  saveSettings();
+  applyPagerPlacement();
+  toast(`Pages moved to the ${next}`, "info", 1600);
+}
+
+function togglePagerPanel() {
+  if (!isVerticalPager()) return;
+  state.settings.pagerCollapsed = !state.settings.pagerCollapsed;
+  saveSettings();
+  applyPagerPlacement();
+}
+
+function showPagerPlacementMenu(x, y) {
+  const current = normalizedPagerPlacement();
+  renderContextMenu([
+    { label: "Open new page", icon: "plus", run: () => addPage() },
+    { separator: true },
+    { label: "Move pages to top", icon: "panel-top", disabled: current === "top", run: () => setPagerPlacement("top") },
+    { label: "Move pages to bottom", icon: "panel-bottom", disabled: current === "bottom", run: () => setPagerPlacement("bottom") },
+    { separator: true },
+    { label: "Move pages to left", icon: "panel-left", disabled: current === "left", run: () => setPagerPlacement("left") },
+    { label: "Move pages to right", icon: "panel-right", disabled: current === "right", run: () => setPagerPlacement("right") }
+  ]);
+  showBuiltContextMenu(x, y);
+}
+
+let draggedPageId = null;
+let pageDragChanged = false;
+let pageDropAccepted = false;
+let originalPageOrder = null;
+let suppressPageClick = false;
+
+function syncPageOrderFromPager() {
+  const pagesById = new Map(state.pages.map((page) => [page.id, page]));
+  const reordered = [...elements.pagerList.querySelectorAll(".pager-chip")]
+    .map((chip) => pagesById.get(chip.dataset.pageId))
+    .filter(Boolean);
+  if (reordered.length === state.pages.length) state.pages = reordered;
+}
+
+function moveDraggedPage(targetChip, before) {
+  const draggedChip = elements.pagerList.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
+  if (!draggedChip || draggedChip === targetChip) return;
+
+  const alreadyPlaced = before
+    ? targetChip.previousElementSibling === draggedChip
+    : targetChip.nextElementSibling === draggedChip;
+  if (alreadyPlaced) return;
+
+  elements.pagerList.insertBefore(draggedChip, before ? targetChip : targetChip.nextElementSibling);
+  syncPageOrderFromPager();
+  pageDragChanged = true;
+}
+
+function movePageByOffset(pageId, offset) {
+  const index = state.pages.findIndex((page) => page.id === pageId);
+  const next = Math.max(0, Math.min(state.pages.length - 1, index + offset));
+  if (index < 0 || next === index) return false;
+
+  const [moved] = state.pages.splice(index, 1);
+  state.pages.splice(next, 0, moved);
+  savePages();
+  renderPager();
+  elements.pagerList.querySelector(`[data-page-id="${CSS.escape(pageId)}"]`)?.focus();
+  toast(`Moved ${moved.name} to position ${next + 1}`, "info", 1400);
+  return true;
+}
+
 function renderPager() {
   if (deferDuringBatch("renderPager")) return;
   const list = elements.pagerList;
@@ -6130,11 +6567,12 @@ function renderPager() {
     chip.type = "button";
     chip.className = "pager-chip";
     chip.dataset.pageId = page.id;
+    chip.draggable = true;
     chip.setAttribute("role", "tab");
     const isActive = page.id === state.activePageId;
     chip.classList.toggle("is-active", isActive);
     chip.setAttribute("aria-selected", isActive ? "true" : "false");
-    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (double-click or right-click to rename)`;
+    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (drag to reorder; double-click or right-click to rename)`;
 
     const label = document.createElement("span");
     label.className = "pager-name";
@@ -6158,16 +6596,16 @@ function renderPager() {
       chip.append(park);
     }
 
-    if (state.pages.length > 1) {
-      const close = document.createElement("span");
-      close.className = "pager-close";
-      close.dataset.pageClose = page.id;
-      close.setAttribute("role", "button");
-      close.setAttribute("aria-label", `Close ${page.name}`);
-      close.title = `Close ${page.name}`;
-      close.textContent = "\u00d7";
-      chip.append(close);
-    }
+    const canClose = state.pages.length > 1;
+    const close = document.createElement("span");
+    close.className = `pager-close${canClose ? "" : " is-disabled"}`;
+    close.dataset.pageClose = page.id;
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-disabled", String(!canClose));
+    close.setAttribute("aria-label", canClose ? `Close ${page.name}` : "The last page cannot be closed");
+    close.title = canClose ? `Close ${page.name}` : "The last page cannot be closed";
+    close.textContent = "\u00d7";
+    chip.append(close);
 
     list.append(chip);
   }
@@ -6214,9 +6652,14 @@ function bindPager() {
   if (!list) return;
 
   list.addEventListener("click", (event) => {
+    if (suppressPageClick) {
+      event.preventDefault();
+      return;
+    }
     const close = event.target.closest("[data-page-close]");
     if (close) {
       event.stopPropagation();
+      if (close.getAttribute("aria-disabled") === "true") return;
       removePage(close.dataset.pageClose);
       return;
     }
@@ -6229,10 +6672,87 @@ function bindPager() {
     if (chip) startPageRename(chip);
   });
 
-  list.addEventListener("contextmenu", (event) => {
+  list.addEventListener("keydown", (event) => {
+    if (!event.ctrlKey || !event.shiftKey || event.target.closest(".pager-rename")) return;
     const chip = event.target.closest(".pager-chip");
     if (!chip) return;
+    const previousKey = isVerticalPager() ? "ArrowUp" : "ArrowLeft";
+    const nextKey = isVerticalPager() ? "ArrowDown" : "ArrowRight";
+    const offset = event.key === previousKey ? -1 : event.key === nextKey ? 1 : 0;
+    if (!offset) return;
     event.preventDefault();
+    event.stopPropagation();
+    movePageByOffset(chip.dataset.pageId, offset);
+  });
+
+  list.addEventListener("dragstart", (event) => {
+    const chip = event.target.closest(".pager-chip");
+    if (!chip || event.target.closest("[data-page-close], .pager-rename")) {
+      event.preventDefault();
+      return;
+    }
+    draggedPageId = chip.dataset.pageId;
+    pageDragChanged = false;
+    pageDropAccepted = false;
+    originalPageOrder = state.pages.map((page) => page.id);
+    suppressPageClick = true;
+    chip.classList.add("is-page-dragging");
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", draggedPageId);
+    }
+  });
+
+  list.addEventListener("dragover", (event) => {
+    if (!draggedPageId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    const targetChip = event.target.closest(".pager-chip");
+    if (targetChip) {
+      const rect = targetChip.getBoundingClientRect();
+      const before = isVerticalPager()
+        ? event.clientY < rect.top + rect.height / 2
+        : event.clientX < rect.left + rect.width / 2;
+      moveDraggedPage(targetChip, before);
+    } else if (event.target === list || event.target.closest(".pager-list") === list) {
+      const draggedChip = list.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
+      if (draggedChip && draggedChip !== list.lastElementChild) {
+        list.append(draggedChip);
+        syncPageOrderFromPager();
+        pageDragChanged = true;
+      }
+    }
+  });
+
+  list.addEventListener("drop", (event) => {
+    if (!draggedPageId) return;
+    event.preventDefault();
+    pageDropAccepted = true;
+  });
+
+  list.addEventListener("dragend", (event) => {
+    event.target.closest(".pager-chip")?.classList.remove("is-page-dragging");
+    if (pageDragChanged && pageDropAccepted) {
+      savePages();
+    } else if (pageDragChanged && originalPageOrder) {
+      const pagesById = new Map(state.pages.map((page) => [page.id, page]));
+      state.pages = originalPageOrder.map((id) => pagesById.get(id)).filter(Boolean);
+      renderPager();
+    }
+    draggedPageId = null;
+    pageDragChanged = false;
+    pageDropAccepted = false;
+    originalPageOrder = null;
+    window.setTimeout(() => { suppressPageClick = false; }, 0);
+  });
+
+  elements.pager.addEventListener("contextmenu", (event) => {
+    const chip = event.target.closest(".pager-chip");
+    event.preventDefault();
+    if (!chip) {
+      if (!event.target.closest("button")) showPagerPlacementMenu(event.clientX, event.clientY);
+      return;
+    }
     const page = pageById(chip.dataset.pageId);
     if (!page) return;
     const items = [
@@ -6248,6 +6768,8 @@ function bindPager() {
   });
 
   elements.pagerAdd?.addEventListener("click", () => addPage());
+  elements.pagerCollapse?.addEventListener("click", togglePagerPanel);
+  elements.togglePager?.addEventListener("click", togglePagerPanel);
 }
 
 /* ---------------- Workspaces --------------- */
@@ -6275,7 +6797,7 @@ function refreshWorkspaceSelect(selected) {
     option.disabled = true;
     option.selected = true;
     elements.workspaceSelect.append(option);
-    if (elements.settingsSearch?.value) applySettingsFilter();
+    invalidateSettingsSearchItem(elements.workspaceSelect);
     return;
   }
 
@@ -6289,7 +6811,7 @@ function refreshWorkspaceSelect(selected) {
     elements.workspaceSelect.value = selected;
   }
   refreshComboboxes();
-  if (elements.settingsSearch?.value) applySettingsFilter();
+  invalidateSettingsSearchItem(elements.workspaceSelect);
 }
 
 function saveWorkspace(rawName) {
@@ -6311,6 +6833,7 @@ function saveWorkspace(rawName) {
       cwd: terminal.cwd,
       color: terminal.color,
       fontSizeOverride: terminal.fontSizeOverride,
+      headerActionOverrides: { ...terminal.headerActionOverrides },
       pageId: terminal.pageId
     }))
   };
@@ -6329,6 +6852,8 @@ function restoreWorkspace(name) {
   }
 
   state.settings = { ...defaultSettings, ...workspace.settings };
+  state.settings.headerActionDragScope = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
+  state.settings.headerActionsInMenu = normalizeHeaderActionsInMenu(state.settings.headerActionsInMenu);
   syncControlsFromSettings();
   clearSnapLayout(false);
   applySettings();
@@ -6367,6 +6892,7 @@ function restoreWorkspace(name) {
         cwd: meta.cwd,
         color: meta.color,
         fontSizeOverride: meta.fontSizeOverride,
+        headerActionOverrides: meta.headerActionOverrides,
         pageId: meta.pageId
       });
     }
@@ -6392,6 +6918,7 @@ function deleteWorkspace(name) {
 
 function syncControlsFromSettings() {
   elements.layoutMode.value = state.settings.layout;
+  elements.pagerPlacement.value = normalizedPagerPlacement();
   elements.minWidth.value = state.settings.minWidth;
   elements.columnCount.value = state.settings.columns;
   elements.rowCount.value = state.settings.rows;
@@ -6402,6 +6929,7 @@ function syncControlsFromSettings() {
   elements.terminalTheme.value = state.settings.theme;
   elements.appTheme.value = state.settings.appTheme;
   elements.fontFamily.value = state.settings.fontFamily;
+  elements.headerActionDragScope.value = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
   elements.cursorStyle.value = state.settings.cursorStyle;
   elements.cursorBlink.checked = state.settings.cursorBlink;
   elements.compactChrome.checked = state.settings.compactChrome;
@@ -6478,6 +7006,7 @@ function saveSessionSnapshot() {
     cwd: terminal.cwd,
     color: terminal.color,
     fontSizeOverride: terminal.fontSizeOverride,
+    headerActionOverrides: { ...terminal.headerActionOverrides },
     minimized: terminal.minimized,
     pageId: terminal.pageId,
     tmux: terminal.tmux
@@ -9175,7 +9704,8 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         reveal: true,
         runStartup: true,
         title: `${terminal.titleInput.value} copy`,
-        fontSizeOverride: terminal.fontSizeOverride
+        fontSizeOverride: terminal.fontSizeOverride,
+        headerActionOverrides: { ...terminal.headerActionOverrides }
       })
     },
     { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
@@ -9252,42 +9782,38 @@ function buildSurfaceContextMenu() {
 }
 
 function buildPaneOverflowMenu(terminal) {
-  // Move/colour live in the header unless the pane is too narrow (or the host is in
-  // compact mode) to show them; find and duplicate live in this menu permanently.
-  const collapsed = terminal.pane.classList.contains("is-narrow")
-    || elements.host.classList.contains("compact");
-  const collapsedItems = collapsed
-    ? [
-      {
-        label: "Move left",
-        icon: "arrow-left",
-        disabled: !terminal.pane.previousElementSibling,
-        run: () => moveTerminal(terminal.id, -1)
-      },
-      {
-        label: "Move right",
-        icon: "arrow-right",
-        disabled: !terminal.pane.nextElementSibling,
-        run: () => moveTerminal(terminal.id, 1)
-      },
-      { label: "Cycle label color", icon: "tag", run: () => cyclePaneColor(terminal) }
-    ]
-    : [];
+  const compact = elements.host.classList.contains("compact");
+  const narrow = terminal.pane.classList.contains("is-narrow");
+  const collapsed = compact || narrow;
+  const responsiveOverflow = [
+    ...(collapsed ? ["move-left", "move-right", "color"] : []),
+    ...(narrow ? ["find", "duplicate"] : [])
+  ];
+  const menuActions = HEADER_ACTION_IDS.filter((action) => headerActionPlacement(terminal, action) === "menu");
+  const visibleActions = [...new Set([...responsiveOverflow, ...menuActions])];
+  const items = visibleActions
+    .map((action) => {
+      const definition = HEADER_ACTIONS[action];
+      const button = terminal.pane.querySelector(`.pane-actions button[data-action="${action}"]`);
+      return {
+        ...definition,
+        disabled: action === "move-left"
+          ? !terminal.pane.previousElementSibling
+          : action === "move-right"
+            ? !terminal.pane.nextElementSibling
+            : Boolean(button?.disabled),
+        headerAction: action,
+        headerActionTerminalId: terminal.id,
+        title: button?.title,
+        run: () => runHeaderAction(terminal, action)
+      };
+    });
 
-  renderContextMenu([
-    ...collapsedItems,
-    { label: "Find\u2026", hint: "Ctrl+F", icon: "search", run: () => openFind(terminal) },
-    {
-      label: "Duplicate",
-      icon: "copy-plus",
-      run: () => addTerminal({
-        reveal: true,
-        runStartup: true,
-        title: `${terminal.titleInput.value} copy`,
-        fontSizeOverride: terminal.fontSizeOverride
-      })
-    }
-  ]);
+  renderContextMenu(items.length > 0 ? items : [{
+    info: true,
+    label: "Drag a header button here",
+    icon: "grip-vertical"
+  }]);
 }
 
 const CONTEXT_SHORTCUT_STORAGE_KEY = "multiterm.contextMenuShortcuts";
@@ -9679,6 +10205,14 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     const el = document.createElement("div");
     el.className = `ctx-item${item.danger ? " danger" : ""}${item.info ? " ctx-info" : ""}`;
     if (item.shortcutId) el.dataset.shortcutId = item.shortcutId;
+    if (item.headerAction && item.headerActionTerminalId) {
+      el.dataset.headerAction = item.headerAction;
+      el.draggable = true;
+      el.addEventListener("dragstart", (event) => {
+        startHeaderActionDrag(event, item.headerActionTerminalId, item.headerAction, el);
+      });
+      el.addEventListener("dragend", finishHeaderActionDrag);
+    }
     el.dataset.searchText = [item.label, item.title, item.hint]
       .filter(Boolean)
       .join(" ")
@@ -10396,8 +10930,10 @@ function enhanceComboboxes() {
   const targets = [
     elements.shellSelect,
     elements.layoutMode,
+    elements.pagerPlacement,
     elements.appTheme,
     elements.fontFamily,
+    elements.headerActionDragScope,
     elements.cursorStyle,
     elements.terminalTheme,
     elements.rightClickAction,
@@ -10584,15 +11120,25 @@ function enhanceSelect(select) {
 }
 
 const settingsPanelGroups = [];
+const settingsSearchTextCache = new WeakMap();
 let settingsSearchSnapshot = null;
 
 function normalizeSettingsSearchText(value) {
-  return String(value || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function settingsItemSearchText(item) {
+  const cached = settingsSearchTextCache.get(item);
+  if (cached !== undefined) return cached;
   const parts = [item.textContent];
-  for (const element of item.querySelectorAll("[id], [title], [placeholder], [aria-label], [value]")) {
+  const indexedElements = [item, ...item.querySelectorAll("[id], [title], [placeholder], [aria-label], [value]")];
+  const aliases = [];
+  for (const element of indexedElements) {
     parts.push(
       element.id,
       element.getAttribute("title"),
@@ -10600,8 +11146,25 @@ function settingsItemSearchText(item) {
       element.getAttribute("aria-label"),
       element.getAttribute("value")
     );
+    if (element.id && SETTINGS_SEARCH_ALIASES[element.id]) aliases.push(SETTINGS_SEARCH_ALIASES[element.id]);
   }
-  return normalizeSettingsSearchText(parts.filter(Boolean).join(" "));
+  if (aliases.length > 0) item.dataset.searchAliases = aliases.join(" ");
+  parts.push(item.dataset.searchAliases);
+  const searchText = normalizeSettingsSearchText(parts.filter(Boolean).join(" "));
+  settingsSearchTextCache.set(item, searchText);
+  return searchText;
+}
+
+function invalidateSettingsSearchItem(element) {
+  const item = element?.closest?.(".settings-filter-item");
+  if (!item) return;
+  settingsSearchTextCache.delete(item);
+  settingsItemSearchText(item);
+  if (elements.settingsSearch?.value) applySettingsFilter();
+}
+
+function settingsSearchMatches(searchText, query, queryTerms) {
+  return searchText.includes(query) || queryTerms.every((term) => searchText.includes(term));
 }
 
 function setSettingsGroupExpanded(group, expanded) {
@@ -10642,11 +11205,12 @@ function applySettingsFilter() {
   }
 
   let matchCount = 0;
+  const queryTerms = query.split(" ");
   for (const group of settingsPanelGroups) {
-    const headingMatches = group.searchText.includes(query);
+    const headingMatches = settingsSearchMatches(group.searchText, query, queryTerms);
     let groupMatches = 0;
     for (const item of group.items) {
-      const matches = headingMatches || settingsItemSearchText(item).includes(query);
+      const matches = headingMatches || settingsSearchMatches(settingsItemSearchText(item), query, queryTerms);
       item.hidden = !matches;
       item.classList.toggle("is-settings-match", matches);
       if (matches) groupMatches += 1;
@@ -10709,6 +11273,7 @@ function initializeSettingsPanel() {
     const items = [...section.children].filter((child) => child !== heading);
     for (const item of items) {
       item.classList.add("settings-filter-item");
+      settingsItemSearchText(item);
       body.append(item);
     }
     heading?.remove();

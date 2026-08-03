@@ -39,8 +39,24 @@ const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), 
     expect(watchdog).toContain("asks each terminal to exit cleanly first");
     expect(watchdog).toContain("will be interrupted and then terminated");
     expect(watchdog).toContain('"X-MultiTerm-Request" = "Launcher"');
-    expect(watchdog).toContain('[System.Windows.MessageBoxButton]::YesNo');
+    expect(watchdog).toContain('function Show-WatchdogDialog');
+    expect(watchdog).toContain('"Keep terminals running"');
+    expect(watchdog).toContain('"Close bridge and terminals"');
+    expect(watchdog).toContain('$dialogState = [PSCustomObject]@{ Choice = "Keep" }');
+    expect(watchdog).toMatch(/New-WatchdogButton -Text "Keep terminals running"[^\r\n]+-Default -Cancel/);
+    expect(watchdog).not.toContain('System.Windows.MessageBox');
     expect(watchdog).toContain('Stop-WatchedBridge -BaseUri $promptUri');
+  });
+
+  it("uses a branded custom dialog for disconnected and unhealthy bridges", () => {
+    expect(watchdog).toContain('[ValidateSet("FrontendClosed", "Unhealthy", "StopError")]');
+    expect(watchdog).toContain('FRONTEND DISCONNECTED');
+    expect(watchdog).toContain('WATCHDOG WARNING');
+    expect(watchdog).toContain('SHUTDOWN FAILED');
+    expect(watchdog).toContain('$window.Background = Get-WatchdogBrush "#111722"');
+    expect(watchdog).toContain('Show-WatchdogDialog -Kind Unhealthy');
+    expect(watchdog).toContain('Show-WatchdogDialog -Kind StopError');
+    expect(watchdog).toContain('-NoLogo -NoProfile -Sta -WindowStyle Hidden');
   });
 
   it("launches notifications outside the polling process", () => {

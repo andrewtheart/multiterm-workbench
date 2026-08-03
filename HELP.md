@@ -40,6 +40,8 @@ Right-click a pane or its title bar to:
 
 The terminal context menu organizes these actions into two columns of named groups. Its search field is focused immediately, so you can type an action name without an extra click. Press <kbd>Down</kbd> or <kbd>Tab</kbd> to enter the filtered results, then use the arrow keys and Enter. On narrow windows the groups collapse to one column.
 
+Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to **All terminals**; choose **This terminal** for a per-terminal layout, or select **Always take this action (don't ask me again)** to remember the scope. Change **Header drag scope** under **Terminal** to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.
+
 #### Custom context-menu shortcuts
 
 Open a terminal's context menu and select the keyboard button beside Search to edit shortcuts in place. Select **Set** beside an executable action, then press either:
@@ -67,9 +69,11 @@ WSL and tmux must already be installed and configured. MultiTerm does not instal
 
 Pages organize terminals into separate visual groups without ending their shell processes.
 
-- Use the page bar or <kbd>Ctrl+PageUp</kbd>/<kbd>Ctrl+PageDown</kbd> to switch pages.
+- Use the page tabs or <kbd>Ctrl+PageUp</kbd>/<kbd>Ctrl+PageDown</kbd> to switch pages. Each tab has a small <strong>x</strong> at its right edge; the last remaining page keeps a disabled close indicator because MultiTerm always retains one page.
 - Double-click a page name to rename it.
-- Right-click a page for rename, move, create, and close actions.
+- Right-click a page for rename, create, and close actions.
+- Choose **Pages location** under **Layout** to place the page tabs at the top, bottom, left, or right. Right-click blank space in the tabs bar or vertical panel to open a menu whose first action is **Open new page** (quick key <kbd>1</kbd>), followed by the same four placement choices. Changes from either placement control persist across launches and keep the other control synchronized. A vertical pages panel has its own hide button and a floating restore button.
+- Drag page tabs left/right in a horizontal bar or up/down in a vertical panel. With a page focused, <kbd>Ctrl+Shift</kbd> plus the matching arrow key reorders it from the keyboard.
 - Move a terminal between pages from its context menu.
 
 Saved workspaces preserve pages, terminal definitions, shell choices, directories, titles, layout settings, and the active page. Session restore can recreate the previous workspace after a reload or restart.
@@ -243,7 +247,7 @@ Choosing **Quit & close bridge** warns that all associated terminal sessions and
 
 ### Optional watchdog
 
-Setup offers the **MultiTerm watchdog** as a recommended optional task. It installs a lightweight per-user background agent that starts when you sign in, monitors every registered MultiTerm bridge, and detects bridges that are unresponsive or have live terminal sessions after their last app window disconnects. After a reconnect grace period, it asks whether to keep that bridge running or close it gracefully. Declining once suppresses repeat prompts until a MultiTerm UI reconnects.
+Setup offers the **MultiTerm watchdog** as a recommended optional task. It installs a lightweight per-user background agent that starts when you sign in, monitors every registered MultiTerm bridge, and detects bridges that are unresponsive or have live terminal sessions after their last app window disconnects. After a reconnect grace period, its decision dialog shows the affected bridge and active-session count. **Keep terminals running** is the safe default; **Close bridge and terminals** starts staged graceful shutdown. Keeping the bridge suppresses repeat prompts until a MultiTerm UI reconnects.
 
 The watchdog is a per-user agent rather than a Windows Service because Windows services run in Session 0 and cannot safely display dialogs in the signed-in user's desktop session. It does not require administrator privileges. Its rotating diagnostic log is `%LOCALAPPDATA%\MultiTerm\watchdog.log`.
 
@@ -273,7 +277,7 @@ Each normal installed, CLI, or taskbar launch requests an independent app instan
 
 ## Settings
 
-Every settings group starts collapsed. Select a group header or its chevron to expand it. The search box remains at the top of the panel while you scroll and filters individual settings by labels, option names, descriptions, placeholders, and control names. Matching groups expand temporarily; clearing the search restores the groups you had open before searching. Select **Show all** to clear any filter and expand every group; select **Collapse all** to close them again.
+Every settings group starts collapsed. Select a group header or its chevron to expand it. The search box remains at the top of the panel while you scroll and filters individual settings by labels, option names, descriptions, placeholders, control names, and related terminology. For example, **tabs** finds **Pages location**, **macros** finds **Snippets**, and **projects** finds **Workspaces** even when the typed word is not visible in the setting label. Multi-word searches may use related terms in any order. Matching groups expand temporarily; clearing the search restores the groups you had open before searching. Select **Show all** to clear any filter and expand every group; select **Collapse all** to close them again.
 
 Settings cover:
 

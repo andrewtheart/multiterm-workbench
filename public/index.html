@@ -49,6 +49,9 @@
           <i class="icon-when-visible" data-lucide="panel-left-close"></i>
           <i class="icon-when-hidden" data-lucide="panel-left-open"></i>
         </button>
+        <button id="togglePager" class="chrome-toggle" type="button" title="Show pages panel" aria-label="Show pages panel" aria-controls="pager" aria-expanded="false">
+          <i data-lucide="panel-left-open"></i>
+        </button>
       </nav>
 
       <header class="topbar">
@@ -142,7 +145,7 @@
           <div class="settings-panel-toolbar">
             <label class="settings-search">
               <i data-lucide="search" aria-hidden="true"></i>
-              <input id="settingsSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search settings" aria-label="Search settings">
+              <input id="settingsSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search settings or related terms" aria-label="Search settings or related terms">
             </label>
             <button id="settingsShowAll" type="button" aria-pressed="false">Show all</button>
           </div>
@@ -208,6 +211,16 @@
                 <option value="spotlight">Spotlight</option>
                 <option value="bento">Bento grid</option>
                 <option value="manual">Manual canvas</option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span>Pages location</span>
+              <select id="pagerPlacement">
+                <option value="top">Top</option>
+                <option value="bottom">Bottom</option>
+                <option value="left">Left</option>
+                <option value="right">Right</option>
               </select>
             </label>
 
@@ -292,6 +305,15 @@
                 <option value="menu">Context menu</option>
                 <option value="paste">Paste</option>
                 <option value="pasteRun">Paste &amp; run</option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span>Header drag scope</span>
+              <select id="headerActionDragScope">
+                <option value="ask">Ask every time</option>
+                <option value="all">All terminals</option>
+                <option value="terminal">This terminal</option>
               </select>
             </label>
 
@@ -493,6 +515,12 @@
       </div>
 
       <nav id="pager" class="pager" role="tablist" aria-label="Pages">
+        <div class="pager-header">
+          <span>Pages</span>
+          <button id="pagerCollapse" class="pager-collapse" type="button" title="Hide pages panel" aria-label="Hide pages panel" aria-controls="pager" aria-expanded="true">
+            <i data-lucide="panel-left-close"></i>
+          </button>
+        </div>
         <div id="pagerList" class="pager-list"></div>
         <button id="pagerAdd" class="pager-add" type="button" title="New page" aria-label="New page">
           <i data-lucide="plus"></i>
@@ -953,6 +981,35 @@
             <span>Refresh</span>
           </button>
         </div>
+      </div>
+    </div>
+
+    <div id="headerActionScopeFlyout" class="header-action-scope-flyout" role="dialog" aria-modal="false" aria-labelledby="headerActionScopeTitle" hidden>
+      <div class="header-action-scope-head">
+        <i data-lucide="panel-top"></i>
+        <div>
+          <h2 id="headerActionScopeTitle">Move header action</h2>
+          <p id="headerActionScopeText"></p>
+        </div>
+      </div>
+      <fieldset class="header-action-scope-options">
+        <legend>Apply to</legend>
+        <label>
+          <input type="radio" name="headerActionScope" value="all" checked>
+          <span>All terminals</span>
+        </label>
+        <label>
+          <input type="radio" name="headerActionScope" value="terminal">
+          <span>This terminal</span>
+        </label>
+      </fieldset>
+      <label class="header-action-scope-remember">
+        <input id="headerActionScopeRemember" type="checkbox">
+        <span>Always take this action (don't ask me again)</span>
+      </label>
+      <div class="header-action-scope-actions">
+        <button id="headerActionScopeCancel" type="button" class="confirm-cancel">Cancel</button>
+        <button id="headerActionScopeApply" type="button" class="confirm-proceed">Move action</button>
       </div>
     </div>
 

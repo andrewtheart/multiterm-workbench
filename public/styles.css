@@ -39,6 +39,7 @@
 
   /* Layout */
   --sidecar-width: 300px;
+  --pager-side-width: 230px;
 
   /* Typography */
   --ui-font: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
@@ -363,7 +364,7 @@ input[type="range"] {
 
 .app-shell {
   display: grid;
-  grid-template-rows: [topbar] auto [broadcast] auto [workbench] 1fr [pager] auto [status] auto;
+  grid-template-rows: [topbar] auto [broadcast] auto [pager-top] auto [workbench] 1fr [pager-bottom] auto [status] auto;
   height: 100vh;
   overflow: hidden;
 }
@@ -427,6 +428,29 @@ body:not(.header-hidden) .chrome-controls #toggleHeader {
 
 body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
   display: none;
+}
+
+.chrome-controls #togglePager {
+  display: none;
+}
+
+body.pager-panel-collapsed[data-pager-placement="left"] .chrome-controls #togglePager,
+body.pager-panel-collapsed[data-pager-placement="right"] .chrome-controls #togglePager {
+  display: inline-flex;
+  position: fixed;
+}
+
+body.pager-panel-collapsed[data-pager-placement="left"] .chrome-controls #togglePager {
+  left: calc(var(--sidecar-width) + 14px);
+}
+
+body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="left"] .chrome-controls #togglePager {
+  left: 14px;
+}
+
+body.pager-panel-collapsed[data-pager-placement="right"] .chrome-controls #togglePager {
+  left: auto;
+  right: 14px;
 }
 
 /* The "show layout controls" restore button floats at the bottom-left edge of
@@ -613,6 +637,7 @@ body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
 .workbench {
   display: grid;
   grid-row: workbench;
+  grid-template-areas: "settings stage";
   grid-template-columns: var(--sidecar-width) minmax(0, 1fr);
   min-height: 0;
 }
@@ -680,6 +705,7 @@ body.header-hidden .topbar {
 }
 
 body.sidecar-hidden .workbench {
+  grid-template-areas: "stage";
   grid-template-columns: minmax(0, 1fr);
 }
 
@@ -692,6 +718,7 @@ body.sidecar-hidden .control-panel {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+  grid-area: settings;
   overflow: auto;
   padding: 0 14px 16px;
 }
@@ -1525,53 +1552,189 @@ body.header-hidden .status-hint kbd,
   border-top: 1px solid var(--border);
   display: flex;
   gap: 6px;
-  grid-row: pager;
+  grid-row: pager-bottom;
   min-height: 38px;
   padding: 4px 10px;
 }
 
+body[data-pager-placement="top"] .pager {
+  border-bottom: 1px solid var(--border);
+  border-top: 0;
+  grid-row: pager-top;
+}
+
+.pager-header {
+  display: none;
+}
+
+body[data-pager-placement="left"] .workbench {
+  grid-template-areas: "settings pager stage";
+  grid-template-columns: var(--sidecar-width) var(--pager-side-width) minmax(0, 1fr);
+}
+
+body.sidecar-hidden[data-pager-placement="left"] .workbench {
+  grid-template-areas: "pager stage";
+  grid-template-columns: var(--pager-side-width) minmax(0, 1fr);
+}
+
+body[data-pager-placement="right"] .workbench {
+  grid-template-areas: "settings stage pager";
+  grid-template-columns: var(--sidecar-width) minmax(0, 1fr) var(--pager-side-width);
+}
+
+body.sidecar-hidden[data-pager-placement="right"] .workbench {
+  grid-template-areas: "stage pager";
+  grid-template-columns: minmax(0, 1fr) var(--pager-side-width);
+}
+
+body[data-pager-placement="left"] .pager,
+body[data-pager-placement="right"] .pager {
+  align-items: stretch;
+  border-bottom: 0;
+  border-top: 0;
+  flex-direction: column;
+  grid-area: pager;
+  grid-row: auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 8px;
+}
+
+body[data-pager-placement="left"] .pager {
+  border-right: 1px solid var(--border);
+}
+
+body.sidecar-hidden[data-pager-placement="left"] .pager {
+  padding-bottom: 58px;
+}
+
+body[data-pager-placement="right"] .pager {
+  border-left: 1px solid var(--border);
+}
+
+body.pager-panel-collapsed[data-pager-placement="left"] .workbench,
+body.pager-panel-collapsed[data-pager-placement="right"] .workbench {
+  grid-template-areas: "settings stage";
+  grid-template-columns: var(--sidecar-width) minmax(0, 1fr);
+}
+
+body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="left"] .workbench,
+body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="right"] .workbench {
+  grid-template-areas: "stage";
+  grid-template-columns: minmax(0, 1fr);
+}
+
+body.pager-panel-collapsed[data-pager-placement="left"] .pager,
+body.pager-panel-collapsed[data-pager-placement="right"] .pager {
+  display: none;
+}
+
+body[data-pager-placement="left"] .pager-header,
+body[data-pager-placement="right"] .pager-header {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 600;
+  justify-content: space-between;
+  letter-spacing: 0.25px;
+  min-height: 34px;
+  padding: 0 2px 6px 8px;
+  text-transform: uppercase;
+}
+
+.pager-collapse {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  min-height: 30px;
+  padding: 0;
+  width: 30px;
+}
+
+.pager-collapse svg {
+  height: 16px;
+  width: 16px;
+}
+
 /* When the left control panel is collapsed, the floating "show layout controls"
-   button parks at the window's bottom-left (left: 14px, 40px wide) — right on top
-   of the pager's first page pill. Reserve that lane so a page chip never sits
-   under the button. 14 + 40 + 8px breathing room = 62px. */
-body.sidecar-hidden .pager {
+  button parks at the window's bottom-left (left: 14px, 40px wide) — right on top
+  of a bottom pager's first page tab. Reserve that lane only at the bottom;
+  a top pager cannot overlap the fixed restore button. */
+body.sidecar-hidden[data-pager-placement="bottom"] .pager {
   padding-left: 62px;
 }
 
 .pager-list {
   display: flex;
   flex: 1;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: thin;
 }
 
+body[data-pager-placement="left"] .pager-list,
+body[data-pager-placement="right"] .pager-list {
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .pager-chip {
   align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 6px 6px 3px 3px;
   color: var(--muted);
-  cursor: pointer;
+  cursor: grab;
   display: inline-flex;
   flex: 0 0 auto;
   font-size: 12px;
-  gap: 7px;
-  min-height: 28px;
-  padding: 0 10px;
-  transition: background var(--dur) var(--ease-standard), color var(--dur) var(--ease-standard);
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 6px 0 10px;
+  transition: background var(--dur) var(--ease-standard), border-color var(--dur) var(--ease-standard), color var(--dur) var(--ease-standard), box-shadow var(--dur) var(--ease-standard);
+}
+
+.pager-chip:active {
+  cursor: grabbing;
+}
+
+.pager-chip.is-page-dragging {
+  opacity: 0.55;
+}
+
+body[data-pager-placement="left"] .pager-chip,
+body[data-pager-placement="right"] .pager-chip {
+  border-radius: 5px;
+  justify-content: flex-start;
+  width: 100%;
 }
 
 .pager-chip:hover {
-  background: var(--hover);
+  background: var(--surface-high);
+  border-color: var(--border-strong);
   color: var(--text);
 }
 
 .pager-chip.is-active {
   background: var(--primary-container);
-  border-color: var(--border-strong);
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border-strong));
+  box-shadow: inset 0 2px 0 var(--accent);
   color: var(--text);
+}
+
+body[data-pager-placement="top"] .pager-chip.is-active {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+body[data-pager-placement="left"] .pager-chip.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+body[data-pager-placement="right"] .pager-chip.is-active {
+  box-shadow: inset -2px 0 0 var(--accent);
 }
 
 .pager-name {
@@ -1579,6 +1742,13 @@ body.sidecar-hidden .pager {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+body[data-pager-placement="left"] .pager-name,
+body[data-pager-placement="right"] .pager-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
 }
 
 .pager-count {
@@ -1618,8 +1788,6 @@ body.sidecar-hidden .pager {
   opacity: 1;
 }
 
-/* Only offer the close affordance on the page you are pointing at, so the strip
-   stays quiet when you are just reading it. */
 .pager-close {
   border-radius: 50%;
   color: var(--muted);
@@ -1628,22 +1796,28 @@ body.sidecar-hidden .pager {
   font-size: 14px;
   height: 16px;
   line-height: 1;
-  opacity: 0;
+  opacity: 0.62;
   align-items: center;
   justify-content: center;
   transition: opacity var(--dur) var(--ease-standard), background var(--dur) var(--ease-standard);
   width: 16px;
 }
 
-.pager-chip:hover .pager-close,
-.pager-chip.is-active .pager-close {
-  opacity: 0.75;
-}
-
 .pager-close:hover {
   background: rgb(255 255 255 / 0.16);
   color: var(--text);
   opacity: 1;
+}
+
+.pager-close.is-disabled {
+  cursor: default;
+  opacity: 0.24;
+}
+
+.pager-close.is-disabled:hover {
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.24;
 }
 
 .pager-rename {
@@ -1665,6 +1839,12 @@ body.sidecar-hidden .pager {
   flex: 0 0 auto;
   min-height: 28px;
   padding: 0 9px;
+}
+
+body[data-pager-placement="left"] .pager-add,
+body[data-pager-placement="right"] .pager-add {
+  border-radius: var(--radius-sm);
+  width: 100%;
 }
 
 .pager-add:hover {
@@ -3466,6 +3646,121 @@ body.sidecar-hidden .pager {
   width: min(760px, calc(100vw - 16px));
 }
 
+.header-action-scope-flyout {
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--elev-4);
+  color: var(--text);
+  padding: 14px;
+  position: fixed;
+  width: min(340px, calc(100vw - 16px));
+  z-index: 140;
+}
+
+.header-action-scope-flyout[hidden] {
+  display: none;
+}
+
+.header-action-scope-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+}
+
+.header-action-scope-head > svg {
+  color: var(--primary);
+  flex: 0 0 auto;
+  height: 18px;
+  margin-top: 2px;
+  width: 18px;
+}
+
+.header-action-scope-head h2 {
+  font-size: 14px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.header-action-scope-head p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 3px 0 0;
+}
+
+.header-action-scope-options {
+  border: 0;
+  display: grid;
+  gap: 4px;
+  margin: 13px 0 10px;
+  padding: 0;
+}
+
+.header-action-scope-options legend {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.header-action-scope-options label,
+.header-action-scope-remember {
+  align-items: center;
+  border-radius: 4px;
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.header-action-scope-options label {
+  padding: 0 8px;
+}
+
+.header-action-scope-options label:hover {
+  background: var(--state-hover);
+}
+
+.header-action-scope-options input,
+.header-action-scope-remember input {
+  accent-color: var(--primary);
+}
+
+.header-action-scope-remember {
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.header-action-scope-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.pane-actions button[draggable="true"],
+.ctx-item[data-header-action] {
+  cursor: grab;
+}
+
+.pane-actions button.is-action-dragging,
+.ctx-item.is-action-dragging {
+  opacity: 0.45;
+}
+
+.pane-actions.is-header-action-drop-target {
+  background: color-mix(in srgb, var(--primary) 13%, transparent);
+  outline: 1px dashed var(--primary);
+  outline-offset: 2px;
+}
+
+.pane-actions button[data-action="more"].is-header-action-drop-target {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 42%, transparent);
+}
+
 .ctx-menu-toolbar {
   align-items: stretch;
   display: flex;
@@ -3700,6 +3995,11 @@ body.sidecar-hidden .pager {
 .ctx-item[aria-disabled="true"] {
   opacity: 0.4;
   pointer-events: none;
+}
+
+.ctx-item[aria-disabled="true"][data-header-action] {
+  cursor: grab;
+  pointer-events: auto;
 }
 
 @media (max-width: 720px) {
@@ -4027,6 +4327,7 @@ body.sidecar-hidden .pager {
 /* ---------------- Stage & snap preview (layout engine) --------------- */
 
 .stage {
+  grid-area: stage;
   min-height: 0;
   overflow: hidden;
   position: relative;
@@ -4907,9 +5208,8 @@ body.is-pane-dragging {
   width: 30px;
 }
 
-.pane-actions button[data-action="find"],
-.pane-actions button[data-action="duplicate"] {
-  display: none;
+.pane-actions button.is-user-menu-action {
+  display: none !important;
 }
 
 .pane-actions button[data-action="close"]:hover {
@@ -5118,12 +5418,56 @@ body.is-pane-dragging {
   }
 
   .workbench {
+    grid-template-areas: "settings" "stage";
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
   }
 
   body.sidecar-hidden .workbench {
+    grid-template-areas: "stage";
     grid-template-rows: 1fr;
+  }
+
+  body[data-pager-placement="left"] .workbench {
+    grid-template-areas: "settings settings" "pager stage";
+    grid-template-columns: min(230px, 38vw) minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+  }
+
+  body[data-pager-placement="right"] .workbench {
+    grid-template-areas: "settings settings" "stage pager";
+    grid-template-columns: minmax(0, 1fr) min(230px, 38vw);
+    grid-template-rows: auto 1fr;
+  }
+
+  body.sidecar-hidden[data-pager-placement="left"] .workbench {
+    grid-template-areas: "pager stage";
+    grid-template-columns: min(230px, 38vw) minmax(0, 1fr);
+    grid-template-rows: 1fr;
+  }
+
+  body.sidecar-hidden[data-pager-placement="right"] .workbench {
+    grid-template-areas: "stage pager";
+    grid-template-columns: minmax(0, 1fr) min(230px, 38vw);
+    grid-template-rows: 1fr;
+  }
+
+  body.pager-panel-collapsed[data-pager-placement="left"] .workbench,
+  body.pager-panel-collapsed[data-pager-placement="right"] .workbench {
+    grid-template-areas: "settings" "stage";
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="left"] .workbench,
+  body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="right"] .workbench {
+    grid-template-areas: "stage";
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  body.pager-panel-collapsed[data-pager-placement="left"] .chrome-controls #togglePager {
+    left: 14px;
   }
 
   .control-panel {

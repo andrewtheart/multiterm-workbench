@@ -50,7 +50,7 @@ UninstallDisplayIcon={app}\MultiTerm.ico
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ; Single installer covers x86, x64, and ARM64: the payload is architecture-neutral
-; (a PowerShell script plus web assets, no native binaries). ArchitecturesAllowed is
+; (a PowerShell script, managed libraries, and web assets; no native binaries). ArchitecturesAllowed is
 ; intentionally omitted so setup runs on every architecture; x64compatible matches
 ; x64 and ARM64 so those install into 64-bit Program Files.
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -80,6 +80,8 @@ Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
 ; Setup extracts the current launcher before replacing files so upgrades can
 ; gracefully stop every running instance, including instances from older installs.
 Source: "{#RepoRoot}\{#MyScriptFile}"; Flags: dontcopy
+Source: "{#RepoRoot}\lib\terminal-gui\*.dll"; DestDir: "{app}\lib\terminal-gui"; Flags: ignoreversion
+Source: "{#RepoRoot}\lib\terminal-gui\README.md"; DestDir: "{app}\lib\terminal-gui"; Flags: ignoreversion
 Source: "cli\multiterm.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "cli\Manage-SystemPath.ps1"; DestDir: "{app}\CLI"; Flags: ignoreversion
 Source: "{#RepoRoot}\scripts\MultiTerm-Watchdog.ps1"; DestDir: "{app}\Watchdog"; Flags: ignoreversion

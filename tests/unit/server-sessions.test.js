@@ -148,6 +148,26 @@ describe("writeSession", () => {
   });
 });
 
+describe("renameSession", () => {
+  it("persists and broadcasts a normalized title", () => {
+    const observer = fakeClient();
+    server.clients.add(observer);
+    server.sessions.set("rename01", { id: "rename01", title: "Old title" });
+
+    server.handleClientMessage(fakeClient(), JSON.stringify({ type: "title", id: "rename01", title: "  Build monitor  " }));
+
+    expect(server.sessions.get("rename01").title).toBe("Build monitor");
+    expect(observer.send).toHaveBeenCalledWith({ type: "title", id: "rename01", title: "Build monitor" });
+  });
+
+  it("ignores empty titles and missing sessions", () => {
+    server.sessions.set("rename02", { id: "rename02", title: "Keep me" });
+    expect(server.renameSession("rename02", "   ")).toBe(false);
+    expect(server.renameSession("missing", "New title")).toBe(false);
+    expect(server.sessions.get("rename02").title).toBe("Keep me");
+  });
+});
+
 describe("rememberSize", () => {
   it("ignores missing sessions", () => {
     expect(() => server.rememberSize("ghost", 10, 5)).not.toThrow();

@@ -58,41 +58,208 @@ function Test-LoopbackInstanceUri {
   return $Uri.Host -in @("127.0.0.1", "localhost", "::1")
 }
 
+function Get-WatchdogBrush {
+  param([string]$Color)
+
+  $converter = New-Object System.Windows.Media.BrushConverter
+  return $converter.ConvertFromString($Color)
+}
+
+function New-WatchdogTextBlock {
+  param(
+    [string]$Text,
+    [double]$FontSize = 14,
+    [string]$Color = "#D9E2F1",
+    [switch]$Bold
+  )
+
+  $block = New-Object System.Windows.Controls.TextBlock
+  $block.Text = $Text
+  $block.FontSize = $FontSize
+  $block.Foreground = Get-WatchdogBrush $Color
+  $block.TextWrapping = [System.Windows.TextWrapping]::Wrap
+  if ($Bold) {
+    $block.FontWeight = [System.Windows.FontWeights]::SemiBold
+  }
+  return $block
+}
+
+function New-WatchdogButton {
+  param(
+    [string]$Text,
+    [string]$Background,
+    [string]$Foreground,
+    [string]$Border,
+    [switch]$Default,
+    [switch]$Cancel
+  )
+
+  $button = New-Object System.Windows.Controls.Button
+  $button.Content = $Text
+  $button.MinWidth = 156
+  $button.Height = 38
+  $button.Padding = [System.Windows.Thickness]::new(16, 0, 16, 0)
+  $button.Margin = [System.Windows.Thickness]::new(8, 0, 0, 0)
+  $button.Background = Get-WatchdogBrush $Background
+  $button.Foreground = Get-WatchdogBrush $Foreground
+  $button.BorderBrush = Get-WatchdogBrush $Border
+  $button.BorderThickness = [System.Windows.Thickness]::new(1)
+  $button.FontWeight = [System.Windows.FontWeights]::SemiBold
+  $button.IsDefault = $Default.IsPresent
+  $button.IsCancel = $Cancel.IsPresent
+  return $button
+}
+
+function Show-WatchdogDialog {
+  param(
+    [ValidateSet("FrontendClosed", "Unhealthy", "StopError")]
+    [string]$Kind,
+    [string]$Url,
+    [int]$SessionCount = 0
+  )
+
+  Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+
+  $isDecision = $Kind -eq "FrontendClosed"
+  if ($Kind -eq "FrontendClosed") {
+    $windowTitle = "MultiTerm terminals still running"
+    $eyebrow = "FRONTEND DISCONNECTED"
+    $heading = "Your terminal sessions are still running"
+    $body = "The MultiTerm window closed, but the local bridge kept your work alive. Choose whether to reopen MultiTerm later or close this bridge now."
+    $detail = if ($SessionCount -eq 1) { "1 active terminal session" } else { "$SessionCount active terminal sessions" }
+    $accent = "#F2B84B"
+  } elseif ($Kind -eq "Unhealthy") {
+    $windowTitle = "MultiTerm bridge is not responding"
+    $eyebrow = "WATCHDOG WARNING"
+    $heading = "Terminal monitoring is temporarily unavailable"
+    $body = "The bridge process is still running, but the watchdog cannot contact it. Your terminals were not stopped. Check the watchdog log if this warning continues."
+    $detail = "Bridge health check failed"
+    $accent = "#F2B84B"
+  } else {
+    $windowTitle = "MultiTerm could not close the bridge"
+    $eyebrow = "SHUTDOWN FAILED"
+    $heading = "The terminal sessions remain running"
+    $body = "MultiTerm could not ask this bridge to stop. No terminal process was force-closed. Check the watchdog log for the underlying error."
+    $detail = "Graceful shutdown request failed"
+    $accent = "#F06A6A"
+  }
+
+  $window = New-Object System.Windows.Window
+  $window.Title = $windowTitle
+  $window.Width = 590
+  $window.SizeToContent = [System.Windows.SizeToContent]::Height
+  $window.MinHeight = 360
+  $window.MaxHeight = 620
+  $window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
+  $window.ResizeMode = [System.Windows.ResizeMode]::NoResize
+  $window.ShowInTaskbar = $true
+  $window.Topmost = $true
+  $window.Background = Get-WatchdogBrush "#111722"
+  $window.Foreground = Get-WatchdogBrush "#D9E2F1"
+  $window.FontFamily = [System.Windows.Media.FontFamily]::new("Segoe UI")
+
+  $root = New-Object System.Windows.Controls.StackPanel
+
+  $header = New-Object System.Windows.Controls.Border
+  $header.Padding = [System.Windows.Thickness]::new(26, 24, 26, 22)
+  $header.Background = Get-WatchdogBrush "#161E2B"
+  $header.BorderBrush = Get-WatchdogBrush "#273348"
+  $header.BorderThickness = [System.Windows.Thickness]::new(0, 0, 0, 1)
+  $headerRow = New-Object System.Windows.Controls.StackPanel
+  $headerRow.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+
+  $icon = New-Object System.Windows.Controls.Border
+  $icon.Width = 48
+  $icon.Height = 48
+  $icon.Margin = [System.Windows.Thickness]::new(0, 0, 16, 0)
+  $icon.CornerRadius = [System.Windows.CornerRadius]::new(24)
+  $icon.Background = Get-WatchdogBrush "#2A2A25"
+  $iconText = New-WatchdogTextBlock -Text "!" -FontSize 26 -Color $accent -Bold
+  $iconText.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Center
+  $iconText.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $icon.Child = $iconText
+
+  $titles = New-Object System.Windows.Controls.StackPanel
+  $titles.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+  $eyebrowText = New-WatchdogTextBlock -Text $eyebrow -FontSize 11 -Color $accent -Bold
+  $eyebrowText.Margin = [System.Windows.Thickness]::new(0, 0, 0, 5)
+  $headingText = New-WatchdogTextBlock -Text $heading -FontSize 21 -Color "#F4F7FC" -Bold
+  [void]$titles.Children.Add($eyebrowText)
+  [void]$titles.Children.Add($headingText)
+  [void]$headerRow.Children.Add($icon)
+  [void]$headerRow.Children.Add($titles)
+  $header.Child = $headerRow
+
+  $content = New-Object System.Windows.Controls.StackPanel
+  $content.Margin = [System.Windows.Thickness]::new(26, 22, 26, 22)
+  $bodyText = New-WatchdogTextBlock -Text $body -FontSize 14 -Color "#C7D1E1"
+  $bodyText.LineHeight = 21
+  $bodyText.Margin = [System.Windows.Thickness]::new(0, 0, 0, 18)
+
+  $details = New-Object System.Windows.Controls.Border
+  $details.Padding = [System.Windows.Thickness]::new(16, 13, 16, 13)
+  $details.Background = Get-WatchdogBrush "#182130"
+  $details.BorderBrush = Get-WatchdogBrush "#2B3A50"
+  $details.BorderThickness = [System.Windows.Thickness]::new(1)
+  $details.CornerRadius = [System.Windows.CornerRadius]::new(5)
+  $detailStack = New-Object System.Windows.Controls.StackPanel
+  $detailText = New-WatchdogTextBlock -Text $detail -FontSize 14 -Color "#F4F7FC" -Bold
+  $urlText = New-WatchdogTextBlock -Text $Url -FontSize 12 -Color "#8FA5C2"
+  $urlText.Margin = [System.Windows.Thickness]::new(0, 5, 0, 0)
+  [void]$detailStack.Children.Add($detailText)
+  [void]$detailStack.Children.Add($urlText)
+  $details.Child = $detailStack
+
+  [void]$content.Children.Add($bodyText)
+  [void]$content.Children.Add($details)
+
+  if ($isDecision) {
+    $warning = New-WatchdogTextBlock -Text "Closing the bridge asks each terminal to exit cleanly first. Commands that are still running after the grace period will be interrupted and then terminated." -FontSize 12 -Color "#AAB8CC"
+    $warning.Margin = [System.Windows.Thickness]::new(0, 16, 0, 0)
+    [void]$content.Children.Add($warning)
+  }
+
+  $footer = New-Object System.Windows.Controls.StackPanel
+  $footer.Orientation = [System.Windows.Controls.Orientation]::Horizontal
+  $footer.HorizontalAlignment = [System.Windows.HorizontalAlignment]::Right
+  $footer.Margin = [System.Windows.Thickness]::new(26, 0, 26, 24)
+  $dialogState = [PSCustomObject]@{ Choice = "Keep" }
+
+  if ($isDecision) {
+    $closeButton = New-WatchdogButton -Text "Close bridge and terminals" -Background "#351D24" -Foreground "#FFD9DF" -Border "#8C3E4F"
+    $keepButton = New-WatchdogButton -Text "Keep terminals running" -Background "#2D6CDF" -Foreground "#FFFFFF" -Border "#4C83E7" -Default -Cancel
+    $closeButton.Add_Click({
+      $dialogState.Choice = "Close"
+      $window.DialogResult = $true
+    })
+    [void]$footer.Children.Add($closeButton)
+    [void]$footer.Children.Add($keepButton)
+  } else {
+    $dismissButton = New-WatchdogButton -Text "Dismiss" -Background "#2D6CDF" -Foreground "#FFFFFF" -Border "#4C83E7" -Default -Cancel
+    [void]$footer.Children.Add($dismissButton)
+  }
+
+  [void]$root.Children.Add($header)
+  [void]$root.Children.Add($content)
+  [void]$root.Children.Add($footer)
+  $window.Content = $root
+  [void]$window.ShowDialog()
+  return $dialogState.Choice
+}
+
 function Show-BridgeClosePrompt {
   param(
     [string]$Url,
     [int]$SessionCount
   )
 
-  Add-Type -AssemblyName PresentationFramework
-  $sessionWord = if ($SessionCount -eq 1) { "session is" } else { "sessions are" }
-  $message = @"
-The MultiTerm window connected to $Url has closed, but $SessionCount terminal $sessionWord still running.
-
-Do you want to close this bridge?
-
-Closing the bridge asks each terminal to exit cleanly first. Commands that are still running after the grace period will be interrupted and then terminated.
-
-Choose No to leave the bridge and all terminal sessions running.
-"@
-  return [System.Windows.MessageBox]::Show(
-    $message,
-    "MultiTerm bridge still running",
-    [System.Windows.MessageBoxButton]::YesNo,
-    [System.Windows.MessageBoxImage]::Warning
-  )
+  return Show-WatchdogDialog -Kind FrontendClosed -Url $Url -SessionCount $SessionCount
 }
 
 function Show-UnhealthyBridgeWarning {
   param([string]$Url)
 
-  Add-Type -AssemblyName PresentationFramework
-  [void][System.Windows.MessageBox]::Show(
-    "The MultiTerm watchdog cannot contact the bridge at $Url, although its process is still running. Terminal monitoring is temporarily unavailable. Check the MultiTerm watchdog log for details.",
-    "MultiTerm bridge is not responding",
-    [System.Windows.MessageBoxButton]::OK,
-    [System.Windows.MessageBoxImage]::Warning
-  )
+  [void](Show-WatchdogDialog -Kind Unhealthy -Url $Url)
 }
 
 function Stop-WatchedBridge {
@@ -115,7 +282,7 @@ function Start-WatchdogPrompt {
 
   try {
     $powershell = Join-Path $PSHOME "powershell.exe"
-    $argumentLine = '-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -PromptBridgeUrl "{1}"' -f `
+    $argumentLine = '-NoLogo -NoProfile -Sta -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}" -PromptBridgeUrl "{1}"' -f `
       $PSCommandPath,
       $BaseUri.AbsoluteUri
     if ($Unhealthy) {
@@ -147,18 +314,13 @@ if ($PromptBridgeUrl) {
       throw "The prompt session count is invalid."
     }
     $choice = Show-BridgeClosePrompt -Url $promptUri.AbsoluteUri -SessionCount $PromptSessionCount
-    if ($choice -eq [System.Windows.MessageBoxResult]::Yes) {
+    if ($choice -eq "Close") {
       try {
         Stop-WatchedBridge -BaseUri $promptUri
         Write-WatchdogLog ("Graceful shutdown requested for {0}." -f $promptUri.AbsoluteUri)
       } catch {
         Write-WatchdogLog ("Could not stop {0}: {1}" -f $promptUri.AbsoluteUri, $_.Exception.Message)
-        [void][System.Windows.MessageBox]::Show(
-          "MultiTerm could not ask the bridge at $($promptUri.AbsoluteUri) to stop. Its terminals remain running.",
-          "Could not close MultiTerm bridge",
-          [System.Windows.MessageBoxButton]::OK,
-          [System.Windows.MessageBoxImage]::Error
-        )
+        [void](Show-WatchdogDialog -Kind StopError -Url $promptUri.AbsoluteUri)
       }
     } else {
       Write-WatchdogLog ("User kept bridge {0} running." -f $promptUri.AbsoluteUri)

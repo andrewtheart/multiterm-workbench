@@ -358,6 +358,28 @@ if (-not (Test-Path -LiteralPath $publicDir -PathType Container)) {
   throw "Cannot find public assets at $publicDir"
 }
 
+$terminalGuiDirectory = Join-Path $PSScriptRoot "lib\terminal-gui"
+$terminalGuiAssemblies = @(
+    (Join-Path $terminalGuiDirectory "NStack.dll"),
+    (Join-Path $terminalGuiDirectory "System.Management.dll"),
+    (Join-Path $terminalGuiDirectory "Terminal.Gui.dll")
+)
+$netstandardFacade = Join-Path $terminalGuiDirectory "netstandard.dll"
+foreach ($terminalGuiAssembly in $terminalGuiAssemblies) {
+    if (-not (Test-Path -LiteralPath $terminalGuiAssembly -PathType Leaf)) {
+        throw "Cannot find the Terminal.Gui runtime assembly at $terminalGuiAssembly"
+    }
+}
+if (-not (Test-Path -LiteralPath $netstandardFacade -PathType Leaf)) {
+    throw "Cannot find the Terminal.Gui compiler facade at $netstandardFacade"
+}
+$terminalGuiReferences = @($terminalGuiAssemblies) + @($netstandardFacade)
+if (-not ("Terminal.Gui.Application" -as [type])) {
+    foreach ($terminalGuiAssembly in $terminalGuiAssemblies) {
+        Add-Type -Path $terminalGuiAssembly
+    }
+}
+
 if (-not ("MultiTerm.PowerShellBridge.BridgeServer" -as [type])) {
   Add-Type -TypeDefinition @'
 using Microsoft.Win32.SafeHandles;
@@ -377,6 +399,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Terminal.Gui;
 
 namespace MultiTerm.PowerShellBridge
 {
@@ -386,6 +409,15 @@ namespace MultiTerm.PowerShellBridge
         public string Title;
         public int Pid;
         public string StartedAt;
+        public string Shell;
+        public string Cwd;
+        public int Cols;
+        public int Rows;
+        public long BytesIn;
+        public long BytesOut;
+        public long KeystrokesIn;
+        public long KeystrokesOut;
+        public bool IsLogging;
     }
 
     internal sealed class DashboardLogEntry
@@ -395,31 +427,303 @@ namespace MultiTerm.PowerShellBridge
         public DateTime Time;
     }
 
+    internal sealed class DashboardLogVisualLine
+    {
+        public string Timestamp;
+        public string Content;
+        public Terminal.Gui.Attribute ContentAttribute;
+    }
+
+    internal sealed class DashboardLogView : View
+    {
+        private static readonly Terminal.Gui.Attribute BackgroundAttribute = Terminal.Gui.Attribute.Make(Color.DarkGray, Color.Gray);
+        private static readonly Terminal.Gui.Attribute TimestampAttribute = Terminal.Gui.Attribute.Make(Color.Black, Color.Gray);
+        private static readonly Terminal.Gui.Attribute InfoAttribute = Terminal.Gui.Attribute.Make(Color.DarkGray, Color.Gray);
+        private static readonly Terminal.Gui.Attribute WarningAttribute = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Gray);
+        private static readonly Terminal.Gui.Attribute ErrorAttribute = Terminal.Gui.Attribute.Make(Color.BrightRed, Color.Gray);
+        private List<DashboardLogEntry> entries = new List<DashboardLogEntry>();
+
+        public DashboardLogView()
+        {
+            this.CanFocus = false;
+            this.ColorScheme = new ColorScheme()
+            {
+                Normal = BackgroundAttribute,
+                Focus = BackgroundAttribute,
+                HotNormal = BackgroundAttribute,
+                HotFocus = BackgroundAttribute
+            };
+        }
+
+        public void SetEntries(List<DashboardLogEntry> nextEntries)
+        {
+            this.entries = nextEntries ?? new List<DashboardLogEntry>();
+            this.SetNeedsDisplay();
+        }
+
+        public override void Redraw(Rect bounds)
+        {
+            int width = this.Bounds.Width;
+            int height = this.Bounds.Height;
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            List<DashboardLogVisualLine> lines = this.BuildLines(width);
+            int firstLine = Math.Max(0, lines.Count - height);
+            ConsoleDriver driver = Application.Driver;
+            for (int row = 0; row < height; row++)
+            {
+                this.Move(0, row, false);
+                driver.SetAttribute(BackgroundAttribute);
+                driver.AddStr(NStack.ustring.Make(new String(' ', width)));
+
+                int lineIndex = firstLine + row;
+                if (lineIndex >= lines.Count)
+                {
+                    continue;
+                }
+
+                DashboardLogVisualLine line = lines[lineIndex];
+                if (!String.IsNullOrEmpty(line.Timestamp))
+                {
+                    this.Move(0, row, false);
+                    driver.SetAttribute(TimestampAttribute);
+                    driver.AddStr(Clip(line.Timestamp, Math.Min(11, width)));
+                }
+                if (width > 11)
+                {
+                    this.Move(11, row, false);
+                    driver.SetAttribute(line.ContentAttribute);
+                    driver.AddStr(Clip(line.Content, width - 11));
+                }
+            }
+        }
+
+        private List<DashboardLogVisualLine> BuildLines(int width)
+        {
+            List<DashboardLogVisualLine> lines = new List<DashboardLogVisualLine>();
+            int contentWidth = Math.Max(1, width - 11);
+            foreach (DashboardLogEntry entry in this.entries)
+            {
+                string level = NormalizeLevel(entry.Level);
+                string content = "[" + level + "] " + (entry.Message ?? String.Empty);
+                List<string> wrapped = WrapText(content, contentWidth);
+                Terminal.Gui.Attribute contentAttribute = LevelAttribute(level);
+                for (int index = 0; index < wrapped.Count; index++)
+                {
+                    lines.Add(new DashboardLogVisualLine
+                    {
+                        Timestamp = index == 0 ? "[" + entry.Time.ToString("HH:mm:ss") + "] " : null,
+                        Content = wrapped[index],
+                        ContentAttribute = contentAttribute
+                    });
+                }
+            }
+            return lines;
+        }
+
+        private static string NormalizeLevel(string level)
+        {
+            string normalized = (level ?? "info").Trim().ToUpperInvariant();
+            if (normalized == "ERROR" || normalized == "ERR" || normalized == "FATAL")
+            {
+                return "ERR";
+            }
+            if (normalized == "WARNING" || normalized == "WARN" || normalized == "WRN")
+            {
+                return "WARN";
+            }
+            if (normalized == "DEBUG")
+            {
+                return "DBG";
+            }
+            return normalized.Length == 0 ? "INFO" : normalized;
+        }
+
+        private static Terminal.Gui.Attribute LevelAttribute(string level)
+        {
+            if (level == "ERR")
+            {
+                return ErrorAttribute;
+            }
+            if (level == "WARN")
+            {
+                return WarningAttribute;
+            }
+            return InfoAttribute;
+        }
+
+        internal static List<string> WrapText(string text, int width)
+        {
+            List<string> lines = new List<string>();
+            string normalized = (text ?? String.Empty).Replace("\r\n", "\n").Replace('\r', '\n');
+            foreach (string paragraph in normalized.Split('\n'))
+            {
+                string remaining = paragraph;
+                if (remaining.Length == 0)
+                {
+                    lines.Add(String.Empty);
+                    continue;
+                }
+                while (remaining.Length > width)
+                {
+                    int split = remaining.LastIndexOf(' ', width);
+                    if (split <= 0)
+                    {
+                        split = width;
+                    }
+                    lines.Add(remaining.Substring(0, split).TrimEnd());
+                    remaining = remaining.Substring(split).TrimStart();
+                }
+                lines.Add(remaining);
+            }
+            return lines;
+        }
+
+        internal static NStack.ustring Clip(string text, int width)
+        {
+            NStack.ustring value = NStack.ustring.Make(text ?? String.Empty);
+            if (value.ConsoleWidth <= width)
+            {
+                return value;
+            }
+            int runeCount = Math.Min(value.RuneCount, width);
+            NStack.ustring clipped = value.RuneSubstring(0, runeCount);
+            while (clipped.ConsoleWidth > width && runeCount > 0)
+            {
+                runeCount--;
+                clipped = value.RuneSubstring(0, runeCount);
+            }
+            return clipped;
+        }
+    }
+
+    internal sealed class DashboardNoticeView : View
+    {
+        private const string Warning = "Closing this console will terminate every terminal session in THIS INSTANCE.";
+        private static readonly Terminal.Gui.Attribute BackgroundAttribute = Terminal.Gui.Attribute.Make(Color.DarkGray, Color.Gray);
+        private static readonly Terminal.Gui.Attribute WarningAttribute = Terminal.Gui.Attribute.Make(Color.BrightRed, Color.Gray);
+        private static readonly Terminal.Gui.Attribute IconAttribute = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Gray);
+        private static readonly Terminal.Gui.Attribute HelpAttribute = Terminal.Gui.Attribute.Make(Color.Black, Color.Gray);
+        private static readonly string[] HelpLines = new string[]
+        {
+            "Up/Down  Select",
+            "Enter    Terminate",
+            "F2       Open frontend",
+            "F3       Clear logs",
+            "F4       Filter logs",
+            "F5       Pause/resume logs",
+            "Ctrl+Q   Stop instance"
+        };
+
+        public DashboardNoticeView()
+        {
+            this.CanFocus = false;
+            this.ColorScheme = new ColorScheme()
+            {
+                Normal = BackgroundAttribute,
+                Focus = BackgroundAttribute,
+                HotNormal = BackgroundAttribute,
+                HotFocus = BackgroundAttribute
+            };
+        }
+
+        public override void Redraw(Rect bounds)
+        {
+            int width = this.Bounds.Width;
+            int height = this.Bounds.Height;
+            if (width <= 0 || height <= 0)
+            {
+                return;
+            }
+
+            ConsoleDriver driver = Application.Driver;
+            for (int row = 0; row < height; row++)
+            {
+                this.Move(0, row, false);
+                driver.SetAttribute(BackgroundAttribute);
+                driver.AddStr(NStack.ustring.Make(new String(' ', width)));
+            }
+
+            int warningWidth = Math.Max(1, width - 3);
+            List<string> warningLines = DashboardLogView.WrapText(Warning, warningWidth);
+            driver.SetAttribute(WarningAttribute);
+            for (int row = 0; row < warningLines.Count && row < height; row++)
+            {
+                this.Move(0, row, false);
+                driver.AddStr(DashboardLogView.Clip(warningLines[row], warningWidth));
+            }
+
+            if (width >= 2)
+            {
+                this.Move(width - 2, 0, false);
+                driver.SetAttribute(IconAttribute);
+                driver.AddStr(NStack.ustring.Make("!"));
+            }
+
+            int helpRow = Math.Max(warningLines.Count + 1, height - HelpLines.Length);
+            driver.SetAttribute(HelpAttribute);
+            foreach (string line in HelpLines)
+            {
+                if (helpRow >= height)
+                {
+                    break;
+                }
+                this.Move(0, helpRow, false);
+                driver.AddStr(DashboardLogView.Clip(line, width));
+                helpRow++;
+            }
+        }
+    }
+
     internal sealed class BridgeConsoleDashboard
     {
         private const int MaximumLogEntries = 250;
         private readonly string instanceUrl;
+        private readonly DateTime startedAt = DateTime.Now;
         private readonly object sync = new object();
         private readonly Func<List<DashboardSessionInfo>> getSessions;
+        private readonly Func<int> getRendererClients;
         private readonly Action<string> terminateSession;
+        private readonly Action openFrontend;
         private readonly Action stopBridge;
         private readonly List<DashboardLogEntry> logs = new List<DashboardLogEntry>();
+        private readonly ManualResetEvent started = new ManualResetEvent(false);
         private Thread worker;
         private volatile bool stopping;
+        private volatile bool startedSuccessfully;
+        private Window window;
+        private DashboardLogView logView;
+        private ListView sessionList;
+        private TextView sessionDetails;
+        private StatusBar statusBar;
+        private StatusItem statusSummary;
+        private StatusItem logFilterStatus;
+        private StatusItem logPauseStatus;
+        private List<DashboardSessionInfo> displayedSessions = new List<DashboardSessionInfo>();
         private string selectedId;
-        private string lastFrame;
-        private int lastWidth;
-        private int lastHeight;
+        private string logFilter = "all";
+        private bool logPaused;
+        private string lastLogText;
+        private string lastSessionSignature;
+        private string lastSessionDetails;
+        private string lastStatusText;
 
         public BridgeConsoleDashboard(
             string instanceUrl,
             Func<List<DashboardSessionInfo>> getSessions,
+            Func<int> getRendererClients,
             Action<string> terminateSession,
+            Action openFrontend,
             Action stopBridge)
         {
             this.instanceUrl = instanceUrl;
             this.getSessions = getSessions;
+            this.getRendererClients = getRendererClients;
             this.terminateSession = terminateSession;
+            this.openFrontend = openFrontend;
             this.stopBridge = stopBridge;
         }
 
@@ -432,9 +736,7 @@ namespace MultiTerm.PowerShellBridge
 
             try
             {
-                Console.Title = "MultiTerm Control Console - " + this.instanceUrl;
-                Console.CursorVisible = false;
-                this.TryResize(122, 26);
+                Console.Title = "MultiTerm Bridge Control Console - " + this.instanceUrl;
             }
             catch
             {
@@ -443,8 +745,13 @@ namespace MultiTerm.PowerShellBridge
 
             this.worker = new Thread(this.RunLoop);
             this.worker.IsBackground = true;
-            this.worker.Name = "MultiTerm console dashboard";
+            this.worker.Name = "MultiTerm bridge control console";
             this.worker.Start();
+            if (!this.started.WaitOne(TimeSpan.FromSeconds(5)) || !this.startedSuccessfully)
+            {
+                this.stopping = true;
+                return false;
+            }
             return true;
         }
 
@@ -468,77 +775,291 @@ namespace MultiTerm.PowerShellBridge
         public void Stop()
         {
             this.stopping = true;
-            try { Console.CursorVisible = true; } catch { }
+            try
+            {
+                MainLoop mainLoop = Application.MainLoop;
+                if (mainLoop != null)
+                {
+                    mainLoop.Invoke(delegate { Application.RequestStop(); });
+                }
+            }
+            catch { }
         }
 
         private void RunLoop()
         {
-            while (!this.stopping)
+            try
             {
-                try
+                Application.Init();
+                this.BuildUi();
+                this.RefreshUi();
+                Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(125), delegate(MainLoop mainLoop)
                 {
-                    this.HandleKeys();
-                    this.Render();
-                }
-                catch
-                {
-                    // A console can disappear while Windows is closing it. The bridge
-                    // shutdown path will still tear down every pseudo-terminal.
-                }
-                Thread.Sleep(125);
-            }
-        }
-
-        private void HandleKeys()
-        {
-            while (!this.stopping && Console.KeyAvailable)
-            {
-                ConsoleKeyInfo key = Console.ReadKey(true);
-                if (key.Key == ConsoleKey.UpArrow)
-                {
-                    this.MoveSelection(-1);
-                }
-                else if (key.Key == ConsoleKey.DownArrow)
-                {
-                    this.MoveSelection(1);
-                }
-                else if (key.Key == ConsoleKey.Enter)
-                {
-                    string id = this.selectedId;
-                    if (!String.IsNullOrEmpty(id))
+                    if (this.stopping)
                     {
-                        this.terminateSession(id);
+                        Application.RequestStop();
+                        return false;
                     }
-                }
-                else if (key.Key == ConsoleKey.Q && (key.Modifiers & ConsoleModifiers.Control) != 0)
+                    this.RefreshUi();
+                    return true;
+                });
+                this.startedSuccessfully = true;
+                this.started.Set();
+                Application.Run();
+                if (!this.stopping)
                 {
                     this.stopBridge();
-                    return;
                 }
+            }
+            catch
+            {
+                if (this.startedSuccessfully && !this.stopping)
+                {
+                    this.stopBridge();
+                }
+            }
+            finally
+            {
+                this.started.Set();
+                try { Application.Shutdown(); } catch { }
+                try { Console.CursorVisible = true; } catch { }
             }
         }
 
-        private void MoveSelection(int direction)
+        private void BuildUi()
         {
-            List<DashboardSessionInfo> sessions = this.GetSortedSessions();
-            if (sessions.Count == 0)
+            this.window = new Window()
             {
-                this.selectedId = null;
-                return;
-            }
+                Title = "MultiTerm Bridge Control Console",
+                X = 0,
+                Y = 0,
+                Width = Dim.Fill(),
+                Height = Dim.Fill(1)
+            };
 
-            int selected = 0;
-            for (int index = 0; index < sessions.Count; index++)
+            FrameView noticeFrame = new FrameView()
             {
-                if (String.Equals(sessions[index].Id, this.selectedId, StringComparison.Ordinal))
+                Title = "NOTICE",
+                X = 0,
+                Y = 0,
+                Width = Dim.Percent(24f),
+                Height = Dim.Fill()
+            };
+            DashboardNoticeView notice = new DashboardNoticeView()
+            {
+                X = 0,
+                Y = 0,
+                Width = Dim.Fill(),
+                Height = Dim.Fill()
+            };
+            noticeFrame.Add(notice);
+
+            FrameView logFrame = new FrameView()
+            {
+                Title = "Logs (streaming)",
+                X = Pos.Percent(24f),
+                Y = 0,
+                Width = Dim.Percent(48f),
+                Height = Dim.Fill()
+            };
+            this.logView = new DashboardLogView()
+            {
+                X = 0,
+                Y = 0,
+                Width = Dim.Fill(),
+                Height = Dim.Fill()
+            };
+            logFrame.Add(this.logView);
+
+            FrameView sessionFrame = new FrameView()
+            {
+                Title = "Terminals",
+                X = Pos.Percent(72f),
+                Y = 0,
+                Width = Dim.Fill(),
+                Height = Dim.Fill()
+            };
+            this.sessionList = new ListView()
+            {
+                X = 0,
+                Y = 0,
+                Width = Dim.Fill(),
+                Height = Dim.Percent(45f)
+            };
+            this.sessionList.OpenSelectedItem += delegate(ListViewItemEventArgs eventArgs)
+            {
+                int index = eventArgs.Item;
+                if (index >= 0 && index < this.displayedSessions.Count)
                 {
-                    selected = index;
-                    break;
+                    this.terminateSession(this.displayedSessions[index].Id);
                 }
+            };
+            Label sessionDetailsTitle = new Label()
+            {
+                X = 0,
+                Y = Pos.Bottom(this.sessionList),
+                Width = Dim.Fill(),
+                Height = 1,
+                Text = "Selected terminal"
+            };
+            this.sessionDetails = new TextView()
+            {
+                X = 0,
+                Y = Pos.Bottom(sessionDetailsTitle),
+                Width = Dim.Fill(),
+                Height = Dim.Fill(),
+                ReadOnly = true,
+                WordWrap = true,
+                CanFocus = false,
+                Text = "No active terminal selected."
+            };
+            sessionFrame.Add(this.sessionList, sessionDetailsTitle, this.sessionDetails);
+
+            this.statusSummary = new StatusItem((Key)0, this.instanceUrl, null, null);
+            this.logFilterStatus = new StatusItem(Key.F4, "~F4~ Logs: all", this.CycleLogFilter, null);
+            this.logPauseStatus = new StatusItem(Key.F5, "~F5~ Pause", this.ToggleLogPause, null);
+            this.statusBar = new StatusBar(new StatusItem[]
+            {
+                this.statusSummary,
+                new StatusItem(Key.F2, "~F2~ Open UI", this.OpenFrontend, null),
+                new StatusItem(Key.F3, "~F3~ Clear", this.ClearLogs, null),
+                this.logFilterStatus,
+                this.logPauseStatus,
+                new StatusItem(Key.CtrlMask | Key.Q, "~^Q~ Stop", this.ConfirmStop, null)
+            });
+
+            this.window.Add(noticeFrame, logFrame, sessionFrame);
+            Application.Top.Add(this.window, this.statusBar);
+            this.sessionList.SetFocus();
+        }
+
+        private void OpenFrontend()
+        {
+            try
+            {
+                this.openFrontend();
+                this.AddLog("info", "Bridge control console requested the frontend.");
+            }
+            catch (Exception error)
+            {
+                this.AddLog("error", "Could not open the frontend: " + error.Message);
+            }
+        }
+
+        private void ClearLogs()
+        {
+            lock (this.sync)
+            {
+                this.logs.Clear();
+            }
+            this.logView.SetEntries(new List<DashboardLogEntry>());
+            this.lastLogText = String.Empty;
+        }
+
+        private void CycleLogFilter()
+        {
+            if (this.logFilter == "all")
+            {
+                this.logFilter = "warnings";
+            }
+            else if (this.logFilter == "warnings")
+            {
+                this.logFilter = "errors";
+            }
+            else
+            {
+                this.logFilter = "all";
+            }
+            this.logFilterStatus.Title = "~F4~ Logs: " + this.logFilter;
+            this.statusBar.SetNeedsDisplay();
+            this.lastLogText = null;
+        }
+
+        private void ToggleLogPause()
+        {
+            this.logPaused = !this.logPaused;
+            this.logPauseStatus.Title = this.logPaused ? "~F5~ Resume" : "~F5~ Pause";
+            this.statusBar.SetNeedsDisplay();
+            if (!this.logPaused)
+            {
+                this.lastLogText = null;
+            }
+        }
+
+        private bool IncludesLog(DashboardLogEntry entry)
+        {
+            if (this.logFilter == "all")
+            {
+                return true;
+            }
+            bool isError = String.Equals(entry.Level, "error", StringComparison.OrdinalIgnoreCase);
+            if (this.logFilter == "errors")
+            {
+                return isError;
+            }
+            return isError || String.Equals(entry.Level, "warn", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ConfirmStop()
+        {
+            int sessionCount = this.getSessions().Count;
+            string sessionLabel = sessionCount == 1 ? "1 active terminal session" : sessionCount + " active terminal sessions";
+            int choice = MessageBox.Query(
+                66,
+                10,
+                "Stop MultiTerm instance?",
+                "This will close the bridge and " + sessionLabel + ". Running commands are asked to exit cleanly before termination.",
+                "Keep running",
+                "Stop instance");
+            if (choice == 1)
+            {
+                this.stopBridge();
+            }
+        }
+
+        private static string FormatUptime(TimeSpan uptime)
+        {
+            if (uptime.TotalHours >= 1)
+            {
+                return ((int)uptime.TotalHours) + "h " + uptime.Minutes + "m";
+            }
+            return Math.Max(0, (int)uptime.TotalMinutes) + "m";
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1024 * 1024)
+            {
+                return (bytes / (1024.0 * 1024.0)).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+            }
+            if (bytes >= 1024)
+            {
+                return (bytes / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " KB";
+            }
+            return bytes.ToString(CultureInfo.InvariantCulture) + " B";
+        }
+
+        private static string SessionDetails(DashboardSessionInfo session)
+        {
+            if (session == null)
+            {
+                return "No active terminal selected.";
             }
 
-            selected = (selected + direction + sessions.Count) % sessions.Count;
-            this.selectedId = sessions[selected].Id;
+            DateTime started;
+            string age = "unknown";
+            if (DateTime.TryParse(session.StartedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out started))
+            {
+                age = FormatUptime(DateTime.UtcNow - started.ToUniversalTime());
+            }
+            return session.Title
+                + "\nPID " + session.Pid + " | " + session.Shell
+                + "\n" + session.Cols + "x" + session.Rows + " | running " + age
+                + "\nI/O " + FormatBytes(session.BytesIn) + " in / " + FormatBytes(session.BytesOut) + " out"
+                + "\nKeys " + session.KeystrokesIn + " in / " + session.KeystrokesOut + " out"
+                + "\nLogging " + (session.IsLogging ? "ON" : "off")
+                + "\nCWD " + session.Cwd
+                + "\nID " + session.Id;
         }
 
         private List<DashboardSessionInfo> GetSortedSessions()
@@ -552,159 +1073,93 @@ namespace MultiTerm.PowerShellBridge
             return sessions;
         }
 
-        private void Render()
+        private void RefreshUi()
         {
-            int reportedWidth = Console.WindowWidth;
-            int reportedHeight = Console.WindowHeight;
-            if (reportedWidth < 2 || reportedHeight < 2)
+            int selectedIndex = this.sessionList.SelectedItem;
+            if (selectedIndex >= 0 && selectedIndex < this.displayedSessions.Count)
             {
-                return;
-            }
-            int width = Math.Max(20, reportedWidth - 1);
-            int height = Math.Max(10, reportedHeight - 1);
-            if (width < 78 || height < 14)
-            {
-                Console.SetCursorPosition(0, 0);
-                Console.Write(this.Fit("MultiTerm dashboard needs at least 79 columns x 15 rows. Resize this window. Closing it stops this instance's terminals.", width));
-                return;
-            }
-
-            if (width != this.lastWidth || height != this.lastHeight)
-            {
-                try { Console.Clear(); } catch { }
-                this.lastWidth = width;
-                this.lastHeight = height;
+                this.selectedId = this.displayedSessions[selectedIndex].Id;
             }
 
             List<DashboardSessionInfo> sessions = this.GetSortedSessions();
-            this.EnsureSelection(sessions);
+            StringBuilder sessionSignature = new StringBuilder();
+            foreach (DashboardSessionInfo session in sessions)
+            {
+                sessionSignature.Append(session.Id).Append('\0').Append(session.Title).Append('\0').Append(session.Pid).Append('\n');
+            }
+            string signature = sessionSignature.ToString();
+            if (!String.Equals(signature, this.lastSessionSignature, StringComparison.Ordinal))
+            {
+                List<string> items = new List<string>();
+                foreach (DashboardSessionInfo session in sessions)
+                {
+                    string pid = session.Pid > 0 ? "pid " + session.Pid : "starting";
+                    items.Add(session.Title + " (" + pid + ")");
+                }
+                if (items.Count == 0)
+                {
+                    items.Add("No active terminals");
+                }
+                this.sessionList.SetSource(items);
+                int nextSelection = 0;
+                for (int index = 0; index < sessions.Count; index++)
+                {
+                    if (String.Equals(sessions[index].Id, this.selectedId, StringComparison.Ordinal))
+                    {
+                        nextSelection = index;
+                        break;
+                    }
+                }
+                this.sessionList.SelectedItem = nextSelection;
+                this.lastSessionSignature = signature;
+            }
+            this.displayedSessions = sessions;
+
+            DashboardSessionInfo selectedSession = null;
+            int currentSelection = this.sessionList.SelectedItem;
+            if (currentSelection >= 0 && currentSelection < this.displayedSessions.Count)
+            {
+                selectedSession = this.displayedSessions[currentSelection];
+            }
+            string nextSessionDetails = SessionDetails(selectedSession);
+            if (!String.Equals(nextSessionDetails, this.lastSessionDetails, StringComparison.Ordinal))
+            {
+                this.sessionDetails.Text = nextSessionDetails;
+                this.lastSessionDetails = nextSessionDetails;
+            }
+
             List<DashboardLogEntry> logSnapshot;
             lock (this.sync)
             {
                 logSnapshot = new List<DashboardLogEntry>(this.logs);
             }
-
-            string frame = this.BuildFrame(width, height, sessions, logSnapshot);
-            if (String.Equals(frame, this.lastFrame, StringComparison.Ordinal))
+            List<DashboardLogEntry> visibleLogs = new List<DashboardLogEntry>();
+            StringBuilder logText = new StringBuilder();
+            foreach (DashboardLogEntry entry in logSnapshot)
             {
-                return;
-            }
-            Console.SetCursorPosition(0, 0);
-            Console.Write(frame);
-            this.lastFrame = frame;
-        }
-
-        private void EnsureSelection(List<DashboardSessionInfo> sessions)
-        {
-            if (sessions.Count == 0)
-            {
-                this.selectedId = null;
-                return;
-            }
-
-            foreach (DashboardSessionInfo session in sessions)
-            {
-                if (String.Equals(session.Id, this.selectedId, StringComparison.Ordinal))
+                if (!this.IncludesLog(entry))
                 {
-                    return;
+                    continue;
                 }
+                visibleLogs.Add(entry);
+                logText.Append(entry.Time.Ticks).Append('\0').Append(entry.Level).Append('\0').Append(entry.Message).Append('\n');
             }
-            this.selectedId = sessions[0].Id;
-        }
-
-        private string BuildFrame(
-            int width,
-            int height,
-            List<DashboardSessionInfo> sessions,
-            List<DashboardLogEntry> logEntries)
-        {
-            int contentWidth = width - 4;
-            int noticeWidth = Math.Min(27, Math.Max(19, contentWidth / 4));
-            int sessionWidth = Math.Min(39, Math.Max(25, contentWidth / 3));
-            int logWidth = contentWidth - noticeWidth - sessionWidth;
-            int bodyRows = height - 6;
-            string border = "+" + new String('-', noticeWidth) + "+" + new String('-', logWidth) + "+" + new String('-', sessionWidth) + "+";
-            List<string> lines = new List<string>();
-            lines.Add(border);
-            lines.Add(this.Row("NOTICE", "Logs (streaming)", "Terminals (select to terminate)", noticeWidth, logWidth, sessionWidth));
-            lines.Add(border);
-
-            string[] notice = new string[]
+            string nextLogText = logText.ToString();
+            if (!this.logPaused && !String.Equals(nextLogText, this.lastLogText, StringComparison.Ordinal))
             {
-                "Closing this console",
-                "will terminate every",
-                "terminal session in",
-                "THIS INSTANCE.",
-                "",
-                "Up/Down: select",
-                "Enter: terminate",
-                "Ctrl+Q: stop instance"
-            };
-
-            int firstLog = Math.Max(0, logEntries.Count - bodyRows);
-            for (int row = 0; row < bodyRows; row++)
-            {
-                string noticeLine = row < notice.Length ? notice[row] : String.Empty;
-                string logLine = String.Empty;
-                int logIndex = firstLog + row;
-                if (logIndex < logEntries.Count)
-                {
-                    DashboardLogEntry entry = logEntries[logIndex];
-                    logLine = "[" + entry.Time.ToString("HH:mm:ss") + "] [" + entry.Level.ToUpperInvariant() + "] " + entry.Message;
-                }
-
-                string sessionLine = String.Empty;
-                if (row < sessions.Count)
-                {
-                    DashboardSessionInfo session = sessions[row];
-                    string marker = String.Equals(session.Id, this.selectedId, StringComparison.Ordinal) ? "> " : "  ";
-                    string pid = session.Pid > 0 ? "pid " + session.Pid : "starting";
-                    sessionLine = marker + (row + 1) + ". " + session.Title + " (" + pid + ")";
-                }
-                else if (row == 0 && sessions.Count == 0)
-                {
-                    sessionLine = "  No active terminals";
-                }
-
-                lines.Add(this.Row(noticeLine, logLine, sessionLine, noticeWidth, logWidth, sessionWidth));
+                this.logView.SetEntries(visibleLogs);
+                this.lastLogText = nextLogText;
             }
 
-            lines.Add(border);
-            string status = " " + this.instanceUrl + " | " + sessions.Count + " active | Arrow keys select; Enter terminates; Ctrl+Q stops this instance";
-            lines.Add("|" + this.Fit(status, width - 2) + "|");
-            lines.Add(new String('-', width));
-            return String.Join(Environment.NewLine, lines.ToArray());
-        }
-
-        private string Row(string left, string middle, string right, int leftWidth, int middleWidth, int rightWidth)
-        {
-            return "|" + this.Fit(left, leftWidth) + "|" + this.Fit(middle, middleWidth) + "|" + this.Fit(right, rightWidth) + "|";
-        }
-
-        private string Fit(string value, int width)
-        {
-            value = value ?? String.Empty;
-            if (value.Length > width)
+            int rendererClients = this.getRendererClients();
+            string frontend = rendererClients > 0 ? "UI ONLINE" : "UI OFFLINE";
+            string sessionLabel = sessions.Count == 1 ? "1 TERM" : sessions.Count + " TERMS";
+            string statusText = "UP " + FormatUptime(DateTime.Now - this.startedAt) + " | " + frontend + " | " + sessionLabel;
+            if (!String.Equals(statusText, this.lastStatusText, StringComparison.Ordinal))
             {
-                return width <= 3 ? value.Substring(0, width) : value.Substring(0, width - 3) + "...";
-            }
-            return value.PadRight(width);
-        }
-
-        private void TryResize(int requestedWidth, int requestedHeight)
-        {
-            try
-            {
-                int width = Math.Min(requestedWidth, Console.LargestWindowWidth);
-                int height = Math.Min(requestedHeight, Console.LargestWindowHeight);
-                Console.SetBufferSize(Math.Max(Console.BufferWidth, width), Math.Max(Console.BufferHeight, height));
-                Console.SetWindowSize(width, height);
-                Console.SetBufferSize(width, height);
-            }
-            catch
-            {
-                // Windows Terminal and redirected hosts may own sizing. Rendering adapts
-                // to the dimensions they provide instead of failing bridge startup.
+                this.statusSummary.Title = statusText;
+                this.statusBar.SetNeedsDisplay();
+                this.lastStatusText = statusText;
             }
         }
     }
@@ -898,11 +1353,13 @@ namespace MultiTerm.PowerShellBridge
                 BridgeConsoleDashboard dashboard = new BridgeConsoleDashboard(
                     this.Url,
                     this.DashboardSessions,
+                    this.RendererClientCount,
                     delegate(string id)
                     {
-                        this.Log("warn", "Control console requested termination for session " + id);
+                        this.Log("warn", "Bridge control console requested termination for session " + id);
                         this.KillSession(id);
                     },
+                    delegate { this.OpenBrowser(); },
                     delegate { this.Stop(true); });
                 if (dashboard.Start())
                 {
@@ -912,7 +1369,7 @@ namespace MultiTerm.PowerShellBridge
 
             this.Log("info", "MultiTerm PowerShell bridge running on " + this.Url);
             this.Log("info", "PowerShell sessions are available only to this local machine by default.");
-            this.Log("info", this.consoleDashboard == null ? "Press Ctrl+C to stop the bridge." : "Control console ready. Use Up/Down and Enter to terminate a selected session.");
+            this.Log("info", this.consoleDashboard == null ? "Press Ctrl+C to stop the bridge." : "Bridge control console ready. F2 opens the frontend; F4 filters logs; Ctrl+Q stops this instance.");
 
             if (this.openBrowser)
             {
@@ -1189,11 +1646,7 @@ namespace MultiTerm.PowerShellBridge
 
                 if (path == "/health")
                 {
-                    int rendererClients = 0;
-                    foreach (BridgeClient client in this.clients.Values)
-                    {
-                        if (client.IsRenderer) rendererClients++;
-                    }
+                    int rendererClients = this.RendererClientCount();
                     string body = "{\"ok\":true,\"app\":\"MultiTerm Workbench\",\"pid\":"
                         + Process.GetCurrentProcess().Id + ",\"port\":" + this.port
                         + ",\"sessions\":" + this.sessions.Count
@@ -1416,6 +1869,7 @@ namespace MultiTerm.PowerShellBridge
                         + " --user-data-dir=\"" + dataDir + "\""
                         + " --window-size=1200,800"
                         + " --max-active-webgl-contexts=64"
+                        + " --disable-sync"
                         + " --no-first-run --no-default-browser-check";
 
                     ProcessStartInfo appInfo = new ProcessStartInfo(browser, args);
@@ -2286,6 +2740,17 @@ namespace MultiTerm.PowerShellBridge
                     session.Resize(cols, rows);
                 }
             }
+            else if (type == "title")
+            {
+                TerminalSession session;
+                string title = Json.Get(message, "title").Trim();
+                if (title.Length > 0 && this.sessions.TryGetValue(Json.Get(message, "id"), out session))
+                {
+                    session.Rename(title);
+                    this.Broadcast("{\"type\":\"title\",\"id\":" + Json.Quote(session.Id)
+                        + ",\"title\":" + Json.Quote(session.Title) + "}");
+                }
+            }
             else if (type == "kill")
             {
                 this.Log("info", "Kill requested for session " + Json.Get(message, "id"));
@@ -2700,10 +3165,32 @@ namespace MultiTerm.PowerShellBridge
                     Id = session.Id,
                     Title = session.Title,
                     Pid = session.Pid,
-                    StartedAt = session.StartedAt
+                    StartedAt = session.StartedAt,
+                    Shell = session.Shell.Label,
+                    Cwd = session.Cwd,
+                    Cols = session.Cols,
+                    Rows = session.Rows,
+                    BytesIn = session.BytesIn,
+                    BytesOut = session.BytesOut,
+                    KeystrokesIn = session.KeystrokesIn,
+                    KeystrokesOut = session.KeystrokesOut,
+                    IsLogging = session.IsLogging
                 });
             }
             return result;
+        }
+
+        private int RendererClientCount()
+        {
+            int count = 0;
+            foreach (BridgeClient client in this.clients.Values)
+            {
+                if (client.IsRenderer)
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         // --- Administrator terminals -------------------------------------------------
@@ -4099,6 +4586,14 @@ namespace MultiTerm.PowerShellBridge
 
         public string StartedAt { get; private set; }
 
+        public void Rename(string title)
+        {
+            if (!String.IsNullOrWhiteSpace(title))
+            {
+                this.Title = title.Trim();
+            }
+        }
+
         public long BytesIn { get { return Interlocked.Read(ref this.bytesIn); } }
 
         public long BytesOut { get { return Interlocked.Read(ref this.bytesOut); } }
@@ -5288,7 +5783,7 @@ namespace MultiTerm.PowerShellBridge
         public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
     }
 }
-'@
+'@ -ReferencedAssemblies $terminalGuiReferences
 }
 
 # Administrator terminals relaunch this script elevated with -ElevatedHost. In that

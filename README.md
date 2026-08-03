@@ -393,17 +393,22 @@ sequenceDiagram
     UI->>BR: { type: "resize", id, cols, rows }
     BR->>PTY: terminal.resize(cols, rows)
 
+    UI->>BR: { type: "title", id, title }
+    BR-->>UI: broadcast { type: "title", id, title }
+
     PTY-->>BR: onExit(code, signal)
     BR-->>UI: broadcast { type: "exited", id, code }
 ```
 
-**Client → bridge** messages: `create`, `listTmux`, `input`, `resize`, `kill`, `killAll`,
+**Client → bridge** messages: `create`, `listTmux`, `input`, `resize`, `title`, `kill`, `killAll`,
 `logStart` / `logStop`, `reveal`, `openPath`, `pickScript`, `elevate`, `list`,
 `memstats`, `statistics`, `communicationConfig`, `messageSend`, `messageList`, and
 `messageAction`. **Bridge → client** messages: `welcome` (session catalog
-on connect), `created`, `output`, `exited`, `createFailed`, `sessions`,
+on connect), `created`, `output`, `title`, `exited`, `createFailed`, `sessions`,
 `memstats`, `statistics`, terminal-message events/results, and `error`. On reconnect the bridge re-announces the sessions it kept alive via
-`welcome`, and the front-end re-adopts each pane instead of respawning it.
+`welcome`, and the front-end re-adopts each pane instead of respawning it. Title
+changes are stored in the bridge and broadcast so the control console and every
+connected renderer stay aligned.
 
 > **Both bridges must stay in lock-step.** Every client → bridge message type is
 > implemented independently in `server.js` (Node) and the embedded C# of
@@ -485,7 +490,10 @@ No Node install required:
 .\Start-MultiTerm.ps1
 ```
 
-The bridge opens your default browser automatically. If it does not, open the URL printed by the bridge, usually:
+The bridge opens a dedicated browser app window automatically. Its isolated
+profile keeps MultiTerm settings local and launches with browser synchronization
+disabled, preventing Edge account-sync promotions without changing your normal
+Edge profile. If it does not open, use the URL printed by the bridge, usually:
 
 ```text
 http://127.0.0.1:3177
@@ -497,13 +505,20 @@ To start the bridge without opening a browser:
 .\Start-MultiTerm.ps1 -NoBrowser
 ```
 
-Installed Start Menu and desktop shortcuts open a compact control console behind
-the MultiTerm app window. It has three columns: a shutdown warning, streaming
-bridge logs, and the active terminal list with each shell's process ID. Use the
-Up/Down arrows to select a terminal and Enter to request its graceful termination.
-Ctrl+Q stops the bridge and all sessions. Closing the control console also ends
-that bridge process, so only the terminals in that MultiTerm instance are
-terminated. The console title and status line show the instance URL.
+Installed Start Menu and desktop shortcuts open the **MultiTerm Bridge Control
+Console** behind the MultiTerm app window. The console uses the Terminal.Gui
+framework for native screen buffering, resizing, and keyboard navigation. It has three panes: a
+shutdown warning, streaming bridge logs, and the active terminal list with each
+shell's process ID. Use the Up/Down arrows to select a terminal and Enter to
+request its graceful termination. The status bar reports bridge uptime, frontend
+connectivity, and the active-session count. The terminal pane shows the selected
+terminal's shell, PID, dimensions, uptime, bridge traffic, keystroke counts,
+logging state, working directory, and session ID. F2 reopens the frontend, F3
+clears the displayed logs, F4 cycles the log filter through all, warnings, and
+errors, and F5 pauses or resumes log updates for inspection. Ctrl+Q opens a
+confirmation before stopping the bridge and all sessions. Closing the bridge
+control console also ends that bridge process, so only the terminals in that
+MultiTerm instance are terminated.
 
 To show the same dashboard when launching the script directly:
 
@@ -591,9 +606,11 @@ a per-user background agent in the user's Startup folder, without requiring
 administrator privileges. The agent validates registered bridges through their
 loopback health endpoints, warns when a live bridge repeatedly stops responding,
 and detects a bridge with terminal sessions after its last renderer disconnects.
-After a reconnect grace period it asks whether to keep those sessions running or
-close the bridge. It is intentionally not a Windows Service: services run in
-Session 0 and cannot safely present dialogs on the signed-in user's desktop.
+After a reconnect grace period it opens a custom decision dialog showing the
+bridge URL and active-session count. **Keep terminals running** is the safe
+default; **Close bridge and terminals** requests staged graceful shutdown. It is
+intentionally not a Windows Service: services run in Session 0 and cannot safely
+present dialogs on the signed-in user's desktop.
 
 Closing the Electron window or choosing **Quit MultiTerm** from its tray uses one
 decision dialog. The user can keep the UI in the tray, quit only the UI while its
@@ -750,11 +767,11 @@ point the checker at a fork.
 - The bridge binds to `127.0.0.1` by default. Set `PORT=4000` to choose another port.
 - Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell, Command Prompt, or WSL. Existing WSL tmux sessions can be discovered and attached from the header or command palette.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.
-- Pages keep related terminals in separate visual groups while their shell processes stay alive. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
+- Pages keep related terminals in separate visual groups while their shell processes stay alive. Compact page tabs expose a persistent right-edge **x** and reorder by dragging along the active axis. Right-click blank pager space for **Open new page** as quick key **1** and the placement actions. **Pages location** under **Layout** and those context actions move the tabs to the top, bottom, left, or right; both paths update one persisted setting and stay synchronized. Side panels are collapsible. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
 - The top-right **?** opens generated in-app help. `Ctrl+/` opens the compact shortcut reference; `Ctrl+Shift+P` or F1 opens the searchable command palette.
 - The top search box runs the same buffer search as `Ctrl+Shift+F` — every match is highlighted in place and a counter shows the running total — and additionally hides panes with nothing to show. Panes reappear (already highlighted) the moment your evolving query matches them again, or when matching output arrives. Enter/Shift+Enter walk the matches, Escape clears the filter. A pane also survives the filter when its title, working directory, shell, or status matches. `Ctrl+Shift+E` focuses the box.
 - Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.
-- Settings groups start collapsed to keep the side panel compact. Its sticky search filters individual controls and temporarily expands matching groups; clearing restores the previous group state. **Show all** clears the filter and expands every group, then changes to **Collapse all**.
+- Settings groups start collapsed to keep the side panel compact. Its sticky search uses a cached related-term index as well as visible labels, so searches such as **tabs**, **macros**, or **projects** find Pages, Snippets, or Workspaces without rescanning every control on each keystroke. It temporarily expands matching groups; clearing restores the previous group state. **Show all** clears the filter and expands every group, then changes to **Collapse all**.
 - The bottom-left workspace buttons hide or restore the top header and layout sidecar for more terminal space.
 - The bottom-left trash button closes every terminal pane and tells the bridge to kill all running shell sessions.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
@@ -762,7 +779,7 @@ point the checker at a fork.
 - Any pane can be minimized to a chip in the status bar with its header's minimize (−) button; click the chip to restore the pane in place.
 - Each pane header has a **maximize** button that overlays the pane across the whole terminal workspace (and turns into restore); `Ctrl+Shift+X` does the same for the active pane.
 - The **focus** button next to it promotes the pane in the focus-rail layout rather than maximizing it.
-- Every pane header carries a **hamburger (⋯) menu** holding *Find…* and *Duplicate*; when a pane gets too narrow, its move and label-colour actions collapse into the same menu.
+- Every pane header carries a **hamburger (⋯) menu** holding *Find…* and *Duplicate*; when a pane gets too narrow, its move and label-colour actions collapse into the same menu. Drag any header action onto the hamburger to move it there, or drag a menu row back onto the header. The scope prompt defaults to all terminals, supports one-terminal overrides, can remember either choice, and persists through reloads and saved workspaces; reset the remembered choice with **Header drag scope** under **Terminal**.
 - Hold Ctrl and use the mouse wheel over a pane to zoom only that terminal; Ctrl+Alt+= / - / 0 controls or resets the active terminal. The status bar − / + controls and Ctrl+- / Ctrl+= change the default inherited by terminals without an individual override.
 - Hover (or keyboard-focus) the **memory chip** at the far left of the status bar to expand a live reading of how much RAM MultiTerm and its terminals are using, alongside system totals. It refreshes about every 4 seconds while open and stops as soon as you move away, so the (fairly expensive) Windows process probe only runs when you are actually looking. The reading is Windows-only; elsewhere the chip reports `unavailable`. Set `MEMSTATS=1` on the bridge to restore the old always-on 10-second broadcast instead.
 - Right-click inside a terminal and choose **Terminal statistics…** to inspect its cumulative input/output character units, UTF-8 payload bytes transferred through the bridge, and current CPU/memory for the shell's full process tree. Right-click blank workspace and choose **All terminal statistics…** for aggregate totals plus a per-terminal table. CPU is a point-in-time sample; use **Refresh** to sample it again.
