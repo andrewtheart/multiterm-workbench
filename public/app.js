@@ -160,7 +160,7 @@ const HEADER_ACTIONS = Object.freeze({
 });
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.60";
+const APP_VERSION = "0.1.61";
 const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
 const MIN_FONT_SIZE = 10;
