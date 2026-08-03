@@ -2784,6 +2784,14 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.PickScript(client, message);
             }
+            else if (type == "prepareSave")
+            {
+                this.SavePreparedText(client, message);
+            }
+            else if (type == "prepareValidate")
+            {
+                this.ValidatePreparedText(client, message);
+            }
             else if (type == "elevate")
             {
                 this.ElevateSession(client, message);
@@ -3641,6 +3649,166 @@ namespace MultiTerm.PowerShellBridge
             dialogThread.Start();
         }
 
+        private static string PreparedFileName(string value)
+        {
+            string name;
+            try
+            {
+                name = Path.GetFileName((value ?? String.Empty).Trim());
+            }
+            catch
+            {
+                name = String.Empty;
+            }
+            foreach (char invalid in Path.GetInvalidFileNameChars())
+            {
+                name = name.Replace(invalid.ToString(), String.Empty);
+            }
+            name = name.TrimEnd('.', ' ');
+            return String.IsNullOrEmpty(name) ? "prepared.ps1" : name;
+        }
+
+        private void SavePreparedText(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string text = Json.Get(message, "text");
+            string suggestedName = PreparedFileName(Json.Get(message, "suggestedName"));
+            string initialDirectory = String.Empty;
+            try
+            {
+                string candidate = Json.Get(message, "cwd");
+                if (!String.IsNullOrEmpty(candidate) && Directory.Exists(candidate))
+                {
+                    initialDirectory = Path.GetFullPath(candidate);
+                }
+            }
+            catch
+            {
+                initialDirectory = String.Empty;
+            }
+
+            Thread dialogThread = new Thread(delegate()
+            {
+                string chosen = null;
+                string errorMessage = null;
+                try
+                {
+                    chosen = FileDialog.Save("Save prepared text", initialDirectory, suggestedName);
+                    if (!String.IsNullOrEmpty(chosen))
+                    {
+                        File.WriteAllText(chosen, text, new UTF8Encoding(false));
+                    }
+                }
+                catch (Exception error)
+                {
+                    errorMessage = "Could not save the file: " + error.Message;
+                    chosen = null;
+                }
+
+                client.Send("{\"type\":\"preparedSaved\",\"requestId\":" + Json.Quote(requestId)
+                    + ",\"path\":" + (String.IsNullOrEmpty(chosen) ? "null" : Json.Quote(chosen))
+                    + ",\"error\":" + (String.IsNullOrEmpty(errorMessage) ? "null" : Json.Quote(errorMessage)) + "}");
+            });
+            dialogThread.IsBackground = true;
+            dialogThread.SetApartmentState(ApartmentState.STA);
+            dialogThread.Start();
+        }
+
+        private static string PowerShellValidationScript()
+        {
+            return String.Join("; ", new string[] {
+                "$source = [IO.File]::ReadAllText($env:MT_PREPARE_SOURCE, [Text.Encoding]::Unicode)",
+                "$tokens = $null",
+                "$parseErrors = $null",
+                "[System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors) | Out-Null",
+                "$issues = @($parseErrors | ForEach-Object { [pscustomobject]@{ severity = 'error'; line = $_.Extent.StartLineNumber; column = $_.Extent.StartColumnNumber; code = $_.ErrorId; message = $_.Message } })",
+                "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
+                "[Console]::Out.Write((ConvertTo-Json -Compress -InputObject $issues))"
+            });
+        }
+
+        private static string CSharpValidationScript()
+        {
+            return String.Join("; ", new string[] {
+                "$source = [IO.File]::ReadAllText($env:MT_PREPARE_SOURCE, [Text.Encoding]::Unicode)",
+                "Add-Type -AssemblyName Microsoft.CSharp",
+                "$provider = New-Object Microsoft.CSharp.CSharpCodeProvider",
+                "$options = New-Object System.CodeDom.Compiler.CompilerParameters",
+                "$options.GenerateExecutable = $false",
+                "$options.GenerateInMemory = $true",
+                "[void]$options.ReferencedAssemblies.Add('System.dll')",
+                "[void]$options.ReferencedAssemblies.Add('System.Core.dll')",
+                "$result = $provider.CompileAssemblyFromSource($options, @($source))",
+                "$issues = @($result.Errors | ForEach-Object { [pscustomobject]@{ severity = $(if ($_.IsWarning) { 'warning' } else { 'error' }); line = $_.Line; column = $_.Column; code = $_.ErrorNumber; message = $_.ErrorText } })",
+                "$provider.Dispose()",
+                "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
+                "[Console]::Out.Write((ConvertTo-Json -Compress -InputObject $issues))"
+            });
+        }
+
+        private void ValidatePreparedText(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string language = Json.Get(message, "language") == "csharp" ? "csharp" : "powershell";
+            string engine = language == "csharp" ? "Windows C# compiler" : "PowerShell AST parser";
+            string source = Json.Get(message, "text");
+
+            Thread worker = new Thread(delegate()
+            {
+                string issuesJson = "[]";
+                string errorMessage = null;
+                string directory = Path.Combine(Path.GetTempPath(), "multiterm-prepare-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    Directory.CreateDirectory(directory);
+                    string sourcePath = Path.Combine(directory, "source.txt");
+                    File.WriteAllText(sourcePath, source, Encoding.Unicode);
+                    string script = language == "csharp" ? CSharpValidationScript() : PowerShellValidationScript();
+                    string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+                    ProcessStartInfo start = new ProcessStartInfo();
+                    start.FileName = "powershell.exe";
+                    start.Arguments = "-NoLogo -NoProfile -NonInteractive -EncodedCommand " + encoded;
+                    start.UseShellExecute = false;
+                    start.CreateNoWindow = true;
+                    start.RedirectStandardOutput = true;
+                    start.RedirectStandardError = true;
+                    start.StandardOutputEncoding = new UTF8Encoding(false);
+                    start.EnvironmentVariables["MT_PREPARE_SOURCE"] = sourcePath;
+                    using (Process process = Process.Start(start))
+                    {
+                        string output = process.StandardOutput.ReadToEnd().TrimStart('\uFEFF').Trim();
+                        string errorOutput = process.StandardError.ReadToEnd().Trim();
+                        process.WaitForExit();
+                        if (Regex.IsMatch(output, @"^(?:\[.*\]|\{.*\})$", RegexOptions.Singleline))
+                        {
+                            issuesJson = output;
+                        }
+                        else
+                        {
+                            string[] details = errorOutput.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries);
+                            string detail = details.Length > 0 ? details[0] : null;
+                            errorMessage = "Could not read " + engine + " results: "
+                                + (String.IsNullOrEmpty(detail) ? "checker exited with code " + process.ExitCode : detail);
+                        }
+                    }
+                }
+                catch (Exception error)
+                {
+                    errorMessage = "Could not run " + engine + ": " + error.Message;
+                }
+                finally
+                {
+                    try { Directory.Delete(directory, true); } catch { }
+                }
+
+                client.Send("{\"type\":\"prepareValidation\",\"requestId\":" + Json.Quote(requestId)
+                    + ",\"engine\":" + Json.Quote(engine) + ",\"issues\":" + issuesJson
+                    + ",\"error\":" + (String.IsNullOrEmpty(errorMessage) ? "null" : Json.Quote(errorMessage)) + "}");
+            });
+            worker.IsBackground = true;
+            worker.Start();
+        }
+
         // Answers the status-bar memory chip. The Node bridge (server.js) shells out to
         // Get-CimInstance and sums the working set of its process tree; here we are already
         // Windows-only and in-process, so we walk the tree directly with a Toolhelp snapshot
@@ -4435,6 +4603,7 @@ namespace MultiTerm.PowerShellBridge
     // C# here is compiled with the default reference set).
     internal static class FileDialog
     {
+        private const int OFN_OVERWRITEPROMPT = 0x00000002;
         private const int OFN_FILEMUSTEXIST = 0x00001000;
         private const int OFN_PATHMUSTEXIST = 0x00000800;
         private const int OFN_HIDEREADONLY = 0x00000004;
@@ -4472,6 +4641,9 @@ namespace MultiTerm.PowerShellBridge
         [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetOpenFileNameW", ExactSpelling = true, SetLastError = true)]
         private static extern bool GetOpenFileNameW(ref OpenFileName options);
 
+        [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetSaveFileNameW", ExactSpelling = true, SetLastError = true)]
+        private static extern bool GetSaveFileNameW(ref OpenFileName options);
+
         // Returns the chosen path, or null when the user cancelled.
         public static string Open(string title, string initialDirectory)
         {
@@ -4503,6 +4675,35 @@ namespace MultiTerm.PowerShellBridge
                 {
                     return null; // Cancelled, or the dialog could not be shown.
                 }
+                return Marshal.PtrToStringUni(buffer);
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(buffer);
+            }
+        }
+
+        // Returns the chosen save path, or null when the user cancelled.
+        public static string Save(string title, string initialDirectory, string suggestedName)
+        {
+            OpenFileName options = new OpenFileName();
+            options.lStructSize = Marshal.SizeOf(typeof(OpenFileName));
+            options.lpstrFilter = "Script and source files (*.ps1;*.bat;*.cmd;*.cs;*.txt)\0*.ps1;*.bat;*.cmd;*.cs;*.txt\0PowerShell (*.ps1)\0*.ps1\0Batch (*.bat;*.cmd)\0*.bat;*.cmd\0C# (*.cs)\0*.cs\0Text (*.txt)\0*.txt\0All files (*.*)\0*.*\0\0";
+            options.nFilterIndex = 1;
+            options.lpstrTitle = title;
+            options.lpstrInitialDir = String.IsNullOrEmpty(initialDirectory) ? null : initialDirectory;
+            options.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER | OFN_NOCHANGEDIR;
+            options.nMaxFile = 4096;
+
+            IntPtr buffer = Marshal.AllocCoTaskMem(options.nMaxFile * 2);
+            try
+            {
+                string initialName = suggestedName ?? String.Empty;
+                char[] characters = new char[options.nMaxFile];
+                initialName.CopyTo(0, characters, 0, Math.Min(initialName.Length, options.nMaxFile - 1));
+                Marshal.Copy(characters, 0, buffer, characters.Length);
+                options.lpstrFile = buffer;
+                if (!GetSaveFileNameW(ref options)) return null;
                 return Marshal.PtrToStringUni(buffer);
             }
             finally

@@ -940,6 +940,12 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     case "pickScript":
       pickScript(client, message);
       break;
+    case "prepareSave":
+      savePreparedText(client, message);
+      break;
+    case "prepareValidate":
+      validatePreparedText(client, message);
+      break;
     case "elevate":
       launchElevatedTerminal(client, message);
       break;
@@ -1560,6 +1566,183 @@ function pickScript(client, message) {
     settle(null);
   });
   child.on("close", () => settle(out.trim()));
+}
+
+function preparedFileName(value) {
+  const name = path.basename(typeof value === "string" ? value.trim() : "")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/[. ]+$/, "");
+  return name || "prepared.ps1";
+}
+
+function savePreparedText(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const answer = (savedPath, error = null) => client.send({
+    type: "preparedSaved",
+    requestId,
+    path: savedPath || null,
+    error
+  });
+  if (process.platform !== "win32") {
+    answer(null, "Native Save As is currently available only on Windows.");
+    return;
+  }
+
+  const text = typeof message.text === "string" ? message.text : "";
+  let initialDir = "";
+  try {
+    const candidate = path.resolve(String(message.cwd || "").trim() || process.cwd());
+    if (fs.statSync(candidate).isDirectory()) initialDir = candidate;
+  } catch {
+    initialDir = "";
+  }
+
+  const script = [
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "$d = New-Object System.Windows.Forms.SaveFileDialog",
+    "$d.Title = 'Save prepared text'",
+    "$d.Filter = 'Script and source files (*.ps1;*.bat;*.cmd;*.cs;*.txt)|*.ps1;*.bat;*.cmd;*.cs;*.txt|PowerShell (*.ps1)|*.ps1|Batch (*.bat;*.cmd)|*.bat;*.cmd|C# (*.cs)|*.cs|Text (*.txt)|*.txt|All files (*.*)|*.*'",
+    "$d.OverwritePrompt = $true",
+    "if ($env:MT_SAVE_DIR) { $d.InitialDirectory = $env:MT_SAVE_DIR }",
+    "if ($env:MT_SAVE_NAME) { $d.FileName = $env:MT_SAVE_NAME }",
+    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"
+  ].join("; ");
+
+  let child;
+  try {
+    child = childProcess.spawn(
+      "powershell.exe",
+      ["-NoProfile", "-STA", "-Command", script],
+      {
+        windowsHide: true,
+        env: {
+          ...process.env,
+          MT_SAVE_DIR: initialDir,
+          MT_SAVE_NAME: preparedFileName(message.suggestedName)
+        }
+      }
+    );
+  } catch (error) {
+    answer(null, `Could not open Save As: ${error.message}`);
+    return;
+  }
+
+  let out = "";
+  let settled = false;
+  const settle = (savedPath, error = null) => {
+    if (settled) return;
+    settled = true;
+    answer(savedPath, error);
+  };
+  child.stdout.on("data", (chunk) => { out += chunk.toString(); });
+  child.on("error", (error) => settle(null, `Could not open Save As: ${error.message}`));
+  child.on("close", () => {
+    if (settled) return;
+    const chosen = out.trim();
+    if (!chosen) {
+      settle(null);
+      return;
+    }
+    fs.writeFile(chosen, text, { encoding: "utf8", mode: 0o600 }, (error) => {
+      if (error) settle(null, `Could not save the file: ${error.message}`);
+      else settle(chosen);
+    });
+  });
+}
+
+const POWERSHELL_VALIDATION_SCRIPT = [
+  "$source = [IO.File]::ReadAllText($env:MT_PREPARE_SOURCE, [Text.Encoding]::Unicode)",
+  "$tokens = $null",
+  "$parseErrors = $null",
+  "[System.Management.Automation.Language.Parser]::ParseInput($source, [ref]$tokens, [ref]$parseErrors) | Out-Null",
+  "$issues = @($parseErrors | ForEach-Object { [pscustomobject]@{ severity = 'error'; line = $_.Extent.StartLineNumber; column = $_.Extent.StartColumnNumber; code = $_.ErrorId; message = $_.Message } })",
+  "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
+  "[Console]::Out.Write((ConvertTo-Json -Compress -InputObject $issues))"
+].join("; ");
+
+const CSHARP_VALIDATION_SCRIPT = [
+  "$source = [IO.File]::ReadAllText($env:MT_PREPARE_SOURCE, [Text.Encoding]::Unicode)",
+  "Add-Type -AssemblyName Microsoft.CSharp",
+  "$provider = New-Object Microsoft.CSharp.CSharpCodeProvider",
+  "$options = New-Object System.CodeDom.Compiler.CompilerParameters",
+  "$options.GenerateExecutable = $false",
+  "$options.GenerateInMemory = $true",
+  "[void]$options.ReferencedAssemblies.Add('System.dll')",
+  "[void]$options.ReferencedAssemblies.Add('System.Core.dll')",
+  "$result = $provider.CompileAssemblyFromSource($options, @($source))",
+  "$issues = @($result.Errors | ForEach-Object { [pscustomobject]@{ severity = $(if ($_.IsWarning) { 'warning' } else { 'error' }); line = $_.Line; column = $_.Column; code = $_.ErrorNumber; message = $_.ErrorText } })",
+  "$provider.Dispose()",
+  "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
+  "[Console]::Out.Write((ConvertTo-Json -Compress -InputObject $issues))"
+].join("; ");
+
+function validatePreparedText(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const language = message.language === "csharp" ? "csharp" : "powershell";
+  const engine = language === "csharp" ? "Windows C# compiler" : "PowerShell AST parser";
+  const answer = (issues, error = null) => client.send({
+    type: "prepareValidation",
+    requestId,
+    engine,
+    issues: Array.isArray(issues) ? issues : [],
+    error
+  });
+  if (process.platform !== "win32") {
+    answer([], `${engine} is currently available only on Windows.`);
+    return;
+  }
+
+  const script = language === "csharp" ? CSHARP_VALIDATION_SCRIPT : POWERSHELL_VALIDATION_SCRIPT;
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  let directory;
+  let sourcePath;
+  try {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-prepare-"));
+    sourcePath = path.join(directory, "source.txt");
+    fs.writeFileSync(sourcePath, Buffer.from(typeof message.text === "string" ? message.text : "", "utf16le"), { mode: 0o600 });
+  } catch (error) {
+    answer([], `Could not prepare ${engine}: ${error.message}`);
+    return;
+  }
+  let child;
+  try {
+    child = childProcess.spawn(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+      {
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, MT_PREPARE_SOURCE: sourcePath }
+      }
+    );
+  } catch (error) {
+    try { fs.rmSync(directory, { force: true, recursive: true }); } catch { /* best-effort cleanup */ }
+    answer([], `Could not start ${engine}: ${error.message}`);
+    return;
+  }
+
+  let stdout = "";
+  let stderr = "";
+  let settled = false;
+  const settle = (issues, error = null) => {
+    if (settled) return;
+    settled = true;
+    try { fs.rmSync(directory, { force: true, recursive: true }); } catch { /* best-effort cleanup */ }
+    answer(issues, error);
+  };
+  child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+  child.on("error", (error) => settle([], `Could not run ${engine}: ${error.message}`));
+  child.on("close", (code) => {
+    if (settled) return;
+    try {
+      const parsed = JSON.parse(stdout.replace(/^\uFEFF/, "").trim() || "[]");
+      settle(Array.isArray(parsed) ? parsed : [parsed]);
+    } catch {
+      const detail = stderr.trim().split(/\r?\n/).find(Boolean) || `checker exited with code ${code}`;
+      settle([], `Could not read ${engine} results: ${detail}`);
+    }
+  });
 }
 
 // Opens a file with whatever the OS has associated with it, so a log can be read in
@@ -2637,6 +2820,9 @@ module.exports = {
     revealPath,
     openPath,
     pickScript,
+    preparedFileName,
+    savePreparedText,
+    validatePreparedText,
     launchElevatedTerminal,
     launchElevatedHost,
     handleElevatedConnection,

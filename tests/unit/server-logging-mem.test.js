@@ -388,6 +388,128 @@ describe("pickScript", () => {
   });
 });
 
+describe("prepared text tools", () => {
+  function fakeProcess() {
+    const handlers = {};
+    return {
+      stdout: { on: (event, fn) => { handlers[`stdout:${event}`] = fn; } },
+      stderr: { on: (event, fn) => { handlers[`stderr:${event}`] = fn; } },
+      on: (event, fn) => { handlers[event] = fn; },
+      emitStdout: (text) => handlers["stdout:data"]?.(Buffer.from(text)),
+      emitStderr: (text) => handlers["stderr:data"]?.(Buffer.from(text)),
+      emitClose: (code = 0) => handlers.close?.(code),
+      emitError: (error) => handlers.error?.(error)
+    };
+  }
+
+  function validation(message) {
+    return new Promise((resolve) => server.validatePreparedText({ send: resolve }, {
+      requestId: "validation",
+      ...message
+    }));
+  }
+
+  it("sanitizes suggested file names without accepting paths", () => {
+    expect(server.preparedFileName("C:\\unsafe\\deploy<now>.ps1 ")).toBe("deploynow.ps1");
+    expect(server.preparedFileName("<>:*?")).toBe("prepared.ps1");
+  });
+
+  it("answers with an error when Save As is unavailable off Windows", () => {
+    setPlatform("linux");
+    const client = fakeClient();
+    server.savePreparedText(client, { requestId: "save", text: "echo hi" });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "preparedSaved",
+      requestId: "save",
+      path: null,
+      error: expect.stringContaining("Windows")
+    }));
+  });
+
+  it("writes the exact prepared text after the native picker returns", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    const process = fakeProcess();
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(process);
+    const writeFile = vi.spyOn(fs, "writeFile").mockImplementation((_path, _text, _options, callback) => callback(null));
+    const client = fakeClient();
+
+    server.savePreparedText(client, {
+      requestId: "save",
+      cwd: "C:\\work",
+      suggestedName: "deploy.ps1",
+      text: "Write-Host exact\r\n"
+    });
+    process.emitStdout("C:\\work\\deploy.ps1\r\n");
+    process.emitClose();
+
+    expect(spawn.mock.calls[0][2].env).toMatchObject({ MT_SAVE_DIR: "C:\\work", MT_SAVE_NAME: "deploy.ps1" });
+    expect(writeFile).toHaveBeenCalledWith(
+      "C:\\work\\deploy.ps1",
+      "Write-Host exact\r\n",
+      expect.objectContaining({ encoding: "utf8" }),
+      expect.any(Function)
+    );
+    expect(client.send).toHaveBeenCalledWith({
+      type: "preparedSaved",
+      requestId: "save",
+      path: "C:\\work\\deploy.ps1",
+      error: null
+    });
+  });
+
+  it("uses the real PowerShell parser and returns source locations", async () => {
+    setPlatform("win32");
+    const result = await validation({ language: "powershell", text: "$value = (" });
+    expect(result).toMatchObject({
+      type: "prepareValidation",
+      requestId: "validation",
+      engine: "PowerShell AST parser",
+      error: null
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ line: 1, severity: "error" })
+    ]));
+  });
+
+  it("uses the real C# compiler and returns compiler error codes", async () => {
+    setPlatform("win32");
+    const result = await validation({ language: "csharp", text: "public class Broken {" });
+    expect(result).toMatchObject({
+      type: "prepareValidation",
+      requestId: "validation",
+      engine: "Windows C# compiler",
+      error: null
+    });
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ line: 1, code: expect.stringMatching(/^CS/) })
+    ]));
+  });
+
+  it("cleans up and reports malformed checker output", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "mkdtempSync").mockReturnValue("C:\\temp\\prepare");
+    vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    const remove = vi.spyOn(fs, "rmSync").mockImplementation(() => {});
+    const process = fakeProcess();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(process);
+    const client = fakeClient();
+
+    server.validatePreparedText(client, { requestId: "bad", language: "powershell", text: "ok" });
+    process.emitStderr("checker failed\r\nmore");
+    process.emitStdout("not-json");
+    process.emitClose(2);
+
+    expect(remove).toHaveBeenCalledWith("C:\\temp\\prepare", { force: true, recursive: true });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "prepareValidation",
+      requestId: "bad",
+      issues: [],
+      error: expect.stringContaining("checker failed")
+    }));
+  });
+});
+
 describe("computeMemStats", () => {
   it("returns null when the PowerShell probe errors", () => {
     vi.spyOn(childProcess, "execFile").mockImplementation((_f, _a, _o, cb) => cb(new Error("nope"), ""));
