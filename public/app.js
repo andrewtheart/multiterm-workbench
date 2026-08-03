@@ -76,6 +76,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 
 const SETTINGS_SEARCH_ALIASES = Object.freeze({
+  analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
   fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
   titleFontScale: "terminal pane title header label text font size scale percentage larger smaller",
@@ -161,6 +162,7 @@ const HEADER_ACTIONS = Object.freeze({
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.59";
 const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
+const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 const COPILOT_YOLO_COMMAND = "copilot --yolo";
@@ -277,6 +279,13 @@ const elements = {
   appShell: document.querySelector(".app-shell"),
   chromeControls: document.querySelector(".chrome-controls"),
   attachTmux: document.querySelector("#attachTmux"),
+  analyticsEmpty: document.querySelector("#analyticsEmpty"),
+  analyticsReset: document.querySelector("#analyticsReset"),
+  analyticsTerminalList: document.querySelector("#analyticsTerminalList"),
+  analyticsTodayFocus: document.querySelector("#analyticsTodayFocus"),
+  analyticsTodayKeystrokes: document.querySelector("#analyticsTodayKeystrokes"),
+  analyticsTotalFocus: document.querySelector("#analyticsTotalFocus"),
+  analyticsTotalKeystrokes: document.querySelector("#analyticsTotalKeystrokes"),
   appTheme: document.querySelector("#appTheme"),
   aboutClose: document.querySelector("#aboutClose"),
   aboutCheckUpdates: document.querySelector("#aboutCheckUpdates"),
@@ -319,6 +328,7 @@ const elements = {
   fitAll: document.querySelector("#fitAll"),
   focusWidth: document.querySelector("#focusWidth"),
   focusWidthValue: document.querySelector("#focusWidthValue"),
+  fullscreenAddTerminal: document.querySelector("#fullscreenAddTerminal"),
   fontFamily: document.querySelector("#fontFamily"),
   fontSize: document.querySelector("#fontSize"),
   fontSizeValue: document.querySelector("#fontSizeValue"),
@@ -385,6 +395,34 @@ const elements = {
   quickSwitchInput: document.querySelector("#quickSwitchInput"),
   quickSwitchList: document.querySelector("#quickSwitchList"),
   quickSwitchOverlay: document.querySelector("#quickSwitchOverlay"),
+  prepareCleanCopilot: document.querySelector("#prepareCleanCopilot"),
+  prepareClose: document.querySelector("#prepareClose"),
+  prepareCopy: document.querySelector("#prepareCopy"),
+  prepareFileName: document.querySelector("#prepareFileName"),
+  prepareFind: document.querySelector("#prepareFind"),
+  prepareFindBar: document.querySelector("#prepareFindBar"),
+  prepareFindNext: document.querySelector("#prepareFindNext"),
+  prepareFindPrevious: document.querySelector("#prepareFindPrevious"),
+  prepareFindToggle: document.querySelector("#prepareFindToggle"),
+  prepareIssues: document.querySelector("#prepareIssues"),
+  prepareLanguage: document.querySelector("#prepareLanguage"),
+  prepareOverlay: document.querySelector("#prepareOverlay"),
+  prepareRedo: document.querySelector("#prepareRedo"),
+  prepareReplace: document.querySelector("#prepareReplace"),
+  prepareReplaceAll: document.querySelector("#prepareReplaceAll"),
+  prepareReplaceOne: document.querySelector("#prepareReplaceOne"),
+  prepareSaveFile: document.querySelector("#prepareSaveFile"),
+  prepareSaveSnippet: document.querySelector("#prepareSaveSnippet"),
+  prepareSend: document.querySelector("#prepareSend"),
+  prepareSnippetName: document.querySelector("#prepareSnippetName"),
+  prepareSource: document.querySelector("#prepareSource"),
+  prepareStatus: document.querySelector("#prepareStatus"),
+  prepareTerminalFlyout: document.querySelector("#prepareTerminalFlyout"),
+  prepareTerminalList: document.querySelector("#prepareTerminalList"),
+  prepareText: document.querySelector("#prepareText"),
+  prepareUndo: document.querySelector("#prepareUndo"),
+  prepareValidate: document.querySelector("#prepareValidate"),
+  prepareValidation: document.querySelector("#prepareValidation"),
   tmuxAttachClose: document.querySelector("#tmuxAttachClose"),
   tmuxAttachList: document.querySelector("#tmuxAttachList"),
   tmuxAttachOverlay: document.querySelector("#tmuxAttachOverlay"),
@@ -515,16 +553,26 @@ const elements = {
 
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const palette = { open: false, index: 0, items: [] };
+const fullscreenFocus = {
+  active: false,
+  desired: false,
+  queue: Promise.resolve(),
+  scheduled: 0,
+  snapshot: null
+};
 let draggedHeaderAction = null;
 let pendingHeaderActionMove = null;
 
 const state = {
   activeId: null,
   activePageId: null,
+  analytics: loadTerminalAnalytics(),
+  analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
   bridgeClosingDown: false,
   closeDisposition: "",
   closeRequestSource: "window",
   pendingPageClose: null,
+  prepareEditor: { closeTimer: 0, returnFocus: null, sourceTerminalId: null, validating: false },
   findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false },
   appElevated: false,
   broadcastScope: "all",
@@ -640,10 +688,13 @@ window.addEventListener("DOMContentLoaded", () => {
   bindUpdateConsent();
   bindUpdateDialog();
   bindStatisticsDialog();
+  bindTerminalAnalytics();
+  bindPrepareEditor();
   bindTerminalArtifactsHub();
   bindTerminalMessages();
   bindMemStatus();
   bindGlobalShortcuts();
+  bindFullscreenEvents();
   bindFindAll();
   window.addEventListener("resize", noteWindowResizeDrag);
   document.addEventListener("visibilitychange", flushAllTerminalOutput);
@@ -666,6 +717,7 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 window.addEventListener("beforeunload", () => {
+  shutdownTerminalAnalytics();
   state.bridgeClosingDown = true;
   stopAutomaticUpdateChecks();
   window.clearTimeout(state.reconnectTimer);
@@ -725,6 +777,10 @@ function bindControls() {
   syncAutomaticUpdateControls();
 
   elements.addTerminal.addEventListener("click", () => addTerminal({ reveal: true, runStartup: true }));
+  elements.fullscreenAddTerminal.addEventListener("click", () => {
+    const terminal = addTerminal({ reveal: true, runStartup: true });
+    terminal.term.focus();
+  });
   elements.attachTmux.addEventListener("click", openTmuxAttach);
   elements.tmuxAttachClose.addEventListener("click", closeTmuxAttach);
   elements.tmuxAttachRefresh.addEventListener("click", refreshTmuxSessions);
@@ -1132,6 +1188,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "preparedSaved" || message.type === "prepareValidation") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
   if (message.type === "statistics") {
     resolveBridgeRequest(message, message);
     return;
@@ -1215,6 +1276,7 @@ function handleBridgeMessage(message) {
     }
     recoverStaleTerminalArtifacts(known);
     pruneTerminalLinks();
+    pruneTerminalAnalyticsRecords();
     requestTerminalMessages();
 
     return;
@@ -1230,6 +1292,7 @@ function handleBridgeMessage(message) {
     // an older bridge omits it — accurate to the round-trip, and better than
     // showing nothing.
     terminal.startedAt = message.startedAt || new Date().toISOString();
+    ensureTerminalAnalyticsRecord(terminal).startedAt = terminal.startedAt;
     terminal.remoteRequested = true;
     terminal.status = "live";
     if (message.title !== terminal.titleInput.value) {
@@ -1571,6 +1634,7 @@ function addTerminal(options = {}) {
     scheduleTerminalConnections();
   });
   state.terminals.set(id, terminal);
+  ensureTerminalAnalyticsRecord(terminal);
   syncTerminalArtifacts(terminal);
   state.nextIndex += 1;
   updateTerminalActions();
@@ -1613,6 +1677,8 @@ function addTerminal(options = {}) {
     }
   });
 
+  term.onKey(() => recordTerminalAnalyticsKeystroke(terminal));
+
   term.onResize(({ cols, rows }) => {
     queueResize(terminal, cols, rows);
   });
@@ -1645,7 +1711,15 @@ function addTerminal(options = {}) {
     }
   });
 
-  term.element?.addEventListener("focusin", () => setActiveTerminal(id));
+  term.element?.addEventListener("focusin", () => {
+    setActiveTerminal(id);
+    beginTerminalAnalyticsFocus(terminal);
+  });
+  term.element?.addEventListener("focusout", () => {
+    window.setTimeout(() => {
+      if (!terminal.term.element?.contains(document.activeElement)) endTerminalAnalyticsFocus(id);
+    }, 0);
+  });
   pane.addEventListener("pointerdown", (event) => {
     // Controls own their click behavior. Terminal/chrome presses only change the
     // keyboard-active pane; the explicit Focus action owns primary-pane promotion.
@@ -2195,6 +2269,12 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   if (!terminal) return;
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : terminalShellTitle(terminal.shell);
   terminal.titleInput.value = title;
+  const analytics = state.analytics.terminals[terminal.id];
+  if (analytics) {
+    analytics.title = title;
+    scheduleTerminalAnalyticsSave();
+    renderTerminalAnalytics();
+  }
   if (state.terminalArtifacts.terminals[terminal.id]) syncTerminalArtifacts(terminal);
   refreshTerminalSearchText(terminal);
   updateTerminalSearchVisibility(terminal);
@@ -2220,6 +2300,15 @@ function bindPaneDrag(terminal) {
       terminal.titleInput.blur();
       terminal.pane.classList.add("is-dragging");
       document.body.classList.add("is-pane-dragging");
+    }
+
+    const pageChip = pageChipUnderPoint(event.clientX, event.clientY, terminal.pageId);
+    setPanePageDropTarget(drag, pageChip);
+    if (pageChip) {
+      drag.edge = null;
+      setSnapPreview(null);
+      clearPaneLift(terminal.pane, drag);
+      return;
     }
 
     const active = getSnapEdges(event.clientX, event.clientY);
@@ -2284,8 +2373,10 @@ function bindPaneDrag(terminal) {
       grabX: event.clientX - rect.left,
       grabY: event.clientY - rect.top,
       pointerId: event.pointerId,
+      pageId: null,
       reordered: false,
       started: false,
+      originalOrder: [...elements.host.children].map((pane) => pane.dataset.id),
       startX: event.clientX,
       startY: event.clientY,
       // Pane bars run along the top of each pane, so grabbing one in the top row
@@ -2313,7 +2404,11 @@ function bindPaneDrag(terminal) {
 }
 
 function finishPaneDrag(terminal, drag) {
-  if (drag.started && drag.edge) {
+  if (drag.started && drag.pageId) {
+    if (drag.reordered) restorePaneOrder(drag.originalOrder);
+    if (state.snap?.id === terminal.id) clearSnapLayout(false);
+    moveTerminalToPage(terminal.id, drag.pageId);
+  } else if (drag.started && drag.edge) {
     snapTerminal(terminal.id, drag.edge);
   } else if (drag.started && state.settings.layout === "manual") {
     clearSnapLayout(false);
@@ -2451,10 +2546,42 @@ function syncTerminalOrderToDom() {
   for (const terminal of ordered) state.terminals.set(terminal.id, terminal);
 }
 
+function restorePaneOrder(order) {
+  if (!Array.isArray(order)) return;
+  const panes = new Map([...elements.host.children].map((pane) => [pane.dataset.id, pane]));
+  for (const id of order) {
+    const pane = panes.get(id);
+    if (pane) elements.host.append(pane);
+  }
+  syncTerminalOrderToDom();
+}
+
+function pageChipUnderPoint(x, y, sourcePageId) {
+  for (const chip of elements.pagerList?.querySelectorAll(".pager-chip") || []) {
+    if (chip.dataset.pageId === sourcePageId || chip.offsetParent === null) continue;
+    const rect = chip.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return chip;
+  }
+  return null;
+}
+
+function setPanePageDropTarget(drag, chip) {
+  const pageId = chip?.dataset.pageId || null;
+  if (drag.pageId === pageId) return;
+  for (const candidate of elements.pagerList?.querySelectorAll(".is-pane-page-drop-target") || []) {
+    candidate.classList.remove("is-pane-page-drop-target");
+  }
+  drag.pageId = pageId;
+  chip?.classList.add("is-pane-page-drop-target");
+}
+
 function endPaneDrag(terminal) {
   terminal.pane.style.transform = "";
   terminal.pane.classList.remove("is-dragging");
   document.body.classList.remove("is-pane-dragging");
+  for (const chip of elements.pagerList?.querySelectorAll(".is-pane-page-drop-target") || []) {
+    chip.classList.remove("is-pane-page-drop-target");
+  }
   setSnapPreview(null);
 }
 
@@ -2651,6 +2778,7 @@ function disposeTerminal(terminal) {
     state.zoomedId = null;
   }
   removeTerminalLinksForSession(id);
+  removeTerminalAnalyticsRecord(terminal);
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
@@ -4152,6 +4280,288 @@ function loadSettings() {
   }
 }
 
+function analyticsDayKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function analyticsCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+
+function emptyTerminalAnalytics() {
+  return {
+    dayKey: analyticsDayKey(),
+    terminals: {},
+    todayFocusMs: 0,
+    todayKeystrokes: 0,
+    totalFocusMs: 0,
+    totalKeystrokes: 0,
+    version: 1
+  };
+}
+
+function loadTerminalAnalytics() {
+  const empty = emptyTerminalAnalytics();
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TERMINAL_ANALYTICS_STORAGE_KEY) || "null");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
+    const terminals = {};
+    for (const [id, value] of Object.entries(parsed.terminals || {})) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      terminals[id] = {
+        focusMs: analyticsCount(value.focusMs),
+        keystrokes: analyticsCount(value.keystrokes),
+        startedAt: typeof value.startedAt === "string" ? value.startedAt : null,
+        title: typeof value.title === "string" && value.title.trim() ? value.title.trim() : "Terminal"
+      };
+    }
+    const analytics = {
+      dayKey: typeof parsed.dayKey === "string" ? parsed.dayKey : empty.dayKey,
+      terminals,
+      todayFocusMs: analyticsCount(parsed.todayFocusMs),
+      todayKeystrokes: analyticsCount(parsed.todayKeystrokes),
+      totalFocusMs: analyticsCount(parsed.totalFocusMs),
+      totalKeystrokes: analyticsCount(parsed.totalKeystrokes),
+      version: 1
+    };
+    if (analytics.dayKey !== empty.dayKey) {
+      analytics.dayKey = empty.dayKey;
+      analytics.todayFocusMs = 0;
+      analytics.todayKeystrokes = 0;
+    }
+    return analytics;
+  } catch {
+    return empty;
+  }
+}
+
+function saveTerminalAnalytics() {
+  localStorage.setItem(TERMINAL_ANALYTICS_STORAGE_KEY, JSON.stringify(state.analytics));
+}
+
+function formatAnalyticsDuration(value) {
+  let seconds = Math.max(0, Math.floor(analyticsCount(value) / 1000));
+  const days = Math.floor(seconds / 86400);
+  seconds %= 86400;
+  const hours = Math.floor(seconds / 3600);
+  seconds %= 3600;
+  const minutes = Math.floor(seconds / 60);
+  seconds %= 60;
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function pendingTerminalAnalyticsFocus(terminalId = null) {
+  const runtime = state.analyticsRuntime;
+  if (!runtime.focusedTerminalId || !runtime.focusStartedAt) return 0;
+  if (terminalId && runtime.focusedTerminalId !== terminalId) return 0;
+  return Math.max(0, performance.now() - runtime.focusStartedAt);
+}
+
+function renderTerminalAnalytics() {
+  if (!elements.analyticsTerminalList) return;
+  ensureAnalyticsCurrentDay();
+  const pendingFocus = pendingTerminalAnalyticsFocus();
+  elements.analyticsTodayKeystrokes.textContent = formatStatisticCount(state.analytics.todayKeystrokes);
+  elements.analyticsTodayFocus.textContent = formatAnalyticsDuration(state.analytics.todayFocusMs + pendingFocus);
+  elements.analyticsTotalKeystrokes.textContent = formatStatisticCount(state.analytics.totalKeystrokes);
+  elements.analyticsTotalFocus.textContent = formatAnalyticsDuration(state.analytics.totalFocusMs + pendingFocus);
+  elements.analyticsTerminalList.textContent = "";
+
+  for (const terminal of state.terminals.values()) {
+    const record = ensureTerminalAnalyticsRecord(terminal);
+    const row = document.createElement("div");
+    row.className = "analytics-terminal-row";
+    row.classList.toggle("is-focused", state.analyticsRuntime.focusedTerminalId === terminal.id);
+    row.setAttribute("role", "listitem");
+    const identity = document.createElement("div");
+    identity.className = "analytics-terminal-identity";
+    const indicator = document.createElement("i");
+    indicator.setAttribute("aria-hidden", "true");
+    const title = document.createElement("span");
+    title.textContent = terminal.titleInput.value || record.title || "Terminal";
+    identity.append(indicator, title);
+    const metrics = document.createElement("div");
+    metrics.className = "analytics-terminal-metrics";
+    const keys = document.createElement("span");
+    keys.textContent = `${formatStatisticCount(record.keystrokes)} keys`;
+    const focus = document.createElement("span");
+    focus.textContent = formatAnalyticsDuration(record.focusMs + pendingTerminalAnalyticsFocus(terminal.id));
+    metrics.append(keys, focus);
+    row.append(identity, metrics);
+    elements.analyticsTerminalList.append(row);
+  }
+  elements.analyticsEmpty.hidden = state.terminals.size > 0;
+}
+
+function resetTerminalAnalytics() {
+  if (!window.confirm("Reset all keystroke and terminal focus analytics?")) return false;
+  const focusedTerminalId = state.analyticsRuntime.focusedTerminalId;
+  state.analytics = emptyTerminalAnalytics();
+  for (const terminal of state.terminals.values()) ensureTerminalAnalyticsRecord(terminal);
+  state.analyticsRuntime.focusStartedAt = focusedTerminalId ? performance.now() : 0;
+  state.analyticsRuntime.ticksSinceSave = 0;
+  saveTerminalAnalytics();
+  renderTerminalAnalytics();
+  toast("Terminal analytics reset", "success", 1800);
+  return true;
+}
+
+function ensureAnalyticsCurrentDay() {
+  const dayKey = analyticsDayKey();
+  if (state.analytics.dayKey === dayKey) return false;
+  state.analytics.dayKey = dayKey;
+  state.analytics.todayFocusMs = 0;
+  state.analytics.todayKeystrokes = 0;
+  scheduleTerminalAnalyticsSave();
+  return true;
+}
+
+function ensureTerminalAnalyticsRecord(terminal) {
+  if (!terminal) return null;
+  let record = state.analytics.terminals[terminal.id];
+  if (!record) {
+    record = {
+      focusMs: 0,
+      keystrokes: 0,
+      startedAt: terminal.startedAt || new Date().toISOString(),
+      title: terminal.titleInput?.value || "Terminal"
+    };
+    state.analytics.terminals[terminal.id] = record;
+  } else {
+    record.title = terminal.titleInput?.value || record.title || "Terminal";
+    if (!record.startedAt && terminal.startedAt) record.startedAt = terminal.startedAt;
+  }
+  return record;
+}
+
+function scheduleTerminalAnalyticsSave() {
+  if (state.analyticsRuntime.saveTimer) return;
+  state.analyticsRuntime.saveTimer = window.setTimeout(() => {
+    state.analyticsRuntime.saveTimer = 0;
+    saveTerminalAnalytics();
+  }, 750);
+}
+
+function recordTerminalAnalyticsKeystroke(terminal) {
+  if (!terminal || !state.terminals.has(terminal.id)) return;
+  ensureAnalyticsCurrentDay();
+  const record = ensureTerminalAnalyticsRecord(terminal);
+  record.keystrokes += 1;
+  state.analytics.todayKeystrokes += 1;
+  state.analytics.totalKeystrokes += 1;
+  scheduleTerminalAnalyticsSave();
+  renderTerminalAnalytics();
+}
+
+function checkpointTerminalAnalyticsFocus(now = performance.now()) {
+  const runtime = state.analyticsRuntime;
+  if (!runtime.focusedTerminalId || !runtime.focusStartedAt) return 0;
+  const elapsed = Math.max(0, now - runtime.focusStartedAt);
+  runtime.focusStartedAt = now;
+  if (!elapsed) return 0;
+  ensureAnalyticsCurrentDay();
+  const terminal = state.terminals.get(runtime.focusedTerminalId);
+  const record = terminal
+    ? ensureTerminalAnalyticsRecord(terminal)
+    : state.analytics.terminals[runtime.focusedTerminalId];
+  if (!record) return 0;
+  record.focusMs += elapsed;
+  state.analytics.todayFocusMs += elapsed;
+  state.analytics.totalFocusMs += elapsed;
+  return elapsed;
+}
+
+function beginTerminalAnalyticsFocus(terminal) {
+  if (!terminal || !state.terminals.has(terminal.id)) return;
+  if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+  const runtime = state.analyticsRuntime;
+  if (runtime.focusedTerminalId === terminal.id) return;
+  checkpointTerminalAnalyticsFocus();
+  ensureTerminalAnalyticsRecord(terminal);
+  runtime.focusedTerminalId = terminal.id;
+  runtime.focusStartedAt = performance.now();
+  renderTerminalAnalytics();
+}
+
+function endTerminalAnalyticsFocus(terminalId = null) {
+  const runtime = state.analyticsRuntime;
+  if (!runtime.focusedTerminalId || (terminalId && runtime.focusedTerminalId !== terminalId)) return;
+  checkpointTerminalAnalyticsFocus();
+  runtime.focusedTerminalId = null;
+  runtime.focusStartedAt = 0;
+  saveTerminalAnalytics();
+  renderTerminalAnalytics();
+}
+
+function reconcileTerminalAnalyticsFocus() {
+  if (document.visibilityState !== "visible" || !document.hasFocus()) {
+    endTerminalAnalyticsFocus();
+    return;
+  }
+  const terminal = [...state.terminals.values()].find((candidate) => (
+    candidate.term.element?.contains(document.activeElement)
+  ));
+  if (terminal) beginTerminalAnalyticsFocus(terminal);
+  else endTerminalAnalyticsFocus();
+}
+
+function removeTerminalAnalyticsRecord(terminal) {
+  if (!terminal) return;
+  endTerminalAnalyticsFocus(terminal.id);
+  delete state.analytics.terminals[terminal.id];
+  saveTerminalAnalytics();
+  renderTerminalAnalytics();
+}
+
+function pruneTerminalAnalyticsRecords() {
+  let changed = false;
+  for (const id of Object.keys(state.analytics.terminals)) {
+    if (state.terminals.has(id)) continue;
+    delete state.analytics.terminals[id];
+    changed = true;
+  }
+  if (changed) saveTerminalAnalytics();
+  renderTerminalAnalytics();
+  return changed;
+}
+
+function bindTerminalAnalytics() {
+  if (state.analyticsRuntime.ticker) return;
+  elements.analyticsReset?.addEventListener("click", resetTerminalAnalytics);
+  window.addEventListener("focus", reconcileTerminalAnalyticsFocus);
+  window.addEventListener("blur", () => endTerminalAnalyticsFocus());
+  document.addEventListener("visibilitychange", reconcileTerminalAnalyticsFocus);
+  state.analyticsRuntime.ticker = window.setInterval(() => {
+    if (state.analyticsRuntime.focusedTerminalId) {
+      checkpointTerminalAnalyticsFocus();
+      state.analyticsRuntime.ticksSinceSave += 1;
+      if (state.analyticsRuntime.ticksSinceSave >= 5) {
+        state.analyticsRuntime.ticksSinceSave = 0;
+        saveTerminalAnalytics();
+      }
+    }
+    renderTerminalAnalytics();
+  }, 1000);
+  reconcileTerminalAnalyticsFocus();
+  renderTerminalAnalytics();
+}
+
+function shutdownTerminalAnalytics() {
+  checkpointTerminalAnalyticsFocus();
+  window.clearInterval(state.analyticsRuntime.ticker);
+  window.clearTimeout(state.analyticsRuntime.saveTimer);
+  state.analyticsRuntime.ticker = 0;
+  state.analyticsRuntime.saveTimer = 0;
+  saveTerminalAnalytics();
+}
+
 function normalizeTitleFontScale(value) {
   const requested = Number(value);
   return Number.isFinite(requested)
@@ -4323,19 +4733,13 @@ function bindLogConsole() {
 }
 
 function toggleLogPanel() {
+  if (blockFullscreenSurfaceAction("logs")) return;
   setLogPanel(elements.logPanel.hidden);
 }
 
 function setLogPanel(open) {
   if (!elements.logPanel) return;
-  elements.logPanel.hidden = !open;
-  // The toggle lives in the status bar now, so it stays put and flips its
-  // chevron instead of vanishing - hiding it would collapse a slot in the bar
-  // and shuffle the controls beside it every time the panel opened.
-  elements.logToggle.setAttribute("aria-expanded", String(open));
-  const label = open ? "Hide logs" : "Show logs";
-  elements.logToggle.title = label;
-  elements.logToggle.setAttribute("aria-label", label);
+  updateLogPanelVisibility(open);
   if (open) {
     logStore.unseenError = false;
     if (elements.logToggleDot) elements.logToggleDot.hidden = true;
@@ -4344,6 +4748,17 @@ function setLogPanel(open) {
     scrollLogToEnd();
     log.debug("ui", "Log console opened");
   }
+}
+
+function updateLogPanelVisibility(open) {
+  elements.logPanel.hidden = !open;
+  // The toggle lives in the status bar now, so it stays put and flips its
+  // chevron instead of vanishing - hiding it would collapse a slot in the bar
+  // and shuffle the controls beside it every time the panel opened.
+  elements.logToggle.setAttribute("aria-expanded", String(open));
+  const label = open ? "Hide logs" : "Show logs";
+  elements.logToggle.title = label;
+  elements.logToggle.setAttribute("aria-label", label);
 }
 
 function passesLogFilter(entry) {
@@ -4517,6 +4932,482 @@ function writeClipboardText(text) {
   return navigator.clipboard.writeText(text);
 }
 
+const PREPARE_FILE_NAMES = {
+  powershell: "prepared.ps1",
+  batch: "prepared.cmd",
+  csharp: "Prepared.cs",
+  text: "prepared.txt"
+};
+
+function prepareLanguageForTerminal(_terminal, text) {
+  const source = String(text || "");
+  if (/^\s*(?:using\s+[\w.]+\s*;|namespace\s+[\w.]+|(?:(?:public|internal|private|protected)\s+)?(?:static\s+)?(?:class|record|struct|interface|enum)\s+\w+|static\s+void\s+Main\s*\()/m.test(source)) {
+    return "csharp";
+  }
+  if (/^\s*(?:@?echo\s+off\b|rem(?:\s|$)|::|:[A-Za-z_][\w.-]*\s*$|(?:setlocal|endlocal|goto|shift)(?:\s|$)|call\s+:[^\s]+|if\s+(?:not\s+)?(?:exist|errorlevel|defined)\b|for\s+%%[A-Za-z]\b)/im.test(source)
+      || /%[A-Za-z_][A-Za-z0-9_]*%/.test(source)) {
+    return "batch";
+  }
+  if (/^\s*(?:#requires\b|(?:param|dynamicparam|begin|process|end)\s*\(|\[(?:CmdletBinding|Parameter)(?:\]|\())/im.test(source)
+      || /\$[A-Za-z_][A-Za-z0-9_]*\s*=|\$env:[A-Za-z_]|\$_(?:\b|\.)/i.test(source)
+      || /\b(?:Add|Clear|Compare|Compress|ConvertFrom|ConvertTo|Copy|Disable|Enable|Enter|Exit|Export|Find|Format|ForEach|Get|Group|Import|Invoke|Join|Measure|Move|New|Out|Pop|Push|Read|Receive|Register|Remove|Rename|Resolve|Restart|Save|Select|Send|Set|Show|Sort|Split|Start|Stop|Test|Unregister|Update|Wait|Where|Write)-[A-Za-z][A-Za-z0-9]*\b/i.test(source)) {
+    return "powershell";
+  }
+  return "text";
+}
+
+function setPrepareValidation(label, kind = "") {
+  elements.prepareValidation.textContent = label;
+  elements.prepareValidation.classList.toggle("prepare-validation-ok", kind === "ok");
+  elements.prepareValidation.classList.toggle("prepare-validation-error", kind === "error");
+}
+
+function updatePrepareStatus() {
+  const editor = elements.prepareText;
+  const before = editor.value.slice(0, editor.selectionStart);
+  const lines = before.split("\n");
+  const line = lines.length;
+  const column = lines[lines.length - 1].length + 1;
+  const totalLines = editor.value ? editor.value.split("\n").length : 1;
+  elements.prepareStatus.textContent = `Ln ${line}, Col ${column}  \u00b7  ${totalLines} lines  \u00b7  ${editor.value.length} chars`;
+}
+
+function prepareEditorFocusableElements() {
+  return [...elements.prepareOverlay.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )].filter((element) => !element.hidden && element.offsetParent !== null);
+}
+
+function openPrepareEditor(text, sourceTerminalId = null) {
+  if (!elements.prepareOverlay || typeof text !== "string" || !text) return;
+  window.clearTimeout(state.prepareEditor.closeTimer);
+  state.prepareEditor.closeTimer = 0;
+  closePalette();
+  hideContextMenu();
+  const source = state.terminals.get(sourceTerminalId);
+  state.prepareEditor.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  state.prepareEditor.sourceTerminalId = source?.id || null;
+  state.prepareEditor.validating = false;
+  const language = prepareLanguageForTerminal(source, text);
+  elements.prepareText.value = text;
+  elements.prepareLanguage.value = language;
+  elements.prepareFileName.value = PREPARE_FILE_NAMES[language];
+  elements.prepareSnippetName.value = "";
+  elements.prepareSource.textContent = source
+    ? `Selected from ${source.titleInput.value || "Terminal"}. Changes stay here until you choose an action.`
+    : "Edit selected terminal text before using it.";
+  elements.prepareFind.value = "";
+  elements.prepareReplace.value = "";
+  elements.prepareFindBar.hidden = true;
+  elements.prepareTerminalFlyout.hidden = true;
+  elements.prepareSend.setAttribute("aria-expanded", "false");
+  elements.prepareIssues.hidden = true;
+  elements.prepareIssues.textContent = "";
+  setPrepareValidation("Not checked");
+  elements.prepareText.setSelectionRange(0, 0);
+  updatePrepareStatus();
+  document.querySelector(".app-shell").inert = true;
+  elements.prepareOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.prepareOverlay.classList.add("is-open"));
+  elements.prepareText.focus();
+}
+
+function closePrepareEditor({ restoreFocus = true } = {}) {
+  if (!elements.prepareOverlay) return;
+  const returnFocus = state.prepareEditor.returnFocus;
+  state.prepareEditor.returnFocus = null;
+  state.prepareEditor.sourceTerminalId = null;
+  state.prepareEditor.validating = false;
+  elements.prepareOverlay.classList.remove("is-open");
+  window.clearTimeout(state.prepareEditor.closeTimer);
+  state.prepareEditor.closeTimer = window.setTimeout(() => {
+    state.prepareEditor.closeTimer = 0;
+    if (!elements.prepareOverlay.classList.contains("is-open")) {
+      elements.prepareOverlay.hidden = true;
+      document.querySelector(".app-shell").inert = false;
+      if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+    }
+  }, 150);
+}
+
+function togglePrepareFind(force) {
+  const open = force === undefined ? elements.prepareFindBar.hidden : Boolean(force);
+  elements.prepareFindBar.hidden = !open;
+  if (open) {
+    const selected = elements.prepareText.value.slice(elements.prepareText.selectionStart, elements.prepareText.selectionEnd);
+    if (selected && !selected.includes("\n")) elements.prepareFind.value = selected;
+    elements.prepareFind.focus();
+    elements.prepareFind.select();
+  } else {
+    elements.prepareText.focus();
+  }
+}
+
+function findPreparedText(direction = 1) {
+  const query = elements.prepareFind.value;
+  const text = elements.prepareText.value;
+  if (!query || !text) return false;
+  const haystack = text.toLocaleLowerCase();
+  const needle = query.toLocaleLowerCase();
+  const start = direction > 0 ? elements.prepareText.selectionEnd : elements.prepareText.selectionStart - 1;
+  let index = direction > 0 ? haystack.indexOf(needle, start) : haystack.lastIndexOf(needle, start);
+  if (index < 0) index = direction > 0 ? haystack.indexOf(needle) : haystack.lastIndexOf(needle);
+  if (index < 0) {
+    toast("No match", "info", 1200);
+    return false;
+  }
+  elements.prepareText.focus();
+  elements.prepareText.setSelectionRange(index, index + query.length);
+  updatePrepareStatus();
+  return true;
+}
+
+function replacePreparedText() {
+  const editor = elements.prepareText;
+  const query = elements.prepareFind.value;
+  let selected = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  if (!query) return false;
+  if (selected.toLocaleLowerCase() !== query.toLocaleLowerCase()) {
+    if (!findPreparedText(1)) return false;
+    selected = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  }
+  editor.setRangeText(elements.prepareReplace.value, editor.selectionStart, editor.selectionEnd, "end");
+  preparedTextChanged();
+  findPreparedText(1);
+  return true;
+}
+
+function replaceAllPreparedText() {
+  const query = elements.prepareFind.value;
+  if (!query) return 0;
+  const matcher = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  let count = 0;
+  elements.prepareText.value = elements.prepareText.value.replace(matcher, () => {
+    count += 1;
+    return elements.prepareReplace.value;
+  });
+  preparedTextChanged();
+  toast(count ? `Replaced ${count} match${count === 1 ? "" : "es"}` : "No match", count ? "success" : "info", 1400);
+  return count;
+}
+
+function cleanPreparedCopilotBorders() {
+  let count = 0;
+  elements.prepareText.value = elements.prepareText.value.split("\n").map((line) => {
+    const cleaned = line.replace(/[ \t]*\|[ \t]*$/, "");
+    if (cleaned !== line) count += 1;
+    return cleaned;
+  }).join("\n");
+  preparedTextChanged();
+  elements.prepareText.focus();
+  toast(
+    count ? `Removed ${count} trailing Copilot border${count === 1 ? "" : "s"}` : "No trailing Copilot borders found",
+    count ? "success" : "info",
+    1800
+  );
+  return count;
+}
+
+function indentPreparedText(outdent = false) {
+  const editor = elements.prepareText;
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  if (start === end && !outdent) {
+    editor.setRangeText("    ", start, end, "end");
+    preparedTextChanged();
+    return;
+  }
+  const lineStart = editor.value.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
+  const selected = editor.value.slice(lineStart, end);
+  const lines = selected.split("\n");
+  const changed = lines.map((line) => outdent ? line.replace(/^(?: {1,4}|\t)/, "") : `    ${line}`).join("\n");
+  editor.setRangeText(changed, lineStart, end, "select");
+  editor.setSelectionRange(lineStart, lineStart + changed.length);
+  preparedTextChanged();
+}
+
+function preparedTextChanged() {
+  setPrepareValidation("Not checked");
+  elements.prepareIssues.hidden = true;
+  elements.prepareIssues.textContent = "";
+  updatePrepareStatus();
+}
+
+function prepareLineOffset(text, line, column) {
+  const lines = String(text).split("\n");
+  let offset = 0;
+  const targetLine = Math.max(1, Math.min(Number(line) || 1, lines.length));
+  for (let index = 0; index < targetLine - 1; index += 1) offset += lines[index].length + 1;
+  return offset + Math.max(0, Math.min((Number(column) || 1) - 1, lines[targetLine - 1].length));
+}
+
+function renderPrepareIssues(result) {
+  const issues = Array.isArray(result?.issues) ? result.issues : [];
+  elements.prepareIssues.textContent = "";
+  if (issues.length === 0) {
+    elements.prepareIssues.hidden = true;
+    setPrepareValidation(result?.error || `No syntax issues (${result?.engine || "check"})`, result?.error ? "error" : "ok");
+    return;
+  }
+  for (const issue of issues) {
+    const row = document.createElement("li");
+    row.className = "prepare-issue";
+    const location = document.createElement("button");
+    location.type = "button";
+    location.textContent = `Ln ${Math.max(1, Number(issue.line) || 1)}:${Math.max(1, Number(issue.column) || 1)}`;
+    location.addEventListener("click", () => {
+      const offset = prepareLineOffset(elements.prepareText.value, issue.line, issue.column);
+      elements.prepareText.focus();
+      elements.prepareText.setSelectionRange(offset, offset);
+      updatePrepareStatus();
+    });
+    const message = document.createElement("span");
+    message.className = "prepare-issue-message";
+    message.textContent = String(issue.message || "Syntax issue");
+    const code = document.createElement("span");
+    code.className = "prepare-issue-code";
+    code.textContent = String(issue.code || issue.severity || "");
+    row.append(location, message, code);
+    elements.prepareIssues.append(row);
+  }
+  elements.prepareIssues.hidden = false;
+  setPrepareValidation(`${issues.length} issue${issues.length === 1 ? "" : "s"} (${result?.engine || "check"})`, "error");
+}
+
+function lintBatchText(text) {
+  const issues = [];
+  const labels = new Map();
+  const references = [];
+  const lines = String(text).replace(/\r\n?/g, "\n").split("\n");
+  let parentheses = 0;
+
+  lines.forEach((line, index) => {
+    const lineNumber = index + 1;
+    const trimmed = line.trim();
+    const label = /^:([^:\s][^\s]*)/.exec(trimmed);
+    if (label) labels.set(label[1].toLocaleLowerCase(), lineNumber);
+    if (!trimmed || /^::/.test(trimmed) || /^rem(?:\s|$)/i.test(trimmed)) return;
+
+    let quoted = false;
+    for (let column = 0; column < line.length; column += 1) {
+      const character = line[column];
+      if (character === "^") {
+        column += 1;
+      } else if (character === '"') {
+        quoted = !quoted;
+      } else if (!quoted && character === "(") {
+        parentheses += 1;
+      } else if (!quoted && character === ")") {
+        parentheses -= 1;
+        if (parentheses < 0) {
+          issues.push({ line: lineNumber, column: column + 1, code: "CMD001", severity: "error", message: "Closing parenthesis has no matching opening parenthesis." });
+          parentheses = 0;
+        }
+      }
+    }
+    if (quoted) issues.push({ line: lineNumber, column: line.length, code: "CMD002", severity: "warning", message: "Double quote is not closed on this line." });
+
+    const goto = /\bgoto\s+(?!:eof\b):?([^\s&|<>]+)/i.exec(line);
+    if (goto) references.push({ name: goto[1], line: lineNumber, column: goto.index + 1 });
+    const call = /\bcall\s+:([^\s&|<>]+)/i.exec(line);
+    if (call) references.push({ name: call[1], line: lineNumber, column: call.index + 1 });
+  });
+
+  if (parentheses > 0) {
+    issues.push({ line: lines.length, column: Math.max(1, lines.at(-1).length), code: "CMD003", severity: "error", message: `${parentheses} opening parenthesis${parentheses === 1 ? " is" : "es are"} not closed.` });
+  }
+  for (const reference of references) {
+    if (!labels.has(reference.name.toLocaleLowerCase())) {
+      issues.push({ ...reference, code: "CMD004", severity: "warning", message: `Label '${reference.name}' is not defined.` });
+    }
+  }
+  return { engine: "Batch structural lint", issues };
+}
+
+async function validatePreparedText() {
+  if (state.prepareEditor.validating) return;
+  const language = elements.prepareLanguage.value;
+  const text = elements.prepareText.value;
+  if (language === "batch") {
+    renderPrepareIssues(lintBatchText(text));
+    return;
+  }
+  if (language === "text") {
+    renderPrepareIssues({ engine: "Plain text", issues: [] });
+    return;
+  }
+  if (!state.socketReady) {
+    renderPrepareIssues({ engine: "syntax check", issues: [], error: "Bridge unavailable" });
+    return;
+  }
+  state.prepareEditor.validating = true;
+  elements.prepareValidate.disabled = true;
+  setPrepareValidation("Checking\u2026");
+  const result = await requestBridge({ type: "prepareValidate", language, text }, { timeout: 60000 });
+  state.prepareEditor.validating = false;
+  elements.prepareValidate.disabled = false;
+  renderPrepareIssues(result || { engine: "syntax check", issues: [], error: "Syntax checker did not respond" });
+}
+
+async function copyPreparedText() {
+  try {
+    await writeClipboardText(elements.prepareText.value);
+    toast("Prepared text copied", "success", 1800);
+  } catch {
+    toast("Clipboard unavailable", "error");
+  }
+}
+
+function savePreparedSnippet() {
+  const text = elements.prepareText.value;
+  if (/\r|\n/.test(text)) {
+    toast("Snippets are single commands. Save multi-line text as a script instead.", "info", 3200);
+    return;
+  }
+  addSnippet(elements.prepareSnippetName.value, text);
+  elements.prepareSnippetName.value = "";
+}
+
+async function savePreparedFile() {
+  const response = await requestBridge({
+    type: "prepareSave",
+    text: elements.prepareText.value,
+    suggestedName: elements.prepareFileName.value,
+    cwd: state.terminals.get(state.prepareEditor.sourceTerminalId)?.cwd || elements.cwdInput.value || ""
+  });
+  if (response?.path) {
+    elements.prepareFileName.value = response.path.split(/[\\/]/).pop();
+    toast(`Saved ${elements.prepareFileName.value}`, "success", 2200);
+  } else if (response?.error) {
+    toast(response.error, "error", 3200);
+  }
+}
+
+function renderPrepareTerminalFlyout() {
+  const terminals = [...state.terminals.values()].filter((terminal) => terminal.status === "live");
+  elements.prepareTerminalList.textContent = "";
+  if (terminals.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "prepare-terminal-empty";
+    empty.textContent = "No live terminals";
+    elements.prepareTerminalList.append(empty);
+    return;
+  }
+  for (const terminal of terminals) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.role = "menuitem";
+    const name = document.createElement("span");
+    name.textContent = terminal.titleInput.value || "Terminal";
+    const meta = document.createElement("span");
+    meta.className = "prepare-terminal-meta";
+    meta.textContent = terminal.pid ? `PID ${terminal.pid}` : "starting";
+    button.append(name, meta);
+    button.addEventListener("click", () => sendPreparedTextToTerminal(terminal.id));
+    elements.prepareTerminalList.append(button);
+  }
+}
+
+function togglePrepareTerminalFlyout(force) {
+  const open = force === undefined ? elements.prepareTerminalFlyout.hidden : Boolean(force);
+  if (open) renderPrepareTerminalFlyout();
+  elements.prepareTerminalFlyout.hidden = !open;
+  elements.prepareSend.setAttribute("aria-expanded", String(open));
+  if (open) elements.prepareTerminalList.querySelector("button")?.focus();
+}
+
+function sendPreparedTextToTerminal(id) {
+  const terminal = state.terminals.get(id);
+  if (!terminal || terminal.status !== "live") {
+    toast("That terminal is no longer available", "error", 2200);
+    renderPrepareTerminalFlyout();
+    return false;
+  }
+  const text = elements.prepareText.value;
+  if (!text) {
+    toast("There is no text to send", "info", 1600);
+    return false;
+  }
+  terminal.term.paste(text);
+  togglePrepareTerminalFlyout(false);
+  toast(`Inserted in ${terminal.titleInput.value || "Terminal"} without Enter`, "success", 2200);
+  return true;
+}
+
+function bindPrepareEditor() {
+  if (!elements.prepareOverlay) return;
+  elements.prepareClose.addEventListener("click", () => closePrepareEditor());
+  elements.prepareOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.prepareOverlay) closePrepareEditor();
+    if (!event.target.closest(".prepare-send-wrap")) togglePrepareTerminalFlyout(false);
+  });
+  elements.prepareText.addEventListener("input", preparedTextChanged);
+  elements.prepareText.addEventListener("click", updatePrepareStatus);
+  elements.prepareText.addEventListener("keyup", updatePrepareStatus);
+  elements.prepareText.addEventListener("keydown", (event) => {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      indentPreparedText(event.shiftKey);
+    } else if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      togglePrepareFind(true);
+    } else if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      savePreparedFile();
+    }
+  });
+  elements.prepareLanguage.addEventListener("change", () => {
+    if (Object.values(PREPARE_FILE_NAMES).includes(elements.prepareFileName.value)) {
+      elements.prepareFileName.value = PREPARE_FILE_NAMES[elements.prepareLanguage.value];
+    }
+    preparedTextChanged();
+  });
+  elements.prepareUndo.addEventListener("click", () => { elements.prepareText.focus(); document.execCommand("undo"); preparedTextChanged(); });
+  elements.prepareRedo.addEventListener("click", () => { elements.prepareText.focus(); document.execCommand("redo"); preparedTextChanged(); });
+  elements.prepareFindToggle.addEventListener("click", () => togglePrepareFind());
+  elements.prepareCleanCopilot.addEventListener("click", cleanPreparedCopilotBorders);
+  elements.prepareFind.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      findPreparedText(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      togglePrepareFind(false);
+    }
+  });
+  elements.prepareFindPrevious.addEventListener("click", () => findPreparedText(-1));
+  elements.prepareFindNext.addEventListener("click", () => findPreparedText(1));
+  elements.prepareReplaceOne.addEventListener("click", replacePreparedText);
+  elements.prepareReplaceAll.addEventListener("click", replaceAllPreparedText);
+  elements.prepareValidate.addEventListener("click", validatePreparedText);
+  elements.prepareCopy.addEventListener("click", copyPreparedText);
+  elements.prepareSaveSnippet.addEventListener("click", savePreparedSnippet);
+  elements.prepareSaveFile.addEventListener("click", savePreparedFile);
+  elements.prepareSend.addEventListener("click", () => togglePrepareTerminalFlyout());
+  elements.prepareOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!elements.prepareTerminalFlyout.hidden) togglePrepareTerminalFlyout(false);
+      else if (!elements.prepareFindBar.hidden) togglePrepareFind(false);
+      else closePrepareEditor();
+      return;
+    }
+    if (event.key !== "Tab" || event.target === elements.prepareText) return;
+    const focusable = prepareEditorFocusableElements();
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+}
+
 function copyActiveTerminal() {
   if (state.activeId) copyTerminalOutput(state.activeId);
 }
@@ -4620,6 +5511,7 @@ function resetActiveTerminalFontZoom() {
 
 function getCommands() {
   const commands = [
+    { label: "Toggle fullscreen", hint: "F11", run: toggleFullscreenFocus },
     { label: "New terminal", hint: "Ctrl+T", run: () => addTerminal({ reveal: true, runStartup: true }) },
     { label: "New PowerShell 7 terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "pwsh", title: "PowerShell 7" }) },
     { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell", title: "Windows PowerShell" }) },
@@ -5109,6 +6001,19 @@ function bindGlobalShortcuts() {
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
 
+    if (event.key === "F11" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault();
+      toggleFullscreenFocus();
+      return;
+    }
+
+    if (fullscreenFocus.active && event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      exitFullscreenFocus();
+      return;
+    }
+
     if (elements.updateConsentOverlay && !elements.updateConsentOverlay.hidden) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -5221,6 +6126,7 @@ function bindGlobalShortcuts() {
       else openFindActive();
     } else if (event.ctrlKey && event.shiftKey && key === "e") {
       event.preventDefault();
+      if (blockFullscreenSurfaceAction("terminal search")) return;
       elements.terminalSearchInput.focus();
       elements.terminalSearchInput.select();
     } else if (event.ctrlKey && event.shiftKey && key === "r") {
@@ -5289,6 +6195,189 @@ function bindGlobalShortcuts() {
       resetFontZoom();
     }
   }, true);
+}
+
+function captureFullscreenSurfaces() {
+  return {
+    activeElement: document.activeElement,
+    activeId: state.activeId,
+    broadcastOpen: !elements.broadcastBar.hidden,
+    findAllOpen: !elements.findAllBar.hidden,
+    logAutoscroll: logStore.autoscroll,
+    logOpen: !elements.logPanel.hidden,
+    logScrollTop: elements.logOutput.scrollTop,
+    modalDialog: visibleModalDialog(),
+    paneFindIds: [...state.terminals.values()]
+      .filter((terminal) => terminal.findBar && !terminal.findBar.hidden)
+      .map((terminal) => terminal.id)
+  };
+}
+
+function visibleModalDialog() {
+  return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
+    .find((dialog) => !dialog.closest("[hidden]")) || null;
+}
+
+function focusModalDialog(dialog, preferred) {
+  const preferredIsValid = preferred instanceof HTMLElement
+    && preferred.isConnected
+    && dialog.contains(preferred);
+  const target = preferredIsValid
+    ? preferred
+    : dialog.querySelector(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), '
+      + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+  target?.focus();
+}
+
+function blockFullscreenSurfaceAction(label) {
+  if (!fullscreenFocus.active) return false;
+  toast(`Exit fullscreen focus mode to open ${label}.`, "info", 1800);
+  state.terminals.get(state.activeId)?.term.focus();
+  return true;
+}
+
+function setFullscreenSurfacesHidden(hidden, snapshot = fullscreenFocus.snapshot) {
+  if (hidden) {
+    elements.broadcastBar.hidden = true;
+    elements.broadcastToggle.setAttribute("aria-pressed", "false");
+    elements.findAllBar.hidden = true;
+    updateLogPanelVisibility(false);
+    for (const terminal of state.terminals.values()) {
+      if (terminal.findBar) terminal.findBar.hidden = true;
+    }
+    return;
+  }
+
+  elements.broadcastBar.hidden = !snapshot.broadcastOpen;
+  elements.broadcastToggle.setAttribute("aria-pressed", String(snapshot.broadcastOpen));
+  elements.findAllBar.hidden = !snapshot.findAllOpen;
+  updateLogPanelVisibility(snapshot.logOpen);
+  if (snapshot.logOpen) {
+    logStore.unseenError = false;
+    if (elements.logToggleDot) elements.logToggleDot.hidden = true;
+    logStore.autoscroll = snapshot.logAutoscroll;
+    renderAllLogs();
+    if (!snapshot.logAutoscroll) elements.logOutput.scrollTop = snapshot.logScrollTop;
+  }
+  const paneFindIds = new Set(snapshot.paneFindIds);
+  for (const terminal of state.terminals.values()) {
+    if (terminal.findBar) terminal.findBar.hidden = !paneFindIds.has(terminal.id);
+  }
+  const dialog = visibleModalDialog();
+  if (dialog) {
+    focusModalDialog(dialog, document.activeElement);
+  } else if (
+    state.activeId === snapshot.activeId
+    && snapshot.activeElement?.isConnected
+    && typeof snapshot.activeElement.focus === "function"
+  ) {
+    snapshot.activeElement.focus();
+  } else {
+    state.terminals.get(state.activeId)?.term.focus();
+  }
+}
+
+function syncFullscreenFocus(enabled) {
+  if (enabled === fullscreenFocus.active) return;
+  if (enabled) {
+    fullscreenFocus.snapshot = captureFullscreenSurfaces();
+    fullscreenFocus.active = true;
+    document.body.classList.add("fullscreen-focus");
+    setFullscreenSurfacesHidden(true);
+    if (fullscreenFocus.snapshot.modalDialog) {
+      focusModalDialog(fullscreenFocus.snapshot.modalDialog, fullscreenFocus.snapshot.activeElement);
+    } else {
+      state.terminals.get(state.activeId)?.term.focus();
+    }
+  } else {
+    const snapshot = fullscreenFocus.snapshot;
+    fullscreenFocus.active = false;
+    fullscreenFocus.snapshot = null;
+    document.body.classList.remove("fullscreen-focus");
+    if (snapshot) setFullscreenSurfacesHidden(false, snapshot);
+  }
+  fitAllTerminals();
+}
+
+function bindFullscreenEvents() {
+  if (window.multiterm?.onFullscreenChange) {
+    window.multiterm.onFullscreenChange(syncNativeFullscreen);
+    return;
+  }
+  document.addEventListener("fullscreenchange", () => {
+    syncNativeFullscreen(Boolean(document.fullscreenElement));
+  });
+}
+
+function syncNativeFullscreen(enabled) {
+  if (fullscreenFocus.scheduled > 0 && enabled !== fullscreenFocus.desired) return;
+  fullscreenFocus.desired = enabled;
+  syncFullscreenFocus(enabled);
+}
+
+async function requestNativeFullscreen(enabled) {
+  if (window.multiterm?.setFullscreen) {
+    return Boolean(await window.multiterm.setFullscreen(enabled));
+  }
+  if (enabled && document.documentElement.requestFullscreen) {
+    await document.documentElement.requestFullscreen();
+    return true;
+  }
+  if (!enabled && document.fullscreenElement && document.exitFullscreen) {
+    await document.exitFullscreen();
+  }
+  return false;
+}
+
+function queueFullscreenRequest(enabled) {
+  fullscreenFocus.scheduled += 1;
+  const run = async () => {
+    try {
+      if (enabled !== fullscreenFocus.desired) return;
+      const actual = await requestNativeFullscreen(enabled);
+      if (enabled !== fullscreenFocus.desired) return;
+      if (actual === enabled) {
+        syncFullscreenFocus(actual);
+        return;
+      }
+      fullscreenFocus.desired = actual;
+      syncFullscreenFocus(actual);
+      toast(enabled ? "Fullscreen unavailable." : "Could not leave fullscreen.", "error");
+    } catch (error) {
+      if (enabled !== fullscreenFocus.desired) return;
+      if (enabled) {
+        fullscreenFocus.desired = false;
+        syncFullscreenFocus(false);
+        toast(`Fullscreen unavailable: ${String(error?.message || error)}`, "error");
+      } else {
+        fullscreenFocus.desired = true;
+        toast(`Could not leave fullscreen: ${String(error?.message || error)}`, "error");
+      }
+    } finally {
+      fullscreenFocus.scheduled -= 1;
+    }
+  };
+  fullscreenFocus.queue = fullscreenFocus.queue.then(run);
+  return fullscreenFocus.queue;
+}
+
+function enterFullscreenFocus() {
+  if (fullscreenFocus.desired && fullscreenFocus.active) return fullscreenFocus.queue;
+  fullscreenFocus.desired = true;
+  syncFullscreenFocus(true);
+  return queueFullscreenRequest(true);
+}
+
+function exitFullscreenFocus() {
+  if (!fullscreenFocus.desired && !fullscreenFocus.active) return fullscreenFocus.queue;
+  fullscreenFocus.desired = false;
+  return queueFullscreenRequest(false);
+}
+
+function toggleFullscreenFocus() {
+  return fullscreenFocus.desired ? exitFullscreenFocus() : enterFullscreenFocus();
 }
 
 /* ---------------- Restart session --------------- */
@@ -5401,6 +6490,7 @@ function bindPaneFind(terminal) {
 }
 
 function openFind(terminal) {
+  if (blockFullscreenSurfaceAction("terminal find")) return;
   if (!terminal?.searchAddon || !terminal.findBar) return;
   clearTerminalSearch();
   if (state.findAll.active) closeFindAll();
@@ -5495,6 +6585,7 @@ function bindFindAll() {
 }
 
 function openFindAll() {
+  if (blockFullscreenSurfaceAction("find in all terminals")) return;
   if (!elements.findAllBar) return;
   // The per-pane find bar, find-all and the header filter share each terminal's
   // single search addon, so make them mutually exclusive.
@@ -5698,6 +6789,7 @@ function findAllCountLabel() {
 /* ---------------- Broadcast command bar --------------- */
 
 function toggleBroadcast(force) {
+  if (blockFullscreenSurfaceAction("broadcast commands")) return;
   const show = typeof force === "boolean" ? force : elements.broadcastBar.hidden;
   elements.broadcastBar.hidden = !show;
   elements.broadcastToggle.setAttribute("aria-pressed", String(show));
@@ -6793,7 +7885,7 @@ function renderPager() {
     const isActive = page.id === state.activePageId;
     chip.classList.toggle("is-active", isActive);
     chip.setAttribute("aria-selected", isActive ? "true" : "false");
-    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (drag to reorder; double-click or right-click to rename)`;
+    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (drop a terminal here; drag the tab to reorder; double-click or right-click to rename)`;
 
     const label = document.createElement("span");
     label.className = "pager-name";
@@ -8879,6 +9971,7 @@ const SHORTCUT_SECTIONS = Object.freeze([
       ["Ctrl+PageDown / Ctrl+PageUp", "Next or previous page", "Moves between pages without stopping their terminals."],
       ["Alt+1…9", "Go to page", "Opens the page at the matching position."],
       ["Ctrl+/", "Keyboard shortcuts", "Opens or closes this shortcut catalog."],
+      ["F11 / Esc", "Fullscreen focus mode", "F11 enters or exits fullscreen with collapsible controls hidden; Esc exits and restores the previous UI."],
       ["Ctrl+T / Ctrl+Shift+T", "New terminal", "Starts a terminal on the active page."],
       ["Ctrl+Shift+W", "Close active terminal", "Closes the active terminal session."],
       ["Ctrl+Shift+R", "Restart active terminal", "Restarts the active shell."],
@@ -8903,6 +9996,7 @@ const SHORTCUT_SECTIONS = Object.freeze([
 const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.command-queue": "Command queue",
   "terminal.copy": "Copy",
+  "terminal.copy-prepare": "Copy and prepare",
   "terminal.copy-all": "Copy all output",
   "terminal.paste": "Paste",
   "terminal.select-all": "Select all",
@@ -10014,6 +11108,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const items = [
     { group: "Clipboard", groupId: "clipboard" },
     { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", shortcutId: "terminal.copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
+    { label: "Copy and prepare\u2026", icon: "notebook-pen", shortcutId: "terminal.copy-prepare", disabled: !hasSelection, run: () => openPrepareEditor(selection, terminal.id) },
     { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { forgetTerminalSelection(terminal); copyTerminalOutput(terminal.id); } },
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
     { label: "Select all", hint: "Ctrl+A", icon: "text-select", shortcutId: "terminal.select-all", run: () => terminal.term.selectAll() },
@@ -12021,6 +13116,51 @@ function hideContextMenu() {
 const comboSelects = [];
 let openCombo = null;
 
+const LAYOUT_MODE_GLYPHS = {
+  auto: [[1, 1, 6, 4], [8, 1, 3, 4], [1, 6, 4, 3], [6, 6, 5, 3]],
+  columns: [[1, 1, 4, 8], [7, 1, 4, 8]],
+  rows: [[1, 1, 10, 3], [1, 6, 10, 3]],
+  horizontal: [[1, 1, 3, 8], [5, 1, 3, 8], [9, 1, 2, 8]],
+  vertical: [[1, 1, 10, 2], [1, 4, 10, 2], [1, 7, 10, 2]],
+  focus: [[1, 1, 7, 8], [9, 1, 2, 2], [9, 4, 2, 2], [9, 7, 2, 2]],
+  grid: [[1, 1, 4, 3], [7, 1, 4, 3], [1, 6, 4, 3], [7, 6, 4, 3]],
+  "master-top": [[1, 1, 10, 5], [1, 7, 2, 2], [5, 7, 2, 2], [9, 7, 2, 2]],
+  "master-right": [[1, 1, 3, 2], [1, 4, 3, 2], [1, 7, 3, 2], [5, 1, 6, 8]],
+  "master-bottom": [[1, 1, 2, 2], [5, 1, 2, 2], [9, 1, 2, 2], [1, 4, 10, 5]],
+  "master-left": [[1, 1, 6, 8], [8, 1, 3, 2], [8, 4, 3, 2], [8, 7, 3, 2]],
+  "priority-grid": [[1, 1, 6, 5], [8, 1, 3, 5], [1, 7, 3, 2], [5, 7, 3, 2], [9, 7, 2, 2]],
+  "compact-matrix": [
+    [1, 1, 2, 2], [5, 1, 2, 2], [9, 1, 2, 2],
+    [1, 4, 2, 2], [5, 4, 2, 2], [9, 4, 2, 2],
+    [1, 7, 2, 2], [5, 7, 2, 2], [9, 7, 2, 2]
+  ],
+  "carousel-horizontal": [[1, 2, 2, 6], [4, 1, 4, 8], [9, 2, 2, 6]],
+  "carousel-vertical": [[3, 1, 6, 2], [2, 4, 8, 3], [3, 8, 6, 1]],
+  spotlight: [[1, 3, 2, 4], [4, 1, 6, 8], [11, 3, 1, 4]],
+  bento: [[1, 1, 6, 5], [8, 1, 3, 3], [8, 5, 3, 4], [1, 7, 3, 2], [5, 7, 2, 2]],
+  manual: [[1, 2, 5, 5], [5, 1, 6, 5], [3, 5, 6, 4]]
+};
+
+function createLayoutModeGlyph(layout) {
+  const glyph = document.createElement("span");
+  glyph.className = "layout-mode-glyph";
+  glyph.dataset.layoutMode = layout;
+  glyph.setAttribute("aria-hidden", "true");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 12 10");
+  for (const [x, y, width, height] of LAYOUT_MODE_GLYPHS[layout]) {
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", String(x));
+    rect.setAttribute("y", String(y));
+    rect.setAttribute("width", String(width));
+    rect.setAttribute("height", String(height));
+    rect.setAttribute("rx", "0.6");
+    svg.append(rect);
+  }
+  glyph.append(svg);
+  return glyph;
+}
+
 function enhanceComboboxes() {
   const targets = [
     elements.shellSelect,
@@ -12055,6 +13195,8 @@ function refreshComboboxes() {
 function enhanceSelect(select) {
   const wrap = document.createElement("div");
   wrap.className = "combobox";
+  const showsLayoutGlyph = select === elements.layoutMode;
+  if (showsLayoutGlyph) wrap.classList.add("layout-mode-combobox");
   select.parentNode.insertBefore(wrap, select);
   wrap.append(select);
   select.classList.add("combobox-native");
@@ -12079,7 +13221,14 @@ function enhanceSelect(select) {
   list.hidden = true;
   document.body.append(list);
 
-  wrap.append(input, chevron);
+  let selectedLayoutGlyph = null;
+  if (showsLayoutGlyph) {
+    selectedLayoutGlyph = createLayoutModeGlyph(select.value);
+    selectedLayoutGlyph.classList.add("layout-mode-glyph-selected");
+  }
+  wrap.append(input);
+  if (selectedLayoutGlyph) wrap.append(selectedLayoutGlyph);
+  wrap.append(chevron);
 
   const box = { open: false, index: 0, items: [] };
 
@@ -12119,7 +13268,11 @@ function enhanceSelect(select) {
     box.items.forEach((o, i) => {
       const li = document.createElement("li");
       li.className = `combobox-option${i === box.index ? " is-active" : ""}`;
-      li.textContent = o.textContent;
+      if (showsLayoutGlyph) li.append(createLayoutModeGlyph(o.value));
+      const label = document.createElement("span");
+      label.className = "combobox-option-label";
+      label.textContent = o.textContent;
+      li.append(label);
       li.setAttribute("role", "option");
       li.setAttribute("aria-selected", String(o.value === select.value));
       li.addEventListener("mousedown", (event) => {
@@ -12174,7 +13327,15 @@ function enhanceSelect(select) {
   };
 
   const sync = () => {
-    if (!box.open) input.value = currentLabel();
+    if (!box.open) {
+      input.value = currentLabel();
+      if (selectedLayoutGlyph) {
+        const replacement = createLayoutModeGlyph(select.value);
+        replacement.classList.add("layout-mode-glyph-selected");
+        selectedLayoutGlyph.replaceWith(replacement);
+        selectedLayoutGlyph = replacement;
+      }
+    }
   };
 
   input.addEventListener("focus", open);

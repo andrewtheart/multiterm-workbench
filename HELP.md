@@ -86,7 +86,7 @@ Pages organize terminals into separate visual groups without ending their shell 
 - Closing a populated page asks whether to move its terminals to a neighbouring page or close them. Select **Take this action next time** to remember the choice, or change **When closing a page with terminals** under **Session** settings.
 - Choose **Pages location** under **Layout** to place the page tabs at the top, bottom, left, or right. Right-click blank space in the tabs bar or vertical panel to open a menu whose first action is **Open new page** (quick key <kbd>1</kbd>), followed by the same four placement choices. Changes from either placement control persist across launches and keep the other control synchronized. A vertical pages panel has its own hide button and a floating restore button.
 - Drag page tabs left/right in a horizontal bar or up/down in a vertical panel. With a page focused, <kbd>Ctrl+Shift</kbd> plus the matching arrow key reorders it from the keyboard.
-- Move a terminal between pages from its context menu.
+- Drag a terminal by its title bar onto a page tab to move it there, or use the terminal's context menu.
 
 Saved workspaces preserve pages, terminal definitions, shell choices, directories, titles, layout settings, and the active page. Session restore can recreate the previous workspace after a reload or restart.
 
@@ -232,6 +232,10 @@ Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several termin
 
 MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.
 
+For selected terminal text, right-click and choose **Copy and prepare...** to open the preparation editor. It supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, undo/redo, an eraser action that removes trailing Copilot TUI `|` borders from every affected line, and <kbd>Ctrl+S</kbd> Save As. From the same dialog you can copy the modified text, save a single command as a named snippet, or choose a live terminal from **Send to terminal**. Sending uses terminal paste semantics and does not append Enter.
+
+Choose PowerShell, Batch/cmd, C#, or plain text before selecting **Check syntax**. PowerShell uses the real PowerShell AST parser, C# uses the installed Windows C# compiler, and Batch performs non-executing structural checks for parentheses, quotes, and missing labels because `cmd.exe` has no safe parse-only mode. Select an issue location to move the editor cursor there.
+
 ## Statistics and logging
 
 ### Statistics
@@ -239,6 +243,12 @@ MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</k
 Open **Terminal statistics...** from a pane or **All terminal statistics...** from the workspace context menu. Statistics include session identity, PID, shell, uptime, rows and columns, input/output totals, and process resource information when available.
 
 If an older installed bridge reports `Unsupported message type: statistics`, update MultiTerm so the UI and bridge versions match.
+
+### Interaction analytics
+
+Open **Analytics** in Settings to see today's and all-time keystroke and focus totals plus a breakdown for each current terminal. Analytics persist across reloads and terminal reattachment. Reset clears both aggregate totals and current-terminal records after confirmation.
+
+A keystroke is one physical keyboard event handled by xterm; pasted text, snippets, startup commands, broadcasts, and other automated input do not increase it. Focus time accrues only while a terminal input owns keyboard focus and the MultiTerm page is visible in the focused application window. It pauses when focus moves to settings, a dialog, another app, or a hidden tab.
 
 ### Logging
 
@@ -326,6 +336,7 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 | <kbd>Ctrl+F</kbd> | Find in active terminal |
 | <kbd>Ctrl+Shift+F</kbd> | Find in all terminals |
 | <kbd>Ctrl+Shift+B</kbd> | Broadcast command |
+| <kbd>F11</kbd> / <kbd>Esc</kbd> | Enter fullscreen focus mode / exit and restore the previous UI |
 | <kbd>Ctrl+Shift+C</kbd> | Copy |
 | <kbd>Ctrl+Shift+V</kbd> | Paste |
 | <kbd>Ctrl+Shift+L</kbd> | Clear active terminal |

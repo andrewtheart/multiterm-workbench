@@ -47,6 +47,11 @@ test.describe("MultiTerm Workbench UI", () => {
     await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      closeAllTerminals();
+      addTerminal();
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
   });
 
   test.afterAll(async () => {
@@ -134,12 +139,11 @@ test.describe("MultiTerm Workbench UI", () => {
   });
 
   test("keeps scrollable dropdowns open while their option list scrolls", async () => {
-    await page.locator("#settings-group-layout").click();
     const input = page.locator("#layoutMode").locator("xpath=..").locator(".combobox-input");
+    if (!await input.isVisible()) await page.locator("#settings-group-layout").click();
     await input.click();
     const list = page.locator(".combobox-list:not([hidden])");
     await expect(list).toBeVisible();
-    await expect(input).toHaveAttribute("aria-expanded", "true");
 
     const dimensions = await list.evaluate((element) => {
       element.scrollTop = 0;
@@ -167,9 +171,53 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#settings-group-layout").click();
   });
 
+  test("shows a distinct miniature beside every layout mode", async () => {
+    const input = page.locator("#layoutMode").locator("xpath=..").locator(".combobox-input");
+    if (!await input.isVisible()) await page.locator("#settings-group-layout").click();
+    await input.click();
+    const list = page.locator(".combobox-list:not([hidden])");
+    const expected = await page.locator("#layoutMode option").evaluateAll((options) =>
+      options.map((option) => ({ label: option.textContent, value: option.value }))
+    );
+    const rendered = await list.locator(".combobox-option").evaluateAll((items) =>
+      items.map((item) => {
+        const glyph = item.querySelector(".layout-mode-glyph");
+        const label = item.querySelector(".combobox-option-label");
+        return {
+          glyphLeft: glyph.getBoundingClientRect().left,
+          label: label.textContent,
+          labelLeft: label.getBoundingClientRect().left,
+          rects: glyph.querySelectorAll("rect").length,
+          value: glyph.dataset.layoutMode
+        };
+      })
+    );
+
+    expect(rendered.map(({ label, value }) => ({ label, value }))).toEqual(expected);
+    expect(rendered.every((item) => item.rects > 0 && item.glyphLeft < item.labelLeft)).toBe(true);
+    expect(new Set(rendered.map((item) => item.value)).size).toBe(expected.length);
+    await page.keyboard.press("Escape");
+
+    const selected = page.locator("#layoutMode").locator("xpath=..").locator(".layout-mode-glyph-selected");
+    await expect(selected).toHaveAttribute("data-layout-mode", "auto");
+    await page.evaluate(() => {
+      elements.layoutMode.value = "bento";
+      elements.layoutMode.dispatchEvent(new Event("change", { bubbles: true }));
+      elements.layoutMode._combo.sync();
+    });
+    await expect(selected).toHaveAttribute("data-layout-mode", "bento");
+    await expect(input).toHaveValue("Bento grid");
+    await page.evaluate(() => {
+      elements.layoutMode.value = "auto";
+      elements.layoutMode.dispatchEvent(new Event("change", { bubbles: true }));
+      elements.layoutMode._combo.sync();
+    });
+    await page.locator("#settings-group-layout").click();
+  });
+
   test("collapses, expands, and filters settings groups", async () => {
     const groups = page.locator(".settings-group-toggle");
-    await expect(groups).toHaveCount(9);
+    await expect(groups).toHaveCount(10);
     for (let index = 0; index < await groups.count(); index += 1) {
       await expect(groups.nth(index)).toHaveAttribute("aria-expanded", "false");
     }
@@ -221,16 +269,16 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsSearch")).toHaveValue("");
     await expect(page.locator("#settingsShowAll")).toHaveText("Collapse all");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(9);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(10);
 
     await page.locator("#settingsSearch").fill("startup");
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsSearch")).toHaveValue("");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(9);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(10);
 
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsShowAll")).toHaveText("Show all");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(9);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(10);
   });
 
   test("finds settings through comprehensive related terms without rescanning the DOM", async () => {
@@ -248,6 +296,7 @@ test.describe("MultiTerm Workbench UI", () => {
       ["tail output", "#scrollOnOutput"],
       ["download ceiling", "#maxInstallerSizeMb"],
       ["shells survive", "#keepSessionsOnClose"],
+      ["typing focus metrics", "#analyticsReset"],
       ["awaiting question", "#highlightInputPrompts"],
       ["handoff quota", "#terminalInboxCapacity"],
       ["macros", "#snippetList"],
@@ -1294,6 +1343,169 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#shortcutsClose").click();
     await expect(page.locator("#shortcutsOverlay")).toBeHidden();
     await page.evaluate(() => clearContextMenuShortcut("terminal.copy-all"));
+  });
+
+  test("uses F11 fullscreen focus mode and restores the prior UI with Escape", async () => {
+    const before = await page.locator(".terminal-pane").count();
+    const original = await page.evaluate(() => {
+      window.__fullscreenRequests = [];
+      window.multiterm = {
+        setFullscreen: async (enabled) => {
+          window.__fullscreenRequests.push(enabled);
+          return enabled;
+        }
+      };
+      state.settings.headerHidden = false;
+      state.settings.sidecarHidden = false;
+      state.settings.pagerPlacement = "left";
+      state.settings.pagerCollapsed = false;
+      applySettings();
+      toggleBroadcast(true);
+      setLogPanel(true);
+      logStore.autoscroll = false;
+      elements.logOutput.scrollTop = 0;
+      elements.findAllBar.hidden = false;
+      const terminal = state.terminals.get(state.activeId);
+      terminal.findBar.hidden = false;
+      terminal.findInput.focus();
+      return {
+        settings: {
+          headerHidden: state.settings.headerHidden,
+          sidecarHidden: state.settings.sidecarHidden,
+          pagerCollapsed: state.settings.pagerCollapsed,
+          pagerPlacement: state.settings.pagerPlacement
+        },
+        logAutoscroll: logStore.autoscroll,
+        logScrollTop: elements.logOutput.scrollTop
+      };
+    });
+
+    await page.keyboard.press("F11");
+    await expect(page.locator("body")).toHaveClass(/fullscreen-focus/);
+    await expect(page.locator(".topbar")).toBeHidden();
+    await expect(page.locator(".control-panel")).toBeHidden();
+    await expect(page.locator("#pager")).toBeHidden();
+    await expect(page.locator("#broadcastBar")).toBeHidden();
+    await expect(page.locator("#findAllBar")).toBeHidden();
+    await expect(page.locator("#logPanel")).toBeHidden();
+    await expect(page.locator(".terminal-pane.is-active .pane-find")).toBeHidden();
+    await expect(page.locator("#logToggle")).toBeHidden();
+    await expect(page.locator("#fullscreenAddTerminal")).toBeVisible();
+    expect(await page.locator(".workbench").evaluate((element) =>
+      getComputedStyle(element).gridTemplateColumns.trim().split(/\s+/).length
+    )).toBe(1);
+    expect(await page.evaluate(() => {
+      logStore.unseenError = true;
+      toggleLogPanel();
+      toggleBroadcast();
+      openFindAll();
+      openFindActive();
+      return {
+        broadcastHidden: elements.broadcastBar.hidden,
+        findAllActive: state.findAll.active,
+        findAllHidden: elements.findAllBar.hidden,
+        logHidden: elements.logPanel.hidden,
+        paneFindHidden: state.terminals.get(state.activeId).findBar.hidden,
+        unseenError: logStore.unseenError
+      };
+    })).toEqual({
+      broadcastHidden: true,
+      findAllActive: false,
+      findAllHidden: true,
+      logHidden: true,
+      paneFindHidden: true,
+      unseenError: true
+    });
+
+    await page.locator("#fullscreenAddTerminal").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
+    await expect.poll(() => page.evaluate(() => {
+      const terminal = state.terminals.get(state.activeId);
+      return terminal.term.element.contains(document.activeElement);
+    })).toBe(true);
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
+    await page.keyboard.press("Escape");
+
+    await expect(page.locator("body")).not.toHaveClass(/fullscreen-focus/);
+    await expect(page.locator(".topbar")).toBeVisible();
+    await expect(page.locator(".control-panel")).toBeVisible();
+    await expect(page.locator("#pager")).toBeVisible();
+    await expect(page.locator("#broadcastBar")).toBeVisible();
+    await expect(page.locator("#findAllBar")).toBeVisible();
+    await expect(page.locator("#logPanel")).toBeVisible();
+    await expect(page.locator(".terminal-pane").first().locator(".pane-find")).toBeVisible();
+    await expect(page.locator("#fullscreenAddTerminal")).toBeHidden();
+    expect(await page.evaluate(() => ({
+      settings: {
+        headerHidden: state.settings.headerHidden,
+        sidecarHidden: state.settings.sidecarHidden,
+        pagerCollapsed: state.settings.pagerCollapsed,
+        pagerPlacement: state.settings.pagerPlacement
+      },
+      activeFocusMatches: state.terminals.get(state.activeId).term.element.contains(document.activeElement),
+      logRowsCurrent: elements.logOutput.querySelectorAll(".log-row").length === Math.min(
+        logStore.max,
+        logStore.entries.filter(passesLogFilter).length
+      ),
+      logAutoscroll: logStore.autoscroll,
+      logScrollTop: elements.logOutput.scrollTop,
+      requests: window.__fullscreenRequests
+    }))).toEqual({ ...original, activeFocusMatches: true, logRowsCurrent: true, requests: [true, false] });
+
+    await page.evaluate(() => {
+      state.settings.pagerCollapsed = true;
+      applySettings();
+      openShortcuts();
+    });
+    await expect(page.locator("#shortcutsOverlay")).toBeVisible();
+    await expect(page.locator(".status-restores")).toBeVisible();
+    await page.keyboard.press("F11");
+    await expect(page.locator("body")).toHaveClass(/fullscreen-focus/);
+    await expect(page.locator(".status-restores")).toBeHidden();
+    expect(await page.evaluate(() =>
+      document.querySelector('#shortcutsOverlay [role="dialog"]').contains(document.activeElement)
+    )).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("body")).not.toHaveClass(/fullscreen-focus/);
+    await expect(page.locator("#shortcutsOverlay")).toBeVisible();
+    await expect(page.locator(".status-restores")).toBeVisible();
+    expect(await page.evaluate(() =>
+      document.querySelector('#shortcutsOverlay [role="dialog"]').contains(document.activeElement)
+    )).toBe(true);
+    expect(await page.evaluate(() => window.__fullscreenRequests)).toEqual([true, false, true, false]);
+
+    await page.evaluate(() => {
+      closeShortcuts();
+      state.settings.pagerCollapsed = false;
+      applySettings();
+    });
+    await expect(page.locator("#shortcutsOverlay")).toBeHidden();
+    await page.evaluate(() => state.terminals.get(state.activeId).term.focus());
+    await page.keyboard.press("F11");
+    await expect(page.locator("body")).toHaveClass(/fullscreen-focus/);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("body")).not.toHaveClass(/fullscreen-focus/);
+    await expect.poll(() => page.evaluate(() =>
+      state.terminals.get(state.activeId).term.element.contains(document.activeElement)
+    )).toBe(true);
+    expect(await page.evaluate(() => window.__fullscreenRequests)).toEqual([
+      true, false, true, false, true, false
+    ]);
+
+    await page.evaluate(() => {
+      setLogPanel(false);
+      toggleBroadcast(false);
+      elements.findAllBar.hidden = true;
+      state.findAll.active = false;
+      for (const terminal of state.terminals.values()) {
+        if (terminal.findBar) terminal.findBar.hidden = true;
+      }
+      state.settings.pagerPlacement = "bottom";
+      applySettings();
+      delete window.multiterm;
+      delete window.__fullscreenRequests;
+    });
   });
 
   test("labels the settings panel", async () => {

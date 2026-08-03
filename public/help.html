@@ -472,6 +472,7 @@
 <li><a href="#statistics-and-logging" id="toc-statistics-and-logging">Statistics and logging</a>
 <ul>
 <li><a href="#statistics" id="toc-statistics">Statistics</a></li>
+<li><a href="#interaction-analytics" id="toc-interaction-analytics">Interaction analytics</a></li>
 <li><a href="#logging" id="toc-logging">Logging</a></li>
 </ul></li>
 <li><a href="#notifications-tray-and-closing" id="toc-notifications-tray-and-closing">Notifications, tray, and closing</a>
@@ -569,7 +570,7 @@
 <li>Closing a populated page asks whether to move its terminals to a neighbouring page or close them. Select <strong>Take this action next time</strong> to remember the choice, or change <strong>When closing a page with terminals</strong> under <strong>Session</strong> settings.</li>
 <li>Choose <strong>Pages location</strong> under <strong>Layout</strong> to place the page tabs at the top, bottom, left, or right. Right-click blank space in the tabs bar or vertical panel to open a menu whose first action is <strong>Open new page</strong> (quick key <kbd>1</kbd>), followed by the same four placement choices. Changes from either placement control persist across launches and keep the other control synchronized. A vertical pages panel has its own hide button and a floating restore button.</li>
 <li>Drag page tabs left/right in a horizontal bar or up/down in a vertical panel. With a page focused, <kbd>Ctrl+Shift</kbd> plus the matching arrow key reorders it from the keyboard.</li>
-<li>Move a terminal between pages from its context menu.</li>
+<li>Drag a terminal by its title bar onto a page tab to move it there, or use the terminal's context menu.</li>
 </ul>
 <p>Saved workspaces preserve pages, terminal definitions, shell choices, directories, titles, layout settings, and the active page. Session restore can recreate the previous workspace after a reload or restart.</p>
 <h2 id="layouts">Layouts</h2>
@@ -703,10 +704,15 @@
 <p>Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several terminals. Broadcast scope can target the current page or all pages. The <strong>Send Enter</strong> option controls whether the command runs immediately.</p>
 <h3 id="clipboard-behavior">Clipboard behavior</h3>
 <p>MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.</p>
+<p>For selected terminal text, right-click and choose <strong>Copy and prepare...</strong> to open the preparation editor. It supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, undo/redo, an eraser action that removes trailing Copilot TUI <code>|</code> borders from every affected line, and <kbd>Ctrl+S</kbd> Save As. From the same dialog you can copy the modified text, save a single command as a named snippet, or choose a live terminal from <strong>Send to terminal</strong>. Sending uses terminal paste semantics and does not append Enter.</p>
+<p>Choose PowerShell, Batch/cmd, C#, or plain text before selecting <strong>Check syntax</strong>. PowerShell uses the real PowerShell AST parser, C# uses the installed Windows C# compiler, and Batch performs non-executing structural checks for parentheses, quotes, and missing labels because <code>cmd.exe</code> has no safe parse-only mode. Select an issue location to move the editor cursor there.</p>
 <h2 id="statistics-and-logging">Statistics and logging</h2>
 <h3 id="statistics">Statistics</h3>
 <p>Open <strong>Terminal statistics...</strong> from a pane or <strong>All terminal statistics...</strong> from the workspace context menu. Statistics include session identity, PID, shell, uptime, rows and columns, input/output totals, and process resource information when available.</p>
 <p>If an older installed bridge reports <code>Unsupported message type: statistics</code>, update MultiTerm so the UI and bridge versions match.</p>
+<h3 id="interaction-analytics">Interaction analytics</h3>
+<p>Open <strong>Analytics</strong> in Settings to see today's and all-time keystroke and focus totals plus a breakdown for each current terminal. Analytics persist across reloads and terminal reattachment. Reset clears both aggregate totals and current-terminal records after confirmation.</p>
+<p>A keystroke is one physical keyboard event handled by xterm; pasted text, snippets, startup commands, broadcasts, and other automated input do not increase it. Focus time accrues only while a terminal input owns keyboard focus and the MultiTerm page is visible in the focused application window. It pauses when focus moves to settings, a dialog, another app, or a hidden tab.</p>
 <h3 id="logging">Logging</h3>
 <p>Use <strong>Log to file...</strong> from a terminal context menu to capture output. Stop logging from the same menu, then use <strong>Reveal last log</strong> or <strong>Reveal log folder</strong> to locate the file.</p>
 <h2 id="notifications-tray-and-closing">Notifications, tray, and closing</h2>
@@ -806,6 +812,10 @@
 <tr>
 <td><kbd>Ctrl+Shift+B</kbd></td>
 <td>Broadcast command</td>
+</tr>
+<tr>
+<td><kbd>F11</kbd> / <kbd>Esc</kbd></td>
+<td>Enter fullscreen focus mode / exit and restore the previous UI</td>
 </tr>
 <tr>
 <td><kbd>Ctrl+Shift+C</kbd></td>

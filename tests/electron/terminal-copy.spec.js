@@ -10,6 +10,53 @@ const path = require("node:path");
 const childProcess = require("node:child_process");
 const { _electron: electron, expect, test } = require("@playwright/test");
 
+test("toggles native fullscreen focus mode and restores the previous chrome", async () => {
+  const repoRoot = path.resolve(__dirname, "..", "..");
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-electron-fullscreen-"));
+  let electronApp;
+
+  try {
+    electronApp = await electron.launch({
+      args: [`--user-data-dir=${userDataDir}`, repoRoot],
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        PORT: "3296",
+        MULTITERM_UPDATE_REPO: "invalid/disabled"
+      }
+    });
+    const page = await electronApp.firstWindow();
+    await expect(page).toHaveTitle("MultiTerm Workbench");
+    await page.waitForFunction(() => document.querySelector("#statusConn")?.textContent === "Connected");
+
+    await page.keyboard.press("F11");
+    await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.isFullScreen()
+    )).toBe(true);
+    await expect(page.locator("body")).toHaveClass(/fullscreen-focus/);
+    await expect(page.locator(".topbar")).toBeHidden();
+    await expect(page.locator(".control-panel")).toBeHidden();
+    await expect(page.locator("#pager")).toBeHidden();
+    await expect(page.locator("#fullscreenAddTerminal")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect.poll(() => electronApp.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]?.isFullScreen()
+    )).toBe(false);
+    await expect(page.locator("body")).not.toHaveClass(/fullscreen-focus/);
+    await expect(page.locator(".topbar")).toBeVisible();
+    await expect(page.locator(".control-panel")).toBeVisible();
+    await expect(page.locator("#pager")).toBeVisible();
+    await expect(page.locator("#fullscreenAddTerminal")).toBeHidden();
+  } finally {
+    try {
+      if (electronApp) await electronApp.close();
+    } finally {
+      fs.rmSync(userDataDir, { force: true, recursive: true });
+    }
+  }
+});
+
 test("copies a physical TUI selection through Electron's native clipboard", async () => {
   const repoRoot = path.resolve(__dirname, "..", "..");
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-electron-copy-"));

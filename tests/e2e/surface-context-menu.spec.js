@@ -435,6 +435,7 @@ test.describe("Surface context menu", () => {
     await expect.poll(() => itemIds("clipboard")).toEqual([
       "terminal.select-all",
       "terminal.copy",
+      "terminal.copy-prepare",
       "terminal.copy-all",
       "terminal.paste"
     ]);

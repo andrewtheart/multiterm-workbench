@@ -169,6 +169,68 @@ test.describe("pane drag to rearrange", () => {
     expect(await paneOrder()).toEqual(expected);
   });
 
+  test("dragging a pane onto a bottom page tab moves it and persists the assignment", async () => {
+    const before = await paneOrder();
+    const sourcePage = await page.evaluate(() => state.activePageId);
+    const targetPage = await page.evaluate(() => addPage({ name: "Drop target", activate: false }));
+    const boxes = await paneBoxes();
+    const tabBox = await page.locator(`.pager-chip[data-page-id="${targetPage}"]`).boundingBox();
+
+    await page.mouse.move(boxes[0].left + 5, boxes[0].top + 3);
+    await page.mouse.down();
+    // Cross a neighbour first: tab-drop must undo this incidental live reorder.
+    await page.mouse.move(boxes[1].midX + 25, boxes[1].top + 3, { steps: 8 });
+    await page.mouse.move(tabBox.x + tabBox.width / 2, tabBox.y + tabBox.height / 2, { steps: 12 });
+    await expect(page.locator(`.pager-chip[data-page-id="${targetPage}"]`)).toHaveClass(/is-pane-page-drop-target/);
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+
+    const result = await page.evaluate(({ terminalId, targetPage }) => ({
+      activePageId: state.activePageId,
+      mappedPageId: JSON.parse(localStorage.getItem("multiterm.terminalPages"))[terminalId],
+      pageId: state.terminals.get(terminalId).pageId,
+      targetCount: terminalsOnPage(targetPage).length
+    }), { terminalId: before[0], targetPage });
+    expect(result).toEqual({
+      activePageId: sourcePage,
+      mappedPageId: targetPage,
+      pageId: targetPage,
+      targetCount: 1
+    });
+    expect(await paneOrder()).toEqual(before);
+    expect(await dragState()).toEqual({ lifted: 0, dragging: 0, bodyFlag: false, preview: null });
+    await expect(page.locator(".pager-chip.is-pane-page-drop-target")).toHaveCount(0);
+
+    await page.evaluate(({ terminalId, sourcePage, targetPage }) => {
+      moveTerminalToPage(terminalId, sourcePage);
+      removePage(targetPage);
+    }, { terminalId: before[0], sourcePage, targetPage });
+  });
+
+  test("dragging onto a vertical page tab uses the same move contract", async () => {
+    await page.evaluate(() => setPagerPlacement("left"));
+    const terminalId = (await paneOrder())[0];
+    const sourcePage = await page.evaluate(() => state.activePageId);
+    const targetPage = await page.evaluate(() => addPage({ name: "Vertical target", activate: false }));
+    const paneBox = await page.locator(`.terminal-pane[data-id="${terminalId}"] .pane-bar`).boundingBox();
+    const tabBox = await page.locator(`.pager-chip[data-page-id="${targetPage}"]`).boundingBox();
+
+    await dragPane(
+      { x: paneBox.x + 35, y: paneBox.y + 10 },
+      [{ x: tabBox.x + tabBox.width / 2, y: tabBox.y + tabBox.height / 2 }]
+    );
+
+    expect(await page.evaluate((id) => state.terminals.get(id).pageId, terminalId)).toBe(targetPage);
+    await expect(page.locator(`.pager-chip[data-page-id="${targetPage}"] .pager-count`)).toHaveText("1");
+    await expect(page.locator(".pager-chip.is-pane-page-drop-target")).toHaveCount(0);
+
+    await page.evaluate(({ terminalId, sourcePage, targetPage }) => {
+      moveTerminalToPage(terminalId, sourcePage);
+      removePage(targetPage);
+      setPagerPlacement("bottom");
+    }, { terminalId, sourcePage, targetPage });
+  });
+
   test("dragging to the host edge still snaps instead of rearranging", async () => {
     await setLayout("auto");
     await page.waitForTimeout(600);

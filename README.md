@@ -75,7 +75,7 @@ layouts from auto-fit grids to a free-form canvas.
   <tr>
     <td align="center" width="33%">
       <h3>📊 Per-terminal bridge and process statistics</h3>
-      Right-click a terminal for its keystrokes, bridge bytes, current CPU, and current memory, or right-click blank workspace for totals and a comparison of every active terminal.
+      Right-click a terminal for bridge traffic, CPU, and memory, or open Analytics for persistent physical-keystroke and focused-time totals with a live per-terminal breakdown.
     </td>
     <td align="center" width="33%">
       <h3>🔗 Attach running WSL tmux sessions</h3>
@@ -93,7 +93,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🖱️ Deep right-click context menu</h3>
-      Copy, paste, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions or whole sections, rename, add, or remove sections, and hide actions you do not use.
+      Copy, paste, prepare selected text in a syntax-aware editor, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions or whole sections, rename, add, or remove sections, and hide actions you do not use.
     </td>
     <td align="center" width="33%">
       <h3>🔔 Activity and input alerts</h3>
@@ -775,7 +775,7 @@ point the checker at a fork.
 - The bridge binds to `127.0.0.1` by default. Set `PORT=4000` to choose another port.
 - Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell, Command Prompt, or WSL. Existing WSL tmux sessions can be discovered and attached from the header or command palette.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.
-- Pages keep related terminals in separate visual groups while their shell processes stay alive. Compact page tabs expose a persistent right-edge **x** and reorder by dragging along the active axis. `Ctrl+P` creates a page. Right-click a page for **Close page** or **Close all**; populated-page closes use the remembered move-or-close policy from Session settings. Right-click blank pager space for **Open new page** as quick key **1** and the placement actions. **Pages location** under **Layout** and those context actions move the tabs to the top, bottom, left, or right; both paths update one persisted setting and stay synchronized. Side panels are collapsible. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
+- Pages keep related terminals in separate visual groups while their shell processes stay alive. Compact page tabs expose a persistent right-edge **x** and reorder by dragging along the active axis; dragging a terminal title bar onto a page tab moves that terminal there. `Ctrl+P` creates a page. Right-click a page for **Close page** or **Close all**; populated-page closes use the remembered move-or-close policy from Session settings. Right-click blank pager space for **Open new page** as quick key **1** and the placement actions. **Pages location** under **Layout** and those context actions move the tabs to the top, bottom, left, or right; both paths update one persisted setting and stay synchronized. Side panels are collapsible. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
 - The top-right **?** opens generated in-app help. The keyboard icon or `Ctrl+/` opens a categorized catalog of terminal-menu, page-menu, app-wide, and customized shortcuts; `Ctrl+Shift+P` or F1 opens the searchable command palette.
 - The top search box runs the same buffer search as `Ctrl+Shift+F` — every match is highlighted in place and a counter shows the running total — and additionally hides panes with nothing to show. Panes reappear (already highlighted) the moment your evolving query matches them again, or when matching output arrives. Enter/Shift+Enter walk the matches, Escape clears the filter. A pane also survives the filter when its title, working directory, shell, or status matches. `Ctrl+Shift+E` focuses the box.
 - Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.

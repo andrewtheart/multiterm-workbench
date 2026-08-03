@@ -407,6 +407,36 @@
             </label>
           </section>
 
+          <section class="control-section analytics-section">
+            <h2>Analytics</h2>
+            <div class="analytics-metrics" role="status" aria-live="polite">
+              <div class="analytics-metric">
+                <span>Today keys</span>
+                <strong id="analyticsTodayKeystrokes">0</strong>
+              </div>
+              <div class="analytics-metric">
+                <span>Today focus</span>
+                <strong id="analyticsTodayFocus">0s</strong>
+              </div>
+              <div class="analytics-metric">
+                <span>All-time keys</span>
+                <strong id="analyticsTotalKeystrokes">0</strong>
+              </div>
+              <div class="analytics-metric">
+                <span>All-time focus</span>
+                <strong id="analyticsTotalFocus">0s</strong>
+              </div>
+            </div>
+            <div class="analytics-terminal-head">
+              <span>Current terminals</span>
+              <button id="analyticsReset" class="icon-button" type="button" title="Reset analytics" aria-label="Reset analytics">
+                <i data-lucide="rotate-ccw"></i>
+              </button>
+            </div>
+            <div id="analyticsTerminalList" class="analytics-terminal-list" role="list"></div>
+            <p id="analyticsEmpty" class="analytics-empty">No terminal activity recorded.</p>
+          </section>
+
           <section class="control-section">
             <h2>Communication</h2>
             <label class="control-row">
@@ -580,6 +610,10 @@
         </button>
       </footer>
     </div>
+
+    <button id="fullscreenAddTerminal" class="fullscreen-add-terminal" type="button" title="New terminal (Ctrl+T)" aria-label="New terminal" aria-keyshortcuts="Control+T">
+      <i data-lucide="plus"></i>
+    </button>
 
     <section id="logPanel" class="log-panel" aria-label="Application logs" hidden>
       <header class="log-panel-head">
@@ -797,6 +831,104 @@
           <button id="updateLater" type="button" class="confirm-cancel">Later</button>
           <button id="updateInstall" type="button" class="confirm-proceed">Download &amp; install</button>
         </div>
+      </div>
+    </div>
+
+    <div id="prepareOverlay" class="palette-overlay prepare-overlay" hidden>
+      <div class="palette prepare-editor" role="dialog" aria-modal="true" aria-labelledby="prepareTitle" aria-describedby="prepareSource">
+        <header class="prepare-head">
+          <div>
+            <h2 id="prepareTitle">Copy and prepare</h2>
+            <p id="prepareSource">Edit selected terminal text before using it.</p>
+          </div>
+          <button id="prepareClose" class="icon-button" type="button" title="Close" aria-label="Close preparation editor">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <div class="prepare-toolbar" role="toolbar" aria-label="Editor tools">
+          <label class="prepare-language">
+            <span>Language</span>
+            <select id="prepareLanguage" aria-label="Syntax language">
+              <option value="powershell">PowerShell</option>
+              <option value="batch">Batch / cmd</option>
+              <option value="csharp">C#</option>
+              <option value="text">Plain text</option>
+            </select>
+          </label>
+          <div class="prepare-tool-buttons">
+            <button id="prepareUndo" class="icon-button" type="button" title="Undo (Ctrl+Z)" aria-label="Undo">
+              <i data-lucide="undo-2"></i>
+            </button>
+            <button id="prepareRedo" class="icon-button" type="button" title="Redo (Ctrl+Y)" aria-label="Redo">
+              <i data-lucide="redo-2"></i>
+            </button>
+            <button id="prepareFindToggle" class="icon-button" type="button" title="Find and replace (Ctrl+F)" aria-label="Find and replace">
+              <i data-lucide="search"></i>
+            </button>
+            <button id="prepareCleanCopilot" class="icon-button" type="button" title="Remove trailing Copilot TUI | borders" aria-label="Remove trailing Copilot TUI pipe borders">
+              <i data-lucide="eraser"></i>
+            </button>
+          </div>
+          <button id="prepareValidate" class="secondary-action prepare-validate" type="button">
+            <i data-lucide="scan-line"></i>
+            <span>Check syntax</span>
+          </button>
+        </div>
+
+        <div id="prepareFindBar" class="prepare-find" hidden>
+          <input id="prepareFind" type="search" spellcheck="false" autocomplete="off" placeholder="Find" aria-label="Find text">
+          <input id="prepareReplace" type="text" spellcheck="false" autocomplete="off" placeholder="Replace" aria-label="Replacement text">
+          <button id="prepareFindPrevious" class="icon-button" type="button" title="Previous match" aria-label="Previous match"><i data-lucide="chevron-up"></i></button>
+          <button id="prepareFindNext" class="icon-button" type="button" title="Next match" aria-label="Next match"><i data-lucide="chevron-down"></i></button>
+          <button id="prepareReplaceOne" class="secondary-action" type="button">Replace</button>
+          <button id="prepareReplaceAll" class="secondary-action" type="button">All</button>
+        </div>
+
+        <textarea id="prepareText" class="prepare-text" spellcheck="false" wrap="off" aria-label="Text to prepare"></textarea>
+        <div class="prepare-statusbar">
+          <span id="prepareStatus">Ln 1, Col 1</span>
+          <span id="prepareValidation" role="status">Not checked</span>
+        </div>
+        <ol id="prepareIssues" class="prepare-issues" aria-label="Syntax issues" hidden></ol>
+
+        <footer class="prepare-footer">
+          <div class="prepare-save-fields">
+            <label>
+              <span>Suggested file name</span>
+              <input id="prepareFileName" type="text" spellcheck="false" autocomplete="off" value="prepared.ps1">
+            </label>
+            <label>
+              <span>Snippet name</span>
+              <input id="prepareSnippetName" type="text" spellcheck="false" autocomplete="off" placeholder="Optional name">
+            </label>
+          </div>
+          <div class="prepare-actions">
+            <button id="prepareSaveSnippet" class="secondary-action" type="button">
+              <i data-lucide="bookmark-plus"></i>
+              <span>Save snippet</span>
+            </button>
+            <button id="prepareSaveFile" class="secondary-action" type="button">
+              <i data-lucide="save"></i>
+              <span>Save file</span>
+            </button>
+            <div class="prepare-send-wrap">
+              <button id="prepareSend" class="secondary-action" type="button" aria-haspopup="menu" aria-expanded="false">
+                <i data-lucide="send"></i>
+                <span>Send to terminal</span>
+                <i data-lucide="chevron-down"></i>
+              </button>
+              <div id="prepareTerminalFlyout" class="prepare-terminal-flyout" role="menu" hidden>
+                <p>Insert without pressing Enter</p>
+                <div id="prepareTerminalList"></div>
+              </div>
+            </div>
+            <button id="prepareCopy" class="confirm-proceed" type="button">
+              <i data-lucide="clipboard-copy"></i>
+              <span>Copy</span>
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
 

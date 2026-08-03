@@ -5771,4 +5771,254 @@ test.describe("Renderer coverage completion", () => {
     expect(result.hiddenPluralTitle).toContain("2 hidden menu items");
     expect(result.namedMessageError).toBe("Deliberate message failure");
   });
+
+  test("covers fullscreen lifecycle fallbacks and external transitions @full", async () => {
+    const result = await page.evaluate(async () => {
+      const oldMultiterm = window.multiterm;
+      for (const overlay of [
+        elements.updateConsentOverlay,
+        elements.pageCloseOverlay,
+        elements.statisticsOverlay,
+        elements.terminalArtifactsOverlay,
+        elements.shortcutsOverlay,
+        elements.updateOverlay,
+        elements.aboutOverlay,
+        elements.helpOverlay
+      ]) {
+        if (overlay) overlay.hidden = true;
+      }
+      palette.open = false;
+      quickSwitch.open = false;
+      const savedActiveId = state.activeId;
+      state.activeId = null;
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "w", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      state.activeId = savedActiveId;
+      const savedPages = state.pages;
+      state.pages = [];
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "1", altKey: true, bubbles: true, cancelable: true
+      }));
+      state.pages = savedPages;
+      renderContextMenu([{ input: true, label: "Fullscreen coverage input", run() {} }]);
+      elements.contextMenu.querySelector(".ctx-command-input").dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape", bubbles: true, cancelable: true
+      }));
+
+      const findAllBar = elements.findAllBar;
+      elements.findAllBar = null;
+      openFindAll();
+      elements.findAllBar = findAllBar;
+      const findAllActiveId = state.activeId;
+      state.activeId = null;
+      openFindAll();
+      closeFindAll({ restoreFocus: false });
+      state.activeId = findAllActiveId;
+
+      window.__fullscreenMode = "normal";
+      window.__fullscreenCalls = [];
+      window.multiterm = {
+        onFullscreenChange(handler) {
+          window.__fullscreenChange = handler;
+        },
+        async setFullscreen(enabled) {
+          window.__fullscreenCalls.push(enabled);
+          if (window.__fullscreenMode === "false") return false;
+          if (window.__fullscreenMode === "stuck") return true;
+          if (window.__fullscreenMode === "deferred" && enabled) {
+            return new Promise((resolve, reject) => {
+              window.__fullscreenDeferred = { reject, resolve };
+            });
+          }
+          if (window.__fullscreenMode === "deferred-error" && enabled) {
+            return new Promise((resolve, reject) => {
+              window.__fullscreenDeferred = { reject, resolve };
+            });
+          }
+          if (window.__fullscreenMode === "error") throw new Error("fullscreen denied");
+          if (window.__fullscreenMode === "string-error") throw "fullscreen denied";
+          return enabled;
+        }
+      };
+      bindFullscreenEvents();
+
+      const noFindBar = { id: "fullscreen-no-find-bar", findBar: null };
+      state.terminals.set(noFindBar.id, noFindBar);
+      setFullscreenSurfacesHidden(true);
+      setFullscreenSurfacesHidden(false, {
+        activeElement: document.activeElement,
+        activeId: state.activeId,
+        broadcastOpen: false,
+        findAllOpen: false,
+        logAutoscroll: false,
+        logOpen: false,
+        logScrollTop: 0,
+        modalDialog: null,
+        paneFindIds: []
+      });
+      const logToggleDot = elements.logToggleDot;
+      const logAutoscroll = logStore.autoscroll;
+      const focusInput = document.createElement("input");
+      document.body.append(focusInput);
+      const visibleDialogs = [...document.querySelectorAll('[role="dialog"], [role="alertdialog"]')]
+        .filter((dialog) => !dialog.closest("[hidden]"));
+      visibleDialogs.forEach((dialog) => { dialog.hidden = true; });
+      elements.logToggleDot = null;
+      setFullscreenSurfacesHidden(false, {
+        activeElement: focusInput,
+        activeId: state.activeId,
+        broadcastOpen: false,
+        findAllOpen: false,
+        logAutoscroll: true,
+        logOpen: true,
+        logScrollTop: 0,
+        modalDialog: null,
+        paneFindIds: []
+      });
+      const visibleDialogAfterHide = visibleModalDialog()?.id || null;
+      const sameTerminalFocusRestored = document.activeElement === focusInput;
+      updateLogPanelVisibility(false);
+      elements.logToggleDot = logToggleDot;
+      logStore.autoscroll = logAutoscroll;
+      visibleDialogs.forEach((dialog) => { dialog.hidden = false; });
+      focusInput.remove();
+      state.terminals.delete(noFindBar.id);
+
+      window.__fullscreenChange(true);
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "e", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      window.__fullscreenChange(true);
+      await enterFullscreenFocus();
+      window.__fullscreenChange(false);
+      window.__fullscreenChange(false);
+      await exitFullscreenFocus();
+
+      await toggleFullscreenFocus();
+      await toggleFullscreenFocus();
+
+      window.__fullscreenMode = "false";
+      await enterFullscreenFocus();
+
+      window.__fullscreenMode = "error";
+      await enterFullscreenFocus();
+      syncNativeFullscreen(true);
+      await exitFullscreenFocus();
+      const failedExitStayedActive = fullscreenFocus.active;
+      syncNativeFullscreen(false);
+
+      window.__fullscreenMode = "stuck";
+      syncNativeFullscreen(true);
+      await exitFullscreenFocus();
+      const unresolvedExitStayedActive = fullscreenFocus.active;
+      syncNativeFullscreen(false);
+
+      window.__fullscreenMode = "string-error";
+      await enterFullscreenFocus();
+      syncNativeFullscreen(true);
+      await exitFullscreenFocus();
+      syncNativeFullscreen(false);
+
+      syncNativeFullscreen(true);
+      fullscreenFocus.snapshot.activeElement = document.createElement("input");
+      syncNativeFullscreen(false);
+      fullscreenFocus.active = true;
+      fullscreenFocus.snapshot = null;
+      document.body.classList.add("fullscreen-focus");
+      syncFullscreenFocus(false);
+
+      window.__fullscreenMode = "normal";
+      const skippedEnter = enterFullscreenFocus();
+      const skippedExit = exitFullscreenFocus();
+      await Promise.all([skippedEnter, skippedExit]);
+      const skippedEntryStayedExited = !fullscreenFocus.active && !fullscreenFocus.desired;
+
+      window.__fullscreenMode = "deferred";
+      const deferredEnter = enterFullscreenFocus();
+      await Promise.resolve();
+      window.__fullscreenChange(true);
+      const deferredExit = toggleFullscreenFocus();
+      window.__fullscreenChange(true);
+      window.__fullscreenDeferred.resolve(true);
+      await Promise.all([deferredEnter, deferredExit]);
+      const deferredEntryStayedExited = !fullscreenFocus.active && !fullscreenFocus.desired;
+
+      window.__fullscreenMode = "deferred-error";
+      const rejectedEnter = enterFullscreenFocus();
+      await Promise.resolve();
+      const rejectedExit = toggleFullscreenFocus();
+      window.__fullscreenDeferred.reject(new Error("stale fullscreen failure"));
+      await Promise.all([rejectedEnter, rejectedExit]);
+      const rejectedEntryStayedExited = !fullscreenFocus.active && !fullscreenFocus.desired;
+
+      const multiterm = window.multiterm;
+      const requestFullscreen = document.documentElement.requestFullscreen;
+      const exitFullscreen = document.exitFullscreen;
+      window.multiterm = null;
+      document.documentElement.requestFullscreen = async () => {};
+      const browserEnter = await requestNativeFullscreen(true);
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        value: document.documentElement
+      });
+      document.exitFullscreen = async () => {};
+      const browserExit = await requestNativeFullscreen(false);
+      syncNativeFullscreen(true);
+      Object.defineProperty(document, "fullscreenElement", {
+        configurable: true,
+        value: null
+      });
+      document.dispatchEvent(new Event("fullscreenchange"));
+      const browserChangeRestored = !fullscreenFocus.active;
+      delete document.fullscreenElement;
+      document.documentElement.requestFullscreen = undefined;
+      document.exitFullscreen = undefined;
+      const browserUnavailable = await requestNativeFullscreen(true);
+      document.documentElement.requestFullscreen = requestFullscreen;
+      document.exitFullscreen = exitFullscreen;
+      window.multiterm = multiterm;
+
+      const outcome = {
+        browserEnter,
+        browserExit,
+        browserChangeRestored,
+        browserUnavailable,
+        calls: [...window.__fullscreenCalls],
+        deferredEntryStayedExited,
+        failedExitStayedActive,
+        rejectedEntryStayedExited,
+        sameTerminalFocusRestored,
+        skippedEntryStayedExited,
+        unresolvedExitStayedActive,
+        visibleDialogAfterHide,
+        focusClass: document.body.classList.contains("fullscreen-focus")
+      };
+      window.multiterm = oldMultiterm;
+      delete window.__fullscreenChange;
+      delete window.__fullscreenCalls;
+      delete window.__fullscreenMode;
+      return outcome;
+    });
+
+    expect(result.browserEnter).toBe(true);
+    expect(result.browserExit).toBe(false);
+    expect(result.browserChangeRestored).toBe(true);
+    expect(result.browserUnavailable).toBe(false);
+    expect(result.calls).toEqual([
+      true, false, true, true, false, false, true, false,
+      false, true, false, true, false
+    ]);
+    expect(result.deferredEntryStayedExited).toBe(true);
+    expect(result.failedExitStayedActive).toBe(true);
+    expect(result.rejectedEntryStayedExited).toBe(true);
+    expect(result.sameTerminalFocusRestored).toBe(true);
+    expect(result.skippedEntryStayedExited).toBe(true);
+    expect(result.unresolvedExitStayedActive).toBe(true);
+    expect(result.visibleDialogAfterHide).toBe(null);
+    expect(result.focusClass).toBe(false);
+  });
 });
