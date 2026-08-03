@@ -1601,10 +1601,14 @@ function addTerminal(options = {}) {
     // Merely clicking away from a terminal blocked on a prompt would otherwise
     // clear its awaiting flag, erasing the indicator meant to call you back.
     const isUserInput = !FOCUS_REPORT_SEQUENCE.test(data);
+    const clearsSelection = isUserInput && !MOUSE_REPORT_SEQUENCE.test(data);
     const targets = state.settings.syncInput ? [...state.terminals.keys()] : [id];
     for (const targetId of targets) {
       const target = state.terminals.get(targetId);
-      if (target && isUserInput) setAwaitingInput(target, false);
+      if (target && isUserInput) {
+        if (clearsSelection) forgetTerminalSelection(target);
+        setAwaitingInput(target, false);
+      }
       sendBridge({ type: "input", id: targetId, data });
     }
   });
@@ -1620,6 +1624,11 @@ function addTerminal(options = {}) {
     if (selection) {
       terminal.selectionSnapshot = selection;
       terminal.selectionSnapshotPosition = term.getSelectionPosition() || null;
+    } else if (terminal.selectionSnapshot && terminal.selectionSnapshotPosition) {
+      // Full-screen TUIs redraw frequently and xterm clears its live selection
+      // during some buffer updates. Restore after that update completes so a
+      // mouse selection remains visible until the user clicks or types.
+      window.queueMicrotask(() => restoreTerminalSelection(terminal));
     }
 
     if (selection && state.settings.copyOnSelect) {
@@ -1743,6 +1752,27 @@ function mouseReportingActive(terminal) {
 }
 
 const DRAG_SELECT_THRESHOLD_PX = 3;
+const MOUSE_REPORT_SEQUENCE = /^(?:\x1b\[<\d+;\d+;\d+[mM]|\x1b\[\d+;\d+;\d+M|\x1b\[M[\s\S]{3})+$/;
+
+function forgetTerminalSelection(terminal, clearLive = true) {
+  terminal.contextSelection = "";
+  terminal.selectionSnapshot = "";
+  terminal.selectionSnapshotPosition = null;
+  if (clearLive && terminal.term.getSelection()) terminal.term.clearSelection();
+}
+
+function restoreTerminalSelection(terminal) {
+  if (terminal.term.getSelection()
+      || !terminal.selectionSnapshot
+      || !terminal.selectionSnapshotPosition) {
+    return false;
+  }
+  const { start, end } = terminal.selectionSnapshotPosition;
+  const length = ((end.y - start.y) * terminal.term.cols) + end.x - start.x;
+  if (length <= 0) return false;
+  terminal.term.select(start.x, start.y, length);
+  return true;
+}
 
 function bindTerminalSelectionHandling(terminal) {
   const element = terminal.term.element;
@@ -1755,19 +1785,11 @@ function bindTerminalSelectionHandling(terminal) {
     terminal.contextSelection = liveSelection
       || terminal.contextSelection
       || terminal.selectionSnapshot;
-    if (!liveSelection && terminal.contextSelection && terminal.selectionSnapshotPosition) {
-      const { start, end } = terminal.selectionSnapshotPosition;
-      const length = ((end.y - start.y) * terminal.term.cols) + end.x - start.x;
-      if (length > 0) terminal.term.select(start.x, start.y, length);
-    }
+    if (!liveSelection && terminal.contextSelection) restoreTerminalSelection(terminal);
   };
 
   element.addEventListener("pointerdown", (event) => {
-    if (event.button === 0) {
-      terminal.selectionSnapshot = "";
-      terminal.selectionSnapshotPosition = null;
-      terminal.contextSelection = "";
-    }
+    if (event.button === 0) forgetTerminalSelection(terminal, false);
   }, true);
 
   const isTerminalGesture = (event) => Boolean(event.target.closest(".xterm"));
@@ -1832,7 +1854,7 @@ function bindTuiDragSelection(terminal, element) {
     }
     const length = ((to.row - from.row) * terminal.term.cols) + (to.col - from.col);
     if (length > 0) terminal.term.select(from.col, from.row, length);
-    else terminal.term.clearSelection();
+    else forgetTerminalSelection(terminal);
   };
 
   const endGesture = () => {
@@ -1895,7 +1917,7 @@ function bindTuiDragSelection(terminal, element) {
     if (!mouseReportingActive(terminal)) return;
 
     drag = { startCell: cellAt(event), x: event.clientX, y: event.clientY, moved: false };
-    terminal.term.clearSelection();
+    forgetTerminalSelection(terminal);
     terminal.term.focus();
     window.addEventListener("mousemove", onMove, true);
     window.addEventListener("mouseup", onUp, true);
@@ -5631,7 +5653,7 @@ function findAllNav(direction) {
   terminal.pane.scrollIntoView({ block: "nearest", inline: "nearest" });
   // When entering a pane fresh, reset the selection so findNext/findPrevious
   // land deterministically on that pane's first/last match.
-  if (switched) terminal.term.clearSelection();
+  if (switched) forgetTerminalSelection(terminal);
   if (direction > 0) {
     terminal.searchAddon.findNext(query, findDecorations);
   } else {
@@ -9854,9 +9876,6 @@ function openTerminalContextMenu(event, terminal) {
     || terminal.selectionSnapshot;
   const selectionPosition = terminal.term.getSelectionPosition()
     || terminal.selectionSnapshotPosition;
-  terminal.contextSelection = "";
-  terminal.selectionSnapshot = "";
-  terminal.selectionSnapshotPosition = null;
 
   const action = state.settings.rightClickAction;
   if (action === "paste" || action === "pasteRun") {
@@ -9867,11 +9886,10 @@ function openTerminalContextMenu(event, terminal) {
     // this same event dispatch even though the menu already captured its text.
     // Restore it after propagation completes so the menu and highlight agree.
     if (selection && selectionPosition) {
+      terminal.selectionSnapshot = selection;
+      terminal.selectionSnapshotPosition = selectionPosition;
       window.queueMicrotask(() => {
-        if (terminal.term.getSelection()) return;
-        const { start, end } = selectionPosition;
-        const length = ((end.y - start.y) * terminal.term.cols) + end.x - start.x;
-        if (length > 0) terminal.term.select(start.x, start.y, length);
+        restoreTerminalSelection(terminal);
       });
     }
   }
@@ -9996,7 +10014,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const items = [
     { group: "Clipboard", groupId: "clipboard" },
     { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", shortcutId: "terminal.copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
-    { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { terminal.term.clearSelection(); copyTerminalOutput(terminal.id); } },
+    { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { forgetTerminalSelection(terminal); copyTerminalOutput(terminal.id); } },
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
     { label: "Select all", hint: "Ctrl+A", icon: "text-select", shortcutId: "terminal.select-all", run: () => terminal.term.selectAll() },
     { group: "Find & context", groupId: "find-context" },

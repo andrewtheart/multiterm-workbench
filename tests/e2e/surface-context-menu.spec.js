@@ -1149,7 +1149,7 @@ test.describe("Surface context menu", () => {
     const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
     await expect(copy).toBeVisible();
     await expect(copy).not.toHaveAttribute("aria-disabled", "true");
-    expect(await page.evaluate(() => state.terminals.get(state.activeId).selectionSnapshot)).toBe("");
+    expect(await page.evaluate(() => state.terminals.get(state.activeId).selectionSnapshot)).toBe(selected);
     await copy.click();
     await expect.poll(() => page.evaluate(() => window.__contextCopiedText)).toBe(selected);
 
@@ -1255,6 +1255,28 @@ test.describe("Surface context menu", () => {
       await expect(copy).toBeVisible();
       await expect(copy).not.toHaveAttribute("aria-disabled", "true");
       await page.keyboard.press("Escape");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("keeps a TUI selection visibly highlighted across repaint clears until the user types", async ({ page }) => {
+      const ctx = await setup(page);
+      await drag(page, ctx, 0, 7);
+
+      const restored = await page.evaluate(async (tid) => {
+        const terminal = state.terminals.get(tid);
+        terminal.term.clearSelection();
+        await new Promise((resolve) => window.queueMicrotask(resolve));
+        return terminal.term.getSelection();
+      }, ctx.id);
+      expect(restored).toBe("TUIDRAG");
+
+      await page.evaluate((tid) => state.terminals.get(tid).term.focus(), ctx.id);
+      await page.keyboard.press("a");
+      await expect.poll(ctx.selection).toBe("");
+      expect(await page.evaluate((tid) => ({
+        snapshot: state.terminals.get(tid).selectionSnapshot,
+        position: state.terminals.get(tid).selectionSnapshotPosition
+      }), ctx.id)).toEqual({ snapshot: "", position: null });
       await page.evaluate(() => window.__restoreBridge());
     });
 
