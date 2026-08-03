@@ -82,8 +82,8 @@ layouts from auto-fit grids to a free-form canvas.
       Discover tmux servers across installed WSL distributions and connect an existing session as another live MultiTerm client without restarting its shell or changing its current work.
     </td>
     <td align="center" width="33%">
-      <h3>❓ Built-in generated help</h3>
-      Open the top-right question-mark button for navigable, theme-aware guidance generated from the repository's canonical <code>HELP.md</code>.
+      <h3>🧹 Copy and prepare selected text</h3>
+      Open copied terminal text in a syntax-aware editor, clean Copilot TUI borders, save it as a script or snippet, or insert the prepared text into another live terminal without pressing Enter.
     </td>
   </tr>
   <tr>

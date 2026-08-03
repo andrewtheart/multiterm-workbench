@@ -67,6 +67,27 @@ describe("in-app help", () => {
     }
   });
 
+  it("ships the illustrated Copy and prepare workflow", () => {
+    const helpSource = read("HELP.md");
+    const generatedHelp = read(path.join("public", "help.html"));
+    const readme = read("README.md");
+    const screenshots = [
+      "copy-prepare-cleanup.png",
+      "copy-prepare-save-send.png"
+    ];
+
+    expect(readme).toContain("Copy and prepare selected text");
+    expect(readme).toContain("save it as a script or snippet");
+    expect(helpSource).toContain("### Copy and prepare selected text");
+    expect(helpSource).toContain("**Save file** or <kbd>Ctrl+S</kbd> opens Save As");
+    expect(generatedHelp).not.toContain('src="public/help-images/');
+    for (const screenshot of screenshots) {
+      expect(fs.statSync(path.join(repoRoot, "public", "help-images", screenshot)).size).toBeGreaterThan(0);
+      expect(helpSource).toContain(`public/help-images/${screenshot}`);
+      expect(generatedHelp).toContain(`src="help-images/${screenshot}"`);
+    }
+  });
+
   it("exposes a visible question-mark button and the help modal", () => {
     const index = read(path.join("public", "index.html"));
 

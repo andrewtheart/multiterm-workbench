@@ -232,9 +232,24 @@ Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several termin
 
 MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.
 
-For selected terminal text, right-click and choose **Copy and prepare...** to open the preparation editor. It supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, undo/redo, an eraser action that removes trailing Copilot TUI `|` borders from every affected line, and <kbd>Ctrl+S</kbd> Save As. From the same dialog you can copy the modified text, save a single command as a named snippet, or choose a live terminal from **Send to terminal**. Sending uses terminal paste semantics and does not append Enter.
+### Copy and prepare selected text
+
+Select terminal output, right-click it, and choose **Copy and prepare...** to open the selected text in an editor before it reaches a file, the clipboard, or another terminal.
+
+Use the eraser action to remove trailing Copilot TUI `|` borders from every affected line while preserving pipes inside commands. The editor also supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, and undo/redo.
+
+![Copied PowerShell output in Copy and prepare with trailing Copilot TUI pipe borders ready for cleanup](public/help-images/copy-prepare-cleanup.png)
 
 Choose PowerShell, Batch/cmd, C#, or plain text before selecting **Check syntax**. PowerShell uses the real PowerShell AST parser, C# uses the installed Windows C# compiler, and Batch performs non-executing structural checks for parentheses, quotes, and missing labels because `cmd.exe` has no safe parse-only mode. Select an issue location to move the editor cursor there.
+
+After editing, choose one of these actions:
+
+- **Save file** or <kbd>Ctrl+S</kbd> opens Save As with a suggested script extension for the selected language.
+- **Save snippet** stores a single prepared command under the name you enter.
+- **Send to terminal** inserts the text into a chosen live terminal using terminal paste semantics without appending Enter.
+- **Copy** places the prepared text on the clipboard.
+
+![Cleaned PowerShell text with successful syntax validation, a script file name, and live terminal destinations](public/help-images/copy-prepare-save-send.png)
 
 ## Statistics and logging
 
