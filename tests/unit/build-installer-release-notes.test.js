@@ -149,7 +149,8 @@ describe("installer release notes", () => {
     expect(script).toContain("$env:GIT_INDEX_FILE = $tempIndex");
     expect(script).not.toContain("git -C $RepositoryRoot reset --mixed HEAD");
     expect(script).toContain("Invoke-InteractiveDirtyPublishCommitFlow -RepositoryRoot $RepoRoot -ReleaseTag $Tag -CopilotExecutable $plannerPath");
-    expect(script).toContain("Apply this whole-file commit plan? (yes/abort)");
+    expect(script).toContain('$choice = (Read-Host "Apply this whole-file commit plan? (yes/abort)").Trim()');
+    expect(script).toContain("if ($choice -ine 'yes')");
     expect(script).toContain("Copilot whole-file commit plan is unavailable, invalid, or unsafe.");
     expect(script).not.toContain("Choose commit mode: (1) apply whole-file plan, (2) interactive hunk review, (3) abort");
     expect(script).not.toContain("Proceed with interactive hunk review now, or abort? (review/abort)");

@@ -543,8 +543,8 @@ function Invoke-InteractiveDirtyPublishCommitFlow {
         $groupIndex++
     }
 
-    $choice = Read-Host "Apply this whole-file commit plan? (yes/abort)"
-    if ($choice -notin @('yes', 'YES')) {
+    $choice = (Read-Host "Apply this whole-file commit plan? (yes/abort)").Trim()
+    if ($choice -ine 'yes') {
         throw "Release cancelled before applying the reviewed whole-file atomic commit plan."
     }
 
