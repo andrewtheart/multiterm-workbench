@@ -599,128 +599,6 @@ function __setMemStatsEnabled(value) {
   memStatsEnabled = Boolean(value);
 }
 
-module.exports = {
-  server,
-  start,
-  host,
-  port,
-  sessions,
-  clients,
-  mimeTypes,
-  securityHeaders,
-  maxMessageSize,
-  maxClients,
-  maxSessions,
-  maxTerminalMessages,
-  maxTerminalMessageStoreBytes,
-  updatePreferencesMaxSize,
-  __setMemStatsEnabled,
-  getPathname,
-  setSecurityHeaders,
-  serveStaticFile,
-  sendJsonResponse,
-  getInstanceDirectory,
-  registerInstance,
-  unregisterInstance,
-  handleShutdownRequest,
-  handleWatchdogKeepRequest,
-  getUpdatePreferencesPath,
-  normalizeUpdatePreferences,
-  readUpdatePreferences,
-  writeUpdatePreferences,
-  handleUpdatePreferencesRequest,
-  readFrames,
-  encodeFrame,
-  handleClientMessage,
-  countRendererClients,
-  createSession,
-  writeSession,
-  renameSession,
-  rememberSize,
-  killSession,
-  killSessionPty,
-  interruptAndExit,
-  scheduleSessionTeardown,
-  __resetTeardownSchedule,
-  isOutputCoalesced,
-  setOutputCoalesceMs,
-  getOutputCoalesceMs,
-  applyClientConfig,
-  applyCommunicationConfig,
-  queueSessionOutput,
-  scheduleOutputFlush,
-  flushSessionOutput,
-  OUTPUT_COALESCE_DEFAULT_MS,
-  OUTPUT_COALESCE_MAX_MS,
-  killAllSessions,
-  closeSessions,
-  endSessionInput,
-  terminalMessages,
-  isSessionRunning,
-  shutdown,
-  handleProcessExit,
-  broadcast,
-  toSessionSummary,
-  sanitizeId,
-  getShell,
-  normalizeTmuxTarget,
-  getTmuxShell,
-  normalizeWslOutput,
-  parseTmuxSessions,
-  listWslTmuxSessions,
-  getWorkingDirectory,
-  isLocalAddress,
-  isAllowedHttpHost,
-  isAllowedWebSocketOrigin,
-  startLog,
-  stopLog,
-  closeLog,
-  sanitizeLogName,
-  stripAnsiForLog,
-  revealPath,
-  openPath,
-  pickScript,
-  launchElevatedTerminal,
-  launchElevatedHost,
-  handleElevatedConnection,
-  registerElevatedSession,
-  finishElevatedSession,
-  finishElevationAttempt,
-  describeElevationError,
-  elevationErrorMessage,
-  timingSafeStringEqual,
-  encodeElevationData,
-  decodeElevationData,
-  defaultElevationServerFactory,
-  __setElevationServerFactory,
-  computeMemStats,
-  computeMemStatsDefault,
-  memStatsSupported,
-  memStatsFrame,
-  runMemStats,
-  broadcastMemStats,
-  requestMemStats,
-  collectProcessStatistics,
-  collectProcessTreeMetrics,
-  buildStatisticsFrame,
-  requestStatistics,
-  pushMemStats,
-  pushMemStatsIfWatched,
-  scheduleMemStats,
-  noteMemStatsInterest,
-  hasRecentMemStatsInterest,
-  startMemStats,
-  stopMemStats,
-  handleUncaughtException,
-  handleUnhandledRejection,
-  sendTerminalMessage,
-  listTerminalMessages,
-  actOnTerminalMessage,
-  terminalMessageInsertText,
-  terminalMessageStoreBytes,
-  expireTerminalMessagesForSession
-};
-
 function getPathname(rawUrl) {
   const pathPart = String(rawUrl || "/").split("?", 1)[0];
   return pathPart || "/";
@@ -809,8 +687,11 @@ async function readUpdatePreferences(filePath = getUpdatePreferencesPath()) {
   try {
     content = await fs.promises.readFile(filePath, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
+    if (error?.code === "ENOENT") {
+      return null;
+    } else {
+      throw error;
+    }
   }
   return normalizeUpdatePreferences(JSON.parse(content));
 }
@@ -947,7 +828,11 @@ function readFrames(client, chunk, dependencies = defaultSessionDependencies) {
     }
 
     const frameLength = offset + 4 + length;
-    if (client.buffer.length < frameLength) return;
+    if (client.buffer.length < frameLength) {
+      return;
+    } else {
+      // A complete frame is available for decoding.
+    }
 
     const mask = client.buffer.subarray(offset, offset + 4);
     offset += 4;
@@ -1091,7 +976,11 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
 function countRendererClients() {
   let count = 0;
   for (const client of clients) {
-    if (client.renderer) count += 1;
+    if (client.renderer) {
+      count += 1;
+    } else {
+      // Only renderer clients count toward the connection ceiling.
+    }
   }
   return count;
 }
@@ -1099,7 +988,7 @@ function countRendererClients() {
 function terminalInboxCount(targetId) {
   let count = 0;
   for (const message of terminalMessages.values()) {
-    if (message.targetId === targetId && message.state === "pending") count += 1;
+    count += Number(message.targetId === targetId && message.state === "pending");
   }
   return count;
 }
@@ -1198,9 +1087,13 @@ function listTerminalMessages(client, request) {
 }
 
 function terminalMessageInsertText(message) {
-  if (message.kind === "path") return message.path;
-  if (message.kind === "status") return message.text || message.status;
-  return message.text;
+  if (message.kind === "path") {
+    return message.path;
+  } else if (message.kind === "status") {
+    return message.text || message.status;
+  } else {
+    return message.text;
+  }
 }
 
 function actOnTerminalMessage(client, request) {
@@ -1208,14 +1101,17 @@ function actOnTerminalMessage(client, request) {
   const id = typeof request.id === "string" ? request.id : "";
   const action = typeof request.action === "string" ? request.action : "";
   const terminalMessage = terminalMessages.get(id);
+  let pendingMessage;
   if (!terminalMessage || terminalMessage.state !== "pending") {
     client.send({ type: "messageError", requestId, message: "That terminal message is no longer pending." });
     return;
+  } else {
+    pendingMessage = terminalMessage;
   }
 
   if (action === "insert") {
-    const target = sessions.get(terminalMessage.targetId);
-    const data = terminalMessageInsertText(terminalMessage);
+    const target = sessions.get(pendingMessage.targetId);
+    const data = terminalMessageInsertText(pendingMessage);
     if (!isSessionRunning(target) || target.closing || !data) {
       client.send({ type: "messageError", requestId, message: "The target terminal is unavailable." });
       return;
@@ -1233,18 +1129,18 @@ function actOnTerminalMessage(client, request) {
       client.send({ type: "messageError", requestId, message: "The target terminal is unavailable." });
       return;
     } else {
-      terminalMessage.state = "inserted";
+      pendingMessage.state = "inserted";
     }
   } else if (action === "dismiss") {
-    terminalMessage.state = "dismissed";
+    pendingMessage.state = "dismissed";
   } else {
     client.send({ type: "messageError", requestId, message: "Unsupported terminal message action." });
     return;
   }
 
   terminalMessages.delete(id);
-  broadcast({ type: "terminalMessageChanged", id, state: terminalMessage.state });
-  client.send({ type: "messageActionResult", requestId, id, state: terminalMessage.state });
+  broadcast({ type: "terminalMessageChanged", id, state: pendingMessage.state });
+  client.send({ type: "messageActionResult", requestId, id, state: pendingMessage.state });
 }
 
 function createSession(client, options, dependencies = defaultSessionDependencies) {
@@ -1598,12 +1494,7 @@ function revealPath(client, message) {
 // a Win32 common dialog, driven from a short-lived STA PowerShell process
 // because Node has no way to show one.
 function pickScript(client, message) {
-  let requestId = "";
-  if (typeof message.requestId === "string") {
-    requestId = message.requestId;
-  } else {
-    // Non-string correlation values are ignored.
-  }
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
   const answer = (chosen) => client.send({ type: "scriptPicked", requestId, path: chosen || null });
 
   if (process.platform !== "win32") {
@@ -2537,10 +2428,18 @@ function getShell(value) {
 }
 
 function normalizeTmuxTarget(value) {
-  if (!value || typeof value !== "object") return null;
+  if (!value || typeof value !== "object") {
+    return null;
+  } else {
+    // The target shape is valid for field normalization.
+  }
   const rawDistro = typeof value.distro === "string" ? value.distro : "";
   const rawSession = typeof value.session === "string" ? value.session : "";
-  if (/[\u0000-\u001f\u007f]/.test(rawDistro) || /[\u0000-\u001f\u007f]/.test(rawSession)) return null;
+  if (/[\u0000-\u001f\u007f]/.test(rawDistro) || /[\u0000-\u001f\u007f]/.test(rawSession)) {
+    return null;
+  } else {
+    // Control-character-free targets can be trimmed and length-checked.
+  }
   const distro = rawDistro.trim();
   const session = rawSession.trim();
   if (!distro || !session || distro.length > 128 || session.length > 128) {
@@ -2569,22 +2468,18 @@ function parseTmuxSessions(distro, output) {
     .filter(Boolean)
     .map((line) => {
       const [session, windows, attached, created, panePid, command, ...titleParts] = line.split("\t");
-      if (!session) {
-        return null;
-      } else {
-        return {
-          attached: Number(attached) > 0,
-          command: command || "",
-          created: Number(created) || 0,
-          distro,
-          panePid: Number(panePid) || null,
-          session,
-          title: titleParts.join("\t"),
-          windows: Number(windows) || 0
-        };
-      }
+      return {
+        attached: Number(attached) > 0,
+        command: command || "",
+        created: Number(created) || 0,
+        distro,
+        panePid: Number(panePid) || null,
+        session,
+        title: titleParts.join("\t"),
+        windows: Number(windows) || 0
+      };
     })
-    .filter(Boolean);
+    .filter((entry) => Boolean(entry.session));
 }
 
 function listWslTmuxSessions(client, requestId) {
@@ -2657,6 +2552,128 @@ function isLocalAddress(address) {
 
 function isLoopbackBindHost(value) {
   const normalized = String(value || "").replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
-  const allowed = ["localhost", "127.0.0.1", "::1"].includes(normalized);
-  return allowed;
+  return ["localhost", "127.0.0.1", "::1"].includes(normalized);
 }
+
+module.exports = {
+    server,
+    start,
+    host,
+    port,
+    sessions,
+    clients,
+    mimeTypes,
+    securityHeaders,
+    maxMessageSize,
+    maxClients,
+    maxSessions,
+    maxTerminalMessages,
+    maxTerminalMessageStoreBytes,
+    updatePreferencesMaxSize,
+    __setMemStatsEnabled,
+    getPathname,
+    setSecurityHeaders,
+    serveStaticFile,
+    sendJsonResponse,
+    getInstanceDirectory,
+    registerInstance,
+    unregisterInstance,
+    handleShutdownRequest,
+    handleWatchdogKeepRequest,
+    getUpdatePreferencesPath,
+    normalizeUpdatePreferences,
+    readUpdatePreferences,
+    writeUpdatePreferences,
+    handleUpdatePreferencesRequest,
+    readFrames,
+    encodeFrame,
+    handleClientMessage,
+    countRendererClients,
+    createSession,
+    writeSession,
+    renameSession,
+    rememberSize,
+    killSession,
+    killSessionPty,
+    interruptAndExit,
+    scheduleSessionTeardown,
+    __resetTeardownSchedule,
+    isOutputCoalesced,
+    setOutputCoalesceMs,
+    getOutputCoalesceMs,
+    applyClientConfig,
+    applyCommunicationConfig,
+    queueSessionOutput,
+    scheduleOutputFlush,
+    flushSessionOutput,
+    OUTPUT_COALESCE_DEFAULT_MS,
+    OUTPUT_COALESCE_MAX_MS,
+    killAllSessions,
+    closeSessions,
+    endSessionInput,
+    terminalMessages,
+    isSessionRunning,
+    shutdown,
+    handleProcessExit,
+    broadcast,
+    toSessionSummary,
+    sanitizeId,
+    getShell,
+    normalizeTmuxTarget,
+    getTmuxShell,
+    normalizeWslOutput,
+    parseTmuxSessions,
+    listWslTmuxSessions,
+    getWorkingDirectory,
+    isLocalAddress,
+    isLoopbackBindHost,
+    isAllowedHttpHost,
+    isAllowedWebSocketOrigin,
+    startLog,
+    stopLog,
+    closeLog,
+    sanitizeLogName,
+    stripAnsiForLog,
+    revealPath,
+    openPath,
+    pickScript,
+    launchElevatedTerminal,
+    launchElevatedHost,
+    handleElevatedConnection,
+    registerElevatedSession,
+    finishElevatedSession,
+    finishElevationAttempt,
+    describeElevationError,
+    elevationErrorMessage,
+    timingSafeStringEqual,
+    encodeElevationData,
+    decodeElevationData,
+    defaultElevationServerFactory,
+    __setElevationServerFactory,
+    computeMemStats,
+    computeMemStatsDefault,
+    memStatsSupported,
+    memStatsFrame,
+    runMemStats,
+    broadcastMemStats,
+    requestMemStats,
+    collectProcessStatistics,
+    collectProcessTreeMetrics,
+    buildStatisticsFrame,
+    requestStatistics,
+    pushMemStats,
+    pushMemStatsIfWatched,
+    scheduleMemStats,
+    noteMemStatsInterest,
+    hasRecentMemStatsInterest,
+    startMemStats,
+    stopMemStats,
+    handleUncaughtException,
+    handleUnhandledRejection,
+    sendTerminalMessage,
+    listTerminalMessages,
+    actOnTerminalMessage,
+    terminalMessageInsertText,
+    terminalMessageStoreBytes,
+  expireTerminalMessagesForSession
+};

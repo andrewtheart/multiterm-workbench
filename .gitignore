@@ -12,6 +12,7 @@ Thumbs.db
 # Installer build output
 installer/Output/
 installer/explorer-integration/generated/
+installer/vscode-integration/generated/
 *.exp
 *.lib
 *.obj

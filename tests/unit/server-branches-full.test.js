@@ -73,6 +73,16 @@ describe("isLocalAddress — each allowed form and a remote address", () => {
   });
 });
 
+describe("isLoopbackBindHost — normalized startup host validation", () => {
+  it("accepts supported names and literals and rejects absent or remote hosts", () => {
+    expect(server.isLoopbackBindHost("LOCALHOST")).toBe(true);
+    expect(server.isLoopbackBindHost("[::1]")).toBe(true);
+    expect(server.isLoopbackBindHost("127.0.0.1")).toBe(true);
+    expect(server.isLoopbackBindHost(undefined)).toBe(false);
+    expect(server.isLoopbackBindHost("0.0.0.0")).toBe(false);
+  });
+});
+
 describe("revealPath — empty/non-string target guard", () => {
   it("returns early for a whitespace-only path", () => {
     const client = fakeClient();
@@ -159,4 +169,3 @@ describe("module load — MEMSTATS platform gate", () => {
     else process.env.MEMSTATS = prev;
   });
 });
-

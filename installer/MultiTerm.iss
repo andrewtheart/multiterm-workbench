@@ -73,6 +73,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "watchdog"; Description: "Install the MultiTerm watchdog (recommended; monitors bridges and asks before closing orphaned terminal sessions)"; GroupDescription: "Background monitoring:"
 Name: "explorercontext"; Description: "Add 'Open in MultiTerm' to File Explorer folder context menus (optional; Windows 11 requires administrator approval)"; GroupDescription: "File Explorer integration (select to enable):"; Flags: unchecked
+Name: "vscodeextension"; Description: "Add 'Open in MultiTerm' to Visual Studio Code Explorer menus"; GroupDescription: "Editor integration (select to enable):"; Flags: unchecked
 Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 'multiterm' command)"; GroupDescription: "Command-line integration (machine-wide Program Files installs only):"; Flags: unchecked; Check: IsProtectedSystemPathInstall
 
 [Files]
@@ -99,6 +100,8 @@ Source: "explorer-integration\generated\bin\x64\*.dll"; DestDir: "{app}\Explorer
 Source: "explorer-integration\generated\bin\x64\*.exe"; DestDir: "{app}\Explorer\x64"; Flags: ignoreversion
 Source: "explorer-integration\generated\bin\arm64\*.dll"; DestDir: "{app}\Explorer\arm64"; Flags: ignoreversion
 Source: "explorer-integration\generated\bin\arm64\*.exe"; DestDir: "{app}\Explorer\arm64"; Flags: ignoreversion
+Source: "vscode-integration\Install-VSCodeIntegration.ps1"; DestDir: "{app}\VSCode"; Flags: ignoreversion
+Source: "vscode-integration\generated\*.vsix"; DestDir: "{app}\VSCode"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Comment: "Start a new MultiTerm instance with its compact bridge control console"
@@ -119,6 +122,8 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext'); StatusMsg: "Removing MultiTerm from File Explorer..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; StatusMsg: "Removing the MultiTerm Explorer package certificate..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext')
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"""; Flags: waituntilterminated runasoriginaluser; Tasks: vscodeextension; StatusMsg: "Adding MultiTerm to Visual Studio Code..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated runasoriginaluser; Check: ShouldRemoveVSCodeIntegration; StatusMsg: "Removing MultiTerm from Visual Studio Code..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -127,6 +132,7 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveMultiTermExplorerIntegration"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; RunOnceId: "RemoveMultiTermExplorerCertificate"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated; RunOnceId: "FinalizeMultiTermExplorerIntegration"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated; RunOnceId: "RemoveMultiTermVSCodeIntegration"
 
 [Code]
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -205,6 +211,18 @@ begin
     HKCU,
     'Software\MultiTerm Workbench\ExplorerIntegration',
     'CertificateThumbprint');
+end;
+
+function VSCodeIntegrationStateExists: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\VSCode\VSCodeIntegrationInstalled.json'));
+end;
+
+function ShouldRemoveVSCodeIntegration: Boolean;
+begin
+  Result :=
+    VSCodeIntegrationStateExists and
+    (not WizardIsTaskSelected('vscodeextension'));
 end;
 
 function ShouldRollbackExplorerCertificate: Boolean;

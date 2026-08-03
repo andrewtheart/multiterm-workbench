@@ -47,6 +47,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
   ipcRenderer.invoke.mockResolvedValue("result");
 
   await expect(api.writeClipboardText(42)).resolves.toBe("result");
+  await expect(api.readClipboardText()).resolves.toBe("result");
   await expect(api.pickScript()).resolves.toBe("result");
   await expect(api.isElevated()).resolves.toBe("result");
   await expect(api.restartAsAdmin()).resolves.toBe("result");
@@ -56,6 +57,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
 
   expect(ipcRenderer.invoke.mock.calls).toEqual([
     ["multiterm:write-clipboard", "42"],
+    ["multiterm:read-clipboard"],
     ["multiterm:pick-script"],
     ["multiterm:is-elevated"],
     ["multiterm:relaunch-as-admin"],

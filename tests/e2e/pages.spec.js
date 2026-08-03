@@ -80,6 +80,7 @@ test.describe("Pages and the quick switcher", () => {
       state.pages = [{ id: "page-1", name: "Page 1" }];
       state.activePageId = "page-1";
       state.terminalPages = {};
+      state.settings.pageCloseAction = "ask";
       state.settings.pagerCollapsed = false;
       state.settings.pagerPlacement = "bottom";
       savePages();
@@ -147,6 +148,7 @@ test.describe("Pages and the quick switcher", () => {
         const style = getComputedStyle(element);
         return { closeLeft: closeBox.left, nameRight: name.right, radius: style.borderRadius };
       });
+
       expect(positions.closeLeft).toBeGreaterThanOrEqual(positions.nameRight);
       expect(positions.radius).not.toContain("999px");
     }
@@ -166,6 +168,70 @@ test.describe("Pages and the quick switcher", () => {
     await expect(menuRows.first()).toHaveAttribute("data-accel-num", "1");
     await expect(tabs.first().locator(".pager-close")).toBeVisible();
     await page.keyboard.press("Escape");
+  });
+
+  test("offers Close page and Close all and remembers how populated pages close", async () => {
+    await reset(2);
+    const doomed = await page.evaluate(() => {
+      const id = addPage({ name: "Doomed", activate: false });
+      moveTerminalToPage([...state.terminals.keys()][0], id);
+      return id;
+    });
+    const doomedTab = page.locator(`.pager-chip[data-page-id="${doomed}"]`);
+    await doomedTab.click({ button: "right" });
+
+    const items = page.locator("#contextMenu .ctx-item");
+    await expect(items).toContainText(["Rename…", "New page", "Close page", "Close all"]);
+    await expect(items.filter({ hasText: "Close Doomed" })).toHaveCount(0);
+    await items.filter({ hasText: "Close page" }).click();
+    await expect(page.locator("#pageCloseOverlay")).toBeVisible();
+    await expect(page.locator("#pageCloseText")).toContainText("Doomed");
+    await page.locator("#pageCloseRemember").check();
+    await page.locator("#pageCloseMove").click();
+
+    await expect(doomedTab).toHaveCount(0);
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await expect(page.locator("#pageCloseAction")).toHaveValue("move");
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).pageCloseAction)).toBe("move");
+
+    const closeTarget = await page.evaluate(() => {
+      const id = addPage({ name: "Close terminals", activate: false });
+      moveTerminalToPage([...state.terminals.keys()][0], id);
+      state.settings.pageCloseAction = "close";
+      elements.pageCloseAction.value = "close";
+      saveSettings();
+      renderPager();
+      return id;
+    });
+    await page.locator(`.pager-chip[data-page-id="${closeTarget}"]`).click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Close page" }).click();
+    await expect(page.locator("#pageCloseOverlay")).toBeHidden();
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+  });
+
+  test("Close all is always available and resets to one empty Page 1", async () => {
+    await reset(2);
+    await page.evaluate(() => addPage({ name: "Second", activate: false }));
+    await page.locator(".pager-chip").first().click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Close all" }).click();
+    await expect(page.locator("#pageCloseOverlay")).toBeVisible();
+    await page.locator("#pageCloseTerminals").click();
+
+    await expect(page.locator(".terminal-pane")).toHaveCount(0);
+    await expect(page.locator(".pager-chip")).toHaveCount(1);
+    await expect(page.locator(".pager-name")).toHaveText("Page 1");
+
+    await page.locator(".pager-chip").click({ button: "right" });
+    await expect(page.locator("#contextMenu .ctx-item", { hasText: "Close all" })).toBeVisible();
+    await expect(page.locator("#contextMenu .ctx-item", { hasText: "Close page" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  });
+
+  test("Ctrl+P creates a page without opening the browser print command", async () => {
+    await reset(0);
+    await page.keyboard.press("Control+P");
+    await expect(page.locator(".pager-chip")).toHaveCount(2);
+    await expect(page.locator(".pager-chip").last().locator(".pager-name")).toHaveText("Page 2");
   });
 
   test("moves the pager around the workbench and collapses vertical panels", async () => {
@@ -367,6 +433,31 @@ test.describe("Pages and the quick switcher", () => {
     await expect(page.locator("#pagerPlacement")).toHaveValue("top");
     await expect(page.locator("#pagerPlacement").locator("xpath=..").locator(".combobox-input")).toHaveValue("Top");
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").pagerPlacement)).toBe("top");
+  });
+
+  test("melds a top page tab and page bar into the workbench", async () => {
+    await reset(0);
+    await page.evaluate(() => setPagerPlacement("top"));
+    const seam = await page.evaluate(() => {
+      const pager = elements.pager.getBoundingClientRect();
+      const workbench = elements.workbench.getBoundingClientRect();
+      const active = elements.pagerList.querySelector(".pager-chip.is-active");
+      const pagerStyle = getComputedStyle(elements.pager);
+      const activeStyle = getComputedStyle(active);
+      return {
+        gap: workbench.top - pager.bottom,
+        pagerBorder: pagerStyle.borderBottomWidth,
+        pagerPadding: pagerStyle.paddingBottom,
+        tabBorder: activeStyle.borderBottomColor,
+        tabMargin: activeStyle.marginBottom,
+        tabRadius: activeStyle.borderRadius
+      };
+    });
+    expect(Math.abs(seam.gap)).toBeLessThanOrEqual(1);
+    expect(seam.pagerBorder).toBe("0px");
+    expect(seam.pagerPadding).toBe("0px");
+    expect(seam.tabMargin).toBe("-1px");
+    expect(seam.tabRadius).toContain("0px");
   });
 
   test("docks the top-bar restore chevron after New page when pages are at the top", async () => {

@@ -24,6 +24,7 @@ const http = require("node:http");
 const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
+const { fileURLToPath } = require("node:url");
 
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
 // `require("electron")` resolves to a path string, so these are set by tests.
@@ -37,6 +38,7 @@ function formatError(err) {
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
+let clipboardImageDirectory = null;
 
 // Whether a URL points back at the app's own local origin. Used to allow internal
 // navigations/window-opens while routing everything else to the default browser.
@@ -464,24 +466,203 @@ function registerCloseHandler() {
 }
 
 function registerClipboardIpc() {
-  if (!ipcMain || typeof ipcMain.handle !== "function" || !clipboard?.writeText) return;
-  try { ipcMain.removeHandler("multiterm:write-clipboard"); } catch { /* no existing handler */ }
-  ipcMain.handle("multiterm:write-clipboard", (event, text) => {
-    if (!isTrustedIpcSender(event)) {
-      throw new Error("Clipboard writes are restricted to the MultiTerm application window.");
+  if (!ipcMain || typeof ipcMain.handle !== "function" || !clipboard) return;
+  if (typeof clipboard.writeText === "function") {
+    try { ipcMain.removeHandler("multiterm:write-clipboard"); } catch { /* no existing handler */ }
+    ipcMain.handle("multiterm:write-clipboard", (event, text) => {
+      if (!isTrustedIpcSender(event)) {
+        throw new Error("Clipboard writes are restricted to the MultiTerm application window.");
+      }
+      if (typeof text !== "string") {
+        throw new TypeError("Clipboard text must be a string.");
+      }
+      clipboard.writeText(text);
+      return true;
+    });
+  }
+  if (typeof clipboard.readText === "function" || typeof clipboard.readImage === "function") {
+    try { ipcMain.removeHandler("multiterm:read-clipboard"); } catch { /* no existing handler */ }
+    ipcMain.handle("multiterm:read-clipboard", (event) => {
+      if (!isTrustedIpcSender(event)) {
+        throw new Error("Clipboard reads are restricted to the MultiTerm application window.");
+      }
+      return readTerminalClipboardText(clipboard);
+    });
+  }
+}
+
+function decodeNullSeparatedClipboardPaths(buffer, encoding, offset = 0) {
+  if (!Buffer.isBuffer(buffer) || offset < 0 || offset >= buffer.length) return [];
+  return buffer.subarray(offset).toString(encoding).split("\0").filter(Boolean);
+}
+
+function decodeWindowsFileDrop(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 20) return [];
+  const offset = buffer.readUInt32LE(0);
+  if (offset < 20 || offset >= buffer.length) return [];
+  return decodeNullSeparatedClipboardPaths(buffer, buffer.readUInt32LE(16) ? "utf16le" : "latin1", offset);
+}
+
+function decodeClipboardUriList(buffer) {
+  if (!Buffer.isBuffer(buffer)) return [];
+  const paths = [];
+  for (const entry of buffer.toString("utf8").split(/\r?\n/)) {
+    if (!entry || entry.startsWith("#")) continue;
+    try {
+      const url = new URL(entry);
+      if (url.protocol === "file:") paths.push(fileURLToPath(url));
+    } catch {
+      // Malformed and non-file clipboard entries are not terminal file paths.
     }
-    if (typeof text !== "string") {
-      throw new TypeError("Clipboard text must be a string.");
-    }
-    clipboard.writeText(text);
-    return true;
+  }
+  return paths;
+}
+
+function readWindowsClipboardFileDrop(execute = childProcess.execFileSync) {
+  const script = [
+    "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)",
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "$files = @([Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { [string]$_ })",
+    "ConvertTo-Json -Compress -InputObject $files"
+  ].join("; ");
+  const output = execute("powershell.exe", [
+    "-NoLogo",
+    "-NoProfile",
+    "-STA",
+    "-NonInteractive",
+    "-Command",
+    script
+  ], {
+    encoding: "utf8",
+    timeout: 5000,
+    windowsHide: true
   });
+  return JSON.parse(String(output).replace(/^\uFEFF/, "").trim());
+}
+
+function readClipboardFilePaths(
+  nativeClipboard,
+  fileSystem = fs,
+  readNativeFileDrop = readWindowsClipboardFileDrop
+) {
+  if (typeof nativeClipboard?.availableFormats !== "function"
+      || typeof nativeClipboard?.readBuffer !== "function") {
+    return [];
+  }
+  const formats = nativeClipboard.availableFormats();
+  const dropFormat = ["CF_HDROP", "FileDrop"].find((format) => formats.includes(format));
+  let candidates = dropFormat
+    ? decodeWindowsFileDrop(nativeClipboard.readBuffer(dropFormat))
+    : [];
+  if (candidates.length === 0 && formats.includes("FileNameW")) {
+    candidates = decodeNullSeparatedClipboardPaths(nativeClipboard.readBuffer("FileNameW"), "utf16le");
+  }
+  if (candidates.length === 0 && formats.includes("text/uri-list")) {
+    const uriList = typeof nativeClipboard.read === "function"
+      ? nativeClipboard.read("text/uri-list")
+      : "";
+    candidates = decodeClipboardUriList(
+      uriList ? Buffer.from(uriList, "utf8") : nativeClipboard.readBuffer("text/uri-list")
+    );
+    if (candidates.length === 0) {
+      candidates = readNativeFileDrop();
+    }
+  }
+
+  const paths = [];
+  const seen = new Set();
+  for (const candidate of candidates.slice(0, 256)) {
+    if (candidate.length > 32767) continue;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    } else {
+      // The first valid occurrence preserves the clipboard's ordering.
+    }
+    try {
+      const stat = fileSystem.statSync(candidate);
+      if (!stat.isFile() && !stat.isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    seen.add(key);
+    paths.push(candidate);
+  }
+  return paths;
+}
+
+function formatClipboardFilePaths(paths) {
+  return paths.map((filePath) => (
+    /[\s"]/.test(filePath)
+      ? `"${filePath.replace(/"/g, '\\"')}"`
+      : filePath
+  )).join(" ");
+}
+
+function getClipboardImageDirectory(fileSystem = fs, targetApp = app) {
+  if (clipboardImageDirectory) return clipboardImageDirectory;
+  const tempRoot = typeof targetApp?.getPath === "function" ? targetApp.getPath("temp") : os.tmpdir();
+  clipboardImageDirectory = fileSystem.mkdtempSync(path.join(tempRoot, "multiterm-clipboard-images-"));
+  return clipboardImageDirectory;
+}
+
+function persistClipboardImage(image, fileSystem = fs, imageDirectory = null) {
+  if (!image || typeof image.isEmpty !== "function" || image.isEmpty() || typeof image.toPNG !== "function") {
+    return "";
+  }
+  const png = image.toPNG();
+  if (!Buffer.isBuffer(png) || png.length === 0) return "";
+  const directory = imageDirectory || getClipboardImageDirectory(fileSystem);
+  fileSystem.mkdirSync(directory, { recursive: true });
+  const digest = crypto.createHash("sha256").update(png).digest("hex");
+  const imagePath = path.join(directory, `clipboard-${digest}.png`);
+  fileSystem.writeFileSync(imagePath, png, { flag: "w", mode: 0o600 });
+  return imagePath;
+}
+
+function readClipboardImagePath(
+  nativeClipboard,
+  fileSystem = fs,
+  imageDirectory = null
+) {
+  if (typeof nativeClipboard?.readImage !== "function") return "";
+  return persistClipboardImage(nativeClipboard.readImage(), fileSystem, imageDirectory);
+}
+
+function cleanupClipboardImages(fileSystem = fs) {
+  if (!clipboardImageDirectory) return;
+  const directory = clipboardImageDirectory;
+  clipboardImageDirectory = null;
+  try {
+    fileSystem.rmSync(directory, { force: true, recursive: true });
+  } catch (error) {
+    console.warn(`Could not remove temporary clipboard images from ${directory}: ${formatError(error)}`);
+  }
+}
+
+function readTerminalClipboardText(
+  nativeClipboard = clipboard,
+  fileSystem = fs,
+  imageDirectory = null
+) {
+  const paths = readClipboardFilePaths(nativeClipboard, fileSystem);
+  const imagePaths = paths.length === 0
+    ? [readClipboardImagePath(nativeClipboard, fileSystem, imageDirectory)].filter(Boolean)
+    : [];
+  const terminalPaths = paths.concat(imagePaths);
+  return terminalPaths.length > 0
+    ? formatClipboardFilePaths(terminalPaths)
+    : (typeof nativeClipboard?.readText === "function" ? nativeClipboard.readText() : "");
 }
 
 // Single-instance: focus the existing window instead of launching a second app.
 async function onReady() {
   const reusedBridge = await probeServer();
-  if (!reusedBridge) startServer();
+  if (!reusedBridge) {
+    startServer();
+  } else {
+    // A healthy detached bridge can be reused by this Electron window.
+  }
   try {
     await waitForServer();
   } catch (err) {
@@ -639,7 +820,11 @@ function compareVersions(a, b) {
   for (let i = 0; i < length; i += 1) {
     const l = left[i] ?? 0;
     const r = right[i] ?? 0;
-    if (l !== r) return l > r ? 1 : -1;
+    if (l !== r) {
+      return l > r ? 1 : -1;
+    } else {
+      // Equal segments defer the decision to the next version segment.
+    }
   }
   return 0;
 }
@@ -687,6 +872,8 @@ function openHttpsStream(url, { accept } = {}, redirects = 0) {
           if (next.protocol !== "https:") {
             reject(new Error("Refusing to follow a redirect away from HTTPS."));
             return;
+          } else {
+            // HTTPS redirects may proceed to the trusted transport checks.
           }
           resolve(openHttpsStream(next.toString(), { accept }, redirects + 1));
           return;
@@ -770,7 +957,9 @@ async function checkForUpdate() {
 }
 
 function isAllowedInstallerAsset(asset, maxInstallerSizeMb = DEFAULT_MAX_INSTALLER_SIZE_MB) {
-  if (!asset || typeof asset.url !== "string") {
+  if (!asset) {
+    return false;
+  } else if (typeof asset.url !== "string") {
     return false;
   } else {
     try {
@@ -791,7 +980,8 @@ function isAllowedInstallerAsset(asset, maxInstallerSizeMb = DEFAULT_MAX_INSTALL
         && Number.isSafeInteger(size)
         && size > 0
         && size <= installerSizeLimitBytes(maxInstallerSizeMb)
-        && /^sha256:[a-f0-9]{64}$/i.test(asset.digest || "");
+        && typeof asset.digest === "string"
+        && /^sha256:[a-f0-9]{64}$/i.test(asset.digest);
     } catch {
       return false;
     }
@@ -803,12 +993,12 @@ function isAllowedInstallerAsset(asset, maxInstallerSizeMb = DEFAULT_MAX_INSTALL
 function downloadUpdate(asset, onProgress, maxInstallerSizeMb = DEFAULT_MAX_INSTALLER_SIZE_MB) {
   if (!asset || !asset.url) {
     return Promise.reject(new Error("This release does not include a Windows installer."));
-  }
-  if (!/^https:\/\//i.test(asset.url)) {
+  } else if (!/^https:\/\//i.test(asset.url)) {
     return Promise.reject(new Error("Refusing to download an installer over an insecure URL."));
-  }
-  if (!isAllowedInstallerAsset(asset, maxInstallerSizeMb)) {
+  } else if (!isAllowedInstallerAsset(asset, maxInstallerSizeMb)) {
     return Promise.reject(new Error("Refusing to download an installer from an untrusted release URL."));
+  } else {
+    // A trusted HTTPS installer can proceed to the streamed download.
   }
 
   let tempDir;
@@ -946,9 +1136,12 @@ function registerUpdateIpc() {
       const file = await downloadUpdate(asset, ({ received, total }) => {
         // Throttle: a 100 MB installer would otherwise flood the renderer.
         const now = Date.now();
-        if (total && received < total && now - lastEmit < 150) return;
-        lastEmit = now;
-        sendUpdateProgress({ received, total });
+        if (received < total && now - lastEmit < 150) {
+          return;
+        } else {
+          lastEmit = now;
+          sendUpdateProgress({ received, total });
+        }
       }, maxInstallerSizeMb);
       sendUpdateProgress({ received: 1, total: 1, done: true });
       const started = runInstaller(file);
@@ -1007,7 +1200,12 @@ function bootstrap() {
 
   app.on("before-quit", () => {
     app.isQuiting = true;
-    if (!bridgeHandledForQuit) stopServer();
+    if (bridgeHandledForQuit) {
+      // The renderer's quit flow already chose whether the bridge should survive.
+    } else {
+      stopServer();
+    }
+    cleanupClipboardImages();
     if (!tray) {
       /* no tray to tear down */
     } else {
@@ -1036,6 +1234,17 @@ module.exports = {
   handleCloseResponse,
   registerCloseHandler,
   registerClipboardIpc,
+  decodeNullSeparatedClipboardPaths,
+  decodeWindowsFileDrop,
+  decodeClipboardUriList,
+  readWindowsClipboardFileDrop,
+  readClipboardFilePaths,
+  formatClipboardFilePaths,
+  getClipboardImageDirectory,
+  persistClipboardImage,
+  readClipboardImagePath,
+  cleanupClipboardImages,
+  readTerminalClipboardText,
   registerAdminIpc,
   registerUpdateIpc,
   configureChromiumCommandLine,
@@ -1073,6 +1282,7 @@ module.exports = {
     serverRestarts = [];
     appIsElevated = false;
     elevationChecked = false;
+    cleanupClipboardImages();
   }
 };
 

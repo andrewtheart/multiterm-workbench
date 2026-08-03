@@ -93,7 +93,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🖱️ Deep right-click context menu</h3>
-      Copy, paste, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions between sections, rename or add sections, and hide actions you do not use.
+      Copy, paste, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions or whole sections, rename, add, or remove sections, and hide actions you do not use.
     </td>
     <td align="center" width="33%">
       <h3>🔔 Activity and input alerts</h3>
@@ -661,6 +661,14 @@ certificate used by the modern menu extension; the app itself remains per-user.
 The Explorer integration remains per-user even with a machine-wide app install
 because its AppX registration belongs to one Windows user profile.
 
+Setup also offers an optional **Visual Studio Code integration**. It adds
+file, folder, and workspace commands to VS Code's Explorer and packages as
+`andrewtheart.multiterm-workbench`. A selected file opens its containing folder;
+a selected folder or blank-workspace command opens that folder directly. The
+extension delegates to `Start-MultiTerm.ps1 -OpenFolder`, so it forwards to a
+live instance or starts MultiTerm when needed. Its source and repeatable VSIX
+build live under `integrations/vscode/`.
+
 ### Download
 
 Grab the latest per-user installer from the
@@ -767,8 +775,8 @@ point the checker at a fork.
 - The bridge binds to `127.0.0.1` by default. Set `PORT=4000` to choose another port.
 - Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell, Command Prompt, or WSL. Existing WSL tmux sessions can be discovered and attached from the header or command palette.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.
-- Pages keep related terminals in separate visual groups while their shell processes stay alive. Compact page tabs expose a persistent right-edge **x** and reorder by dragging along the active axis. Right-click blank pager space for **Open new page** as quick key **1** and the placement actions. **Pages location** under **Layout** and those context actions move the tabs to the top, bottom, left, or right; both paths update one persisted setting and stay synchronized. Side panels are collapsible. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
-- The top-right **?** opens generated in-app help. `Ctrl+/` opens the compact shortcut reference; `Ctrl+Shift+P` or F1 opens the searchable command palette.
+- Pages keep related terminals in separate visual groups while their shell processes stay alive. Compact page tabs expose a persistent right-edge **x** and reorder by dragging along the active axis. `Ctrl+P` creates a page. Right-click a page for **Close page** or **Close all**; populated-page closes use the remembered move-or-close policy from Session settings. Right-click blank pager space for **Open new page** as quick key **1** and the placement actions. **Pages location** under **Layout** and those context actions move the tabs to the top, bottom, left, or right; both paths update one persisted setting and stay synchronized. Side panels are collapsible. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
+- The top-right **?** opens generated in-app help. The keyboard icon or `Ctrl+/` opens a categorized catalog of terminal-menu, page-menu, app-wide, and customized shortcuts; `Ctrl+Shift+P` or F1 opens the searchable command palette.
 - The top search box runs the same buffer search as `Ctrl+Shift+F` — every match is highlighted in place and a counter shows the running total — and additionally hides panes with nothing to show. Panes reappear (already highlighted) the moment your evolving query matches them again, or when matching output arrives. Enter/Shift+Enter walk the matches, Escape clears the filter. A pane also survives the filter when its title, working directory, shell, or status matches. `Ctrl+Shift+E` focuses the box.
 - Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.
 - Settings groups start collapsed to keep the side panel compact. Its sticky search uses a cached related-term index as well as visible labels, so searches such as **tabs**, **macros**, or **projects** find Pages, Snippets, or Workspaces without rescanning every control on each keystroke. It temporarily expands matching groups; clearing restores the previous group state. **Show all** clears the filter and expands every group, then changes to **Collapse all**.

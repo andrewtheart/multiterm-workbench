@@ -49,6 +49,19 @@ function runCompareLinkFormatter() {
   return JSON.parse(output);
 }
 
+function runDeterministicNotesFormatter() {
+  const output = runPowerShellFunctions([
+    "Add-DeterministicReleaseDetails",
+    "Add-ReleaseCompareLink"
+  ], [
+    "$notes = \"## What's changed`n- Improved release flow.`n`n## Installation`nDownload and run the installer.\"",
+    "$withDetails = Add-DeterministicReleaseDetails -Notes $notes -AssetName 'MultiTerm-Setup-0.1.50.exe' -AssetSize 12345 -AssetSha256 'abcdef123456'",
+    "$withLink = Add-ReleaseCompareLink -Notes $withDetails -RepositorySlug 'andrewtheart/multiterm-workbench' -PreviousReleaseTag 'v0.1.49' -ReleaseTag 'v0.1.50'",
+    "[pscustomobject]@{ Notes=$withLink; FullChangelogCount=([regex]::Matches($withLink, '(?im)^##\\s+Full\\s+changelog\\s*$')).Count } | ConvertTo-Json -Compress"
+  ]);
+  return JSON.parse(output);
+}
+
 describe("installer release notes", () => {
   it("appends one compare link and skips releases without a comparison base", () => {
     const result = runCompareLinkFormatter();
@@ -64,12 +77,29 @@ describe("installer release notes", () => {
 
   it("routes generated release notes through the compare-link formatter", () => {
     expect(script).toContain(
+      "$notes = Add-DeterministicReleaseDetails -Notes $notes -AssetName $AssetName -AssetSize $AssetSize -AssetSha256 $AssetSha256"
+    );
+    expect(script).toContain(
       "return Add-ReleaseCompareLink -Notes $notes -RepositorySlug $RepositorySlug -PreviousReleaseTag $PreviousReleaseTag -ReleaseTag $ReleaseTag"
     );
     expect(script).toContain(
       "New-CopilotReleaseNotes -RepositoryRoot $RepoRoot -RepositorySlug $RepoSlug"
     );
   });
+
+  it("adds deterministic asset and validation sections before appending one full changelog link", () => {
+    const result = runDeterministicNotesFormatter();
+
+    expect(result.Notes).toContain("## Assets");
+    expect(result.Notes).toContain("- MultiTerm-Setup-0.1.50.exe");
+    expect(result.Notes).toContain("- Size: 12345 bytes");
+    expect(result.Notes).toContain("- SHA-256: abcdef123456");
+    expect(result.Notes).toContain("## Validation");
+    expect(result.Notes).toContain("Installer build completed.");
+    expect(result.Notes).toContain("Version metadata consistency checks completed.");
+    expect(result.Notes).toContain("## Installation");
+    expect(result.FullChangelogCount).toBe(1);
+  }, 20000);
 
   it("accepts exact atomic groups and rejects duplicate, unknown, and omitted paths", () => {
     const output = runPowerShellFunctions(
@@ -108,11 +138,26 @@ describe("installer release notes", () => {
     });
   });
 
-  it("uses read-only planning, whole-path staging preflight, and a safe fallback", () => {
+  it("uses read-only planning, non-mutating staging preflight, interactive dirty flow, and release verification", () => {
+    const deferredBlocks = script.match(/<#\s*DEFERRED:[\s\S]*?#>/g) || [];
+    const nonDeferredScript = script.replace(/<#\s*DEFERRED:[\s\S]*?#>/g, "");
+
     expect(script).toContain("Never split or repeat a file across commits");
     expect(script).toContain("--deny-tool shell --deny-tool write");
-    expect(script).toContain("Test-AtomicCommitStaging -RepositoryRoot $RepoRoot -Plan $plan");
-    expect(script).toContain("git -C $RepositoryRoot reset --mixed HEAD");
-    expect(script).toContain('git -C $RepoRoot commit -m "chore: snapshot changes before $Tag"');
+    expect(script).toContain("Assert-PushGitPreflight -RepositoryRoot $RepoRoot");
+    expect(script).toContain("Test-AtomicCommitStaging -RepositoryRoot $RepositoryRoot -Plan $plan");
+    expect(script).toContain("$env:GIT_INDEX_FILE = $tempIndex");
+    expect(script).not.toContain("git -C $RepositoryRoot reset --mixed HEAD");
+    expect(script).toContain("Invoke-InteractiveDirtyPublishCommitFlow -RepositoryRoot $RepoRoot -ReleaseTag $Tag -CopilotExecutable $plannerPath");
+    expect(script).toContain("Apply this whole-file commit plan? (yes/abort)");
+    expect(script).toContain("Copilot whole-file commit plan is unavailable, invalid, or unsafe.");
+    expect(script).not.toContain("Choose commit mode: (1) apply whole-file plan, (2) interactive hunk review, (3) abort");
+    expect(script).not.toContain("Proceed with interactive hunk review now, or abort? (review/abort)");
+    expect(script).not.toContain("Invoke-InteractiveHunkCommitGroup -RepositoryRoot");
+    expect(nonDeferredScript).not.toContain("git -C $RepositoryRoot add --patch -- @Paths");
+    expect(deferredBlocks.some((block) => block.includes("git -C $RepositoryRoot add --patch -- @Paths"))).toBe(true);
+    expect(script).toContain("Assert-PublishedRelease -GhPath $GhPath");
+    expect(script).toContain('Get-PreviousPublishedReleaseTag -GhPath $GhPath -RepositorySlug $RepoSlug -CurrentTag $Tag');
+    expect(script).toContain("[WhatIf] Planned output: $OutputExe");
   });
 });

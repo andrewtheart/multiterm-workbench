@@ -47,6 +47,7 @@ const defaultSettings = {
   notifySilence: false,
   outputBacklogKb: 1024,
   outputCoalesceMs: 8,
+  pageCloseAction: "ask",
   paneHeight: 320,
   pagerCollapsed: false,
   pagerPlacement: "bottom",
@@ -102,6 +103,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   outputCoalesceMs: "performance output batching batch coalesce grouping bridge chunks messages latency throttle delay milliseconds pty",
   outputBacklogKb: "performance output buffer queue backlog burst memory ram renderer pending kilobytes kb",
   maxInstallerSizeMb: "updater update download installer package maximum max size limit ceiling security megabytes mb",
+  pageCloseAction: "page pages close remove terminals sessions move relocate ask remember confirmation prompt",
   keepSessionsOnClose: "keep preserve survive terminals sessions shells processes bridge background detach close quit exit window alive",
   restoreSession: "restore reopen remember previous last session startup launch restart terminals workspace resume",
   autoUpdateChecks: "automatic updates updater check releases versions upgrade background scheduled",
@@ -396,6 +398,14 @@ const elements = {
   closeConfirmTray: document.querySelector("#closeConfirmTray"),
   closeConfirmKeep: document.querySelector("#closeConfirmKeep"),
   closeConfirmQuit: document.querySelector("#closeConfirmQuit"),
+  pageCloseAction: document.querySelector("#pageCloseAction"),
+  pageCloseOverlay: document.querySelector("#pageCloseOverlay"),
+  pageCloseTitle: document.querySelector("#pageCloseTitle"),
+  pageCloseText: document.querySelector("#pageCloseText"),
+  pageCloseRemember: document.querySelector("#pageCloseRemember"),
+  pageCloseMove: document.querySelector("#pageCloseMove"),
+  pageCloseTerminals: document.querySelector("#pageCloseTerminals"),
+  pageCloseCancel: document.querySelector("#pageCloseCancel"),
   paneGap: document.querySelector("#paneGap"),
   paneGapValue: document.querySelector("#paneGapValue"),
   paneHeight: document.querySelector("#paneHeight"),
@@ -425,6 +435,7 @@ const elements = {
   snapPreview: document.querySelector("#snapPreview"),
   stage: document.querySelector(".stage"),
   shortcutsClose: document.querySelector("#shortcutsClose"),
+  shortcutsCatalog: document.querySelector("#shortcutsCatalog"),
   shortcutsOverlay: document.querySelector("#shortcutsOverlay"),
   startupCommand: document.querySelector("#startupCommand"),
   statusConn: document.querySelector("#statusConn"),
@@ -513,6 +524,7 @@ const state = {
   bridgeClosingDown: false,
   closeDisposition: "",
   closeRequestSource: "window",
+  pendingPageClose: null,
   findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false },
   appElevated: false,
   broadcastScope: "all",
@@ -624,6 +636,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindContextMenu();
   bindRightClickWarning();
   bindCloseConfirm();
+  bindPageCloseConfirm();
   bindUpdateConsent();
   bindUpdateDialog();
   bindStatisticsDialog();
@@ -698,6 +711,7 @@ function bindControls() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  elements.pageCloseAction.value = normalizePageCloseAction(state.settings.pageCloseAction);
   elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
   elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
   state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
@@ -823,6 +837,7 @@ function bindControls() {
   bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
   bindSetting(elements.outputCoalesceMs, "outputCoalesceMs", "change", clampOutputCoalesceMs);
   bindSetting(elements.outputBacklogKb, "outputBacklogKb", "change", clampOutputBacklogKb);
+  bindSetting(elements.pageCloseAction, "pageCloseAction", "change", normalizePageCloseAction);
   bindSetting(elements.terminalMessageMaxKb, "terminalMessageMaxKb", "change", clampTerminalMessageMaxKb);
   bindSetting(elements.terminalInboxCapacity, "terminalInboxCapacity", "change", clampTerminalInboxCapacity);
   bindSetting(elements.maxInstallerSizeMb, "maxInstallerSizeMb", "change", normalizeInstallerSizeMb);
@@ -2541,13 +2556,13 @@ function requestSession(terminal) {
 
 function removeTerminal(id) {
   const terminal = state.terminals.get(id);
-  if (!terminal) return;
+  if (!terminal) return false;
 
   if (!sendBridge({ type: "kill", id }) && terminal.remoteRequested) {
     setBridgeStatus("Bridge unavailable; session still running", "offline");
     log.warn("terminal", `Cannot close ${terminal.titleInput.value}; bridge unavailable`, { id });
     updateTerminalActions();
-    return;
+    return false;
   }
 
   log.info("terminal", `Terminal closed: ${terminal.titleInput.value}`, { id });
@@ -2575,16 +2590,17 @@ function removeTerminal(id) {
   forgetTerminalPages([id]);
   updateTerminalActions();
   saveSessionSnapshot();
+  return true;
 }
 
 function closeAllTerminals() {
-  if (state.terminals.size === 0) return;
+  if (state.terminals.size === 0) return true;
 
   if (!sendBridge({ type: "killAll" })) {
     setBridgeStatus("Bridge unavailable; sessions still running", "offline");
     log.warn("terminal", "Cannot close all; bridge unavailable");
     updateTerminalActions();
-    return;
+    return false;
   }
 
   log.info("terminal", `Closing all terminals (${state.terminals.size})`);
@@ -2601,6 +2617,7 @@ function closeAllTerminals() {
   forgetTerminalPages(closedIds);
   updateTerminalActions();
   saveSessionSnapshot();
+  return true;
 }
 
 function disposeTerminal(terminal) {
@@ -4105,6 +4122,7 @@ function loadSettings() {
     const settings = { ...defaultSettings, ...JSON.parse(localStorage.getItem("multiterm.settings") || "{}") };
     settings.headerActionDragScope = normalizeHeaderActionDragScope(settings.headerActionDragScope);
     settings.headerActionsInMenu = normalizeHeaderActionsInMenu(settings.headerActionsInMenu);
+    settings.pageCloseAction = normalizePageCloseAction(settings.pageCloseAction);
     settings.titleFontScale = normalizeTitleFontScale(settings.titleFontScale);
     return settings;
   } catch {
@@ -4127,6 +4145,10 @@ function normalizeTitleFontScale(value) {
 
 function normalizeHeaderActionDragScope(value) {
   return value === "all" || value === "terminal" ? value : "ask";
+}
+
+function normalizePageCloseAction(value) {
+  return value === "move" || value === "close" ? value : "ask";
 }
 
 function normalizeHeaderActionsInMenu(value) {
@@ -4613,10 +4635,10 @@ function getCommands() {
     { label: "Next terminal", run: () => cycleTerminal(1) },
     { label: "Previous terminal", run: () => cycleTerminal(-1) },
     { label: "Switch terminal\u2026", hint: "Alt+Q", run: openQuickSwitch },
-    { label: "New page", run: () => addPage() },
+    { label: "New page", hint: "Ctrl+P", run: () => addPage() },
     { label: "Next page", hint: "Ctrl+PageDown", run: () => cyclePage(1) },
     { label: "Previous page", hint: "Ctrl+PageUp", run: () => cyclePage(-1) },
-    { label: "Close current page", run: () => removePage(state.activePageId) },
+    { label: "Close current page", run: () => requestPageClose(state.activePageId) },
     { label: "Increase default terminal font size", hint: "Ctrl++", run: () => fontZoom(1) },
     { label: "Decrease default terminal font size", hint: "Ctrl+-", run: () => fontZoom(-1) },
     { label: "Toggle app theme", run: toggleAppTheme },
@@ -5073,6 +5095,14 @@ function bindGlobalShortcuts() {
       return;
     }
 
+    if (elements.pageCloseOverlay && !elements.pageCloseOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closePageCloseConfirm();
+      }
+      return;
+    }
+
     if (elements.statisticsOverlay && !elements.statisticsOverlay.hidden) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -5092,6 +5122,12 @@ function bindGlobalShortcuts() {
     if ((event.ctrlKey && event.shiftKey && key === "p") || event.key === "F1") {
       event.preventDefault();
       palette.open ? closePalette() : openPalette();
+      return;
+    }
+
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && key === "p") {
+      event.preventDefault();
+      addPage();
       return;
     }
 
@@ -6048,10 +6084,20 @@ function normalizeClipboardText(text) {
   return lines.map((line) => line.replace(/[ \t]*\|[ \t]*$/, "")).join(newline);
 }
 
+function readClipboardText() {
+  if (window.multiterm?.readClipboardText) {
+    return window.multiterm.readClipboardText();
+  }
+  if (!navigator.clipboard?.readText) {
+    return Promise.reject(new Error("Clipboard read access is unavailable."));
+  }
+  return navigator.clipboard.readText();
+}
+
 async function pasteIntoTerminal(id) {
   if (!id || !state.terminals.has(id)) return;
   try {
-    const text = normalizeClipboardText(await navigator.clipboard.readText());
+    const text = normalizeClipboardText(await readClipboardText());
     if (text) state.terminals.get(id).term.paste(text);
   } catch {
     toast("Clipboard unavailable", "error");
@@ -6086,7 +6132,7 @@ function handleRightClickPaste(terminal, action) {
 async function performRightClickPaste(id, execute) {
   if (!id || !state.terminals.has(id)) return;
   try {
-    const text = normalizeClipboardText(await navigator.clipboard.readText());
+    const text = normalizeClipboardText(await readClipboardText());
     if (!text) return;
     state.terminals.get(id).term.paste(text);
     if (execute) sendBridge({ type: "input", id, data: "\r" });
@@ -6408,21 +6454,124 @@ function renamePage(id, rawName) {
   renderQuickSwitch();
 }
 
-// Closing a page must not silently kill work, so its terminals move to a
-// neighbouring page rather than being disposed.
-function removePage(id) {
+function requestPageClose(id) {
   if (state.pages.length <= 1) {
     toast("Keep at least one page", "info", 1800);
-    return;
+    return false;
+  }
+  const page = pageById(id);
+  if (!page) return false;
+  if (terminalsOnPage(id).length === 0) return removePage(id);
+
+  const action = normalizePageCloseAction(state.settings.pageCloseAction);
+  if (action === "ask") {
+    openPageCloseConfirm({ kind: "page", pageId: id });
+    return false;
+  }
+  return removePage(id, { terminalAction: action });
+}
+
+function requestCloseAllPages() {
+  const action = normalizePageCloseAction(state.settings.pageCloseAction);
+  if (state.terminals.size > 0 && action === "ask") {
+    openPageCloseConfirm({ kind: "all" });
+    return false;
+  }
+  return resetAllPages(action);
+}
+
+function openPageCloseConfirm(request) {
+  state.pendingPageClose = request;
+  const closingAll = request.kind === "all";
+  const page = closingAll ? null : pageById(request.pageId);
+  const count = closingAll ? state.terminals.size : terminalsOnPage(request.pageId).length;
+  elements.pageCloseTitle.textContent = closingAll ? "Close all pages?" : "Close page?";
+  elements.pageCloseText.textContent = closingAll
+    ? `The ${count} terminal${count === 1 ? "" : "s"} across all pages can be moved to one new Page 1 or closed with the pages.`
+    : `“${page?.name || "This page"}” contains ${count} terminal${count === 1 ? "" : "s"}. Move ${count === 1 ? "it" : "them"} to a neighbouring page or close ${count === 1 ? "it" : "them"} with the page.`;
+  elements.pageCloseRemember.checked = false;
+  elements.pageCloseOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.pageCloseOverlay.classList.add("is-open");
+    elements.pageCloseMove.focus();
+  });
+  refreshIcons();
+}
+
+function closePageCloseConfirm() {
+  state.pendingPageClose = null;
+  elements.pageCloseOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.pageCloseOverlay.hidden = true;
+  }, 150);
+}
+
+function choosePageCloseAction(action) {
+  const request = state.pendingPageClose;
+  if (!request) return;
+  if (elements.pageCloseRemember.checked) {
+    state.settings.pageCloseAction = action;
+    elements.pageCloseAction.value = action;
+    elements.pageCloseAction._combo?.sync();
+    saveSettings();
+  }
+  closePageCloseConfirm();
+  if (request.kind === "all") resetAllPages(action);
+  else removePage(request.pageId, { terminalAction: action });
+}
+
+function bindPageCloseConfirm() {
+  elements.pageCloseMove.addEventListener("click", () => choosePageCloseAction("move"));
+  elements.pageCloseTerminals.addEventListener("click", () => choosePageCloseAction("close"));
+  elements.pageCloseCancel.addEventListener("click", closePageCloseConfirm);
+  elements.pageCloseOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.pageCloseOverlay) closePageCloseConfirm();
+  });
+}
+
+function resetAllPages(terminalAction) {
+  const nextPage = defaultPages()[0];
+  if (terminalAction === "close") {
+    if (!closeAllTerminals()) return false;
+  } else {
+    for (const terminal of state.terminals.values()) terminal.pageId = nextPage.id;
+  }
+  state.pages = [nextPage];
+  state.activePageId = nextPage.id;
+  applyPageVisibility();
+  renderPager();
+  savePages();
+  saveTerminalPages();
+  saveSessionSnapshot();
+  applyZoom();
+  updateTerminalActions();
+  window.requestAnimationFrame(() => fitAllTerminals());
+  toast(terminalAction === "close" ? "Closed all pages and terminals" : "Closed all pages — moved terminals to Page 1", "info");
+  return true;
+}
+
+// The low-level operation defaults to moving terminals so internal restore and
+// migration paths remain non-destructive. User actions call requestPageClose.
+function removePage(id, options = {}) {
+  if (state.pages.length <= 1) {
+    toast("Keep at least one page", "info", 1800);
+    return false;
   }
   const index = state.pages.findIndex((page) => page.id === id);
-  if (index === -1) return;
+  if (index === -1) return false;
 
   const page = state.pages[index];
   const fallback = state.pages[index === 0 ? 1 : index - 1];
-  const moved = terminalsOnPage(id);
-  for (const terminal of moved) {
-    terminal.pageId = fallback.id;
+  const affected = terminalsOnPage(id);
+  const terminalAction = normalizePageCloseAction(options.terminalAction);
+  if (terminalAction === "close") {
+    for (const terminal of affected) removeTerminal(terminal.id);
+    if (terminalsOnPage(id).length > 0) {
+      toast(`Could not close every terminal on “${page.name}”`, "error", 3200);
+      return false;
+    }
+  } else {
+    for (const terminal of affected) terminal.pageId = fallback.id;
   }
   state.pages.splice(index, 1);
 
@@ -6437,13 +6586,19 @@ function removePage(id) {
   updateTerminalActions();
   window.requestAnimationFrame(() => fitAllTerminals());
 
-  log.info("pages", `Closed ${page.name}`, { movedTerminals: moved.length });
+  log.info("pages", `Closed ${page.name}`, {
+    closedTerminals: terminalAction === "close" ? affected.length : 0,
+    movedTerminals: terminalAction === "close" ? 0 : affected.length
+  });
   toast(
-    moved.length > 0
-      ? `Closed “${page.name}” — moved ${moved.length} terminal${moved.length === 1 ? "" : "s"} to “${fallback.name}”`
+    affected.length > 0
+      ? terminalAction === "close"
+        ? `Closed “${page.name}” and ${affected.length} terminal${affected.length === 1 ? "" : "s"}`
+        : `Closed “${page.name}” — moved ${affected.length} terminal${affected.length === 1 ? "" : "s"} to “${fallback.name}”`
       : `Closed “${page.name}”`,
     "info"
   );
+  return true;
 }
 
 function moveTerminalToPage(terminalId, pageId) {
@@ -6646,8 +6801,8 @@ function renderPager() {
     close.dataset.pageClose = page.id;
     close.setAttribute("role", "button");
     close.setAttribute("aria-disabled", String(!canClose));
-    close.setAttribute("aria-label", canClose ? `Close ${page.name}` : "The last page cannot be closed");
-    close.title = canClose ? `Close ${page.name}` : "The last page cannot be closed";
+    close.setAttribute("aria-label", canClose ? "Close page" : "The last page cannot be closed");
+    close.title = canClose ? "Close page" : "The last page cannot be closed";
     close.textContent = "\u00d7";
     chip.append(close);
 
@@ -6704,7 +6859,7 @@ function bindPager() {
     if (close) {
       event.stopPropagation();
       if (close.getAttribute("aria-disabled") === "true") return;
-      removePage(close.dataset.pageClose);
+      requestPageClose(close.dataset.pageClose);
       return;
     }
     const chip = event.target.closest(".pager-chip");
@@ -6803,10 +6958,11 @@ function bindPager() {
       { label: "Rename\u2026", icon: "pencil", run: () => startPageRename(chip) },
       { label: "New page", icon: "plus", run: () => addPage() }
     ];
+    items.push({ separator: true });
     if (state.pages.length > 1) {
-      items.push({ separator: true });
-      items.push({ label: `Close ${page.name}`, icon: "x", danger: true, run: () => removePage(page.id) });
+      items.push({ label: "Close page", icon: "x", danger: true, run: () => requestPageClose(page.id) });
     }
+    items.push({ label: "Close all", icon: "trash-2", danger: true, run: requestCloseAllPages });
     renderContextMenu(items);
     showBuiltContextMenu(event.clientX, event.clientY);
   });
@@ -6898,6 +7054,7 @@ function restoreWorkspace(name) {
   state.settings = { ...defaultSettings, ...workspace.settings };
   state.settings.headerActionDragScope = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
   state.settings.headerActionsInMenu = normalizeHeaderActionsInMenu(state.settings.headerActionsInMenu);
+  state.settings.pageCloseAction = normalizePageCloseAction(state.settings.pageCloseAction);
   state.settings.titleFontScale = normalizeTitleFontScale(state.settings.titleFontScale);
   syncControlsFromSettings();
   clearSnapLayout(false);
@@ -6993,6 +7150,7 @@ function syncControlsFromSettings() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  elements.pageCloseAction.value = normalizePageCloseAction(state.settings.pageCloseAction);
   elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
   elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
   state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
@@ -8664,8 +8822,145 @@ function bindTerminalMessages() {
 
 /* ---------------- Shortcuts cheat sheet --------------- */
 
+const SHORTCUT_SECTIONS = Object.freeze([
+  {
+    title: "Terminal right-click menu shortcuts",
+    items: [
+      ["Ctrl+Shift+C", "Copy", "Copies the selected terminal output."],
+      ["Ctrl+Shift+V", "Paste", "Pastes clipboard text into the active terminal."],
+      ["Ctrl+A", "Select all", "Selects all output in the terminal buffer."],
+      ["Ctrl+F", "Find", "Opens search for the active terminal."],
+      ["Ctrl+Shift+F", "Find in all terminals", "Searches every terminal buffer."],
+      ["Ctrl+Shift+L", "Clear", "Clears the active terminal display."],
+      ["Ctrl+Shift+X", "Maximize or restore", "Toggles the active pane between normal and maximized size."],
+      ["Ctrl+Shift+R", "Restart", "Restarts the active terminal session."],
+      ["Ctrl+Shift+W", "Close", "Closes the active terminal session."]
+    ]
+  },
+  {
+    title: "Page right-click menu shortcuts",
+    items: [
+      ["Ctrl+P", "New page", "Creates and opens a new page."],
+      ["Ctrl+T", "New terminal", "Starts a terminal in the current workspace folder."],
+      ["Ctrl+Shift+F", "Find in all terminals", "Searches every terminal on every page."],
+      ["Ctrl+Shift+B", "Broadcast command", "Opens the command broadcaster."],
+      ["Ctrl+Shift+P", "Command palette", "Opens the searchable action palette."]
+    ]
+  },
+  {
+    title: "App shortcuts (available at any time)",
+    items: [
+      ["Ctrl+Shift+P / F1", "Command palette", "Opens or closes the searchable action palette."],
+      ["Ctrl+P", "New page", "Creates and opens a new page instead of opening Print."],
+      ["Alt+Q", "Switch terminal", "Opens the quick terminal switcher."],
+      ["Alt+1…9 / Alt+A…Z", "Jump to terminal", "Chooses a terminal from the quick switcher."],
+      ["Ctrl+PageDown / Ctrl+PageUp", "Next or previous page", "Moves between pages without stopping their terminals."],
+      ["Alt+1…9", "Go to page", "Opens the page at the matching position."],
+      ["Ctrl+/", "Keyboard shortcuts", "Opens or closes this shortcut catalog."],
+      ["Ctrl+T / Ctrl+Shift+T", "New terminal", "Starts a terminal on the active page."],
+      ["Ctrl+Shift+W", "Close active terminal", "Closes the active terminal session."],
+      ["Ctrl+Shift+R", "Restart active terminal", "Restarts the active shell."],
+      ["Ctrl+F / Ctrl+Shift+F", "Find", "Searches the active terminal or every terminal."],
+      ["Ctrl+Shift+E", "Search and filter panes", "Focuses the terminal filter in the top bar."],
+      ["Ctrl+Shift+L", "Clear active terminal", "Clears the active terminal display."],
+      ["Ctrl+Shift+X", "Maximize or restore pane", "Toggles the active pane size."],
+      ["Ctrl+V / Ctrl+Shift+V", "Paste", "Pastes clipboard text into the active terminal."],
+      ["Ctrl+Shift+C", "Copy output", "Copies selected terminal output."],
+      ["Alt+Drag", "Pass drag to full-screen app", "Lets a mouse-aware terminal app handle the drag."],
+      ["Ctrl+Shift+Q", "Dequeue next command", "Inserts and runs the next staged command."],
+      ["Ctrl+Shift+B", "Broadcast command", "Opens the command broadcaster."],
+      ["Ctrl+Alt+→ / Ctrl+Alt+←", "Next or previous terminal", "Cycles terminal focus."],
+      ["Ctrl+mouse wheel", "Zoom terminal under pointer", "Changes only the pointed terminal's font size."],
+      ["Ctrl+Alt+= / Ctrl+Alt+- / Ctrl+Alt+0", "Active terminal zoom", "Changes or resets only the active terminal's font size."],
+      ["Ctrl+= / Ctrl+- / Ctrl+0", "Default terminal zoom", "Changes or resets the default terminal font size."],
+      ["Escape", "Close active surface", "Closes the active dialog, menu, or search."]
+    ]
+  }
+]);
+
+const TERMINAL_SHORTCUT_LABELS = Object.freeze({
+  "terminal.command-queue": "Command queue",
+  "terminal.copy": "Copy",
+  "terminal.copy-all": "Copy all output",
+  "terminal.paste": "Paste",
+  "terminal.select-all": "Select all",
+  "terminal.find": "Find",
+  "terminal.find-all": "Find in all terminals",
+  "terminal.clear": "Clear",
+  "terminal.zoom": "Maximize or restore",
+  "terminal.statistics": "Terminal statistics",
+  "terminal.notes": "Notes and command queue",
+  "terminal.send-message": "Send to terminal",
+  "terminal.open-folder": "Open folder",
+  "terminal.new-here": "New terminal here",
+  "terminal.copilot-yolo": "Launch Copilot CLI (YOLO)",
+  "terminal.new-admin": "New Administrator terminal",
+  "terminal.run-script": "Run script",
+  "terminal.logging.toggle": "Toggle logging",
+  "terminal.logging.reveal-last": "Reveal last log",
+  "terminal.logging.reveal-folder": "Reveal log folder",
+  "terminal.duplicate": "Split (duplicate)",
+  "terminal.restart": "Restart",
+  "terminal.cycle-color": "Cycle color",
+  "terminal.move-new-page": "Move to new page",
+  "terminal.close": "Close"
+});
+
+function terminalShortcutLabel(actionId) {
+  if (TERMINAL_SHORTCUT_LABELS[actionId]) return TERMINAL_SHORTCUT_LABELS[actionId];
+  if (actionId.startsWith("terminal.move-page:")) {
+    return `Move to ${pageName(actionId.slice("terminal.move-page:".length)) || "page"}`;
+  }
+  if (actionId.startsWith("terminal.snippet:")) {
+    const token = actionId.slice("terminal.snippet:".length);
+    const snippet = (state.settings.snippets || []).find((item) => (
+      stableContextActionToken(`${item.name || ""}\n${item.command || ""}`) === token
+    ));
+    return snippet?.name || snippet?.command || "Run saved snippet";
+  }
+  return actionId;
+}
+
+function renderShortcutSection(title, items) {
+  const section = document.createElement("section");
+  section.className = "shortcuts-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const list = document.createElement("ul");
+  list.className = "shortcuts-list";
+  for (const [shortcut, label, detail] of items) {
+    const row = document.createElement("li");
+    const description = document.createElement("span");
+    description.className = "shortcut-description";
+    const name = document.createElement("strong");
+    name.textContent = label;
+    const explanation = document.createElement("small");
+    explanation.textContent = detail;
+    const key = document.createElement("span");
+    key.className = "kbd";
+    key.textContent = shortcut;
+    description.append(name, explanation);
+    row.append(description, key);
+    list.append(row);
+  }
+  section.append(heading, list);
+  elements.shortcutsCatalog.append(section);
+}
+
+function renderShortcutCatalog() {
+  elements.shortcutsCatalog.textContent = "";
+  for (const section of SHORTCUT_SECTIONS) renderShortcutSection(section.title, section.items);
+  const custom = [...contextMenuShortcuts.entries()].map(([actionId, binding]) => [
+    formatContextShortcut(binding),
+    terminalShortcutLabel(actionId),
+    "Runs this customized action while a terminal context menu is open."
+  ]);
+  if (custom.length > 0) renderShortcutSection("Custom terminal right-click shortcuts", custom);
+}
+
 function openShortcuts() {
   closePalette();
+  renderShortcutCatalog();
   elements.shortcutsOverlay.hidden = false;
   window.requestAnimationFrame(() => elements.shortcutsOverlay.classList.add("is-open"));
   refreshIcons();
@@ -9889,7 +10184,12 @@ function normalizeContextMenuSectionName(value) {
 }
 
 function normalizeContextMenuLayout(value) {
-  const empty = { version: CONTEXT_MENU_LAYOUT_VERSION, sections: [], hidden: [] };
+  const empty = {
+    version: CONTEXT_MENU_LAYOUT_VERSION,
+    sections: [],
+    hidden: [],
+    removedSections: []
+  };
   if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
   if (value.version != null && Number(value.version) !== CONTEXT_MENU_LAYOUT_VERSION) return empty;
 
@@ -9929,7 +10229,16 @@ function normalizeContextMenuLayout(value) {
     hiddenIds.add(itemId);
     hidden.push(itemId);
   }
-  return { version: CONTEXT_MENU_LAYOUT_VERSION, sections, hidden };
+  const removedSections = [];
+  const removedSectionIds = new Set();
+  const sourceRemovedSections = Array.isArray(value.removedSections) ? value.removedSections : [];
+  for (const rawSectionId of sourceRemovedSections.slice(0, CONTEXT_MENU_MAX_SECTIONS)) {
+    const sectionId = String(rawSectionId || "");
+    if (!CONTEXT_MENU_SECTION_ID_PATTERN.test(sectionId) || removedSectionIds.has(sectionId)) continue;
+    removedSectionIds.add(sectionId);
+    removedSections.push(sectionId);
+  }
+  return { version: CONTEXT_MENU_LAYOUT_VERSION, sections, hidden, removedSections };
 }
 
 function loadContextMenuLayout() {
@@ -10000,12 +10309,16 @@ function buildCustomizableContextMenu(items) {
   }
 
   const saved = normalizeContextMenuLayout(contextMenuLayout);
-  const sections = saved.sections.map((section) => ({
-    ...section,
-    items: [...section.items]
-  }));
+  const removedSections = new Set(saved.removedSections);
+  const sections = saved.sections
+    .filter((section) => !removedSections.has(section.id))
+    .map((section) => ({
+      ...section,
+      items: [...section.items]
+    }));
   const sectionById = new Map(sections.map((section) => [section.id, section]));
   for (const defaultSection of defaultSections) {
+    if (removedSections.has(defaultSection.id)) continue;
     const existing = sectionById.get(defaultSection.id);
     if (existing) {
       if (!existing.name) existing.name = defaultSection.name;
@@ -10015,10 +10328,16 @@ function buildCustomizableContextMenu(items) {
     sections.push(section);
     sectionById.set(section.id, section);
   }
+  if (sections.length === 0 && defaultSections.length > 0) {
+    const fallback = { ...defaultSections[0], items: [] };
+    sections.push(fallback);
+    sectionById.set(fallback.id, fallback);
+    removedSections.delete(fallback.id);
+  }
 
   const placedItemIds = new Set(sections.flatMap((section) => section.items));
   for (const defaultSection of defaultSections) {
-    const target = sectionById.get(defaultSection.id);
+    const target = sectionById.get(defaultSection.id) || sections[0];
     for (const itemId of defaultSection.items) {
       if (placedItemIds.has(itemId)) continue;
       target.items.push(itemId);
@@ -10055,7 +10374,8 @@ function buildCustomizableContextMenu(items) {
       version: CONTEXT_MENU_LAYOUT_VERSION,
       sections,
       hidden,
-      hiddenCurrentCount
+      hiddenCurrentCount,
+      removedSections
     }
   };
 }
@@ -10205,6 +10525,7 @@ let ctxShortcutStatus = "";
 let ctxSearchFocusRequest = 0;
 let ctxCustomizationModel = null;
 let ctxCustomizationDrag = null;
+let ctxSectionDrag = null;
 let ctxEditingSectionId = null;
 let ctxNewSectionId = null;
 let ctxShowHiddenItems = false;
@@ -10263,10 +10584,12 @@ function rerenderOpenContextMenu({ focusSearch = true } = {}) {
 
 function persistContextMenuCustomizationModel() {
   if (!ctxCustomizationModel) return;
+  const removedSections = ctxCustomizationModel.removedSections || new Set();
   saveContextMenuLayout({
     version: CONTEXT_MENU_LAYOUT_VERSION,
     sections: ctxCustomizationModel.sections,
-    hidden: [...ctxCustomizationModel.hidden]
+    hidden: [...ctxCustomizationModel.hidden],
+    removedSections: [...removedSections]
   });
 }
 
@@ -10276,9 +10599,15 @@ function contextMenuSection(sectionId) {
 
 function clearContextCustomizationDropIndicators() {
   for (const element of elements.contextMenu.querySelectorAll(
-    ".is-item-drop-target, .is-item-drop-before, .is-item-drop-after"
+    ".is-item-drop-target, .is-item-drop-before, .is-item-drop-after, .is-section-drop-before, .is-section-drop-after"
   )) {
-    element.classList.remove("is-item-drop-target", "is-item-drop-before", "is-item-drop-after");
+    element.classList.remove(
+      "is-item-drop-target",
+      "is-item-drop-before",
+      "is-item-drop-after",
+      "is-section-drop-before",
+      "is-section-drop-after"
+    );
   }
 }
 
@@ -10306,6 +10635,26 @@ function startContextCustomizationDrag(event, item, element) {
   }
 }
 
+function finishContextSectionDrag() {
+  clearContextCustomizationDropIndicators();
+  elements.contextMenu.querySelector(".ctx-group.is-context-section-dragging")
+    ?.classList.remove("is-context-section-dragging");
+  ctxSectionDrag = null;
+}
+
+function startContextSectionDrag(event, sectionId, element) {
+  const section = contextMenuSection(sectionId);
+  if (!section) return;
+  hideContextSubmenu();
+  ctxSectionDrag = { sectionId };
+  element.classList.add("is-context-section-dragging");
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-multiterm-context-section", sectionId);
+    event.dataTransfer.setData("text/plain", section.name);
+  }
+}
+
 function moveContextMenuItem(itemId, targetSectionId, referenceItemId, placeAfter) {
   if (!ctxCustomizationModel || itemId === referenceItemId) return false;
   const target = contextMenuSection(targetSectionId);
@@ -10329,6 +10678,51 @@ function moveContextMenuItem(itemId, targetSectionId, referenceItemId, placeAfte
   target.items.splice(insertionIndex, 0, itemId);
   persistContextMenuCustomizationModel();
   return true;
+}
+
+function moveContextMenuSection(sectionId, referenceSectionId, placeAfter) {
+  if (!ctxCustomizationModel || sectionId === referenceSectionId) return false;
+  const sections = ctxCustomizationModel.sections;
+  const sourceIndex = sections.findIndex((section) => section.id === sectionId);
+  if (sourceIndex < 0) return false;
+  if (!contextMenuSection(referenceSectionId)) return false;
+  const before = sections.map((section) => section.id).join("\n");
+  const [section] = sections.splice(sourceIndex, 1);
+  const referenceIndex = sections.findIndex((entry) => entry.id === referenceSectionId);
+  sections.splice(referenceIndex + (placeAfter ? 1 : 0), 0, section);
+  if (sections.map((entry) => entry.id).join("\n") === before) return false;
+  persistContextMenuCustomizationModel();
+  return true;
+}
+
+function bindContextMenuSectionReorderTarget(group, sectionId) {
+  const updateIndicator = (event) => {
+    if (!ctxSectionDrag || ctxSectionDrag.sectionId === sectionId) return null;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    clearContextCustomizationDropIndicators();
+    const rect = group.getBoundingClientRect();
+    const placeAfter = event.clientY >= rect.top + (rect.height / 2);
+    group.classList.add(placeAfter ? "is-section-drop-after" : "is-section-drop-before");
+    return placeAfter;
+  };
+
+  group.addEventListener("dragover", updateIndicator);
+  group.addEventListener("dragleave", (event) => {
+    if (!ctxSectionDrag) return;
+    if (event.relatedTarget instanceof Node && group.contains(event.relatedTarget)) return;
+    clearContextCustomizationDropIndicators();
+  });
+  group.addEventListener("drop", (event) => {
+    if (!ctxSectionDrag) return;
+    const placeAfter = updateIndicator(event);
+    if (placeAfter == null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const moved = moveContextMenuSection(ctxSectionDrag.sectionId, sectionId, placeAfter);
+    finishContextSectionDrag();
+    if (moved) rerenderOpenContextMenu({ focusSearch: false });
+  });
 }
 
 function bindContextMenuSectionDropTarget(group, body, sectionId) {
@@ -10423,6 +10817,58 @@ function addContextMenuSection() {
   const searchInput = elements.contextMenu.querySelector(".ctx-menu-search-input");
   if (searchInput) searchInput.value = "";
   rerenderOpenContextMenu({ focusSearch: false });
+}
+
+function removeContextMenuSection(sectionId) {
+  if (!ctxCustomizationModel) return false;
+  const sections = ctxCustomizationModel.sections;
+  const index = sections.findIndex((section) => section.id === sectionId);
+  if (index < 0) return false;
+  if (sections.length <= 1) {
+    toast("Keep at least one context-menu section", "error", 2200);
+    return false;
+  }
+
+  const section = sections[index];
+  const destination = sections[index + 1] || sections[index - 1];
+  destination.items.push(...section.items);
+  sections.splice(index, 1);
+  if (section.custom) ctxCustomizationModel.removedSections.delete(sectionId);
+  else ctxCustomizationModel.removedSections.add(sectionId);
+  persistContextMenuCustomizationModel();
+  hideContextSubmenu();
+  rerenderOpenContextMenu({ focusSearch: false });
+  const moved = section.items.length;
+  toast(
+    moved
+      ? `${section.name} removed; ${moved} item${moved === 1 ? "" : "s"} moved to ${destination.name}`
+      : `${section.name} removed`,
+    "success",
+    2400
+  );
+  return true;
+}
+
+function showContextSectionMenu(event, sectionId) {
+  event.preventDefault();
+  event.stopPropagation();
+  renderContextSubmenu([
+    {
+      label: "Rename section",
+      icon: "pencil",
+      keepMenuOpen: true,
+      run: () => startContextSectionRename(sectionId)
+    },
+    {
+      label: "Remove section",
+      icon: "trash-2",
+      danger: true,
+      keepMenuOpen: true,
+      run: () => removeContextMenuSection(sectionId)
+    }
+  ]);
+  const rect = event.currentTarget.getBoundingClientRect();
+  showContextSubmenuAt(rect.right, rect.bottom);
 }
 
 function setContextMenuItemHidden(itemId, hidden) {
@@ -10535,6 +10981,7 @@ function renderContextMenu(items, {
   } else {
     ctxCustomizationModel = null;
     ctxCustomizationDrag = null;
+    ctxSectionDrag = null;
     ctxEditingSectionId = null;
     ctxNewSectionId = null;
     ctxShowHiddenItems = false;
@@ -10652,11 +11099,27 @@ function renderContextMenu(items, {
       if (item.customSection) group.classList.add("is-custom-section");
       if (item.groupId) group.dataset.sectionId = item.groupId;
       group.dataset.groupSearch = item.group.toLowerCase();
+      const header = document.createElement("div");
+      header.className = "ctx-group-header";
       const title = document.createElement("h3");
       title.className = "ctx-group-title";
       const body = document.createElement("div");
       body.className = "ctx-group-body";
       if (customizable && item.groupId) {
+        const dragHandle = document.createElement("button");
+        dragHandle.type = "button";
+        dragHandle.className = "ctx-section-drag-handle ctx-customization-control";
+        dragHandle.draggable = ctxEditingSectionId !== item.groupId;
+        dragHandle.title = `Drag to move ${item.group} section`;
+        dragHandle.setAttribute("aria-label", dragHandle.title);
+        const dragIcon = document.createElement("i");
+        dragIcon.dataset.lucide = "grip-vertical";
+        dragHandle.append(dragIcon);
+        dragHandle.addEventListener("dragstart", (event) => {
+          startContextSectionDrag(event, item.groupId, group);
+        });
+        dragHandle.addEventListener("dragend", finishContextSectionDrag);
+        header.append(dragHandle);
         if (ctxEditingSectionId === item.groupId) {
           const input = document.createElement("input");
           input.className = "ctx-group-title-input ctx-customization-control";
@@ -10697,11 +11160,23 @@ function renderContextMenu(items, {
             startContextSectionRename(item.groupId);
           });
         }
+        const sectionActions = document.createElement("button");
+        sectionActions.type = "button";
+        sectionActions.className = "ctx-section-actions ctx-customization-control";
+        sectionActions.title = `${item.group} section options`;
+        sectionActions.setAttribute("aria-label", sectionActions.title);
+        const actionsIcon = document.createElement("i");
+        actionsIcon.dataset.lucide = "ellipsis";
+        sectionActions.append(actionsIcon);
+        sectionActions.addEventListener("click", (event) => showContextSectionMenu(event, item.groupId));
+        header.append(title, sectionActions);
         bindContextMenuSectionDropTarget(group, body, item.groupId);
+        bindContextMenuSectionReorderTarget(group, item.groupId);
       } else {
         title.textContent = item.group;
+        header.append(title);
       }
-      group.append(title, body);
+      group.append(header, body);
       (groupColumns?.[columnIndex] || groupsRoot || elements.contextMenu).append(group);
       itemContainer = body;
       continue;
@@ -11005,7 +11480,7 @@ function renderContextSubmenu(items) {
 
   for (const item of items) {
     const el = document.createElement("div");
-    el.className = `ctx-item${item.info ? " ctx-info" : ""}`;
+    el.className = `ctx-item${item.info ? " ctx-info" : ""}${item.danger ? " danger" : ""}`;
     el.setAttribute("role", item.info ? "presentation" : "menuitem");
 
     const icon = document.createElement("i");
@@ -11510,6 +11985,7 @@ function hideContextMenu() {
     ctxRenderOptions = {};
     ctxCustomizationModel = null;
     ctxCustomizationDrag = null;
+    ctxSectionDrag = null;
     ctxEditingSectionId = null;
     ctxNewSectionId = null;
     ctxShowHiddenItems = false;

@@ -21,6 +21,8 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
+const os = require("node:os");
+const path = require("node:path");
 const childProcess = require("node:child_process");
 const main = require("../../main.js");
 
@@ -52,7 +54,13 @@ function makeElectron() {
       setApplicationMenu: vi.fn(),
       buildFromTemplate: vi.fn((template) => ({ __template: template }))
     },
-    clipboard: { writeText: vi.fn() },
+    clipboard: {
+      availableFormats: vi.fn(() => []),
+      readBuffer: vi.fn(() => Buffer.alloc(0)),
+      readImage: vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })),
+      readText: vi.fn(() => ""),
+      writeText: vi.fn()
+    },
     shell: { openExternal: vi.fn() },
     dialog: { showErrorBox: vi.fn() },
     ipcMain: {
@@ -561,6 +569,10 @@ describe("tray + close-to-tray", () => {
       headers: { "X-MultiTerm-Request": "Launcher" }
     }), expect.any(Function));
     expect(electron.app.quit).toHaveBeenCalled();
+
+    electron.app.whenReady.mockReturnValue(new Promise(() => {}));
+    main.bootstrap();
+    expect(() => handlerFor("before-quit")()).not.toThrow();
   });
 
   it("restores and focuses the window for notification clicks", async () => {
@@ -751,6 +763,10 @@ describe("showMainWindow / createTray / close handling edge cases", () => {
 });
 
 describe("clipboard IPC", () => {
+  function clipboardHandler(channel) {
+    return electron.ipcMain.handle.mock.calls.find(([registered]) => registered === channel)?.[1];
+  }
+
   it("writes validated text through Electron's main-process clipboard", () => {
     main.createWindow();
     const webContents = main.getMainWindow().webContents;
@@ -769,6 +785,266 @@ describe("clipboard IPC", () => {
       .toThrow("restricted to the MultiTerm application window");
     expect(() => handler({ sender: {}, senderFrame: mainFrame }, "blocked"))
       .toThrow("restricted to the MultiTerm application window");
+  });
+
+  it("reads copied Explorer files as terminal-ready paths", () => {
+    main.createWindow();
+    const webContents = main.getMainWindow().webContents;
+    const mainFrame = { url: "http://127.0.0.1:3177/" };
+    webContents.mainFrame = mainFrame;
+    const first = "C:\\src\\README.md";
+    const second = "C:\\Copilot Files\\notes.txt";
+    electron.clipboard.availableFormats.mockReturnValue(["FileNameW"]);
+    electron.clipboard.readBuffer.mockReturnValue(
+      Buffer.from(`${first}\0${second}\0\0`, "utf16le")
+    );
+    vi.spyOn(fs, "statSync").mockReturnValue({
+      isDirectory: () => false,
+      isFile: () => true
+    });
+
+    main.registerClipboardIpc();
+    const handler = clipboardHandler("multiterm:read-clipboard");
+    expect(handler({ sender: webContents, senderFrame: mainFrame }))
+      .toBe(`${first} "${second}"`);
+    expect(electron.clipboard.readText).not.toHaveBeenCalled();
+    expect(() => handler({ sender: webContents, senderFrame: { url: "https://example.com/" } }))
+      .toThrow("Clipboard reads are restricted");
+  });
+
+  it("decodes CF_HDROP lists and falls back to ordinary text", () => {
+    const paths = ["C:\\one.txt", "D:\\two.txt"];
+    const payload = Buffer.from(`${paths.join("\0")}\0\0`, "utf16le");
+    const drop = Buffer.alloc(20 + payload.length);
+    drop.writeUInt32LE(20, 0);
+    drop.writeUInt32LE(1, 16);
+    payload.copy(drop, 20);
+
+    expect(main.decodeWindowsFileDrop(drop)).toEqual(paths);
+    expect(main.decodeWindowsFileDrop(null)).toEqual([]);
+    expect(main.decodeWindowsFileDrop(Buffer.alloc(19))).toEqual([]);
+    expect(main.decodeNullSeparatedClipboardPaths(null, "utf16le")).toEqual([]);
+    expect(main.decodeNullSeparatedClipboardPaths(Buffer.from("x"), "utf8", -1)).toEqual([]);
+    expect(main.decodeNullSeparatedClipboardPaths(Buffer.from("x"), "utf8", 1)).toEqual([]);
+    const lowOffset = Buffer.alloc(21);
+    lowOffset.writeUInt32LE(19, 0);
+    expect(main.decodeWindowsFileDrop(lowOffset)).toEqual([]);
+    const invalidOffset = Buffer.alloc(20);
+    invalidOffset.writeUInt32LE(20, 0);
+    expect(main.decodeWindowsFileDrop(invalidOffset)).toEqual([]);
+    const ansiPayload = Buffer.from(`${paths.join("\0")}\0\0`, "latin1");
+    const ansiDrop = Buffer.alloc(20 + ansiPayload.length);
+    ansiDrop.writeUInt32LE(20, 0);
+    ansiPayload.copy(ansiDrop, 20);
+    expect(main.decodeWindowsFileDrop(ansiDrop)).toEqual(paths);
+
+    const nativeClipboard = {
+      availableFormats: () => ["CF_HDROP"],
+      readBuffer: () => drop,
+      readText: () => "fallback"
+    };
+    const fileSystem = {
+      statSync: (filePath) => ({
+        isDirectory: () => filePath === paths[1],
+        isFile: () => filePath === paths[0]
+      })
+    };
+    expect(main.readTerminalClipboardText(nativeClipboard, fileSystem))
+      .toBe(paths.join(" "));
+    expect(main.readTerminalClipboardText({
+      availableFormats: () => [],
+      readBuffer: () => Buffer.alloc(0),
+      readImage: () => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) }),
+      readText: () => "ordinary text"
+    }, fileSystem)).toBe("ordinary text");
+    expect(main.readClipboardFilePaths({}, fileSystem)).toEqual([]);
+    expect(main.readClipboardFilePaths({
+      availableFormats: () => [],
+      readBuffer: null
+    }, fileSystem)).toEqual([]);
+  });
+
+  it("materializes native clipboard images as reusable PNG paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-image-paste-unit-"));
+    const imageDirectory = path.join(root, "clipboard images");
+    const png = Buffer.from("89504e470d0a1a0a00000000", "hex");
+    const image = { isEmpty: () => false, toPNG: () => png };
+    const nativeClipboard = {
+      availableFormats: () => ["Bitmap", "PNG"],
+      readBuffer: () => Buffer.alloc(0),
+      readImage: () => image,
+      readText: vi.fn(() => "unused text")
+    };
+
+    try {
+      const pasted = main.readTerminalClipboardText(nativeClipboard, fs, imageDirectory);
+      expect(pasted).toMatch(/^".+\.png"$/);
+      const imagePath = pasted.slice(1, -1);
+      expect(fs.readFileSync(imagePath)).toEqual(png);
+      expect(main.persistClipboardImage(image, fs, imageDirectory)).toBe(imagePath);
+      expect(nativeClipboard.readText).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("ignores empty or unavailable native clipboard images", () => {
+    const imageDirectory = path.join(os.tmpdir(), "unused-multiterm-image-directory");
+    expect(main.readClipboardImagePath({}, fs, imageDirectory)).toBe("");
+    expect(main.persistClipboardImage(null, fs, imageDirectory)).toBe("");
+    expect(main.persistClipboardImage({}, fs, imageDirectory)).toBe("");
+    expect(main.persistClipboardImage({ isEmpty: () => true }, fs, imageDirectory)).toBe("");
+    expect(main.persistClipboardImage({
+      isEmpty: () => false,
+      toPNG: () => "not a buffer"
+    }, fs, imageDirectory)).toBe("");
+    expect(main.persistClipboardImage({
+      isEmpty: () => false,
+      toPNG: () => Buffer.alloc(0)
+    }, fs, imageDirectory)).toBe("");
+    expect(main.readTerminalClipboardText({
+      availableFormats: () => [],
+      readBuffer: () => Buffer.alloc(0),
+      readImage: () => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })
+    }, fs, imageDirectory)).toBe("");
+    expect(fs.existsSync(imageDirectory)).toBe(false);
+  });
+
+  it("reuses and cleans its private clipboard image directory", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-image-lifecycle-unit-"));
+    const png = Buffer.from("89504e470d0a1a0a01020304", "hex");
+    const image = { isEmpty: () => false, toPNG: () => png };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const fallbackDirectory = main.getClipboardImageDirectory();
+      expect(main.getClipboardImageDirectory()).toBe(fallbackDirectory);
+      expect(main.persistClipboardImage(image)).toMatch(/clipboard-[a-f0-9]{64}\.png$/);
+      main.cleanupClipboardImages();
+      expect(fs.existsSync(fallbackDirectory)).toBe(false);
+
+      const targetApp = { getPath: vi.fn(() => root) };
+      const appDirectory = main.getClipboardImageDirectory(fs, targetApp);
+      expect(appDirectory.startsWith(root)).toBe(true);
+      expect(targetApp.getPath).toHaveBeenCalledWith("temp");
+      main.cleanupClipboardImages({
+        rmSync() { throw new Error("locked"); }
+      });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Could not remove temporary clipboard images"));
+      main.cleanupClipboardImages();
+    } finally {
+      fs.rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("filters malformed, duplicate, missing, and non-file clipboard entries", () => {
+    const valid = "C:\\valid.txt";
+    const duplicate = "c:\\VALID.txt";
+    const special = "C:\\device";
+    const missing = "C:\\missing.txt";
+    const oversized = `C:\\${"x".repeat(32767)}`;
+    const buffer = Buffer.from(
+      `${valid}\0${duplicate}\0${special}\0${missing}\0${oversized}\0\0`,
+      "utf16le"
+    );
+    const fileSystem = {
+      statSync(filePath) {
+        if (filePath === missing) throw new Error("missing");
+        return {
+          isDirectory: () => false,
+          isFile: () => filePath !== special
+        };
+      }
+    };
+    const paths = main.readClipboardFilePaths({
+      availableFormats: () => ["FileNameW"],
+      readBuffer: () => buffer
+    }, fileSystem);
+
+    expect(paths).toEqual([valid]);
+    expect(main.formatClipboardFilePaths([
+      "C:\\plain.txt",
+      "C:\\with space.txt",
+      'C:\\with"quote.txt'
+    ])).toBe('C:\\plain.txt "C:\\with space.txt" "C:\\with\\"quote.txt"');
+  });
+
+  it("decodes Electron's URI-list representation of Explorer files", () => {
+    const uriList = Buffer.from([
+      "# copied files",
+      "file:///C:/Copilot%20Files/context.txt",
+      "https://example.com/not-a-file",
+      "not a URL"
+    ].join("\r\n"));
+    expect(main.decodeClipboardUriList(null)).toEqual([]);
+    expect(main.decodeClipboardUriList(uriList)).toEqual([
+      "C:\\Copilot Files\\context.txt"
+    ]);
+    expect(main.readClipboardFilePaths({
+      availableFormats: () => ["text/uri-list"],
+      read: () => uriList.toString("utf8"),
+      readBuffer: () => Buffer.alloc(0)
+    }, {
+      statSync: () => ({
+        isDirectory: () => false,
+        isFile: () => true
+      })
+    })).toEqual(["C:\\Copilot Files\\context.txt"]);
+  });
+
+  it("falls back to the native Windows file-drop list when Electron hides the URI payload", () => {
+    const copiedFile = "C:\\Copilot Files\\native.txt";
+    const execute = vi.fn(() => `\uFEFF["${copiedFile.replace(/\\/g, "\\\\")}"]`);
+    expect(main.readWindowsClipboardFileDrop(execute)).toEqual([copiedFile]);
+    expect(execute).toHaveBeenCalledWith(
+      "powershell.exe",
+      expect.arrayContaining(["-STA", "-Command"]),
+      expect.objectContaining({ encoding: "utf8", windowsHide: true })
+    );
+
+    const nativeFallback = vi.fn(() => [copiedFile]);
+    expect(main.readClipboardFilePaths({
+      availableFormats: () => ["text/uri-list"],
+      read: () => "",
+      readBuffer: () => Buffer.alloc(0)
+    }, {
+      statSync: () => ({
+        isDirectory: () => false,
+        isFile: () => true
+      })
+    }, nativeFallback)).toEqual([copiedFile]);
+    expect(nativeFallback).toHaveBeenCalledOnce();
+  });
+
+  it("registers whichever clipboard capabilities are available", () => {
+    electron.ipcMain.handle.mockClear();
+    main.__setElectron({
+      ...electron,
+      clipboard: { readText: vi.fn(() => "read only") }
+    });
+    main.registerClipboardIpc();
+    expect(electron.ipcMain.handle.mock.calls.map(([channel]) => channel))
+      .toEqual(["multiterm:read-clipboard"]);
+
+    electron.ipcMain.handle.mockClear();
+    main.__setElectron({
+      ...electron,
+      clipboard: { writeText: vi.fn() }
+    });
+    main.registerClipboardIpc();
+    expect(electron.ipcMain.handle.mock.calls.map(([channel]) => channel))
+      .toEqual(["multiterm:write-clipboard"]);
+
+    electron.ipcMain.handle.mockClear();
+    main.__setElectron({
+      ...electron,
+      clipboard: {
+        readImage: vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) }))
+      }
+    });
+    main.registerClipboardIpc();
+    expect(electron.ipcMain.handle.mock.calls.map(([channel]) => channel))
+      .toEqual(["multiterm:read-clipboard"]);
   });
 
   it("falls back to the sender's own URL when the frame does not expose one", () => {
@@ -1054,6 +1330,21 @@ describe("administrator elevation IPC", () => {
     expect(unref).toHaveBeenCalled();
   });
 
+  it("relaunchAsAdmin omits ArgumentList when Electron has no application arguments", () => {
+    setPlatform("win32");
+    const originalArgv = process.argv;
+    const unref = vi.fn();
+    childProcess.spawn.mockImplementation(() => ({ unref }));
+    try {
+      process.argv = [process.execPath];
+      expect(main.relaunchAsAdmin()).toBe(true);
+      const command = childProcess.spawn.mock.calls.at(-1)[1].at(-1);
+      expect(command).not.toContain("-ArgumentList");
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
   it("relaunchAsAdmin returns false when the launcher spawn throws", () => {
     setPlatform("win32");
     childProcess.spawn.mockImplementation(() => { throw new Error("spawn failed"); });
@@ -1163,11 +1454,19 @@ describe("backend completion edge cases", () => {
     expect(main.installerSizeLimitBytes(undefined)).toBe(fallback);
     expect(main.installerSizeLimitBytes(1)).toBe(1024 * 1024);
     expect(main.installerSizeLimitBytes(Number.MAX_VALUE)).toBe(fallback);
+    expect(main.isAllowedInstallerAsset(null)).toBe(false);
     expect(main.isAllowedInstallerAsset({
       name: "setup.exe",
       size: 1,
       url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
     })).toBe(false);
+    expect(main.isAllowedInstallerAsset({
+      digest: 42,
+      name: "setup.exe",
+      size: 1,
+      url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+    })).toBe(false);
+    expect(main.isAllowedInstallerAsset({ url: 42 })).toBe(false);
   });
 });
 
@@ -1703,6 +2002,17 @@ describe("update checker", () => {
     it("does nothing when ipcMain is unavailable", () => {
       main.__setElectron({ ...electron, ipcMain: null });
       expect(() => main.registerUpdateIpc()).not.toThrow();
+    });
+
+    it("replaces update handlers even when none were registered before", () => {
+      electron.ipcMain.removeHandler.mockImplementation(() => {
+        throw new Error("missing");
+      });
+      expect(() => main.registerUpdateIpc()).not.toThrow();
+      expect(electron.ipcMain.handle).toHaveBeenCalledWith(
+        "multiterm:download-update",
+        expect.any(Function)
+      );
     });
   });
 });

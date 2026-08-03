@@ -297,6 +297,13 @@ describe("pickScript", () => {
     expect(client.send).toHaveBeenCalledWith({ type: "scriptPicked", requestId: "r1", path: null });
   });
 
+  it("ignores a non-string picker request id", () => {
+    setPlatform("linux");
+    const client = fakeClient();
+    server.pickScript(client, { requestId: 42, cwd: "/home/me" });
+    expect(client.send).toHaveBeenCalledWith({ type: "scriptPicked", requestId: "", path: null });
+  });
+
   it("runs the dialog on an STA thread with no visible console", () => {
     setPlatform("win32");
     vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });

@@ -4571,6 +4571,310 @@ test.describe("Renderer coverage completion", () => {
     expect(result.normalizedHeaderDefaults.length).toBeGreaterThan(0);
   });
 
+  test("covers page-close policy and shortcut-label branch alternatives @full", async () => {
+    const result = await page.evaluate(async () => {
+      closePageCloseConfirm();
+      closeAllTerminals();
+      state.pages = defaultPages();
+      state.activePageId = state.pages[0].id;
+      state.terminalPages = {};
+      state.settings.pageCloseAction = "ask";
+      savePages();
+      renderPager();
+
+      const values = {};
+      values.lastPageClose = requestPageClose(state.activePageId);
+      const emptyPageId = addPage({ name: "Empty branch page", activate: false });
+      values.missingPageClose = requestPageClose("missing-page");
+      values.emptyPageClose = requestPageClose(emptyPageId);
+
+      const first = addTerminal({
+        title: "Page close branch one",
+        reattach: true,
+        session: { id: createId() }
+      });
+      const second = addTerminal({
+        title: "Page close branch two",
+        reattach: true,
+        session: { id: createId() }
+      });
+      first.remoteRequested = false;
+      second.remoteRequested = false;
+      const crowdedPageId = addPage({ name: "Crowded branch page", activate: false });
+      moveTerminalToPage(first.id, crowdedPageId);
+      moveTerminalToPage(second.id, crowdedPageId);
+      values.promptedPageClose = requestPageClose(crowdedPageId);
+      values.pluralPagePrompt = elements.pageCloseText.textContent;
+      elements.pageCloseMove.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true
+      }));
+      elements.pageCloseOverlay.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true
+      }));
+
+      openPageCloseConfirm({ kind: "page", pageId: "missing-page" });
+      values.missingPagePrompt = elements.pageCloseText.textContent;
+      elements.updateConsentOverlay.hidden = true;
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "x",
+        bubbles: true,
+        cancelable: true
+      }));
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true
+      }));
+      values.pageCloseEscaped = state.pendingPageClose === null;
+      choosePageCloseAction("move");
+
+      const nativeRemoveTerminal = removeTerminal;
+      removeTerminal = () => false;
+      values.failedPageClose = removePage(crowdedPageId, { terminalAction: "close" });
+      removeTerminal = nativeRemoveTerminal;
+      values.pageRemainedAfterFailure = Boolean(pageById(crowdedPageId));
+      values.movedCrowdedPage = removePage(crowdedPageId, { terminalAction: "move" });
+
+      const existingPageId = state.pages[0].id;
+      values.existingPageLabel = terminalShortcutLabel(`terminal.move-page:${existingPageId}`);
+      values.missingPageLabel = terminalShortcutLabel("terminal.move-page:missing");
+      const snippets = [
+        { name: "Named snippet", command: "echo named" },
+        { name: "", command: "echo command only" },
+        { name: "", command: "" }
+      ];
+      state.settings.snippets = snippets;
+      values.namedSnippetLabel = terminalShortcutLabel(
+        `terminal.snippet:${stableContextActionToken("Named snippet\necho named")}`
+      );
+      values.commandSnippetLabel = terminalShortcutLabel(
+        `terminal.snippet:${stableContextActionToken("\necho command only")}`
+      );
+      values.emptySnippetLabel = terminalShortcutLabel(
+        `terminal.snippet:${stableContextActionToken("\n")}`
+      );
+      state.settings.snippets = null;
+      values.missingSnippetLabel = terminalShortcutLabel("terminal.snippet:missing");
+      values.unknownShortcutLabel = terminalShortcutLabel("terminal.unknown");
+      state.settings.snippets = [];
+
+      const nativeTerminals = state.terminals;
+      state.terminals = new Map([["single", { pageId: existingPageId }]]);
+      openPageCloseConfirm({ kind: "all" });
+      values.singularAllPrompt = elements.pageCloseText.textContent;
+      closePageCloseConfirm();
+      state.terminals = nativeTerminals;
+
+      const nativePageCloseCombo = elements.pageCloseAction._combo;
+      elements.pageCloseAction._combo = {
+        sync() {
+          values.pageCloseComboSynced = true;
+        }
+      };
+      state.pendingPageClose = { kind: "all" };
+      elements.pageCloseRemember.checked = true;
+      choosePageCloseAction("move");
+      elements.pageCloseAction._combo = nativePageCloseCombo;
+
+      state.settings.pageCloseAction = "move";
+      values.directMovedAll = requestCloseAllPages();
+      state.settings.pageCloseAction = "ask";
+      values.promptedAllClose = requestCloseAllPages();
+      closePageCloseConfirm();
+      state.pendingPageClose = { kind: "all" };
+      elements.pageCloseRemember.checked = false;
+      choosePageCloseAction("move");
+      values.movedAllPageCount = state.pages.length;
+      values.movedAllTerminalCount = terminalsOnPage(state.activePageId).length;
+
+      const nativeCloseAllTerminals = closeAllTerminals;
+      closeAllTerminals = () => false;
+      values.failedAllClose = resetAllPages("close");
+      closeAllTerminals = nativeCloseAllTerminals;
+
+      const closePageId = addPage({ name: "Close plural branch", activate: false });
+      moveTerminalToPage(first.id, closePageId);
+      moveTerminalToPage(second.id, closePageId);
+      values.closedPluralPage = removePage(closePageId, { terminalAction: "close" });
+      const remainingTerminals = state.terminals;
+      state.terminals = new Map();
+      state.settings.pageCloseAction = "ask";
+      values.emptyAllClose = requestCloseAllPages();
+      state.settings.pageCloseAction = "close";
+      values.emptyClosePolicy = requestCloseAllPages();
+      state.terminals = remainingTerminals;
+      state.settings.pageCloseAction = "ask";
+      closeAllTerminals();
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      commandSnippetLabel: "echo command only",
+      closedPluralPage: true,
+      directMovedAll: true,
+      emptyAllClose: true,
+      emptyClosePolicy: true,
+      emptyPageClose: true,
+      emptySnippetLabel: "Run saved snippet",
+      existingPageLabel: "Move to Page 1",
+      failedAllClose: false,
+      failedPageClose: false,
+      lastPageClose: false,
+      missingPageClose: false,
+      missingPageLabel: "Move to page",
+      missingSnippetLabel: "Run saved snippet",
+      movedAllPageCount: 1,
+      movedCrowdedPage: true,
+      namedSnippetLabel: "Named snippet",
+      pageCloseComboSynced: true,
+      pageRemainedAfterFailure: true,
+      pageCloseEscaped: true,
+      promptedAllClose: false,
+      promptedPageClose: false,
+      unknownShortcutLabel: "terminal.unknown"
+    });
+    expect(result.pluralPagePrompt).toContain("2 terminals");
+    expect(result.missingPagePrompt).toContain("This page");
+    expect(result.movedAllTerminalCount).toBeGreaterThanOrEqual(2);
+    expect(result.singularAllPrompt).toContain("The 1 terminal across all pages");
+  });
+
+  test("covers final clipboard, shortcut, artifact, update, and menu fallbacks @full", async () => {
+    const result = await page.evaluate(async () => {
+      const values = {};
+      for (const overlay of [
+        elements.updateConsentOverlay,
+        elements.pageCloseOverlay,
+        elements.statisticsOverlay,
+        elements.terminalArtifactsOverlay,
+        elements.shortcutsOverlay,
+        elements.updateOverlay,
+        elements.aboutOverlay,
+        elements.helpOverlay
+      ]) {
+        overlay.hidden = true;
+        overlay.classList.remove("is-open");
+      }
+      palette.open = false;
+      quickSwitch.open = false;
+
+      const terminal = addTerminal({
+        title: "Final fallback terminal",
+        reattach: true,
+        session: { id: createId() }
+      });
+      terminal.remoteRequested = false;
+      state.activeId = terminal.id;
+
+      const nativeGetSelection = terminal.term.getSelection.bind(terminal.term);
+      const nativeCopyTerminalOutput = copyTerminalOutput;
+      const copiedSelections = [];
+      copyTerminalOutput = (_id, selection) => copiedSelections.push(selection ?? null);
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: () => "" });
+      terminal.contextSelection = "context selection";
+      terminal.selectionSnapshot = "snapshot selection";
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      }));
+      terminal.contextSelection = "";
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      }));
+      terminal.selectionSnapshot = "";
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      }));
+      copyTerminalOutput = nativeCopyTerminalOutput;
+      Object.defineProperty(terminal.term, "getSelection", {
+        configurable: true,
+        value: nativeGetSelection
+      });
+      values.copiedSelections = copiedSelections;
+
+      const nativeDequeue = dequeueNextTerminalCommand;
+      let dequeuedWithoutTerminal = false;
+      dequeueNextTerminalCommand = (candidate) => {
+        dequeuedWithoutTerminal = candidate === null;
+        return false;
+      };
+      state.activeId = null;
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "q",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      }));
+      dequeueNextTerminalCommand = nativeDequeue;
+      values.dequeuedWithoutTerminal = dequeuedWithoutTerminal;
+      closeTmuxAttach();
+
+      const clipboardDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard");
+      const nativeMultiterm = window.multiterm;
+      window.multiterm = {
+        ...(nativeMultiterm || {}),
+        writeClipboardText: () => Promise.reject(null)
+      };
+      Object.defineProperty(Navigator.prototype, "clipboard", {
+        configurable: true,
+        get: () => ({ writeText: () => Promise.reject(null), readText: async () => "" })
+      });
+      state.settings.copyOnSelect = true;
+      await new Promise((resolve) => terminal.term.write("clipboard fallback", resolve));
+      terminal.term.selectAll();
+      terminal.term._core._onSelectionChange.fire();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      state.settings.copyOnSelect = false;
+      window.multiterm = nativeMultiterm;
+      if (clipboardDescriptor) Object.defineProperty(Navigator.prototype, "clipboard", clipboardDescriptor);
+      else delete Navigator.prototype.clipboard;
+
+      terminal.pid = 202;
+      const record = ensureTerminalArtifact(terminal);
+      record.pid = 101;
+      syncTerminalArtifacts(terminal);
+      values.reusedArtifactRemoved = !state.terminalArtifacts.terminals[terminal.id];
+
+      saveAutomaticUpdatePreferences({ configured: true, enabled: false, intervalHours: 1 });
+      startAutomaticUpdateChecks();
+      values.disabledUpdateTimer = state.update.timer === null;
+
+      elements.contextMenu.hidden = false;
+      elements.contextMenu.style.left = "";
+      elements.contextMenu.style.top = "";
+      clampOpenContextMenu();
+      values.clampedMenu = {
+        left: elements.contextMenu.style.left,
+        top: elements.contextMenu.style.top
+      };
+      hideContextMenu();
+      removeTerminal(terminal.id);
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      clampedMenu: { left: "8px", top: "8px" },
+      copiedSelections: ["context selection", "snapshot selection", null],
+      dequeuedWithoutTerminal: true,
+      disabledUpdateTimer: true,
+      reusedArtifactRemoved: true
+    });
+  });
+
   test("covers artifact, connection, message, and statistics fallback truth tables @full", async () => {
     const result = await page.evaluate(async () => {
       closeAllTerminals();
@@ -4653,8 +4957,7 @@ test.describe("Renderer coverage completion", () => {
       refreshUnparentedQueueTargets("missing");
       values.fallbackUnparentedTarget = elements.unparentedQueueTarget.value;
 
-      first.status = "exited";
-      second.status = "exited";
+      for (const terminal of state.terminals.values()) terminal.status = "exited";
       elements.terminalArtifactsTarget.value = "";
       state.activeId = null;
       refreshTerminalArtifactTargets();
@@ -4959,8 +5262,15 @@ test.describe("Renderer coverage completion", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
       stopAutomaticUpdateChecks();
 
-      const terminal = addTerminal({ title: "Final branch terminal" });
-      terminal.status = "live";
+      const terminal = addTerminal({
+        title: "Final branch terminal",
+        reattach: true,
+        session: { id: createId() }
+      });
+      terminal.remoteRequested = false;
+      for (const candidate of state.terminals.values()) {
+        if (candidate.id !== terminal.id) candidate.status = "exited";
+      }
       refreshTerminalArtifactTargets("missing-artifact-target");
       values.liveArtifactFallback = elements.terminalArtifactsTarget.value === terminal.id;
       state.statistics.terminalId = terminal.id;
@@ -5393,6 +5703,13 @@ test.describe("Renderer coverage completion", () => {
         cancelable: true
       }));
       values.comboStayedOpenForArrow = comboInput.getAttribute("aria-expanded");
+      applySettingsFilter();
+      comboInput.dispatchEvent(new FocusEvent("focus"));
+      comboInput.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true
+      }));
       setSettingsGroupExpanded(comboGroup, false);
       values.comboClosedWithGroup = comboInput.getAttribute("aria-expanded");
 

@@ -481,6 +481,7 @@
 <li><a href="#windows-integration" id="toc-windows-integration">Windows integration</a>
 <ul>
 <li><a href="#file-explorer" id="toc-file-explorer">File Explorer</a></li>
+<li><a href="#visual-studio-code" id="toc-visual-studio-code">Visual Studio Code</a></li>
 <li><a href="#command-line" id="toc-command-line">Command line</a></li>
 </ul></li>
 <li><a href="#settings" id="toc-settings">Settings</a></li>
@@ -537,7 +538,9 @@
 <p>Customize that menu directly:</p>
 <ul>
 <li>drag an action to reorder it within a section or move it into another section;</li>
+<li>drag the grip beside a section heading to move the entire section;</li>
 <li>select a section heading to rename it;</li>
+<li>open a section's <strong>...</strong> menu to rename or remove it (its actions move to the nearest remaining section);</li>
 <li>select <strong>Add section</strong> at the bottom-left to create and name a new section; or</li>
 <li>right-click an action and choose <strong>Hide item</strong>.</li>
 </ul>
@@ -562,7 +565,8 @@
 <ul>
 <li>Use the page tabs or <kbd>Ctrl+PageUp</kbd>/<kbd>Ctrl+PageDown</kbd> to switch pages. Each tab has a small <strong>x</strong> at its right edge; the last remaining page keeps a disabled close indicator because MultiTerm always retains one page.</li>
 <li>Double-click a page name to rename it.</li>
-<li>Right-click a page for rename, create, and close actions.</li>
+<li>Right-click a page for <strong>Rename</strong>, <strong>New page</strong>, <strong>Close page</strong>, and <strong>Close all</strong>. Close all resets the workspace to one empty <strong>Page 1</strong>.</li>
+<li>Closing a populated page asks whether to move its terminals to a neighbouring page or close them. Select <strong>Take this action next time</strong> to remember the choice, or change <strong>When closing a page with terminals</strong> under <strong>Session</strong> settings.</li>
 <li>Choose <strong>Pages location</strong> under <strong>Layout</strong> to place the page tabs at the top, bottom, left, or right. Right-click blank space in the tabs bar or vertical panel to open a menu whose first action is <strong>Open new page</strong> (quick key <kbd>1</kbd>), followed by the same four placement choices. Changes from either placement control persist across launches and keep the other control synchronized. A vertical pages panel has its own hide button and a floating restore button.</li>
 <li>Drag page tabs left/right in a horizontal bar or up/down in a vertical panel. With a page focused, <kbd>Ctrl+Shift</kbd> plus the matching arrow key reorders it from the keyboard.</li>
 <li>Move a terminal between pages from its context menu.</li>
@@ -698,7 +702,7 @@
 <h3 id="broadcast">Broadcast</h3>
 <p>Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several terminals. Broadcast scope can target the current page or all pages. The <strong>Send Enter</strong> option controls whether the command runs immediately.</p>
 <h3 id="clipboard-behavior">Clipboard behavior</h3>
-<p>MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Configure these behaviors in Settings.</p>
+<p>MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.</p>
 <h2 id="statistics-and-logging">Statistics and logging</h2>
 <h3 id="statistics">Statistics</h3>
 <p>Open <strong>Terminal statistics...</strong> from a pane or <strong>All terminal statistics...</strong> from the workspace context menu. Statistics include session identity, PID, shell, uptime, rows and columns, input/output totals, and process resource information when available.</p>
@@ -727,6 +731,8 @@
 <li>a modern Windows 11 <strong>Open in MultiTerm</strong> entry.</li>
 </ul>
 <p>Explorer integration is optional and unchecked by default. Enable it explicitly on the installer's <strong>Select Additional Tasks</strong> page. Folder, folder-background, and drive invocations are supported. If MultiTerm is already running, Explorer forwards the folder to a live instance.</p>
+<h3 id="visual-studio-code">Visual Studio Code</h3>
+<p>The installer can also add MultiTerm commands to Visual Studio Code's Explorer. Right-click a file to open its containing folder, right-click a folder to open that folder, or use <strong>Open Workspace in MultiTerm</strong> from the Explorer when no resource is selected. The command reuses a live MultiTerm instance or starts one if necessary. For a nonstandard installation, set <code>multiterm.launcherPath</code> in VS Code.</p>
 <h3 id="command-line">Command line</h3>
 <p>The installer can optionally add MultiTerm's protected installation directory to the system <code>PATH</code>. After opening a new shell, run:</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>multiterm</span>
@@ -760,6 +766,10 @@
 <tr>
 <td><kbd>Ctrl+T</kbd></td>
 <td>New terminal</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+P</kbd></td>
+<td>New page</td>
 </tr>
 <tr>
 <td><kbd>Ctrl+Shift+W</kbd></td>
@@ -823,7 +833,7 @@
 </tr>
 <tr>
 <td><kbd>Ctrl+/</kbd></td>
-<td>Keyboard-shortcut reference</td>
+<td>Categorized keyboard-shortcut reference</td>
 </tr>
 <tr>
 <td><kbd>Escape</kbd></td>

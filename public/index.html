@@ -135,6 +135,7 @@
 
       <div class="workbench">
         <aside class="control-panel" aria-label="Terminal layout controls">
+          <div class="settings-panel-heading">Settings</div>
           <div class="settings-panel-toolbar">
             <label class="settings-search">
               <i data-lucide="search" aria-hidden="true"></i>
@@ -359,6 +360,14 @@
             <label class="toggle-row">
               <input id="restoreSession" type="checkbox">
               <span>Restore last session</span>
+            </label>
+            <label class="control-row">
+              <span>When closing a page with terminals</span>
+              <select id="pageCloseAction">
+                <option value="ask">Ask every time</option>
+                <option value="move">Move terminals to another page</option>
+                <option value="close">Close the terminals</option>
+              </select>
             </label>
             <label class="toggle-row">
               <input id="autoUpdateChecks" type="checkbox">
@@ -644,32 +653,7 @@
             <i data-lucide="x"></i>
           </button>
         </div>
-        <ul class="shortcuts-list">
-          <li><span>Command palette</span><span class="kbd">Ctrl+Shift+P</span></li>
-          <li><span>Switch terminal</span><span class="kbd">Alt+Q</span></li>
-          <li><span>Jump to a listed terminal</span><span class="kbd">Alt+1…9, Alt+A…Z</span></li>
-          <li><span>Next / previous page</span><span class="kbd">Ctrl+PageDown / Ctrl+PageUp</span></li>
-          <li><span>Go to page 1–9</span><span class="kbd">Alt+1…9</span></li>
-          <li><span>Keyboard shortcuts</span><span class="kbd">Ctrl+/</span></li>
-          <li><span>New terminal</span><span class="kbd">Ctrl+T / Ctrl+Shift+T</span></li>
-          <li><span>Close active terminal</span><span class="kbd">Ctrl+Shift+W</span></li>
-          <li><span>Restart active terminal</span><span class="kbd">Ctrl+Shift+R</span></li>
-          <li><span>Find in terminal</span><span class="kbd">Ctrl+F</span></li>
-          <li><span>Find in all terminals</span><span class="kbd">Ctrl+Shift+F</span></li>
-          <li><span>Search + filter panes</span><span class="kbd">Ctrl+Shift+E</span></li>
-          <li><span>Clear active terminal</span><span class="kbd">Ctrl+Shift+L</span></li>
-          <li><span>Maximize / restore pane</span><span class="kbd">Ctrl+Shift+X</span></li>
-          <li><span>Select all terminal output</span><span class="kbd">Ctrl+A</span></li>
-          <li><span>Paste into terminal</span><span class="kbd">Ctrl+V / Ctrl+Shift+V</span></li>
-          <li><span>Copy active output</span><span class="kbd">Ctrl+Shift+C</span></li>
-          <li><span>Give a drag to a full-screen app instead of selecting</span><span class="kbd">Alt+Drag</span></li>
-          <li><span>Dequeue next command</span><span class="kbd">Ctrl+Shift+Q</span></li>
-          <li><span>Broadcast command</span><span class="kbd">Ctrl+Shift+B</span></li>
-          <li><span>Next / previous terminal</span><span class="kbd">Ctrl+Alt+→ / ←</span></li>
-          <li><span>Zoom terminal under pointer</span><span class="kbd">Ctrl+mouse wheel</span></li>
-          <li><span>Active terminal zoom in / out / reset</span><span class="kbd">Ctrl+Alt+= / - / 0</span></li>
-          <li><span>Default terminal zoom in / out / reset</span><span class="kbd">Ctrl+= / Ctrl+- / Ctrl+0</span></li>
-        </ul>
+        <div id="shortcutsCatalog" class="shortcuts-catalog"></div>
       </div>
     </div>
 
@@ -747,6 +731,25 @@
           <button id="closeConfirmTray" type="button" class="confirm-cancel">Keep in tray</button>
           <button id="closeConfirmKeep" type="button" class="confirm-cancel">Quit, keep terminals</button>
           <button id="closeConfirmQuit" type="button" class="confirm-danger">Quit &amp; close bridge</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="pageCloseOverlay" class="palette-overlay" hidden>
+      <div class="palette confirm" role="alertdialog" aria-modal="true" aria-labelledby="pageCloseTitle" aria-describedby="pageCloseText">
+        <div class="confirm-head">
+          <i data-lucide="triangle-alert"></i>
+          <h2 id="pageCloseTitle">Close page?</h2>
+        </div>
+        <p id="pageCloseText" class="confirm-body"></p>
+        <label class="confirm-remember toggle-row">
+          <input id="pageCloseRemember" type="checkbox">
+          <span>Take this action next time (don't ask me again)</span>
+        </label>
+        <div class="confirm-actions">
+          <button id="pageCloseCancel" type="button" class="confirm-cancel">Cancel</button>
+          <button id="pageCloseMove" type="button" class="confirm-proceed">Move terminals</button>
+          <button id="pageCloseTerminals" type="button" class="confirm-danger">Close terminals</button>
         </div>
       </div>
     </div>

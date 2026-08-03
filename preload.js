@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("multiterm", {
   // Uses Electron's native clipboard instead of relying on renderer permission
   // state for terminal selections and other copy actions.
   writeClipboardText: (text) => ipcRenderer.invoke("multiterm:write-clipboard", String(text)),
+  readClipboardText: () => ipcRenderer.invoke("multiterm:read-clipboard"),
 
   // Opens a native file picker and resolves to the chosen script path, or
   // null if the user cancelled.

@@ -1,0 +1,106 @@
+{
+  "name": "multiterm-workbench",
+  "displayName": "MultiTerm Workbench",
+  "description": "Open files, folders, and workspaces from VS Code in MultiTerm Workbench.",
+  "version": "0.1.56",
+  "publisher": "andrewtheart",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "terminal",
+    "multiterm",
+    "explorer",
+    "workspace"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onCommand:multiterm.openContainingFolder",
+    "onCommand:multiterm.openFolder",
+    "onCommand:multiterm.openWorkspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "multiterm.openContainingFolder",
+        "title": "Open Containing Folder in MultiTerm",
+        "category": "MultiTerm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "multiterm.openFolder",
+        "title": "Open Folder in MultiTerm",
+        "category": "MultiTerm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "multiterm.openWorkspace",
+        "title": "Open Workspace in MultiTerm",
+        "category": "MultiTerm",
+        "icon": "$(terminal)"
+      }
+    ],
+    "configuration": {
+      "title": "MultiTerm Workbench",
+      "properties": {
+        "multiterm.launcherPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional full path to Start-MultiTerm.ps1. Leave empty to find a standard MultiTerm installation automatically."
+        }
+      }
+    },
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "multiterm.openContainingFolder",
+          "when": "isWindows && resourceScheme == file && !explorerResourceIsFolder",
+          "group": "navigation@90"
+        },
+        {
+          "command": "multiterm.openFolder",
+          "when": "isWindows && resourceScheme == file && explorerResourceIsFolder",
+          "group": "navigation@90"
+        },
+        {
+          "command": "multiterm.openWorkspace",
+          "when": "isWindows && !resourceScheme && workspaceFolderCount > 0",
+          "group": "navigation@90"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "multiterm.openWorkspace",
+          "when": "isWindows && view == workbench.explorer.fileView && workspaceFolderCount > 0",
+          "group": "navigation@90"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "multiterm.openContainingFolder",
+          "when": "isWindows"
+        },
+        {
+          "command": "multiterm.openFolder",
+          "when": "isWindows"
+        },
+        {
+          "command": "multiterm.openWorkspace",
+          "when": "isWindows && workspaceFolderCount > 0"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "package": "vsce package"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andrewtheart/multiterm-workbench.git"
+  }
+}

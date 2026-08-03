@@ -476,6 +476,83 @@ test.describe("Surface context menu", () => {
     expect(restoredSessionIds.indexOf("terminal.paste")).toBeLessThan(restoredSessionIds.indexOf("terminal.restart"));
   });
 
+  test("reorders and removes sections without losing their actions", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      localStorage.removeItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY);
+      contextMenuLayout = loadContextMenuLayout();
+    });
+
+    let menu = await openTerminalMenu(page);
+    const section = (id) => menu.locator(`.ctx-group[data-section-id="${id}"]`);
+    const originalActionCount = await menu.locator(".ctx-item[data-customization-id]").count();
+    const sessionHandle = section("session").locator(".ctx-section-drag-handle");
+    await expect(sessionHandle).toHaveAttribute("draggable", "true");
+    await expect(sessionHandle).toHaveAttribute("aria-label", "Drag to move Session section");
+    await sessionHandle.dragTo(section("clipboard"), { targetPosition: { x: 12, y: 2 } });
+
+    await expect.poll(() => page.evaluate(() =>
+      JSON.parse(localStorage.getItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY)).sections[0].id
+    )).toBe("session");
+
+    const findHeader = section("find-context").locator(".ctx-group-header");
+    await findHeader.hover();
+    const options = findHeader.locator(".ctx-section-actions");
+    await expect(options).toHaveAttribute("aria-label", "Find & context section options");
+    await options.click();
+    const sectionMenu = page.locator("#contextSubmenu");
+    await expect(sectionMenu).toBeVisible();
+    await sectionMenu.locator(".ctx-item", { hasText: "Rename section" }).click();
+    await expect(section("find-context").locator(".ctx-group-title-input")).toBeFocused();
+    await section("find-context").locator(".ctx-group-title-input").press("Escape");
+    await findHeader.hover();
+    await options.click();
+    const remove = sectionMenu.locator(".ctx-item", { hasText: "Remove section" });
+    await expect(remove).toHaveClass(/danger/);
+    await remove.click();
+
+    await expect(section("find-context")).toHaveCount(0);
+    await expect(section("tools-automation").locator('[data-customization-id="terminal.find"]')).toBeVisible();
+    await expect(menu.locator(".ctx-item[data-customization-id]")).toHaveCount(originalActionCount);
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY)));
+    expect(stored.removedSections).toContain("find-context");
+    expect(stored.sections.some((entry) => entry.id === "find-context")).toBe(false);
+
+    await menu.locator(".ctx-add-section").click();
+    await menu.locator(".ctx-group-title-input").fill("Temporary empty");
+    await menu.locator(".ctx-group-title-input").press("Enter");
+    let temporary = menu.locator(".ctx-group.is-custom-section").filter({ hasText: "Temporary empty" });
+    const emptySectionId = await temporary.getAttribute("data-section-id");
+    await temporary.locator(".ctx-group-header").hover();
+    await temporary.locator(".ctx-section-actions").click();
+    await sectionMenu.locator(".ctx-item", { hasText: "Remove section" }).click();
+    await expect(menu.locator(`.ctx-group[data-section-id="${emptySectionId}"]`)).toHaveCount(0);
+
+    await menu.locator(".ctx-add-section").click();
+    await menu.locator(".ctx-group-title-input").fill("Temporary action");
+    await menu.locator(".ctx-group-title-input").press("Enter");
+    temporary = menu.locator(".ctx-group.is-custom-section").filter({ hasText: "Temporary action" });
+    const actionSectionId = await temporary.getAttribute("data-section-id");
+    await menu.locator('[data-customization-id="terminal.notes"]').dragTo(temporary.locator(".ctx-group-body"));
+    await expect(temporary.locator(".ctx-item")).toHaveCount(1);
+    await temporary.locator(".ctx-group-header").hover();
+    await temporary.locator(".ctx-section-actions").click();
+    await sectionMenu.locator(".ctx-item", { hasText: "Remove section" }).click();
+    await expect(menu.locator(`.ctx-group[data-section-id="${actionSectionId}"]`)).toHaveCount(0);
+    await expect(menu.locator('[data-customization-id="terminal.notes"]')).toBeVisible();
+    await expect(menu.locator(".ctx-item[data-customization-id]")).toHaveCount(originalActionCount);
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    menu = await openTerminalMenu(page);
+    await expect(menu.locator('.ctx-group[data-section-id="find-context"]')).toHaveCount(0);
+    await expect(menu.locator(
+      '.ctx-group[data-section-id="tools-automation"] [data-customization-id="terminal.find"]'
+    )).toBeVisible();
+    expect(await page.evaluate(() => contextMenuLayout.sections[0].id)).toBe("session");
+  });
+
   test("hides menu items and exposes the bottom-right hidden-items control", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -551,7 +628,8 @@ test.describe("Surface context menu", () => {
           { id: "valid", name: "Duplicate", items: ["terminal.paste"] },
           { id: "custom:saved", name: "Saved", custom: false, items: itemIds }
         ],
-        hidden: [null, "Invalid ID", "terminal.copy", "terminal.copy", "terminal.paste"]
+        hidden: [null, "Invalid ID", "terminal.copy", "terminal.copy", "terminal.paste"],
+        removedSections: [null, "Invalid ID", "find-context", "find-context", "custom:saved"]
       });
       const tooManySections = normalizeContextMenuLayout({
         sections: Array.from({ length: CONTEXT_MENU_MAX_SECTIONS + 4 }, (_, index) => ({
@@ -561,6 +639,13 @@ test.describe("Surface context menu", () => {
         }))
       });
       const wrongVersion = normalizeContextMenuLayout({ version: CONTEXT_MENU_LAYOUT_VERSION + 1, sections: [] });
+      const savedLayout = contextMenuLayout;
+      contextMenuLayout = normalizeContextMenuLayout({ removedSections: ["only"] });
+      const recoveredRemovedSection = buildCustomizableContextMenu([
+        { group: "Only", groupId: "only" },
+        { customizationId: "only.action", label: "Only action", icon: "copy", run() {} }
+      ]).model;
+      contextMenuLayout = savedLayout;
 
       localStorage.setItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY, "{");
       const malformedStored = loadContextMenuLayout();
@@ -581,6 +666,11 @@ test.describe("Surface context menu", () => {
         malformedStored,
         normalized,
         oversizedStored,
+        recoveredRemovedSection: {
+          items: recoveredRemovedSection.sections[0].items,
+          removedSections: [...recoveredRemovedSection.removedSections],
+          sectionId: recoveredRemovedSection.sections[0].id
+        },
         savedDespiteFailure,
         storageWarnings: logStore.entries.slice(warningCount).filter((entry) =>
           entry.source === "context-menu" && entry.message.includes("persist context-menu layout")
@@ -599,10 +689,16 @@ test.describe("Surface context menu", () => {
     expect(result.normalized.sections[1].custom).toBe(true);
     expect(result.normalized.sections[1].items).toHaveLength(511);
     expect(result.normalized.hidden).toEqual(["terminal.copy", "terminal.paste"]);
+    expect(result.normalized.removedSections).toEqual(["find-context", "custom:saved"]);
     expect(result.tooManySections).toBe(32);
     expect(result.wrongVersion).toMatchObject({ sections: [], hidden: [] });
     expect(result.malformedStored).toMatchObject({ sections: [], hidden: [] });
     expect(result.oversizedStored).toMatchObject({ sections: [], hidden: [] });
+    expect(result.recoveredRemovedSection).toEqual({
+      items: ["only.action"],
+      removedSections: [],
+      sectionId: "only"
+    });
     expect(result.savedDespiteFailure.sections[0].items).toEqual(["terminal.copy"]);
     expect(result.storageWarnings).toBe(1);
   });
@@ -658,7 +754,105 @@ test.describe("Surface context menu", () => {
       const toastText = elements.toastHost.lastElementChild?.textContent || "";
       ctxCustomizationModel.sections = originalSections;
 
+      const sectionOrder = ctxCustomizationModel.sections.map((section) => section.id);
+      const firstSectionId = sectionOrder[0];
+      const secondSectionId = sectionOrder[1];
+      const lastSectionId = sectionOrder.at(-1);
+      const firstGroup = elements.contextMenu.querySelector(`.ctx-group[data-section-id="${firstSectionId}"]`);
+      const secondGroup = elements.contextMenu.querySelector(`.ctx-group[data-section-id="${secondSectionId}"]`);
+      const firstHandle = firstGroup.querySelector(".ctx-section-drag-handle");
+      const secondHandle = secondGroup.querySelector(".ctx-section-drag-handle");
+      const dragTransfer = new DataTransfer();
+      firstHandle.dispatchEvent(new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dragTransfer
+      }));
+      const dragPayloads = [
+        ["application/x-multiterm-context-section", dragTransfer.getData("application/x-multiterm-context-section")],
+        ["text/plain", dragTransfer.getData("text/plain")]
+      ];
+      firstHandle.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
+
+      const idleDragOver = new DragEvent("dragover", { bubbles: true, cancelable: true });
+      firstGroup.dispatchEvent(idleDragOver);
+      firstHandle.dispatchEvent(new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer()
+      }));
+      const sameSectionDrop = new DragEvent("drop", { bubbles: true, cancelable: true });
+      firstGroup.dispatchEvent(sameSectionDrop);
+      firstHandle.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
+
+      firstGroup.getBoundingClientRect = () => ({ top: 10, height: 40 });
+      secondHandle.dispatchEvent(new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer()
+      }));
+      const noTransferDragOver = new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        clientY: 45
+      });
+      firstGroup.dispatchEvent(noTransferDragOver);
+      const afterIndicator = firstGroup.classList.contains("is-section-drop-after");
+      firstGroup.dispatchEvent(new DragEvent("dragleave", {
+        bubbles: true,
+        relatedTarget: firstGroup.querySelector(".ctx-group-header")
+      }));
+      const internalLeaveKeptIndicator = firstGroup.classList.contains("is-section-drop-after");
+      firstGroup.dispatchEvent(new DragEvent("dragleave", {
+        bubbles: true,
+        relatedTarget: document.body
+      }));
+      const externalLeaveClearedIndicator = !firstGroup.classList.contains("is-section-drop-after");
+      const noOpDrop = new DragEvent("drop", {
+        bubbles: true,
+        cancelable: true,
+        clientY: 45,
+        dataTransfer: new DataTransfer()
+      });
+      firstGroup.dispatchEvent(noOpDrop);
+      const noOpDropFinishedDrag = ctxSectionDrag === null;
+      finishContextSectionDrag();
+
+      startContextSectionDrag({ dataTransfer: null }, firstSectionId, firstGroup);
+      const noTransferDragStarted = ctxSectionDrag?.sectionId === firstSectionId;
+      finishContextSectionDrag();
+      startContextSectionDrag({}, "missing-section", firstGroup);
+
+      const noModel = ctxCustomizationModel;
+      ctxCustomizationModel = null;
+      const noModelMove = moveContextMenuSection(firstSectionId, lastSectionId, true);
+      const noModelRemove = removeContextMenuSection(firstSectionId);
+      ctxCustomizationModel = noModel;
+      const sameSectionMove = moveContextMenuSection(firstSectionId, firstSectionId, true);
+      const missingSourceSectionMove = moveContextMenuSection("missing-section", lastSectionId, true);
+      const missingReferenceSectionMove = moveContextMenuSection(firstSectionId, "missing-section", true);
+      const movedAfterLast = moveContextMenuSection(firstSectionId, lastSectionId, true);
+      const noOpMove = moveContextMenuSection(firstSectionId, lastSectionId, true);
+      const restoredFirst = moveContextMenuSection(firstSectionId, sectionOrder[1], false);
+
+      const singleSectionModel = ctxCustomizationModel;
+      ctxCustomizationModel = {
+        version: CONTEXT_MENU_LAYOUT_VERSION,
+        sections: [{ id: "only", name: "Only", custom: true, items: [] }],
+        hidden: new Set(),
+        hiddenCurrentCount: 0,
+        removedSections: new Set()
+      };
+      const lastSectionRemove = removeContextMenuSection("only");
+      const missingSectionRemove = removeContextMenuSection("missing");
+      ctxCustomizationModel = singleSectionModel;
+
       return {
+        afterIndicator,
+        dragPayloads,
+        externalLeaveClearedIndicator,
+        idleDragOverPrevented: idleDragOver.defaultPrevented,
+        internalLeaveKeptIndicator,
         invalidHidePreserved: (() => {
           const size = ctxCustomizationModel.hidden.size;
           setContextMenuItemHidden("Invalid ID", true);
@@ -669,22 +863,59 @@ test.describe("Surface context menu", () => {
           return ctxEditingSectionId === null;
         })(),
         limitedCount,
+        lastSectionRemove,
         missingItemMove: moveContextMenuItem("missing-item", "session", null, false),
+        missingSectionRemove,
         missingSectionMove: moveContextMenuItem(firstItem, "missing-section", null, false),
+        missingReferenceSectionMove,
+        missingSourceSectionMove,
+        movedAfterLast,
+        noModelMove,
+        noModelRemove,
+        noOpMove,
+        noOpDropFinishedDrag,
+        noTransferDragOverPrevented: noTransferDragOver.defaultPrevented,
+        noTransferDragStarted,
+        restoredFirst,
+        sameSectionDropPrevented: sameSectionDrop.defaultPrevented,
+        sameSectionMove,
         sameItemMove: moveContextMenuItem(firstItem, "session", firstItem, false),
+        firstSectionId,
         sectionCount,
         toastText
       };
     });
 
     expect(guards).toMatchObject({
+      afterIndicator: true,
+      externalLeaveClearedIndicator: true,
+      idleDragOverPrevented: false,
+      internalLeaveKeptIndicator: true,
       invalidHidePreserved: true,
       invalidRenameIgnored: true,
+      lastSectionRemove: false,
       limitedCount: 32,
+      missingSectionRemove: false,
       missingItemMove: false,
+      missingReferenceSectionMove: false,
       missingSectionMove: false,
+      missingSourceSectionMove: false,
+      movedAfterLast: true,
+      noModelMove: false,
+      noModelRemove: false,
+      noOpMove: false,
+      noOpDropFinishedDrag: true,
+      noTransferDragOverPrevented: true,
+      noTransferDragStarted: true,
+      restoredFirst: true,
+      sameSectionDropPrevented: false,
+      sameSectionMove: false,
       sameItemMove: false
     });
+    expect(guards.dragPayloads).toEqual([
+      ["application/x-multiterm-context-section", guards.firstSectionId],
+      ["text/plain", expect.any(String)]
+    ]);
     expect(guards.sectionCount).toBeGreaterThan(0);
     expect(guards.toastText).toContain("up to 32 sections");
   });
@@ -1247,7 +1478,7 @@ test.describe("Surface context menu", () => {
     });
   });
 
-  test("context-menu Paste uses xterm bracketed paste for TUI prompts", async ({ page }) => {
+  test("context-menu Paste sends copied Explorer files through xterm bracketed paste", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
 
@@ -1257,7 +1488,7 @@ test.describe("Surface context menu", () => {
 
       const originalSocket = state.socket;
       const originalReady = state.socketReady;
-      const originalClipboard = navigator.clipboard;
+      const originalBridge = window.multiterm;
       const messages = [];
       state.socket = {
         readyState: WebSocket.OPEN,
@@ -1265,10 +1496,9 @@ test.describe("Surface context menu", () => {
       };
       state.socketReady = true;
       state.settings.rightClickAction = "menu";
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { readText: async () => "copilot-paste-marker" }
-      });
+      window.multiterm = {
+        readClipboardText: async () => '"C:\\Copilot Attachments\\requirements.txt"'
+      };
 
       terminal.screen.dispatchEvent(new MouseEvent("contextmenu", {
         bubbles: true,
@@ -1285,7 +1515,7 @@ test.describe("Surface context menu", () => {
       }
 
       await new Promise((resolve) => terminal.term.write("\x1b[?2004l", resolve));
-      Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+      window.multiterm = originalBridge;
       state.socket = originalSocket;
       state.socketReady = originalReady;
       return messages;
@@ -1294,7 +1524,7 @@ test.describe("Surface context menu", () => {
     expect(sent).toContainEqual({
       type: "input",
       id: expect.any(String),
-      data: "\x1b[200~copilot-paste-marker\x1b[201~"
+      data: '\x1b[200~"C:\\Copilot Attachments\\requirements.txt"\x1b[201~'
     });
   });
 

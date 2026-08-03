@@ -74,7 +74,7 @@ test.describe("Terminal messaging", () => {
     await expect(page.locator("#terminalMessagesBadge")).toBeHidden();
     await expect.poll(() => page.evaluate(() => state.activeId)).toBe(route.targetId);
 
-    const renderedBuffer = await page.evaluate((targetId) => {
+    await expect.poll(() => page.evaluate((targetId) => {
       const terminal = state.terminals.get(targetId);
       const buffer = terminal.term.buffer.active;
       const lines = [];
@@ -82,8 +82,7 @@ test.describe("Terminal messaging", () => {
         lines.push(buffer.getLine(index)?.translateToString(true) || "");
       }
       return lines.join("");
-    }, route.targetId);
-    expect(renderedBuffer).toContain("terminal-message-must-not-run");
+    }, route.targetId)).toContain("terminal-message-must-not-run");
     expect(route.sourceId).not.toBe(route.targetId);
   });
 

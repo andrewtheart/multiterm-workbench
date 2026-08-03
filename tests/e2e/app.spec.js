@@ -797,9 +797,7 @@ test.describe("MultiTerm Workbench UI", () => {
     });
     expect(fills).toBe(true);
 
-    // The sticky pane header must drop back into normal flow while maximized:
-    // the absolutely positioned pane gives sticky a scrollport offset to resolve
-    // against, which slid the header down over the terminal and clipped row 0.
+    // The pane header remains in normal grid flow while maximized.
     const header = await firstPane.evaluate((pane) => {
       const bar = pane.querySelector(".pane-bar");
       const screen = pane.querySelector(".terminal-screen");
@@ -808,7 +806,7 @@ test.describe("MultiTerm Workbench UI", () => {
         overlap: bar.getBoundingClientRect().bottom - screen.getBoundingClientRect().top,
       };
     });
-    expect(header.position).toBe("relative");
+    expect(header.position).toBe("static");
     expect(Math.abs(header.overlap)).toBeLessThan(1);
 
     await maximize.click();
@@ -817,8 +815,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(maximize).toHaveAttribute("aria-pressed", "false");
     await expect(maximize).toHaveAttribute("title", /Maximize/);
 
-    // Normal panes keep the sticky header that keeps their X reachable.
-    await expect(firstPane.locator(".pane-bar")).toHaveCSS("position", "sticky");
+    await expect(firstPane.locator(".pane-bar")).toHaveCSS("position", "static");
   });
 
   test("new terminal restores a maximized viewport so the new pane is visible", async () => {
@@ -1281,10 +1278,27 @@ test.describe("MultiTerm Workbench UI", () => {
   });
 
   test("opens the keyboard shortcuts dialog", async () => {
+    await page.evaluate(() => assignContextMenuShortcut("terminal.copy-all", {
+      ctrl: true, alt: true, shift: false, meta: false, key: "c"
+    }));
     await page.locator("#helpToggle").click();
     await expect(page.locator("#shortcutsOverlay")).toBeVisible();
+    await expect(page.locator(".shortcuts-section h3")).toContainText([
+      "Terminal right-click menu shortcuts",
+      "Page right-click menu shortcuts",
+      "App shortcuts (available at any time)",
+      "Custom terminal right-click shortcuts"
+    ]);
+    await expect(page.locator("#shortcutsCatalog")).toContainText("Creates and opens a new page");
+    await expect(page.locator("#shortcutsCatalog")).toContainText("Ctrl+Alt+C");
     await page.locator("#shortcutsClose").click();
     await expect(page.locator("#shortcutsOverlay")).toBeHidden();
+    await page.evaluate(() => clearContextMenuShortcut("terminal.copy-all"));
+  });
+
+  test("labels the settings panel", async () => {
+    await expect(page.locator(".settings-panel-heading")).toHaveText("Settings");
+    await expect(page.locator(".settings-panel-heading")).toHaveCSS("text-transform", "uppercase");
   });
 
   test("opens and filters the command palette", async () => {
@@ -1538,15 +1552,10 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(result.sent[1].cols).toBe(88);
   });
 
-  test("keeps every pane's close button clickable when the terminal host scrolls", async () => {
-    // Regression guard for "pressing the right-most terminal's X does nothing".
-    // At the default 1280x720 viewport, 3 panes overflow the host vertically, so
-    // revealing the newly-added pane scrolls the top row's headers up toward the
-    // topbar. Before the sticky-header fix a top-row pane's X slid under the
-    // topbar's action buttons (e.g. #toggleHeaderTop), which then intercepted the
-    // click, so the X had no effect. Note a naive locator.click() auto-scrolls the
-    // button into view and MASKS the bug — the guard must hit-test real
-    // coordinates and click via the raw mouse.
+  test("keeps pane headers attached to equally-sized terminals while the host scrolls", async () => {
+    // A sticky header made the first visible row appear to shrink while scrolling:
+    // the pane stayed in its grid cell, but its header detached and followed the
+    // host scrollport. Headers must instead scroll as part of their own panes.
     await page.evaluate(() => {
       for (const t of [...state.terminals.values()]) disposeTerminal(t);
       state.terminals.clear();
@@ -1562,41 +1571,39 @@ test.describe("MultiTerm Workbench UI", () => {
     const probe = await page.evaluate(() => {
       const host = document.querySelector("#terminalHost");
       const panes = [...document.querySelectorAll(".terminal-pane")];
-      panes.sort((a, b) => b.getBoundingClientRect().right - a.getBoundingClientRect().right);
-      const pane = panes[0]; // the right-most pane (worst-affected top-row pane)
-      const btn = pane.querySelector('[data-action="close"]');
-      const bar = pane.querySelector(".pane-bar");
-      const r = btn.getBoundingClientRect();
+      const ordered = panes
+        .map((pane) => ({ pane, rect: pane.getBoundingClientRect() }))
+        .sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+      const top = ordered[0];
+      const lower = ordered.at(-1);
+      host.scrollTop = Math.min(host.scrollHeight - host.clientHeight, Math.max(48, host.scrollTop));
+      const topRect = top.pane.getBoundingClientRect();
+      const lowerRect = lower.pane.getBoundingClientRect();
+      const bar = top.pane.querySelector(".pane-bar");
       const barRect = bar.getBoundingClientRect();
-      const cx = Math.round(r.left + r.width / 2);
-      const cy = Math.round(r.top + r.height / 2);
-      const at = document.elementFromPoint(cx, cy);
       return {
         overflows: host.scrollHeight > host.clientHeight,
         scrollTop: host.scrollTop,
         hostTop: Math.round(host.getBoundingClientRect().top),
+        paneTop: Math.round(topRect.top),
         headerTop: Math.round(barRect.top),
-        buttonTop: Math.round(r.top),
-        cx,
-        cy,
-        hitsButton: !!(at && btn.contains(at))
+        headerPosition: getComputedStyle(bar).position,
+        heightDelta: Math.abs(topRect.height - lowerRect.height)
       };
     });
 
-    // The scenario must genuinely scroll the host, else it guards nothing.
     expect(probe.overflows).toBe(true);
     expect(probe.scrollTop).toBeGreaterThan(0);
-    // The sticky header pins flush to the host's top edge. Leaving the host's
-    // stage padding above it exposes a detached strip of terminal output.
-    expect(Math.abs(probe.headerTop - probe.hostTop)).toBeLessThanOrEqual(1);
-    // Its X remains clear of the topbar, and a real hit-test at the X's centre
-    // lands on the close button — not the topbar.
-    expect(probe.buttonTop).toBeGreaterThanOrEqual(probe.hostTop);
-    expect(probe.hitsButton).toBe(true);
+    expect(probe.headerPosition).toBe("static");
+    expect(Math.abs(probe.headerTop - probe.paneTop)).toBeLessThanOrEqual(1);
+    expect(probe.headerTop).toBeLessThan(probe.hostTop);
+    expect(probe.heightDelta).toBeLessThanOrEqual(1);
 
-    // A real coordinate click (raw mouse, no auto-scroll) closes that pane.
+    // Scrolling the pane back into view makes its close button reachable normally.
+    const topPane = page.locator(".terminal-pane").first();
+    await topPane.scrollIntoViewIfNeeded();
     const before = await page.evaluate(() => state.terminals.size);
-    await page.mouse.click(probe.cx, probe.cy);
+    await topPane.locator('[data-action="close"]').click();
     await expect(page.locator(".terminal-pane")).toHaveCount(before - 1);
   });
 

@@ -43,7 +43,9 @@ The terminal context menu organizes these actions into two columns of named grou
 Customize that menu directly:
 
 - drag an action to reorder it within a section or move it into another section;
+- drag the grip beside a section heading to move the entire section;
 - select a section heading to rename it;
+- open a section's **...** menu to rename or remove it (its actions move to the nearest remaining section);
 - select **Add section** at the bottom-left to create and name a new section; or
 - right-click an action and choose **Hide item**.
 
@@ -80,7 +82,8 @@ Pages organize terminals into separate visual groups without ending their shell 
 
 - Use the page tabs or <kbd>Ctrl+PageUp</kbd>/<kbd>Ctrl+PageDown</kbd> to switch pages. Each tab has a small <strong>x</strong> at its right edge; the last remaining page keeps a disabled close indicator because MultiTerm always retains one page.
 - Double-click a page name to rename it.
-- Right-click a page for rename, create, and close actions.
+- Right-click a page for **Rename**, **New page**, **Close page**, and **Close all**. Close all resets the workspace to one empty **Page 1**.
+- Closing a populated page asks whether to move its terminals to a neighbouring page or close them. Select **Take this action next time** to remember the choice, or change **When closing a page with terminals** under **Session** settings.
 - Choose **Pages location** under **Layout** to place the page tabs at the top, bottom, left, or right. Right-click blank space in the tabs bar or vertical panel to open a menu whose first action is **Open new page** (quick key <kbd>1</kbd>), followed by the same four placement choices. Changes from either placement control persist across launches and keep the other control synchronized. A vertical pages panel has its own hide button and a floating restore button.
 - Drag page tabs left/right in a horizontal bar or up/down in a vertical panel. With a page focused, <kbd>Ctrl+Shift</kbd> plus the matching arrow key reorders it from the keyboard.
 - Move a terminal between pages from its context menu.
@@ -227,7 +230,7 @@ Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several termin
 
 ### Clipboard behavior
 
-MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Configure these behaviors in Settings.
+MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.
 
 ## Statistics and logging
 
@@ -273,6 +276,10 @@ The installer can add both:
 
 Explorer integration is optional and unchecked by default. Enable it explicitly on the installer's **Select Additional Tasks** page. Folder, folder-background, and drive invocations are supported. If MultiTerm is already running, Explorer forwards the folder to a live instance.
 
+### Visual Studio Code
+
+The installer can also add MultiTerm commands to Visual Studio Code's Explorer. Right-click a file to open its containing folder, right-click a folder to open that folder, or use **Open Workspace in MultiTerm** from the Explorer when no resource is selected. The command reuses a live MultiTerm instance or starts one if necessary. For a nonstandard installation, set `multiterm.launcherPath` in VS Code.
+
 ### Command line
 
 The installer can optionally add MultiTerm's protected installation directory to the system `PATH`. After opening a new shell, run:
@@ -309,6 +316,7 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 | Shortcut | Action |
 | --- | --- |
 | <kbd>Ctrl+T</kbd> | New terminal |
+| <kbd>Ctrl+P</kbd> | New page |
 | <kbd>Ctrl+Shift+W</kbd> | Close active terminal |
 | <kbd>Ctrl+Shift+R</kbd> | Restart active terminal |
 | <kbd>Ctrl+Shift+X</kbd> | Maximize or restore active pane |
@@ -324,7 +332,7 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 | <kbd>Ctrl+PageUp</kbd> / <kbd>Ctrl+PageDown</kbd> | Previous or next page |
 | <kbd>Ctrl++</kbd> / <kbd>Ctrl+-</kbd> | Change default terminal font size |
 | <kbd>Ctrl+Alt++</kbd> / <kbd>Ctrl+Alt+-</kbd> / <kbd>Ctrl+Alt+0</kbd> | Change or reset active-pane zoom |
-| <kbd>Ctrl+/</kbd> | Keyboard-shortcut reference |
+| <kbd>Ctrl+/</kbd> | Categorized keyboard-shortcut reference |
 | <kbd>Escape</kbd> | Close the active dialog, menu, or search |
 
 ## Updates and version information
