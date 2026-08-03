@@ -154,10 +154,30 @@ describe("installer release notes", () => {
     expect(script).not.toContain("Choose commit mode: (1) apply whole-file plan, (2) interactive hunk review, (3) abort");
     expect(script).not.toContain("Proceed with interactive hunk review now, or abort? (review/abort)");
     expect(script).not.toContain("Invoke-InteractiveHunkCommitGroup -RepositoryRoot");
-    expect(nonDeferredScript).not.toContain("git -C $RepositoryRoot add --patch -- @Paths");
-    expect(deferredBlocks.some((block) => block.includes("git -C $RepositoryRoot add --patch -- @Paths"))).toBe(true);
+    expect(nonDeferredScript).not.toContain("git --no-pager -C $RepositoryRoot add --patch -- @Paths");
+    expect(deferredBlocks.some((block) => block.includes("git --no-pager -C $RepositoryRoot add --patch -- @Paths"))).toBe(true);
     expect(script).toContain("Assert-PublishedRelease -GhPath $GhPath");
     expect(script).toContain('Get-PreviousPublishedReleaseTag -GhPath $GhPath -RepositorySlug $RepoSlug -CurrentTag $Tag');
     expect(script).toContain("[WhatIf] Planned output: $OutputExe");
+  });
+
+  it("enforces explicit git --no-pager in active code and keeps representative commands hardened", () => {
+    const deferredBlocks = script.match(/<#\s*DEFERRED:[\s\S]*?#>/g) || [];
+    const nonDeferredScript = script.replace(/<#\s*DEFERRED:[\s\S]*?#>/g, "");
+
+    expect(nonDeferredScript).not.toMatch(/(?<![#\w-])&?\s*git\s+-C\s+/m);
+    expect(nonDeferredScript).not.toMatch(/&\s*git\s+@(?![^\r\n]*--no-pager)/m);
+
+    const representative = [
+      "git --no-pager -C $RepositoryRoot diff --stat",
+      "git --no-pager -C $RepositoryRoot log --no-merges",
+      "git --no-pager -C $RepositoryRoot commit -m",
+      "git --no-pager -C $RepoRoot push origin HEAD"
+    ];
+    for (const marker of representative) {
+      expect(script).toContain(marker);
+    }
+
+    expect(deferredBlocks.some((block) => block.includes("git --no-pager -C"))).toBe(true);
   });
 });

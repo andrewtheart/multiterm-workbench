@@ -26,6 +26,9 @@
     Compiles installer\MultiTerm.iss with Inno Setup (ISCC.exe) to produce
     installer\Output\MultiTerm-Setup-<version>.exe.
 
+    This workflow never invokes a Git pager; every git command is run with
+    explicit --no-pager.
+
     Build only (no -Push):
         The version in package.json is treated as the source of truth and the
         script verifies that package-lock.json, installer\MultiTerm.iss (which
@@ -197,7 +200,7 @@ function Test-InteractiveTerminalForDirtyPublish {
 function Assert-CommitishMatchesPaths {
     param([string]$RepositoryRoot, [string[]]$ExpectedPaths, [string]$Label)
 
-    $actualInfo = Get-NativeOutput { git -C $RepositoryRoot show --name-only --pretty=format: HEAD }
+    $actualInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot show --name-only --pretty=format: HEAD }
     if ($actualInfo.ExitCode -ne 0) {
         throw "Could not inspect committed paths for '$Label'."
     }
@@ -213,19 +216,19 @@ function Assert-CommitishMatchesPaths {
 function Assert-PushGitPreflight {
     param([string]$RepositoryRoot)
 
-    $inside = Get-NativeOutput { git -C $RepositoryRoot rev-parse --is-inside-work-tree }
+    $inside = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-parse --is-inside-work-tree }
     if ($inside.ExitCode -ne 0 -or -not $inside.Output -or ($inside.Output | Select-Object -First 1).ToString().Trim() -ne 'true') {
         throw "-Push requires running inside a git worktree."
     }
 
-    $branchInfo = Get-NativeOutput { git -C $RepositoryRoot rev-parse --abbrev-ref HEAD }
+    $branchInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-parse --abbrev-ref HEAD }
     if ($branchInfo.ExitCode -ne 0) { throw "Could not determine the current git branch." }
     $branchName = ($branchInfo.Output | Select-Object -First 1).ToString().Trim()
     if ([string]::IsNullOrWhiteSpace($branchName) -or $branchName -eq 'HEAD') {
         throw "-Push cannot run on a detached HEAD."
     }
 
-    $gitDirInfo = Get-NativeOutput { git -C $RepositoryRoot rev-parse --git-dir }
+    $gitDirInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-parse --git-dir }
     if ($gitDirInfo.ExitCode -ne 0 -or -not $gitDirInfo.Output) { throw "Could not determine the .git directory." }
     $gitDir = ConvertTo-AbsolutePath -BasePath $RepositoryRoot -CandidatePath (($gitDirInfo.Output | Select-Object -First 1).ToString().Trim())
 
@@ -241,19 +244,19 @@ function Assert-PushGitPreflight {
         throw "-Push requires a clean git state with no active merge/cherry-pick/revert/rebase operation."
     }
 
-    $conflicts = Get-NativeOutput { git -C $RepositoryRoot diff --name-only --diff-filter=U }
+    $conflicts = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --name-only --diff-filter=U }
     if ($conflicts.ExitCode -ne 0) { throw "Could not inspect merge conflicts in the git index." }
     if (@($conflicts.Output | Where-Object { $_ -and $_.ToString().Trim() }).Count -gt 0) {
         throw "Resolve all merge conflicts before running -Push."
     }
 
-    $renameCopyUnstaged = Get-NativeOutput { git -C $RepositoryRoot diff --name-status --diff-filter=RC }
+    $renameCopyUnstaged = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --name-status --diff-filter=RC }
     if ($renameCopyUnstaged.ExitCode -ne 0) { throw "Could not inspect unstaged rename/copy changes." }
     if (@($renameCopyUnstaged.Output | Where-Object { $_ -and $_.ToString().Trim() }).Count -gt 0) {
         throw "-Push does not allow unstaged rename/copy records. Commit or clean them first."
     }
 
-    $renameCopyStaged = Get-NativeOutput { git -C $RepositoryRoot diff --cached --name-status --diff-filter=RC }
+    $renameCopyStaged = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-status --diff-filter=RC }
     if ($renameCopyStaged.ExitCode -ne 0) { throw "Could not inspect staged rename/copy changes." }
     if (@($renameCopyStaged.Output | Where-Object { $_ -and $_.ToString().Trim() }).Count -gt 0) {
         throw "-Push does not allow staged rename/copy records. Commit or clean them first."
@@ -310,7 +313,7 @@ $baseNotes
 function Get-RemoteTagTarget {
     param([string]$RepositoryRoot, [string]$Tag)
 
-    $tagInfo = Get-NativeOutput { git -C $RepositoryRoot ls-remote --tags origin "refs/tags/$Tag" "refs/tags/$Tag^{}" }
+    $tagInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot ls-remote --tags origin "refs/tags/$Tag" "refs/tags/$Tag^{}" }
     if ($tagInfo.ExitCode -ne 0 -or -not $tagInfo.Output) {
         throw "Could not resolve remote tag $Tag."
     }
@@ -401,26 +404,26 @@ function Invoke-InteractiveHunkCommitGroup {
     Write-Step "Interactive hunk review for group '$GroupLabel'"
     Write-Host "Paths: $($Paths -join ', ')"
 
-    $untracked = Get-NativeOutput { git -C $RepositoryRoot ls-files --others --exclude-standard -- @Paths }
+    $untracked = Get-NativeOutput { git --no-pager -C $RepositoryRoot ls-files --others --exclude-standard -- @Paths }
     if ($untracked.ExitCode -ne 0) { throw "Could not list untracked files for hunk review." }
     $intentPaths = @($untracked.Output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ })
     if ($intentPaths.Count -gt 0) {
-        Invoke-Native { git -C $RepositoryRoot add -N -- @intentPaths } "git add -N failed during interactive hunk review"
+        Invoke-Native { git --no-pager -C $RepositoryRoot add -N -- @intentPaths } "git add -N failed during interactive hunk review"
     }
 
     $committed = $false
     try {
         Write-Host "Review hunks now (git add --patch)."
-        Invoke-Native { git -C $RepositoryRoot add --patch -- @Paths } "git add --patch failed"
+        Invoke-Native { git --no-pager -C $RepositoryRoot add --patch -- @Paths } "git add --patch failed"
 
-        $stagedForGroup = Get-NativeOutput { git -C $RepositoryRoot diff --cached --name-only -- @Paths }
+        $stagedForGroup = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only -- @Paths }
         if ($stagedForGroup.ExitCode -ne 0) { throw "Could not inspect staged paths for '$GroupLabel'." }
         $stagedPaths = @($stagedForGroup.Output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Sort-Object -Unique)
         if ($stagedPaths.Count -eq 0) {
             throw "No staged changes were selected for '$GroupLabel'."
         }
 
-        $allStagedInfo = Get-NativeOutput { git -C $RepositoryRoot diff --cached --name-only }
+        $allStagedInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only }
         if ($allStagedInfo.ExitCode -ne 0) { throw "Could not inspect staged state before commit." }
         $allStaged = @($allStagedInfo.Output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Sort-Object -Unique)
         if (($allStaged -join "`n") -cne ($stagedPaths -join "`n")) {
@@ -428,7 +431,7 @@ function Invoke-InteractiveHunkCommitGroup {
         }
 
         Write-Host "Staged diff stat:"
-        Invoke-Native { git -C $RepositoryRoot diff --cached --stat -- @Paths } "git diff --cached --stat failed"
+        Invoke-Native { git --no-pager -C $RepositoryRoot diff --cached --stat -- @Paths } "git diff --cached --stat failed"
 
         $message = ''
         while ([string]::IsNullOrWhiteSpace($message)) {
@@ -450,16 +453,16 @@ function Invoke-InteractiveHunkCommitGroup {
             throw "User aborted interactive commit group '$GroupLabel'."
         }
 
-        Invoke-Native { git -C $RepositoryRoot commit -m $message -- @Paths } "git commit failed for interactive group '$GroupLabel'"
+        Invoke-Native { git --no-pager -C $RepositoryRoot commit -m $message -- @Paths } "git commit failed for interactive group '$GroupLabel'"
         Assert-CommitishMatchesPaths -RepositoryRoot $RepositoryRoot -ExpectedPaths $stagedPaths -Label $message
         $committed = $true
     }
     finally {
         if ($intentPaths.Count -gt 0) {
-            Get-NativeExit { git -C $RepositoryRoot reset -- @intentPaths } | Out-Null
+            Get-NativeExit { git --no-pager -C $RepositoryRoot reset -- @intentPaths } | Out-Null
         }
         if (-not $committed) {
-            Get-NativeExit { git -C $RepositoryRoot reset -- @Paths } | Out-Null
+            Get-NativeExit { git --no-pager -C $RepositoryRoot reset -- @Paths } | Out-Null
         }
     }
 }
@@ -472,7 +475,7 @@ function Invoke-InteractiveDirtyPublishCommitFlow {
         [string]$CopilotExecutable
     )
 
-    $status = Get-NativeOutput { git -C $RepositoryRoot status --porcelain=v1 --untracked-files=all }
+    $status = Get-NativeOutput { git --no-pager -C $RepositoryRoot status --porcelain=v1 --untracked-files=all }
     if ($status.ExitCode -ne 0) { throw "git status failed." }
     $pendingChanges = @($status.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
     if ($pendingChanges.Count -eq 0) {
@@ -484,7 +487,7 @@ function Invoke-InteractiveDirtyPublishCommitFlow {
         throw "Dirty -Push runs require an interactive terminal (no redirected input/output and no CI)."
     }
 
-    $stagedStat = Get-NativeOutput { git -C $RepositoryRoot diff --cached --stat }
+    $stagedStat = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --stat }
     if ($stagedStat.ExitCode -ne 0) { throw "Could not inspect staged changes." }
     $hasStaged = @($stagedStat.Output | Where-Object { $_ -and $_.ToString().Trim() }).Count -gt 0
 
@@ -505,15 +508,15 @@ function Invoke-InteractiveDirtyPublishCommitFlow {
             throw "Release cancelled while confirming the staged-change commit."
         }
 
-        $expectedExisting = Get-NativeOutput { git -C $RepositoryRoot diff --cached --name-only }
+        $expectedExisting = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only }
         if ($expectedExisting.ExitCode -ne 0) { throw "Could not capture staged paths before commit." }
         $existingPaths = @($expectedExisting.Output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Sort-Object -Unique)
         if ($existingPaths.Count -eq 0) { throw "No staged paths were available to commit." }
 
-        Invoke-Native { git -C $RepositoryRoot commit -m $stagedMessage } "git commit failed for pre-staged changes"
+        Invoke-Native { git --no-pager -C $RepositoryRoot commit -m $stagedMessage } "git commit failed for pre-staged changes"
         Assert-CommitishMatchesPaths -RepositoryRoot $RepositoryRoot -ExpectedPaths $existingPaths -Label $stagedMessage
 
-        $status = Get-NativeOutput { git -C $RepositoryRoot status --porcelain=v1 --untracked-files=all }
+        $status = Get-NativeOutput { git --no-pager -C $RepositoryRoot status --porcelain=v1 --untracked-files=all }
         if ($status.ExitCode -ne 0) { throw "git status failed after committing pre-staged changes." }
         $pendingChanges = @($status.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
         if ($pendingChanges.Count -eq 0) {
@@ -556,7 +559,7 @@ function Get-ReleaseChangeContext {
         # this clone's local tag namespace. Resolve the remote tag directly so
         # consecutive releases compare against the actual last published build.
         $tagInfo = Get-NativeOutput {
-            git -C $RepositoryRoot ls-remote --tags origin "refs/tags/$PreviousReleaseTag" "refs/tags/$PreviousReleaseTag^{}"
+            git --no-pager -C $RepositoryRoot ls-remote --tags origin "refs/tags/$PreviousReleaseTag" "refs/tags/$PreviousReleaseTag^{}"
         }
         if ($tagInfo.ExitCode -ne 0 -or -not $tagInfo.Output) {
             throw "Could not resolve previous release tag $PreviousReleaseTag for Copilot release notes."
@@ -568,7 +571,7 @@ function Get-ReleaseChangeContext {
         $baseLabel = $PreviousReleaseTag
     }
     else {
-        $rootInfo = Get-NativeOutput { git -C $RepositoryRoot rev-list --max-parents=0 HEAD }
+        $rootInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-list --max-parents=0 HEAD }
         if ($rootInfo.ExitCode -ne 0 -or -not $rootInfo.Output) {
             throw "Could not determine a comparison base for Copilot release notes."
         }
@@ -577,11 +580,11 @@ function Get-ReleaseChangeContext {
     }
 
     $range = "$base..HEAD"
-    $commits = Get-NativeOutput { git -C $RepositoryRoot log --no-merges --format=format:'%h %s%n%b' $range }
+    $commits = Get-NativeOutput { git --no-pager -C $RepositoryRoot log --no-merges --format=format:'%h %s%n%b' $range }
     if ($commits.ExitCode -ne 0) { throw "git log failed while preparing Copilot release notes." }
-    $stat = Get-NativeOutput { git -C $RepositoryRoot diff --stat --summary $range }
+    $stat = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --stat --summary $range }
     if ($stat.ExitCode -ne 0) { throw "git diff --stat failed while preparing Copilot release notes." }
-    $patch = Get-NativeOutput { git -C $RepositoryRoot diff --unified=2 $range -- . ':(exclude)package-lock.json' }
+    $patch = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --unified=2 $range -- . ':(exclude)package-lock.json' }
     if ($patch.ExitCode -ne 0) { throw "git diff failed while preparing Copilot release notes." }
 
     $patchText = ConvertTo-NativeText $patch.Output
@@ -744,9 +747,9 @@ function New-CopilotAtomicCommitPlan {
 
     $contextPath = Join-Path ([System.IO.Path]::GetTempPath()) ("multiterm-commit-context-{0}.txt" -f [guid]::NewGuid().ToString('N'))
     try {
-        $status = Get-NativeOutput { git -C $RepositoryRoot status --short --untracked-files=all }
-        $stat = Get-NativeOutput { git -C $RepositoryRoot diff --stat HEAD -- . }
-        $patch = Get-NativeOutput { git -C $RepositoryRoot diff --no-ext-diff --unified=2 HEAD -- . }
+        $status = Get-NativeOutput { git --no-pager -C $RepositoryRoot status --short --untracked-files=all }
+        $stat = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --stat HEAD -- . }
+        $patch = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --no-ext-diff --unified=2 HEAD -- . }
         if ($status.ExitCode -ne 0 -or $stat.ExitCode -ne 0 -or $patch.ExitCode -ne 0) {
             throw "Could not prepare pending changes for atomic commit planning."
         }
@@ -810,7 +813,7 @@ Return JSON only in this exact shape:
 function Test-AtomicCommitStaging {
     param([string]$RepositoryRoot, $Plan)
 
-    $gitIndexInfo = Get-NativeOutput { git -C $RepositoryRoot rev-parse --git-path index }
+    $gitIndexInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-parse --git-path index }
     if ($gitIndexInfo.ExitCode -ne 0 -or -not $gitIndexInfo.Output) {
         throw "Atomic commit staging preflight could not resolve git index path."
     }
@@ -827,8 +830,8 @@ function Test-AtomicCommitStaging {
         Copy-Item -LiteralPath $indexPath -Destination $tempIndex -Force
         try {
             $env:GIT_INDEX_FILE = $tempIndex
-            Invoke-Native { git -C $RepositoryRoot add -A -- @paths } "git add failed during atomic commit preflight" | Out-Null
-            $staged = Get-NativeOutput { git -C $RepositoryRoot diff --cached --name-only }
+            Invoke-Native { git --no-pager -C $RepositoryRoot add -A -- @paths } "git add failed during atomic commit preflight" | Out-Null
+            $staged = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only }
         }
         finally {
             if ($null -eq $oldIndex) {
@@ -858,8 +861,8 @@ function Invoke-AtomicCommitPlan {
         $paths = @($group.paths | ForEach-Object { [string]$_ })
         $message = [string]$group.message
         Write-Step "Committing atomic group: $message"
-        Invoke-Native { git -C $RepositoryRoot add -A -- @paths } "git add failed for atomic commit '$message'"
-        Invoke-Native { git -C $RepositoryRoot commit -m $message } "git commit failed for atomic commit '$message'"
+        Invoke-Native { git --no-pager -C $RepositoryRoot add -A -- @paths } "git add failed for atomic commit '$message'"
+        Invoke-Native { git --no-pager -C $RepositoryRoot commit -m $message } "git commit failed for atomic commit '$message'"
         Assert-CommitishMatchesPaths -RepositoryRoot $RepositoryRoot -ExpectedPaths $paths -Label $message
     }
 }
@@ -1230,8 +1233,8 @@ if ($NoGitCommit) {
 if ($BumpVersion) {
     if ($PSCmdlet.ShouldProcess($RepoRoot, "Commit release version $Tag")) {
         Write-Step "Committing release version $Tag..."
-        Invoke-Native { git -C $RepoRoot add -- package.json package-lock.json installer/MultiTerm.iss public/app.js } "git add release files failed"
-        Invoke-Native { git -C $RepoRoot commit -m "chore(release): $Tag" } "git commit failed"
+        Invoke-Native { git --no-pager -C $RepoRoot add -- package.json package-lock.json installer/MultiTerm.iss public/app.js } "git add release files failed"
+        Invoke-Native { git --no-pager -C $RepoRoot commit -m "chore(release): $Tag" } "git commit failed"
     }
     else {
         if ($WhatIfPreference) {
@@ -1244,7 +1247,7 @@ if ($BumpVersion) {
 }
 
 if (-not $WhatIfPreference) {
-    $postBuildStatus = Get-NativeOutput { git -C $RepoRoot status --porcelain=v1 --untracked-files=all }
+    $postBuildStatus = Get-NativeOutput { git --no-pager -C $RepoRoot status --porcelain=v1 --untracked-files=all }
     if ($postBuildStatus.ExitCode -ne 0) { throw "git status failed after the release commit." }
     $postBuildChanges = @($postBuildStatus.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
     if ($postBuildChanges.Count -gt 0) {
@@ -1272,8 +1275,8 @@ if (-not ($NoVersionBump -and $Force -and $releaseExists)) {
 $Target = $null
 if ($PSCmdlet.ShouldProcess($RepoSlug, "Push branch '$branch'")) {
     Write-Step "Pushing branch..."
-    Invoke-Native { git -C $RepoRoot push origin HEAD } "git push failed"
-    $head = Get-NativeOutput { git -C $RepoRoot rev-parse HEAD }
+    Invoke-Native { git --no-pager -C $RepoRoot push origin HEAD } "git push failed"
+    $head = Get-NativeOutput { git --no-pager -C $RepoRoot rev-parse HEAD }
     if ($head.ExitCode -ne 0) { throw "git rev-parse HEAD failed." }
     $Target = ($head.Output | Select-Object -First 1).ToString().Trim()
 }
