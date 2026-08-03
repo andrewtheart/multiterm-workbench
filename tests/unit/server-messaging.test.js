@@ -39,6 +39,20 @@ afterEach(() => {
 });
 
 describe("Node bridge terminal messaging", () => {
+  it("keeps the last communication limits when replacements are invalid", () => {
+    const receiver = client();
+    server.applyCommunicationConfig(receiver, {
+      terminalInboxCapacity: -1,
+      terminalMessageMaxKb: 0
+    });
+
+    expect(receiver.send).toHaveBeenCalledWith({
+      type: "communicationConfig",
+      terminalInboxCapacity: 500,
+      terminalMessageMaxKb: 64
+    });
+  });
+
   it("stores and broadcasts a validated same-instance message", () => {
     const sender = client();
     const observer = client();

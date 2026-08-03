@@ -703,6 +703,8 @@ describe("elevated (administrator) terminal", () => {
     app.sessions.get("admin-term-1").logStream = logStream;
     socket.feed({ type: "output", data: app.encodeElevationData("logged line") });
     expect(logStream.write).toHaveBeenCalled();
+    logStream.write.mockImplementation(() => { throw new Error("log closed"); });
+    expect(() => socket.feed({ type: "output", data: app.encodeElevationData("still live") })).not.toThrow();
 
     // The session shim forwards input and resize as frames.
     app.writeSession("admin-term-1", "whoami\r");
@@ -740,6 +742,24 @@ describe("elevated (administrator) terminal", () => {
 
     socket.feed({ type: "exit", code: "not-a-number" });
     expect(observer.send).toHaveBeenCalledWith({ type: "exited", id: "admin-term-1", code: null, signal: null });
+  });
+
+  it("continues authentication when writing the ready frame fails", () => {
+    const client = makeClient();
+    const spawn = launch(client);
+    const { config } = configFromSpawn(spawn);
+    const socket = makeConnSocket();
+    socket.write.mockImplementation(() => { throw new Error("socket closed"); });
+    currentServer.onConnection(socket);
+
+    expect(() => socket.feed({ type: "auth", token: config.token })).not.toThrow();
+    socket.feed({ type: "started", pid: 77 });
+
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "created",
+      id: "admin-term-1",
+      pid: 77
+    }));
   });
 
   it("rejects a bad token, destroys the socket, and fails the attempt once", () => {

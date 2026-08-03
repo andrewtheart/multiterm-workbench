@@ -57,7 +57,11 @@ function getInstanceDirectory() {
 
 function registerInstance(boundHost, boundPort) {
   const directory = getInstanceDirectory();
-  if (!directory) return null;
+  if (!directory) {
+    return null;
+  } else {
+    // Registration is available when the per-user app-data directory is known.
+  }
 
   try {
     fs.mkdirSync(directory, { recursive: true });
@@ -86,12 +90,17 @@ function registerInstance(boundHost, boundPort) {
 function unregisterInstance() {
   const filePath = instanceFilePath;
   instanceFilePath = null;
-  if (!filePath) return;
-  try {
-    fs.unlinkSync(filePath);
-  } catch (error) {
-    if (error.code !== "ENOENT") {
-      console.warn(`[bridge] Could not remove this bridge instance record: ${error.message}`);
+  if (!filePath) {
+    return;
+  } else {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        console.warn(`[bridge] Could not remove this bridge instance record: ${error.message}`);
+      } else {
+        // Another cleanup path already removed the record.
+      }
     }
   }
 }
@@ -172,9 +181,13 @@ function applyCommunicationConfig(client, message) {
   const requestedCapacity = Math.round(Number(message.terminalInboxCapacity));
   if (Number.isSafeInteger(requestedKb) && requestedKb > 0 && requestedKb <= 1024) {
     terminalMessageMaxBytes = requestedKb * 1024;
+  } else {
+    // Keep the last accepted message-size limit.
   }
   if (Number.isSafeInteger(requestedCapacity) && requestedCapacity >= 0 && requestedCapacity <= 2147483647) {
     terminalInboxCapacity = requestedCapacity;
+  } else {
+    // Keep the last accepted inbox capacity.
   }
   client.send({
     type: "communicationConfig",
@@ -444,6 +457,8 @@ server.on("upgrade", (request, socket) => {
   if (!key) {
     socket.destroy();
     return;
+  } else {
+    // Continue only after the client supplied the RFC 6455 handshake key.
   }
 
   // RFC 6455 defines this handshake for version 13 only. Anything else is a
@@ -499,8 +514,12 @@ server.on("upgrade", (request, socket) => {
   if (memStatsEnabled) {
     if (lastMemStats) {
       client.send(memStatsFrame(lastMemStats));
+    } else {
+      // The scheduled probe below will populate and send the first sample.
     }
     scheduleMemStats(500);
+  } else {
+    // Memory sampling remains idle until explicitly enabled.
   }
 
   socket.on("data", (chunk) => {
@@ -827,12 +846,16 @@ function handleUpdatePreferencesRequest(request, response) {
       (error) => sendJsonResponse(response, 500, { ok: false, error: String(error.message || error) })
     );
     return;
+  } else {
+    // Non-GET requests continue through the write-path validation.
   }
 
   if (request.method !== "POST") {
     response.setHeader("Allow", "GET, POST");
     sendJsonResponse(response, 405, { ok: false, error: "Method not allowed" });
     return;
+  } else {
+    // POST is the only supported write method.
   }
 
   const declaredSize = Number(request.headers["content-length"]);
@@ -846,22 +869,29 @@ function handleUpdatePreferencesRequest(request, response) {
   let tooLarge = false;
   request.setEncoding("utf8");
   request.on("data", (chunk) => {
-    if (tooLarge) return;
-    body += chunk;
-    if (Buffer.byteLength(body, "utf8") > updatePreferencesMaxSize) {
-      tooLarge = true;
-      body = "";
+    if (tooLarge) {
+      return;
+    } else {
+      body += chunk;
+      if (Buffer.byteLength(body, "utf8") > updatePreferencesMaxSize) {
+        tooLarge = true;
+        body = "";
+      }
     }
   });
   request.on("error", (error) => {
     if (!response.headersSent) {
       sendJsonResponse(response, 400, { ok: false, error: String(error.message || error) });
+    } else {
+      // The response has already completed; there is nothing left to send.
     }
   });
   request.on("end", () => {
     if (tooLarge) {
       sendJsonResponse(response, 413, { ok: false, error: "Request too large" });
       return;
+    } else {
+      // Parse only a request body that remained under the safety limit.
     }
     let value;
     try {
@@ -892,11 +922,19 @@ function readFrames(client, chunk, dependencies = defaultSessionDependencies) {
     let offset = 2;
 
     if (length === 126) {
-      if (client.buffer.length < 4) return;
+      if (client.buffer.length < 4) {
+        return;
+      } else {
+        // The complete 16-bit length field is available.
+      }
       length = client.buffer.readUInt16BE(2);
       offset = 4;
     } else if (length === 127) {
-      if (client.buffer.length < 10) return;
+      if (client.buffer.length < 10) {
+        return;
+      } else {
+        // The complete 64-bit length field is available.
+      }
       length = Number(client.buffer.readBigUInt64BE(2));
       offset = 10;
     }
@@ -904,6 +942,8 @@ function readFrames(client, chunk, dependencies = defaultSessionDependencies) {
     if (length > maxMessageSize || !masked) {
       client.socket.end(encodeFrame("", 0x8));
       return;
+    } else {
+      // A masked frame within the configured limit can be decoded.
     }
 
     const frameLength = offset + 4 + length;
@@ -922,15 +962,21 @@ function readFrames(client, chunk, dependencies = defaultSessionDependencies) {
     if (opcode === 0x8) {
       client.socket.end(encodeFrame("", 0x8));
       return;
+    } else {
+      // Non-close frames continue through opcode dispatch.
     }
 
     if (opcode === 0x9) {
       client.socket.write(encodeFrame(payload, 0xA));
       continue;
+    } else {
+      // Non-ping frames continue through message dispatch.
     }
 
     if (opcode === 0x1) {
       handleClientMessage(client, payload.toString("utf8"), dependencies);
+    } else {
+      // Unsupported non-control opcodes are ignored.
     }
   }
 }
@@ -1069,11 +1115,18 @@ function terminalMessageStoreBytes() {
 function expireTerminalMessagesForSession(targetId) {
   const ids = [];
   for (const [id, message] of terminalMessages) {
-    if (message.targetId !== targetId) continue;
-    terminalMessages.delete(id);
-    ids.push(id);
+    if (message.targetId !== targetId) {
+      continue;
+    } else {
+      terminalMessages.delete(id);
+      ids.push(id);
+    }
   }
-  if (ids.length) broadcast({ type: "terminalMessagesExpired", ids, state: "expired" });
+  if (ids.length) {
+    broadcast({ type: "terminalMessagesExpired", ids, state: "expired" });
+  } else {
+    // Avoid broadcasting an empty expiry notification.
+  }
   return ids;
 }
 
@@ -1083,6 +1136,8 @@ function sendTerminalMessage(client, request) {
   if (!normalized.ok) {
     client.send({ type: "messageError", requestId, message: normalized.error });
     return;
+  } else {
+    // Only normalized requests proceed to live-session validation.
   }
 
   const source = sessions.get(normalized.value.sourceId);
@@ -1094,10 +1149,14 @@ function sendTerminalMessage(client, request) {
   if (target.elevated) {
     client.send({ type: "messageError", requestId, message: "Terminal messages cannot target an elevated relay until confirmed delivery is supported." });
     return;
+  } else {
+    // Ordinary PTY sessions can accept terminal messages.
   }
   if (normalized.value.persist) {
     client.send({ type: "messageError", requestId, message: "Durable terminal messages are not enabled yet." });
     return;
+  } else {
+    // Ephemeral messages are supported.
   }
   if (terminalInboxCapacity > 0 && terminalInboxCount(target.id) >= terminalInboxCapacity) {
     client.send({ type: "messageError", requestId, message: "The target terminal inbox is full under the configured capacity." });
@@ -1160,17 +1219,22 @@ function actOnTerminalMessage(client, request) {
     if (!isSessionRunning(target) || target.closing || !data) {
       client.send({ type: "messageError", requestId, message: "The target terminal is unavailable." });
       return;
+    } else {
+      // A live target with non-empty content can proceed to insert validation.
     }
     const insert = terminalMessaging.validateTerminalInsertText(data);
     if (!insert.ok) {
       client.send({ type: "messageError", requestId, message: insert.error });
       return;
+    } else {
+      // The validated text is safe to write to the PTY.
     }
     if (!writeSession(target.id, insert.value)) {
       client.send({ type: "messageError", requestId, message: "The target terminal is unavailable." });
       return;
+    } else {
+      terminalMessage.state = "inserted";
     }
-    terminalMessage.state = "inserted";
   } else if (action === "dismiss") {
     terminalMessage.state = "dismissed";
   } else {
@@ -1188,17 +1252,23 @@ function createSession(client, options, dependencies = defaultSessionDependencie
   if (sessions.has(id)) {
     client.send({ type: "error", id, message: "A session with this id already exists." });
     return;
+  } else {
+    // A fresh identifier can proceed to capacity validation.
   }
 
   if (sessions.size >= maxSessions) {
     client.send({ type: "createFailed", id, message: `The bridge is limited to ${maxSessions} terminals.` });
     return;
+  } else {
+    // Capacity is available for another PTY.
   }
 
   const tmux = normalizeTmuxTarget(options.tmux);
   if (options.tmux && !tmux) {
     client.send({ type: "createFailed", id, message: "Invalid WSL tmux target." });
     return;
+  } else {
+    // Plain sessions and valid tmux targets can be spawned.
   }
 
   const shell = tmux ? getTmuxShell(tmux) : getShell(options.shell);
@@ -1260,6 +1330,8 @@ function createSession(client, options, dependencies = defaultSessionDependencie
       } catch {
         // A failed log write should never break the live session.
       }
+    } else {
+      // Logging is optional; live output is still queued below.
     }
     queueSessionOutput(session, data);
   });
@@ -1295,32 +1367,42 @@ function writeSession(id, data) {
     } catch {
       return false;
     }
+  } else {
+    return false;
   }
-  return false;
 }
 
 function renameSession(id, value) {
   const session = sessions.get(id);
   const title = typeof value === "string" ? value.trim() : "";
-  if (!session || !title) return false;
-  session.title = title;
-  broadcast({ type: "title", id, title });
-  return true;
+  if (!session || !title) {
+    return false;
+  } else {
+    session.title = title;
+    broadcast({ type: "title", id, title });
+    return true;
+  }
 }
 
 function rememberSize(id, cols, rows) {
-  if (!sessions.has(id)) return;
+  if (!sessions.has(id)) {
+    return;
+  } else {
+    // Existing sessions retain their latest requested dimensions.
+  }
   const session = sessions.get(id);
 
   session.cols = Number(cols) || session.cols;
   session.rows = Number(rows) || session.rows;
 
-  if (!isSessionRunning(session)) return;
-
-  try {
-    session.terminal.resize(session.cols, session.rows);
-  } catch {
-    // The pty may have closed between the size event and the resize call.
+  if (!isSessionRunning(session)) {
+    return;
+  } else {
+    try {
+      session.terminal.resize(session.cols, session.rows);
+    } catch {
+      // The pty may have closed between the size event and the resize call.
+    }
   }
 }
 
@@ -1335,38 +1417,46 @@ function rememberSize(id, cols, rows) {
 // conpty and conpty.dll paths), so callers should exhaust the graceful routes in
 // killSession before reaching for this.
 function killSessionPty(session) {
-  if (!isSessionRunning(session)) return;
+  if (!isSessionRunning(session)) {
+    return;
+  } else {
+    session.killed = true;
 
-  session.killed = true;
-
-  try {
-    session.terminal.kill();
-  } catch {
-    // The pty may have already torn itself down; the session is dead either way.
+    try {
+      session.terminal.kill();
+    } catch {
+      // The pty may have already torn itself down; the session is dead either way.
+    }
   }
 }
 
 // Ask a session to end without force-killing it. A shell sitting at its prompt honours
 // "exit"; one busy in a foreground command never sees it, so interrupt it first.
 function interruptAndExit(session) {
-  if (!isSessionRunning(session)) return;
-
-  if (session.tmux) {
-    killSessionPty(session);
+  if (!isSessionRunning(session)) {
     return;
   } else {
-    try {
-      session.terminal.write("\u0003");
-      session.terminal.write("exit\r");
-    } catch {
+    if (session.tmux) {
       killSessionPty(session);
+      return;
+    } else {
+      try {
+        session.terminal.write("\u0003");
+        session.terminal.write("exit\r");
+      } catch {
+        killSessionPty(session);
+      }
     }
   }
 }
 
 function killSession(id) {
   const session = sessions.get(id);
-  if (!isSessionRunning(session) || session.closing) return;
+  if (!isSessionRunning(session) || session.closing) {
+    return;
+  } else {
+    // A live session begins its staged teardown exactly once.
+  }
 
   session.closing = true;
 
@@ -1401,15 +1491,17 @@ function closeSessions(graceful) {
 }
 
 function endSessionInput(session) {
-  if (!isSessionRunning(session)) return;
-
-  try {
-    // Detach only MultiTerm's tmux client. The standard prefix works immediately;
-    // a custom prefix falls back to killing this WSL client after the grace period,
-    // which still leaves the tmux server and its shells alive.
-    session.terminal.write(session.tmux ? "\u0002d" : "exit\r");
-  } catch {
-    killSessionPty(session);
+  if (!isSessionRunning(session)) {
+    return;
+  } else {
+    try {
+      // Detach only MultiTerm's tmux client. The standard prefix works immediately;
+      // a custom prefix falls back to killing this WSL client after the grace period,
+      // which still leaves the tmux server and its shells alive.
+      session.terminal.write(session.tmux ? "\u0002d" : "exit\r");
+    } catch {
+      killSessionPty(session);
+    }
   }
 }
 
@@ -1443,11 +1535,13 @@ function startLog(client, id) {
 
 function stopLog(client, id) {
   const session = sessions.get(id);
-  if (!session || !session.logStream) return;
-
-  const file = session.logPath;
-  closeLog(session);
-  client.send({ type: "logStopped", id, path: file });
+  if (!session || !session.logStream) {
+    return;
+  } else {
+    const file = session.logPath;
+    closeLog(session);
+    client.send({ type: "logStopped", id, path: file });
+  }
 }
 
 function closeLog(session) {
@@ -1504,12 +1598,19 @@ function revealPath(client, message) {
 // a Win32 common dialog, driven from a short-lived STA PowerShell process
 // because Node has no way to show one.
 function pickScript(client, message) {
-  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  let requestId = "";
+  if (typeof message.requestId === "string") {
+    requestId = message.requestId;
+  } else {
+    // Non-string correlation values are ignored.
+  }
   const answer = (chosen) => client.send({ type: "scriptPicked", requestId, path: chosen || null });
 
   if (process.platform !== "win32") {
     answer(null);
     return;
+  } else {
+    // The native picker below is available only on Windows.
   }
 
   let initialDir = "";
@@ -1656,6 +1757,22 @@ function decodeElevationData(text) {
   return Buffer.from(String(text), "base64").toString("utf8");
 }
 
+function sendElevationFrame(socket, payload) {
+  try {
+    socket.write(JSON.stringify(payload) + "\n");
+  } catch {
+    // The socket may already be gone.
+  }
+}
+
+function writeElevationLog(logStream, data) {
+  try {
+    logStream.write(stripAnsiForLog(data));
+  } catch {
+    // Logging must never break the session.
+  }
+}
+
 // Best-effort teardown helpers, funnelled through one place so every call site tears down
 // the same way. node's socket.destroy() and server.close() are safe to call repeatedly and
 // never throw synchronously (a non-listening server surfaces its error via callback), so no
@@ -1680,6 +1797,8 @@ function launchElevatedTerminal(client, message) {
   if (process.platform !== "win32") {
     client.send({ type: "elevateError", message: "Administrator terminals are only supported on Windows." });
     return;
+  } else {
+    // Windows can proceed with the UAC-backed relay.
   }
 
   const id = sanitizeId(message.id);
@@ -1840,9 +1959,7 @@ function handleElevatedConnection(attempt, socket) {
   }, ELEVATION_AUTH_TIMEOUT_MS);
   authTimer.unref();
 
-  const sendFrame = (payload) => {
-    try { socket.write(JSON.stringify(payload) + "\n"); } catch { /* socket gone */ }
-  };
+  const sendFrame = sendElevationFrame.bind(null, socket);
 
   const handleLine = (line) => {
     let msg;
@@ -1866,13 +1983,15 @@ function handleElevatedConnection(attempt, socket) {
       attempt.session.keystrokesOut += data.length;
       attempt.session.bytesOut += Buffer.byteLength(data, "utf8");
       if (attempt.session.logStream) {
-        try { attempt.session.logStream.write(stripAnsiForLog(data)); } catch { /* logging must never break the session */ }
+        writeElevationLog(attempt.session.logStream, data);
       } else {
         // No per-session log is active; the live output is still broadcast below.
       }
       queueSessionOutput(attempt.session, data);
     } else if (msg.type === "exit" && attempt.session) {
       finishElevatedSession(attempt.session, Number.isFinite(Number(msg.code)) ? Number(msg.code) : null);
+    } else {
+      // Unknown messages and lifecycle events without a session are ignored.
     }
   };
 
@@ -1985,8 +2104,9 @@ function describeElevationError(detail) {
   const text = String(detail || "").trim();
   if (/cancell?ed by the user/i.test(text)) {
     return "Administrator terminal canceled — the UAC prompt was declined.";
+  } else {
+    return text || "Failed to launch the administrator terminal.";
   }
-  return text || "Failed to launch the administrator terminal.";
 }
 
 function shutdown() {
@@ -2010,9 +2130,12 @@ function shutdown() {
   // handleProcessExit, which is exactly the crash-prone path we are avoiding.
   const deadline = Date.now() + shutdownWaitMs;
   const drain = setInterval(() => {
-    if (sessions.size > 0 && Date.now() < deadline) return;
-    clearInterval(drain);
-    process.exit(0);
+    if (sessions.size > 0 && Date.now() < deadline) {
+      return;
+    } else {
+      clearInterval(drain);
+      process.exit(0);
+    }
   }, SHUTDOWN_POLL_MS);
   drain.unref();
 }
@@ -2179,7 +2302,13 @@ function collectProcessStatistics(callback) {
           callback(null, error.message || "Could not sample processes.");
         } else {
           try {
-            const parsed = JSON.parse(stdout || "[]");
+            let serialized;
+            if (stdout) {
+              serialized = stdout;
+            } else {
+              serialized = "[]";
+            }
+            const parsed = JSON.parse(serialized);
             callback(Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []), null);
           } catch {
             callback(null, "Could not parse process statistics.");
@@ -2221,10 +2350,8 @@ function collectProcessTreeMetrics(rootPid, processRows) {
       seen.add(pid);
       const row = byPid.get(pid);
       if (row) {
-        [cpu, memory] = [
-          cpu + Math.max(0, Number(row.cpu) || 0),
-          memory + Math.max(0, Number(row.memory) || 0)
-        ];
+        cpu += Math.max(0, Number(row.cpu) || 0);
+        memory += Math.max(0, Number(row.memory) || 0);
       } else {
         // A root can disappear between snapshots; its surviving children still count.
       }
@@ -2321,10 +2448,13 @@ function scheduleMemStats(delay) {
 }
 
 function startMemStats() {
-  if (!memStatsEnabled || memStatsInterval) return;
-  scheduleMemStats(1500);
-  memStatsInterval = setInterval(pushMemStatsIfWatched, 10000);
-  memStatsInterval.unref();
+  if (!memStatsEnabled || memStatsInterval) {
+    return;
+  } else {
+    scheduleMemStats(1500);
+    memStatsInterval = setInterval(pushMemStatsIfWatched, 10000);
+    memStatsInterval.unref();
+  }
 }
 
 function stopMemStats() {
@@ -2413,8 +2543,11 @@ function normalizeTmuxTarget(value) {
   if (/[\u0000-\u001f\u007f]/.test(rawDistro) || /[\u0000-\u001f\u007f]/.test(rawSession)) return null;
   const distro = rawDistro.trim();
   const session = rawSession.trim();
-  if (!distro || !session || distro.length > 128 || session.length > 128) return null;
-  return { distro, session };
+  if (!distro || !session || distro.length > 128 || session.length > 128) {
+    return null;
+  } else {
+    return { distro, session };
+  }
 }
 
 function getTmuxShell(target) {
@@ -2524,5 +2657,6 @@ function isLocalAddress(address) {
 
 function isLoopbackBindHost(value) {
   const normalized = String(value || "").replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
-  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+  const allowed = ["localhost", "127.0.0.1", "::1"].includes(normalized);
+  return allowed;
 }

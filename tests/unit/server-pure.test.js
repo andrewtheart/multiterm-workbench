@@ -384,6 +384,83 @@ describe("watchdog bridge control", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("skips instance registration without app data and tolerates redundant cleanup", () => {
+    const original = process.env.LOCALAPPDATA;
+    delete process.env.LOCALAPPDATA;
+    try {
+      expect(server.getInstanceDirectory()).toBeNull();
+      expect(server.registerInstance("127.0.0.1", 45678)).toBeNull();
+      expect(() => server.unregisterInstance()).not.toThrow();
+    } finally {
+      if (original === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = original;
+    }
+  });
+
+  it("warns on instance registration and cleanup failures but ignores a missing record", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-instance-errors-"));
+    const original = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const mkdir = vi.spyOn(fs, "mkdirSync").mockImplementationOnce(() => {
+        throw new Error("registration denied");
+      });
+      expect(server.registerInstance("127.0.0.1", 45678)).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("registration denied"));
+      mkdir.mockRestore();
+
+      expect(server.registerInstance("127.0.0.1", 45678)).toEqual(expect.any(String));
+      const unlink = vi.spyOn(fs, "unlinkSync").mockImplementationOnce(() => {
+        const error = new Error("cleanup denied");
+        error.code = "EACCES";
+        throw error;
+      });
+      server.unregisterInstance();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup denied"));
+
+      expect(server.registerInstance("127.0.0.1", 45678)).toEqual(expect.any(String));
+      unlink.mockImplementationOnce(() => {
+        const error = new Error("already gone");
+        error.code = "ENOENT";
+        throw error;
+      });
+      const warningCount = warn.mock.calls.length;
+      server.unregisterInstance();
+      expect(warn).toHaveBeenCalledTimes(warningCount);
+    } finally {
+      if (original === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = original;
+      vi.restoreAllMocks();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("dispatches shutdown and watchdog paths through the HTTP request listener", () => {
+    const shutdownResponse = mockResponse();
+    server.server.emit("request", mockRequest({ method: "GET", url: "/shutdown" }), shutdownResponse);
+    expect(shutdownResponse.statusCode).toBe(405);
+    expect(shutdownResponse.headers.Allow).toBe("POST");
+
+    const watchdogResponse = mockResponse();
+    server.server.emit("request", mockRequest({ method: "GET", url: "/watchdog/keep" }), watchdogResponse);
+    expect(watchdogResponse.statusCode).toBe(405);
+    expect(watchdogResponse.headers.Allow).toBe("POST");
+  });
+
+  it("routes watchdog state changes through bridge messages", () => {
+    const client = fakeClient();
+    server.handleClientMessage(client, JSON.stringify({ type: "watchdogKeepBridge" }));
+    const kept = mockResponse();
+    server.server.emit("request", mockRequest({ url: "/health" }), kept);
+    expect(JSON.parse(kept.body).watchdogSuppressed).toBe(true);
+
+    server.handleClientMessage(client, JSON.stringify({ type: "rendererPresence" }));
+    const resumed = mockResponse();
+    server.server.emit("request", mockRequest({ url: "/health" }), resumed);
+    expect(JSON.parse(resumed.body).watchdogSuppressed).toBe(false);
+  });
 });
 
 describe("setSecurityHeaders", () => {
@@ -943,4 +1020,3 @@ describe("output coalescing", () => {
     expect(client.send).toHaveBeenCalledWith({ type: "config", outputCoalesceMs: 12 });
   });
 });
-
