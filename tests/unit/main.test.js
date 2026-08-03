@@ -115,7 +115,9 @@ function makeWindow() {
     isMinimized: vi.fn(() => false),
     isVisible: vi.fn(() => true),
     isDestroyed: vi.fn(() => false),
+    isFullScreen: vi.fn(() => true),
     restore: vi.fn(),
+    setFullScreen: vi.fn(),
     show: vi.fn(),
     hide: vi.fn(),
     focus: vi.fn()
@@ -358,6 +360,17 @@ describe("createWindow", () => {
     expect(main.getMainWindow()).toBeNull();
   });
 
+  it("reports native fullscreen changes to the renderer", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    winHandlerFor(win, "enter-full-screen")();
+    winHandlerFor(win, "leave-full-screen")();
+    expect(win.webContents.send.mock.calls).toEqual([
+      ["multiterm:fullscreen-change", true],
+      ["multiterm:fullscreen-change", false]
+    ]);
+  });
+
   it("runs the renderer sandboxed with node integration off", () => {
     main.createWindow();
     const options = electron.BrowserWindow.mock.calls[0][0];
@@ -373,6 +386,7 @@ describe("createWindow", () => {
       backgroundThrottling: false,
       sandbox: true
     });
+
   });
 
   it("blocks off-origin navigation and opens external links in the browser", () => {
@@ -428,6 +442,45 @@ describe("createWindow", () => {
       return win;
     });
     expect(() => main.createWindow()).not.toThrow();
+  });
+});
+
+describe("window IPC", () => {
+  function fullscreenHandler() {
+    return electron.ipcMain.handle.mock.calls
+      .find(([channel]) => channel === "multiterm:set-fullscreen")?.[1];
+  }
+
+  it("allows only the app renderer to change native fullscreen", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    let fullscreen = false;
+    win.setFullScreen.mockImplementation((enabled) => { fullscreen = enabled; });
+    win.isFullScreen.mockImplementation(() => fullscreen);
+    main.registerWindowIpc();
+
+    const event = trustedIpcEvent();
+    expect(fullscreenHandler()(event, 1)).toBe(true);
+    expect(fullscreenHandler()(event, 0)).toBe(false);
+    expect(win.setFullScreen.mock.calls).toEqual([[true], [false]]);
+    expect(() => fullscreenHandler()({
+      sender: win.webContents,
+      senderFrame: { url: "https://example.com/" }
+    }, true)).toThrow("restricted to the MultiTerm application window");
+  });
+
+  it("falls back to the requested state and tolerates handler replacement failures", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.isFullScreen = undefined;
+    electron.ipcMain.removeHandler.mockImplementation(() => { throw new Error("missing"); });
+    expect(() => main.registerWindowIpc()).not.toThrow();
+    expect(fullscreenHandler()(trustedIpcEvent(), true)).toBe(true);
+  });
+
+  it("is unavailable when ipcMain.handle is missing", () => {
+    main.__setElectron({ ...electron, ipcMain: null });
+    expect(() => main.registerWindowIpc()).not.toThrow();
   });
 });
 
@@ -1620,6 +1673,9 @@ describe("update checker", () => {
 
       stubHttps(() => makeResponse({ status: 404 }));
       await expect(main.fetchLatestRelease()).rejects.toThrow(/HTTP 404/);
+
+      stubHttps(() => makeResponse({ status: 302, headers: {} }));
+      await expect(main.fetchLatestRelease()).rejects.toThrow(/HTTP 302/);
     });
 
     it("reports a response without an HTTP status as status zero", async () => {

@@ -32,6 +32,17 @@ function __setElectron(mock) {
   ({ app, BrowserWindow, Menu, Tray, clipboard, shell, dialog, ipcMain } = mock);
 }
 
+function registerWindowIpc() {
+  if (!ipcMain || typeof ipcMain.handle !== "function") return;
+  try { ipcMain.removeHandler("multiterm:set-fullscreen"); } catch { /* no existing handler */ }
+  ipcMain.handle("multiterm:set-fullscreen", (event, enabled) => {
+    assertTrustedIpcSender(event);
+    const next = Boolean(enabled);
+    mainWindow.setFullScreen(next);
+    return typeof mainWindow.isFullScreen === "function" ? mainWindow.isFullScreen() : next;
+  });
+}
+
 function formatError(err) {
   return String(err.message || err);
 }
@@ -378,6 +389,12 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  mainWindow.on("enter-full-screen", () => {
+    mainWindow?.webContents.send("multiterm:fullscreen-change", true);
+  });
+  mainWindow.on("leave-full-screen", () => {
+    mainWindow?.webContents.send("multiterm:fullscreen-change", false);
+  });
 }
 
 // Brings the (possibly hidden/minimized) window back to the foreground.
@@ -676,6 +693,7 @@ async function onReady() {
   registerScriptPicker();
   registerCloseHandler();
   registerClipboardIpc();
+  registerWindowIpc();
   registerAdminIpc();
   registerUpdateIpc();
 
@@ -1234,6 +1252,7 @@ module.exports = {
   handleCloseResponse,
   registerCloseHandler,
   registerClipboardIpc,
+  registerWindowIpc,
   decodeNullSeparatedClipboardPaths,
   decodeWindowsFileDrop,
   decodeClipboardUriList,

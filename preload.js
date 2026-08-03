@@ -25,6 +25,11 @@ contextBridge.exposeInMainWorld("multiterm", {
   // state for terminal selections and other copy actions.
   writeClipboardText: (text) => ipcRenderer.invoke("multiterm:write-clipboard", String(text)),
   readClipboardText: () => ipcRenderer.invoke("multiterm:read-clipboard"),
+  setFullscreen: (enabled) => ipcRenderer.invoke("multiterm:set-fullscreen", Boolean(enabled)),
+  onFullscreenChange: (handler) => {
+    if (typeof handler !== "function") return;
+    ipcRenderer.on("multiterm:fullscreen-change", (_event, enabled) => handler(Boolean(enabled)));
+  },
 
   // Opens a native file picker and resolves to the chosen script path, or
   // null if the user cancelled.

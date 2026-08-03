@@ -48,6 +48,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
 
   await expect(api.writeClipboardText(42)).resolves.toBe("result");
   await expect(api.readClipboardText()).resolves.toBe("result");
+  await expect(api.setFullscreen(1)).resolves.toBe("result");
   await expect(api.pickScript()).resolves.toBe("result");
   await expect(api.isElevated()).resolves.toBe("result");
   await expect(api.restartAsAdmin()).resolves.toBe("result");
@@ -58,6 +59,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
   expect(ipcRenderer.invoke.mock.calls).toEqual([
     ["multiterm:write-clipboard", "42"],
     ["multiterm:read-clipboard"],
+    ["multiterm:set-fullscreen", true],
     ["multiterm:pick-script"],
     ["multiterm:is-elevated"],
     ["multiterm:relaunch-as-admin"],
@@ -74,19 +76,25 @@ test("exposes every isolated renderer API over the expected IPC channels", async
   ]);
 });
 
-test("registers close and progress callbacks and ignores invalid handlers", () => {
+test("registers close, fullscreen, and progress callbacks and ignores invalid handlers", () => {
   const close = vi.fn();
+  const fullscreen = vi.fn();
   const progress = vi.fn();
   api.onCloseRequest(close);
+  api.onFullscreenChange(fullscreen);
   api.onUpdateProgress(progress);
   api.onCloseRequest(null);
+  api.onFullscreenChange(null);
   api.onUpdateProgress("invalid");
 
-  expect(ipcRenderer.on).toHaveBeenCalledTimes(2);
+  expect(ipcRenderer.on).toHaveBeenCalledTimes(3);
   const closeListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:close-request")[1];
+  const fullscreenListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:fullscreen-change")[1];
   const progressListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:update-progress")[1];
   closeListener({}, "ignored");
+  fullscreenListener({}, 1);
   progressListener({}, { received: 5, total: 10 });
   expect(close).toHaveBeenCalledWith("ignored");
+  expect(fullscreen).toHaveBeenCalledWith(true);
   expect(progress).toHaveBeenCalledWith({ received: 5, total: 10 });
 });
