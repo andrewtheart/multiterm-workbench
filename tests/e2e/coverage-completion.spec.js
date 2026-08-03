@@ -1165,7 +1165,7 @@ test.describe("Renderer coverage completion", () => {
       for (const [element, eventName] of [
         [elements.minWidth, "input"], [elements.columnCount, "input"], [elements.rowCount, "input"],
         [elements.paneHeight, "input"], [elements.focusWidth, "input"], [elements.paneGap, "input"],
-        [elements.fontSize, "input"], [elements.terminalTheme, "change"], [elements.appTheme, "change"],
+        [elements.fontSize, "input"], [elements.titleFontScale, "input"], [elements.terminalTheme, "change"], [elements.appTheme, "change"],
         [elements.fontFamily, "change"], [elements.cursorStyle, "change"], [elements.cursorBlink, "change"],
         [elements.compactChrome, "change"], [elements.syncInput, "change"], [elements.ctrlVPaste, "change"],
         [elements.cleanCopilotClipboard, "change"], [elements.keepSessionsOnClose, "change"],
@@ -3048,6 +3048,1167 @@ test.describe("Renderer coverage completion", () => {
     expect(result.remaining).toBe(0);
   });
 
+  test("covers context customization guards, drag targets, and keyboard alternatives @full", async () => {
+    const result = await page.evaluate(async () => {
+      const savedLayout = contextMenuLayout;
+      const savedShortcuts = contextMenuShortcuts;
+      const savedSetItem = Storage.prototype.setItem;
+      const runs = [];
+      hideContextMenu();
+
+      const generatedGroupId = `default:${stableContextActionToken("Generated group")}`;
+      contextMenuLayout = normalizeContextMenuLayout({
+        sections: [
+          { id: generatedGroupId, name: "", items: ["missing.action"] },
+          { id: "other", name: "Other", items: [] }
+        ]
+      });
+      const syntheticItems = [
+        { label: "Ungrouped", icon: "terminal", run: () => runs.push("ungrouped") },
+        { separator: true },
+        { group: "Generated group", groupId: "Invalid ID" },
+        { group: "Generated group", groupId: "Invalid ID" },
+        { customizationId: "same.action", label: "First", icon: "copy", run: () => runs.push("first") },
+        { customizationId: "same.action", label: "Second", icon: "copy", run: () => runs.push("second") },
+        { group: "\u0000", groupId: "empty-name" },
+        { label: "", icon: "", run: () => runs.push("empty") }
+      ];
+      const customized = buildCustomizableContextMenu(syntheticItems);
+      const generatedDuplicate = customized.model.sections
+        .flatMap((section) => section.items)
+        .find((id) => id.startsWith("generated:"));
+
+      const noModelResults = {};
+      ctxCustomizationModel = null;
+      persistContextMenuCustomizationModel();
+      addContextMenuSection();
+      startContextCustomizationDrag({}, {}, document.createElement("div"));
+      noModelResults.persisted = ctxCustomizationModel === null;
+      elements.contextMenu.hidden = true;
+      clampOpenContextMenu();
+
+      renderContextMenu([
+        { group: "Plain group" },
+        { label: "Plain action", icon: "copy", run: () => runs.push("plain") }
+      ], { grouped: true });
+      const plainTitle = elements.contextMenu.querySelector(".ctx-group-title")?.textContent;
+
+      contextMenuLayout = normalizeContextMenuLayout(null);
+      contextMenuShortcuts = new Map();
+      renderContextMenu([
+        { group: "Alpha", groupId: "alpha" },
+        { customizationId: "alpha.one", shortcutId: "alpha.one", label: "Alpha one", icon: "copy", run: () => runs.push("one") },
+        { customizationId: "alpha.two", shortcutId: "alpha.two", label: "Alpha two", icon: "copy", run: () => runs.push("two") },
+        { group: "Beta", groupId: "beta" },
+        { customizationId: "beta.one", shortcutId: "beta.one", label: "Beta one", icon: "copy", run: () => runs.push("beta") }
+      ], { customizable: true, grouped: true, searchable: true, shortcutEditor: true });
+      elements.contextMenu.hidden = false;
+
+      const alphaGroup = elements.contextMenu.querySelector('[data-section-id="alpha"]');
+      const alphaBody = alphaGroup.querySelector(".ctx-group-body");
+      const alphaOne = alphaBody.querySelector('[data-customization-id="alpha.one"]');
+      const alphaTwo = alphaBody.querySelector('[data-customization-id="alpha.two"]');
+      const betaGroup = elements.contextMenu.querySelector('[data-section-id="beta"]');
+      const betaBody = betaGroup.querySelector(".ctx-group-body");
+
+      betaGroup.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+      alphaGroup.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true }));
+      alphaOne.dispatchEvent(new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer()
+      }));
+      alphaGroup.dispatchEvent(new DragEvent("dragleave", {
+        bubbles: true,
+        relatedTarget: alphaBody
+      }));
+      alphaGroup.dispatchEvent(new DragEvent("dragleave", {
+        bubbles: true,
+        relatedTarget: document.body
+      }));
+      alphaTwo.getBoundingClientRect = () => ({ top: 10, height: 20 });
+      alphaTwo.dispatchEvent(new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        clientY: 12,
+        dataTransfer: new DataTransfer()
+      }));
+      alphaTwo.dispatchEvent(new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        clientY: 40,
+        dataTransfer: new DataTransfer()
+      }));
+      betaBody.dispatchEvent(new DragEvent("drop", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer()
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      ctxSuppressCustomizationClick = true;
+      elements.contextMenu.querySelector('[data-customization-id="alpha.two"]')?.click();
+      ctxSuppressCustomizationClick = false;
+
+      beginContextShortcutCapture({});
+      cancelContextShortcutCapture();
+      const customizationSearch = elements.contextMenu.querySelector(".ctx-menu-search-input");
+      customizationSearch.value = "alpha";
+      filterContextMenu(customizationSearch.value);
+      const shortcutToggle = elements.contextMenu.querySelector(".ctx-shortcut-edit-toggle");
+      shortcutToggle.click();
+      let setButton = elements.contextMenu.querySelector(".ctx-shortcut-set");
+      setButton.click();
+      elements.contextMenu.querySelector(".ctx-shortcut-cancel").click();
+      setButton = elements.contextMenu.querySelector(".ctx-shortcut-set");
+      setButton.click();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      setButton = elements.contextMenu.querySelector(".ctx-shortcut-set");
+      setButton.click();
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true }));
+
+      const search = elements.contextMenu.querySelector(".ctx-menu-search-input");
+      elements.contextMenu.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "z",
+        bubbles: true,
+        cancelable: true
+      }));
+      search.value = "";
+      filterContextMenu("");
+      search.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        bubbles: true,
+        cancelable: true
+      }));
+      search.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
+
+      renderContextMenu([
+        {
+          label: "Parent",
+          icon: "list",
+          run: () => runs.push("parent"),
+          submenu: [
+            { label: "First child", icon: "copy", run: () => runs.push("child-one") },
+            { label: "Second child", icon: "copy", run: () => runs.push("child-two") }
+          ]
+        }
+      ]);
+      elements.contextMenu.hidden = false;
+      const parent = elements.contextMenu.querySelector(".ctx-item");
+      openContextSubmenuFor(parent, ctxSubmenus.get(parent));
+      openContextSubmenuFor(parent, ctxSubmenus.get(parent));
+      setSubmenuFocus(0);
+      for (const key of ["ArrowDown", "ArrowUp", "Home", "End", "x"]) {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      }
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
+      openContextSubmenuFor(parent, ctxSubmenus.get(parent));
+      subKeyIndex = -1;
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true, cancelable: true }));
+
+      const alternateParent = document.createElement("div");
+      alternateParent.setAttribute("aria-expanded", "true");
+      activeSubmenuParent = alternateParent;
+      showContextSubmenuAt(10, 10);
+      activeSubmenuParent = parent;
+      openContextSubmenuFor(alternateParent, [{ label: "Info", icon: "info", info: true }]);
+      hideContextSubmenu();
+
+      renderContextMenu([
+        { group: "Focus", groupId: "focus" },
+        { customizationId: "focus.one", label: "Focusable", icon: "copy", run: () => runs.push("focus") }
+      ], { customizable: true, grouped: true, searchable: true });
+      const focusSearch = elements.contextMenu.querySelector(".ctx-menu-search-input");
+      const focusItem = elements.contextMenu.querySelector(".ctx-item");
+      focusItem.tabIndex = 0;
+      focusItem.focus();
+      showBuiltContextMenu(20, 20);
+      const originalFocus = focusSearch.focus.bind(focusSearch);
+      focusSearch.focus = () => {};
+      const outsideFocus = document.createElement("button");
+      document.body.append(outsideFocus);
+      outsideFocus.focus();
+      showBuiltContextMenu(20, 20);
+      hideContextMenu();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      focusSearch.focus = originalFocus;
+      outsideFocus.remove();
+
+      const shortcutResults = {
+        badBinding: normalizeContextShortcutBinding({ key: "a" }),
+        badEvent: contextShortcutFromEvent(null),
+        composingEvent: contextShortcutFromEvent({ isComposing: true }),
+        emptyFormat: formatContextShortcut(null),
+        longLabel: contextShortcutKeyLabel("insert"),
+        singleLabel: contextShortcutKeyLabel("q")
+      };
+      localStorage.setItem(CONTEXT_SHORTCUT_STORAGE_KEY, "[]");
+      const arrayShortcuts = loadContextMenuShortcuts().size;
+      localStorage.setItem(CONTEXT_SHORTCUT_STORAGE_KEY, "{");
+      const malformedShortcuts = loadContextMenuShortcuts().size;
+      Storage.prototype.setItem = () => { throw new Error("shortcut storage denied"); };
+      saveContextMenuShortcuts();
+      Storage.prototype.setItem = savedSetItem;
+      const invalidAssignment = assignContextMenuShortcut("Invalid ID", { ctrl: true, key: "k" });
+
+      contextMenuLayout = savedLayout;
+      contextMenuShortcuts = savedShortcuts;
+      hideContextMenu();
+      return {
+        arrayShortcuts,
+        customizedSections: customized.model.sections.length,
+        generatedDuplicate: Boolean(generatedDuplicate),
+        invalidAssignment,
+        malformedShortcuts,
+        noModelResults,
+        plainTitle,
+        runs,
+        shortcutResults
+      };
+    });
+
+    expect(result).toMatchObject({
+      arrayShortcuts: 0,
+      generatedDuplicate: true,
+      invalidAssignment: null,
+      malformedShortcuts: 0,
+      noModelResults: { persisted: true },
+      plainTitle: "Plain group",
+      shortcutResults: {
+        badBinding: null,
+        badEvent: null,
+        composingEvent: null,
+        emptyFormat: "",
+        longLabel: "Insert",
+        singleLabel: "Q"
+      }
+    });
+    expect(result.customizedSections).toBeGreaterThanOrEqual(3);
+    expect(result.runs).not.toContain("two");
+  });
+
+  test("covers terminal, header-action, shortcut, search, and pager residual paths @full", async () => {
+    const result = await page.evaluate(async () => {
+      const savedFetch = window.fetch;
+      const savedMultiterm = window.multiterm;
+      const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const originalClipboard = navigator.clipboard;
+      const key = (value, init = {}) => {
+        const event = new KeyboardEvent("keydown", {
+          key: value,
+          code: init.code || "",
+          bubbles: true,
+          cancelable: true,
+          ...init
+        });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      const results = {};
+
+      window.fetch = async () => { throw new Error("preference write denied"); };
+      elements.autoUpdateChecks.checked = !elements.autoUpdateChecks.checked;
+      elements.autoUpdateChecks.dispatchEvent(new Event("change", { bubbles: true }));
+      elements.updateCheckIntervalHours.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      window.fetch = savedFetch;
+
+      handleBridgeMessage({
+        type: "welcome",
+        cwd: "D:\\multiTerm",
+        sessions: [],
+        openFolders: [null, " ", "D:\\multiTerm"]
+      });
+      const terminal = [...state.terminals.values()].at(-1) || addTerminal({ title: "Residual terminal" });
+      ensureTerminalArtifact(terminal);
+      handleBridgeMessage({ type: "createFailed", id: terminal.id, message: "coverage create failure" });
+      terminal.status = "live";
+      reattachExistingSession(terminal, {
+        cwd: terminal.cwd,
+        pid: terminal.pid || 123,
+        startedAt: new Date().toISOString(),
+        tmux: { distro: "Ubuntu", target: "coverage" }
+      });
+      results.wslTitle = terminalShellTitle("wsl.exe");
+      terminal.term._core._onData.fire("");
+
+      const emptyPane = document.createElement("div");
+      applyHeaderActionPlacement({ headerActionOverrides: {}, pane: emptyPane });
+      let preventedInvalidDrag = false;
+      startHeaderActionDrag({ preventDefault: () => { preventedInvalidDrag = true; } }, "missing", "invalid", emptyPane);
+      setHeaderActionPlacement("missing", "clear", "menu", "one");
+      commitTerminalTitle(null, "ignored");
+      zoomTerminalFont("missing", 1);
+      resetTerminalFontZoom("missing");
+      setTerminalFontSize(null, 12);
+
+      const paneActions = terminal.pane.querySelector(".pane-actions");
+      const clearButton = paneActions.querySelector('[data-action="clear"]');
+      const moreButton = paneActions.querySelector('[data-action="more"]');
+      terminal.headerActionOverrides.clear = headerActionPlacement(terminal, "clear");
+      setHeaderActionPlacement(terminal.id, "clear", headerActionPlacement(terminal, "clear"), "one");
+      terminal.headerActionOverrides = {};
+      requestHeaderActionPlacement(terminal, "clear", headerActionPlacement(terminal, "clear"), clearButton);
+
+      state.settings.headerActionDragScope = "ask";
+      const destination = headerActionPlacement(terminal, "clear") === "menu" ? "header" : "menu";
+      requestHeaderActionPlacement(terminal, "clear", destination, clearButton);
+      elements.headerActionScopeCancel.click();
+      elements.headerActionScopeApply.click();
+      requestHeaderActionPlacement(terminal, "clear", destination, clearButton);
+      elements.headerActionScopeFlyout.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      elements.headerActionScopeFlyout.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true
+      }));
+      requestHeaderActionPlacement(terminal, "clear", destination, clearButton);
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+
+      paneActions.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true }));
+      paneActions.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true }));
+      draggedHeaderAction = { terminalId: "other", action: "clear" };
+      paneActions.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true }));
+      draggedHeaderAction = { terminalId: terminal.id, action: "clear" };
+      const sameTarget = headerActionPlacement(terminal, "clear") === "menu" ? moreButton : clearButton;
+      sameTarget.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true }));
+      paneActions.dispatchEvent(new DragEvent("dragleave", { bubbles: true, relatedTarget: clearButton }));
+      paneActions.dispatchEvent(new DragEvent("dragleave", { bubbles: true, relatedTarget: document.body }));
+      finishHeaderActionDrag();
+      paneActions.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+      draggedHeaderAction = { terminalId: terminal.id, action: "clear" };
+      sameTarget.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+      finishHeaderActionDrag();
+
+      const artifact = ensureTerminalArtifact(terminal);
+      artifact.notes = "coverage";
+      commitTerminalTitle(terminal, "Residual renamed", false);
+
+      let settled = false;
+      pendingBridgeRequests.clear();
+      pendingBridgeRequests.set("wrong", { type: "wrong", settle() {} });
+      pendingBridgeRequests.set("right", { type: "right", settle: () => { settled = true; } });
+      results.resolvedTyped = resolveBridgeRequestByType("right", true);
+      pendingBridgeRequests.clear();
+      results.missingTyped = resolveBridgeRequestByType("missing", true);
+
+      terminalBatchDepth = 1;
+      flushTerminalBatch();
+      terminalBatchDepth = 0;
+      flushTerminalBatch();
+
+      window.multiterm = { writeClipboardText: async (text) => text };
+      results.nativeClipboard = await writeClipboardText("native");
+      window.multiterm = null;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      results.missingClipboard = await writeClipboardText("missing").then(() => false, () => true);
+      if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      else delete navigator.clipboard;
+
+      hideContextMenu();
+      closePalette();
+      closeQuickSwitch(false);
+      closeFindAll();
+      elements.shortcutsOverlay.hidden = true;
+      elements.aboutOverlay.hidden = true;
+      elements.helpOverlay.hidden = true;
+      elements.updateOverlay.hidden = true;
+      elements.statisticsOverlay.hidden = true;
+      elements.terminalArtifactsOverlay.hidden = true;
+      elements.updateConsentOverlay.hidden = false;
+      key("Escape");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      elements.updateConsentOverlay.hidden = true;
+
+      state.activeId = null;
+      state.primaryId = terminal.id;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText: async () => "coverage paste", writeText: async () => {} }
+      });
+      const shortcutResults = {};
+      for (const [name, value, init] of [
+        ["search", "e", { ctrlKey: true, shiftKey: true }],
+        ["restart", "r", { ctrlKey: true, shiftKey: true }],
+        ["broadcast", "b", { ctrlKey: true, shiftKey: true }],
+        ["paste", "v", { ctrlKey: true, shiftKey: true }],
+        ["clear", "l", { ctrlKey: true, shiftKey: true }],
+        ["maximize", "x", { ctrlKey: true, shiftKey: true }],
+        ["nextTerminal", "ArrowRight", { ctrlKey: true, altKey: true }],
+        ["previousTerminal", "ArrowLeft", { ctrlKey: true, altKey: true }]
+      ]) {
+        shortcutResults[name] = key(value, init);
+      }
+      if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      else {
+        delete navigator.clipboard;
+        if (navigator.clipboard !== originalClipboard) {
+          Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+        }
+      }
+
+      state.pages = [
+        { id: "coverage-page-1", name: "Coverage 1" },
+        { id: "coverage-page-2", name: "Coverage 2" }
+      ];
+      state.activePageId = state.pages[0].id;
+      for (const current of state.terminals.values()) current.pageId = state.activePageId;
+      renderPager();
+      shortcutResults.nextPage = key("PageDown", { ctrlKey: true });
+      shortcutResults.previousPage = key("PageUp", { ctrlKey: true });
+      shortcutResults.directPage = key("2", { altKey: true });
+      shortcutResults.zoomIn = key("=", { ctrlKey: true });
+      shortcutResults.zoomOut = key("-", { ctrlKey: true });
+      shortcutResults.zoomReset = key("0", { ctrlKey: true });
+
+      const findFirst = terminal;
+      const findSecond = [...state.terminals.values()].find((current) => current.id !== terminal.id) || terminal;
+      findFirst.lastFindCount = 2;
+      findSecond.lastFindCount = 2;
+      state.findAll.query = "coverage";
+      state.findAll.order = [findFirst.id, findSecond.id];
+      state.findAll.ti = 0;
+      state.findAll.li = -1;
+      findAllNav(-1);
+      state.findAll.ti = 0;
+      state.findAll.li = 1;
+      findAllNav(1);
+      const savedSearchAddon = findFirst.searchAddon;
+      findFirst.searchAddon = null;
+      state.findAll.order = [findFirst.id];
+      state.findAll.ti = 0;
+      state.findAll.li = -1;
+      findAllNav(1);
+      findFirst.searchAddon = savedSearchAddon;
+
+      const originalPlacement = state.settings.pagerPlacement;
+      state.settings.pagerPlacement = "top";
+      togglePagerPanel();
+      for (const [label, expected] of [
+        ["Move pages to top", "top"],
+        ["Move pages to bottom", "bottom"],
+        ["Move pages to left", "left"],
+        ["Move pages to right", "right"]
+      ]) {
+        showPagerPlacementMenu(20, 20);
+        const row = [...elements.contextMenu.querySelectorAll(".ctx-item")]
+          .find((item) => item.textContent.includes(label));
+        if (row.getAttribute("aria-disabled") === "true") {
+          setPagerPlacement(expected === "top" ? "bottom" : "top");
+          showPagerPlacementMenu(20, 20);
+          [...elements.contextMenu.querySelectorAll(".ctx-item")]
+            .find((item) => item.textContent.includes(label))
+            .click();
+        } else {
+          row.click();
+        }
+      }
+      state.settings.pagerPlacement = originalPlacement;
+      applyPagerPlacement();
+
+      renderPager();
+      const chips = [...elements.pagerList.querySelectorAll(".pager-chip")];
+      draggedPageId = null;
+      moveDraggedPage(chips[0], true);
+      draggedPageId = chips[0].dataset.pageId;
+      moveDraggedPage(chips[0], true);
+      moveDraggedPage(chips[1], true);
+      movePageByOffset("missing", 1);
+      movePageByOffset(state.pages[0].id, -1);
+      suppressPageClick = true;
+      chips[0].dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      suppressPageClick = false;
+      elements.pagerList.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        ctrlKey: true,
+        shiftKey: true,
+        bubbles: true
+      }));
+      chips[0].querySelector("[data-page-close]").dispatchEvent(new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true
+      }));
+      draggedPageId = null;
+      elements.pagerList.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true }));
+      elements.pagerList.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+      chips[0].dispatchEvent(new DragEvent("dragstart", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer()
+      }));
+      elements.pagerList.dispatchEvent(new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer()
+      }));
+      elements.pagerList.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
+      chips[0].dispatchEvent(new DragEvent("dragend", { bubbles: true }));
+
+      const closeTarget = addTerminal({ title: "Shortcut close target" });
+      state.activeId = closeTarget.id;
+      shortcutResults.close = key("w", { ctrlKey: true, shiftKey: true });
+      requestAppClose("window");
+      elements.closeConfirmQuit.click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      window.fetch = savedFetch;
+      window.multiterm = savedMultiterm;
+      return {
+        missingClipboard: results.missingClipboard,
+        missingTyped: results.missingTyped,
+        nativeClipboard: results.nativeClipboard,
+        preventedInvalidDrag,
+        resolvedTyped: results.resolvedTyped,
+        settled,
+        shortcutResults,
+        wslTitle: results.wslTitle
+      };
+    });
+
+    expect(result).toMatchObject({
+      missingClipboard: true,
+      missingTyped: false,
+      nativeClipboard: "native",
+      preventedInvalidDrag: true,
+      resolvedTyped: true,
+      settled: true,
+      wslTitle: "WSL"
+    });
+    expect(Object.values(result.shortcutResults).every(Boolean)).toBe(true);
+  });
+
+  test("covers artifact, messaging, update-preference, and statistics residual paths @full", async () => {
+    const result = await page.evaluate(async () => {
+      const savedFetch = window.fetch;
+      const savedMultiterm = window.multiterm;
+      const savedSocket = state.socket;
+      const savedSocketReady = state.socketReady;
+      const savedSetItem = Storage.prototype.setItem;
+      const savedWebdriver = Object.getOwnPropertyDescriptor(Navigator.prototype, "webdriver");
+      const first = addTerminal({ title: "Artifact source" });
+      const second = addTerminal({ title: "Artifact target" });
+      first.status = "live";
+      second.status = "live";
+      first.pid = 101;
+      second.pid = 202;
+      const values = {};
+
+      values.nullQueueItem = normalizeQueueItem(null, 0, "missing");
+      localStorage.setItem(TERMINAL_ARTIFACTS_STORAGE_KEY, JSON.stringify({
+        terminals: {
+          invalid: null,
+          valid: { notes: "saved", queue: [{ command: "echo queue" }] }
+        },
+        recoveredNotes: [null, { notes: "recovered" }],
+        unparentedQueue: [null, { command: "echo unparented" }]
+      }));
+      values.loadedArtifacts = loadTerminalArtifacts();
+      localStorage.setItem(TERMINAL_ARTIFACTS_STORAGE_KEY, "{");
+      values.malformedArtifacts = loadTerminalArtifacts();
+      values.nullArchive = archiveArtifactRecord(null, "none");
+
+      state.terminalArtifacts = emptyTerminalArtifacts();
+      state.terminalArtifacts.terminals.recoverOne = {
+        terminalId: "recoverOne",
+        notes: "note",
+        queue: [{ id: "q1", command: "echo one", createdAt: new Date().toISOString() }]
+      };
+      recoverAllTerminalArtifacts("coverage all");
+      state.terminalArtifacts.terminals.staleOne = {
+        terminalId: "staleOne",
+        notes: "",
+        queue: [{ id: "q2", command: "echo stale", createdAt: new Date().toISOString() }]
+      };
+      recoverStaleTerminalArtifacts(new Set());
+
+      const fakeTerminal = { id: "missing-controls", pane: document.createElement("div") };
+      state.terminals.set(fakeTerminal.id, fakeTerminal);
+      updateTerminalArtifactIndicators();
+      state.terminals.delete(fakeTerminal.id);
+
+      const savedArtifactTarget = elements.terminalArtifactsTarget;
+      const savedUnparentedTarget = elements.unparentedQueueTarget;
+      const savedArtifactsOverlay = elements.terminalArtifactsOverlay;
+      elements.terminalArtifactsTarget = null;
+      refreshTerminalArtifactTargets();
+      elements.terminalArtifactsTarget = savedArtifactTarget;
+      elements.unparentedQueueTarget = null;
+      refreshUnparentedQueueTargets();
+      elements.unparentedQueueTarget = savedUnparentedTarget;
+      elements.terminalArtifactsOverlay = null;
+      renderTerminalArtifacts();
+      openTerminalArtifacts();
+      closeTerminalArtifacts();
+      bindTerminalArtifactsHub();
+      elements.terminalArtifactsOverlay = savedArtifactsOverlay;
+      values.invalidArtifactTime = artifactTimeLabel("not-a-date");
+
+      refreshTerminalArtifactTargets(first.id);
+      elements.terminalArtifactsTarget.value = UNPARENTED_QUEUE_VALUE;
+      elements.commandQueueInput.value = "echo staged";
+      addCommandQueueItem();
+      const unparentedId = state.terminalArtifacts.unparentedQueue.at(-1).id;
+      removeCommandQueueItem("missing");
+      removeCommandQueueItem(unparentedId);
+
+      first.pageId = "coverage-artifact-page";
+      second.pageId = first.pageId;
+      first.minimized = true;
+      state.pages.push({ id: first.pageId, name: "Artifacts" });
+      focusTerminalAfterQueueInsert(first, { closeArtifacts: false });
+      applyPageVisibility();
+      const dequeueItems = [{ id: "valid", command: "echo valid" }];
+      values.missingQueue = dequeueQueueItem({ items: dequeueItems, terminal: first, id: "missing" });
+      const dead = {
+        ...first,
+        id: "dead-artifact",
+        status: "exited"
+      };
+      state.terminalArtifacts.terminals[dead.id] = {
+        ...terminalArtifactMetadata(dead),
+        notes: "recover me",
+        queue: [{ id: "dead-command", command: "echo dead" }]
+      };
+      values.deadQueue = dequeueQueueItem({
+        items: state.terminalArtifacts.terminals[dead.id].queue,
+        terminal: dead,
+        id: "dead-command",
+        source: "terminal",
+        sourceTerminal: dead
+      });
+      first.status = "starting";
+      values.startingQueue = dequeueQueueItem({
+        items: [{ id: "starting", command: "echo starting" }],
+        terminal: first,
+        id: "starting"
+      });
+      first.status = "live";
+      values.malformedQueue = dequeueQueueItem({
+        items: [{ id: "malformed", command: "" }],
+        terminal: first,
+        id: "malformed"
+      });
+      state.socketReady = false;
+      values.offlineQueue = dequeueQueueItem({
+        items: [{ id: "offline", command: "echo offline" }],
+        terminal: first,
+        id: "offline"
+      });
+      values.emptyNext = dequeueNextTerminalCommand(first);
+      values.nullTerminalQueue = dequeueTerminalCommand(null, "missing");
+
+      openTerminalArtifacts(first.id);
+      elements.terminalArtifactsTarget.value = "missing-terminal";
+      elements.terminalNotesInput.dispatchEvent(new Event("input", { bubbles: true }));
+      elements.terminalArtifactsTarget.value = first.id;
+      ensureTerminalArtifact(first);
+      elements.terminalNotesInput.value = "saved through input";
+      elements.terminalNotesInput.dispatchEvent(new Event("input", { bubbles: true }));
+      elements.commandQueueInput.value = "echo keyboard";
+      elements.commandQueueInput.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 1450));
+
+      state.terminalArtifacts.recoveredNotes = [{
+        id: "recovered-input",
+        notes: "before",
+        title: "Recovered",
+        recoveredAt: new Date().toISOString()
+      }];
+      renderRecoveredNotes();
+      elements.recoveredNotesList.dispatchEvent(new Event("input", { bubbles: true }));
+      const recoveredInput = elements.recoveredNotesList.querySelector("[data-recovered-notes]");
+      recoveredInput.dataset.recoveredNotes = "missing";
+      recoveredInput.dispatchEvent(new Event("input", { bubbles: true }));
+      recoveredInput.dataset.recoveredNotes = "recovered-input";
+      recoveredInput.value = "after";
+      recoveredInput.dispatchEvent(new Event("input", { bubbles: true }));
+      elements.recoveredNotesList.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const recoveredDelete = elements.recoveredNotesList.querySelector("[data-recovered-delete]");
+      recoveredDelete.dataset.recoveredDelete = "missing";
+      recoveredDelete.click();
+      recoveredDelete.dataset.recoveredDelete = "recovered-input";
+      recoveredDelete.click();
+      closeTerminalArtifacts({ restoreFocus: false });
+
+      localStorage.setItem("multiterm.terminalLinks", "x".repeat((1024 * 1024) + 1));
+      values.oversizedLinks = loadTerminalLinks().size;
+      localStorage.setItem("multiterm.terminalLinks", JSON.stringify([
+        null,
+        { sourceId: first.id, targetId: first.id },
+        { sourceId: first.id, targetId: second.id }
+      ]));
+      state.terminalLinks = loadTerminalLinks();
+      localStorage.setItem("multiterm.terminalLinks", "{");
+      values.malformedLinks = loadTerminalLinks().size;
+      Storage.prototype.setItem = () => { throw new Error("link storage denied"); };
+      saveTerminalLinks();
+      Storage.prototype.setItem = savedSetItem;
+
+      state.terminalLinks.set("remove-me", { sourceId: first.id, targetId: "other" });
+      values.removedSessionLinks = removeTerminalLinksForSession(first.id);
+      state.terminalLinks.set("dead-link", { sourceId: first.id, targetId: "missing-target" });
+      values.prunedLinks = pruneTerminalLinks();
+      elements.messageSource.value = first.id;
+      elements.messageTarget.value = first.id;
+      values.invalidSelectedLink = addSelectedTerminalLink();
+      elements.messageTarget.value = second.id;
+      state.terminalLinks.set(terminalLinkKey(first.id, second.id), {
+        sourceId: first.id,
+        targetId: second.id,
+        createdAt: new Date().toISOString()
+      });
+      values.duplicateSelectedLink = addSelectedTerminalLink();
+      values.missingRemoveLink = removeTerminalLink("missing-link");
+
+      state.terminalMessages.clear();
+      for (const id of ["pending-one", "pending-two"]) {
+        ingestTerminalMessage({
+          id,
+          kind: "text",
+          sourceId: first.id,
+          sourceTitle: "Source",
+          targetId: second.id,
+          targetTitle: "Target",
+          text: id,
+          createdAt: new Date().toISOString()
+        }, false);
+      }
+      values.pendingRouteCount = terminalConnectionRoutes().find((route) => route.type === "pending")?.count;
+
+      const savedStage = elements.stage;
+      const savedConnectorAction = elements.terminalConnectorAction;
+      const savedConnectionOverlay = elements.terminalConnectionsOverlay;
+      const savedConnectionPaths = elements.terminalConnectionPaths;
+      const savedMap = elements.messageConnectionsMap;
+      const savedLinkAdd = elements.messageLinkAdd;
+      elements.stage = null;
+      positionTerminalConnectorAction({ midX: 0, midY: 0 });
+      renderWorkspaceTerminalConnections();
+      elements.stage = savedStage;
+      elements.terminalConnectorAction = null;
+      hideTerminalConnectorAction();
+      showTerminalConnectorAction(null);
+      elements.terminalConnectorAction = savedConnectorAction;
+      openTerminalMessagesForConnector();
+      elements.terminalConnectionsOverlay = null;
+      renderWorkspaceTerminalConnections();
+      elements.terminalConnectionsOverlay = savedConnectionOverlay;
+      elements.terminalConnectionPaths = null;
+      renderWorkspaceTerminalConnections();
+      elements.terminalConnectionPaths = savedConnectionPaths;
+      elements.messageConnectionsMap = null;
+      renderMessageConnectionMap([]);
+      elements.messageConnectionsMap = savedMap;
+      elements.messageLinkAdd = null;
+      updateMessageLinkAction();
+      elements.messageLinkAdd = savedLinkAdd;
+
+      const routes = terminalConnectionRoutes();
+      renderMessageConnectionMap(routes.concat([{
+        key: "missing-route",
+        type: "pending",
+        count: 2,
+        sourceId: "missing-source",
+        targetId: second.id
+      }]));
+      elements.terminalMessagesOverlay.classList.add("is-open");
+      renderMessageConnections();
+      renderWorkspaceTerminalConnections();
+      const liveRoute = terminalConnectionRoutes()[0];
+      if (liveRoute) {
+        elements.terminalConnectorAction.hidden = false;
+        elements.terminalConnectorAction.dataset.routeId = terminalConnectionRouteId(liveRoute);
+        renderWorkspaceTerminalConnections();
+        elements.terminalConnectorAction.dataset.routeId = "missing:route";
+        renderWorkspaceTerminalConnections();
+      }
+      state.terminalConnections.animationFrame = 1;
+      trackTerminalConnectionAnimation(10);
+      state.terminalConnections.animationFrame = 0;
+      window.dispatchEvent(new StorageEvent("storage", { key: "multiterm.terminalLinks" }));
+
+      values.invalidMessageRoot = normalizeIncomingTerminalMessage(null);
+      values.invalidMessageKind = normalizeIncomingTerminalMessage({ id: "bad", kind: "invalid" });
+      values.invalidMessageRoute = normalizeIncomingTerminalMessage({ id: "bad", kind: "text" });
+      values.invalidIngest = ingestTerminalMessage(null);
+      values.pathContent = terminalMessageContent({ kind: "path", path: "D:\\file" });
+      values.statusContent = terminalMessageContent({ kind: "status", status: "ok", text: "ready" });
+      const savedMessagesList = elements.terminalMessagesList;
+      const savedMessagesOverlay = elements.terminalMessagesOverlay;
+      elements.terminalMessagesList = null;
+      renderTerminalMessages();
+      elements.terminalMessagesList = savedMessagesList;
+      state.socketReady = false;
+      values.offlineMessages = await requestTerminalMessages();
+      elements.messageKind.value = "text";
+      elements.messageSource.value = "";
+      elements.messageTarget.value = "";
+      elements.messageText.value = "";
+      values.invalidComposed = await sendComposedTerminalMessage();
+      elements.messageSource.value = first.id;
+      elements.messageTarget.value = second.id;
+      elements.messageText.value = "valid but offline";
+      values.offlineComposed = await sendComposedTerminalMessage();
+      values.missingMessageAction = await actOnRenderedTerminalMessage("missing", "dismiss");
+
+      elements.terminalMessagesOverlay = null;
+      openTerminalMessages();
+      closeTerminalMessages();
+      bindTerminalMessages();
+      elements.terminalMessagesOverlay = savedMessagesOverlay;
+      openTerminalMessages(first.id, second.id);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      renderWorkspaceTerminalConnections();
+      const hitPath = elements.terminalConnectionPaths.querySelector(".terminal-connector-hit");
+      if (hitPath) {
+        for (const type of ["focusin", "focusout", "click"]) {
+          hitPath.dispatchEvent(new Event(type, { bubbles: true }));
+        }
+        hitPath.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+        hitPath.dispatchEvent(new KeyboardEvent("keydown", {
+          key: "Enter",
+          bubbles: true,
+          cancelable: true
+        }));
+      }
+      elements.terminalMessagesOverlay.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      elements.terminalMessagesOverlay.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true
+      }));
+      elements.terminalMessagesClose.disabled = true;
+      elements.terminalMessagesRefresh.disabled = true;
+      elements.terminalMessagesOverlay.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true
+      }));
+      elements.terminalMessagesClose.disabled = false;
+      elements.terminalMessagesRefresh.disabled = false;
+      elements.messageSource.dispatchEvent(new Event("change", { bubbles: true }));
+      elements.messageText.value = "keyboard message";
+      elements.messageText.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true
+      }));
+      closeTerminalMessages({ restoreFocus: false });
+
+      const response = (ok, body, status = ok ? 200 : 500) => ({
+        ok,
+        status,
+        json: async () => body
+      });
+      window.fetch = async () => response(false, { error: "load failed" }, 503);
+      values.loadPreferenceError = await loadPersistedAutomaticUpdatePreferences().then(() => "", (error) => error.message);
+      window.fetch = async () => response(true, { ok: true });
+      values.noPersistedPreferences = await loadPersistedAutomaticUpdatePreferences();
+      window.fetch = async () => response(false, { ok: false, error: "persist failed" }, 500);
+      values.persistPreferenceError = await persistAutomaticUpdatePreferences({ configured: true }).then(() => "", (error) => error.message);
+      values.savePreferenceError = await saveAndPersistAutomaticUpdatePreferences({ configured: true }).then(() => "", (error) => error.message);
+      saveAutomaticUpdatePreferences({ configured: false, enabled: false });
+      window.fetch = async () => { throw new Error("hydrate load failed"); };
+      values.hydratedLocal = await hydrateAutomaticUpdatePreferences();
+      saveAutomaticUpdatePreferences({ configured: true, enabled: false });
+      values.hydratedConfigured = await hydrateAutomaticUpdatePreferences();
+
+      const savedConsentOverlay = elements.updateConsentOverlay;
+      elements.updateConsentOverlay = null;
+      bindUpdateConsent();
+      openUpdateConsentDialog();
+      closeUpdateConsentDialog();
+      elements.updateConsentOverlay = savedConsentOverlay;
+      window.fetch = async () => { throw new Error("consent save failed"); };
+      await acceptAutomaticUpdateChecks();
+      await declineAutomaticUpdateChecks();
+
+      const generation = state.update.scheduleGeneration;
+      scheduleNextAutomaticUpdateCheck(generation + 1);
+      saveAutomaticUpdatePreferences({ configured: true, enabled: false });
+      scheduleNextAutomaticUpdateCheck(state.update.scheduleGeneration);
+      saveAutomaticUpdatePreferences({ configured: true, enabled: true, intervalHours: 1 });
+      const nativeSetTimeout = window.setTimeout;
+      let scheduledUpdate = null;
+      window.setTimeout = (callback) => {
+        scheduledUpdate = callback;
+        return 1;
+      };
+      window.multiterm = {
+        checkForUpdate: async () => ({ ok: true, available: false, release: {}, current: APP_VERSION })
+      };
+      scheduleNextAutomaticUpdateCheck(state.update.scheduleGeneration);
+      window.setTimeout = nativeSetTimeout;
+      if (scheduledUpdate) await scheduledUpdate();
+      stopAutomaticUpdateChecks();
+
+      Object.defineProperty(Navigator.prototype, "webdriver", { configurable: true, get: () => false });
+      saveAutomaticUpdatePreferences({ configured: false, enabled: false });
+      window.fetch = async () => response(true, { ok: true });
+      await initializeAutomaticUpdateChecks();
+      closeUpdateConsentDialog();
+      saveAutomaticUpdatePreferences({ configured: true, enabled: true, intervalHours: 1 });
+      window.fetch = async () => response(true, {
+        ok: true,
+        preferences: { configured: true, enabled: true, intervalHours: 1 }
+      });
+      await initializeAutomaticUpdateChecks();
+      stopAutomaticUpdateChecks();
+      if (savedWebdriver) Object.defineProperty(Navigator.prototype, "webdriver", savedWebdriver);
+
+      const savedStatisticsBody = elements.statisticsBody;
+      const savedStatisticsRefresh = elements.statisticsRefresh;
+      const savedStatisticsOverlay = elements.statisticsOverlay;
+      elements.statisticsBody = null;
+      renderStatistics({});
+      await refreshStatistics();
+      elements.statisticsBody = savedStatisticsBody;
+      renderStatistics({
+        scope: "all",
+        processError: "partial statistics",
+        sessions: [
+          { id: first.id, pid: first.pid, keystrokesIn: 1, keystrokesOut: 2, bytesIn: 3, bytesOut: 4, cpuPercent: 5, memoryBytes: 6 },
+          { id: second.id, pid: second.pid, keystrokesIn: 7, keystrokesOut: 8, bytesIn: 9, bytesOut: 10, cpuPercent: 11, memoryBytes: 12 }
+        ]
+      });
+      elements.statisticsRefresh = null;
+      setStatisticsLoading(true);
+      elements.statisticsRefresh = savedStatisticsRefresh;
+      state.statistics.loading = true;
+      await refreshStatistics();
+      state.statistics.loading = false;
+      state.socketReady = false;
+      const staleRefresh = refreshStatistics();
+      state.statistics.requestGeneration += 1;
+      await staleRefresh;
+      state.statistics.loading = false;
+      await refreshStatistics();
+      elements.statisticsOverlay = null;
+      openStatistics();
+      closeStatistics();
+      bindStatisticsDialog();
+      elements.statisticsOverlay = savedStatisticsOverlay;
+      openStatistics(first.id);
+      elements.statisticsOverlay.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true
+      }));
+      elements.statisticsOverlay.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true
+      }));
+      elements.statisticsClose.disabled = true;
+      elements.statisticsRefresh.disabled = true;
+      elements.statisticsOverlay.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true
+      }));
+      elements.statisticsClose.disabled = false;
+      elements.statisticsRefresh.disabled = false;
+      closeStatistics();
+      launchCopilotCli(null);
+
+      window.fetch = savedFetch;
+      window.multiterm = savedMultiterm;
+      state.socket = savedSocket;
+      state.socketReady = savedSocketReady;
+      Storage.prototype.setItem = savedSetItem;
+      state.settings.keepSessionsOnClose = true;
+      closeAllTerminals();
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      deadQueue: false,
+      duplicateSelectedLink: false,
+      emptyNext: false,
+      invalidArtifactTime: "",
+      invalidComposed: false,
+      invalidIngest: false,
+      invalidSelectedLink: false,
+      malformedLinks: 0,
+      malformedQueue: false,
+      missingMessageAction: false,
+      missingQueue: false,
+      missingRemoveLink: false,
+      noPersistedPreferences: null,
+      nullArchive: false,
+      nullQueueItem: null,
+      nullTerminalQueue: false,
+      offlineComposed: false,
+      offlineMessages: null,
+      offlineQueue: false,
+      oversizedLinks: 0,
+      pendingRouteCount: 2,
+      prunedLinks: true,
+      removedSessionLinks: true,
+      startingQueue: false
+    });
+    expect(result.loadPreferenceError).toContain("load failed");
+    expect(result.persistPreferenceError).toContain("persist failed");
+    expect(result.savePreferenceError).toContain("persist failed");
+  });
+
+  test("covers the final executable renderer statements and callbacks @full", async () => {
+    const result = await page.evaluate(async () => {
+      const terminal = addTerminal({ title: "Final statement terminal" });
+      terminal.status = "live";
+      const values = {};
+
+      const hiddenDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "hidden")
+        || Object.getOwnPropertyDescriptor(document, "hidden");
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      enqueueTerminalOutput(terminal, "hidden timer output");
+      await new Promise((resolve) => setTimeout(resolve, HIDDEN_FLUSH_MS + 20));
+      if (hiddenDescriptor) Object.defineProperty(document, "hidden", hiddenDescriptor);
+      else delete document.hidden;
+
+      openTerminalArtifacts(terminal.id);
+      elements.terminalArtifactsOverlay.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true
+      }));
+      openTerminalArtifacts(terminal.id);
+      const record = ensureTerminalArtifact(terminal);
+      record.queue = [{ id: "remove-through-list", command: "echo remove", createdAt: new Date().toISOString() }];
+      renderTerminalArtifacts();
+      elements.commandQueueList.querySelector("[data-queue-delete]").click();
+      closeTerminalArtifacts({ restoreFocus: false });
+
+      const other = addTerminal({ title: "Final statement target" });
+      other.status = "live";
+      refreshMessageRoutes(terminal.id, other.id);
+      state.terminalLinks.set(terminalLinkKey(terminal.id, other.id), {
+        sourceId: terminal.id,
+        targetId: other.id,
+        createdAt: new Date().toISOString()
+      });
+      values.duplicateLink = addSelectedTerminalLink();
+      const invalidHit = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      invalidHit.dataset.sourceId = "missing-source";
+      invalidHit.dataset.targetId = "missing-target";
+      showTerminalConnectorAction(invalidHit);
+      elements.terminalConnectionPaths.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      const savedFocusable = terminalMessagesFocusableElements;
+      terminalMessagesFocusableElements = () => [];
+      elements.terminalMessagesOverlay.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true
+      }));
+      terminalMessagesFocusableElements = savedFocusable;
+
+      values.invalidShortcutKey = normalizeContextShortcutBinding({ ctrl: true, key: "Control" });
+      cancelContextSectionRename();
+      renderContextMenu([
+        { group: "Keyboard", groupId: "keyboard" },
+        { customizationId: "keyboard.one", label: "Keyboard one", icon: "copy", run() {} }
+      ], { customizable: true, grouped: true, searchable: true });
+      elements.contextMenu.hidden = false;
+      startContextSectionRename("keyboard");
+      const sectionInput = elements.contextMenu.querySelector(".ctx-group-title-input");
+      sectionInput.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      sectionInput.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      cancelContextSectionRename();
+
+      renderContextMenu([
+        { label: "First", icon: "copy", run() {} },
+        { label: "Second", icon: "copy", run() {} }
+      ], { searchable: true });
+      elements.contextMenu.hidden = false;
+      ctxShortcutCapture = null;
+      ctxShortcutEditing = false;
+      const search = elements.contextMenu.querySelector(".ctx-menu-search-input");
+      elements.contextMenu.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "f",
+        bubbles: true,
+        cancelable: true
+      }));
+      search.value = "";
+      filterContextMenu("");
+      search.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowUp",
+        bubbles: true,
+        cancelable: true
+      }));
+      search.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
+
+      subFocusables = [];
+      moveSubmenuFocus(1);
+      const subOne = document.createElement("div");
+      const subTwo = document.createElement("div");
+      subFocusables = [subOne, subTwo];
+      subKeyIndex = -1;
+      moveSubmenuFocus(-1);
+      subKeyIndex = -1;
+      moveSubmenuFocus(1);
+
+      renderContextMenu([
+        { group: "Focus retry", groupId: "focus-retry" },
+        { customizationId: "focus.retry", label: "Retry", icon: "copy", run() {} }
+      ], { customizable: true, grouped: true, searchable: true });
+      const focusSearch = elements.contextMenu.querySelector(".ctx-menu-search-input");
+      const outside = document.createElement("button");
+      outside.textContent = "Outside focus";
+      document.body.append(outside);
+      outside.focus();
+      const nativeFocus = focusSearch.focus;
+      const nativeSelect = focusSearch.select;
+      Object.defineProperty(focusSearch, "focus", { configurable: true, value: () => {} });
+      Object.defineProperty(focusSearch, "select", { configurable: true, value: () => {} });
+      const nativeSetTimeout = window.setTimeout;
+      const focusRetries = [];
+      window.setTimeout = (callback) => {
+        focusRetries.push(callback);
+        return 1;
+      };
+      showBuiltContextMenu(20, 20);
+      window.setTimeout = nativeSetTimeout;
+      ctxSearchFocusRequest += 1;
+      focusRetries.forEach((callback) => callback());
+      Object.defineProperty(focusSearch, "focus", { configurable: true, value: nativeFocus });
+      Object.defineProperty(focusSearch, "select", { configurable: true, value: nativeSelect });
+      outside.remove();
+      hideContextMenu();
+
+      buildSurfaceContextMenu();
+      const notesAction = [...elements.contextMenu.querySelectorAll(".ctx-item")]
+        .find((item) => item.textContent.includes("Terminal notes & command queue"));
+      notesAction?.click();
+      closeTerminalArtifacts({ restoreFocus: false });
+
+      invalidateSettingsSearchItem(document.body);
+      elements.settingsSearch.value = "";
+      elements.settingsSearch.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "x",
+        bubbles: true,
+        cancelable: true
+      }));
+
+      state.settings.keepSessionsOnClose = true;
+      closeAllTerminals();
+      return { ...values, focusRetries: focusRetries.length };
+    });
+
+    expect(result.duplicateLink).toBe(false);
+    expect(result.focusRetries).toBeGreaterThan(0);
+    expect(result.invalidShortcutKey).toBeNull();
+  });
+
   test("covers header-search filter internals, off-host panes, and counter fallbacks", async () => {
     const setup = await page.evaluate(async () => {
       closeAllTerminals();
@@ -3172,5 +4333,1125 @@ test.describe("Renderer coverage completion", () => {
       state.settings.keepSessionsOnClose = true;
       closeAllTerminals();
     });
+  });
+
+  test("covers remaining renderer control defaults and alternate navigation branches @full", async () => {
+    const result = await page.evaluate(async () => {
+      closeAllTerminals();
+      const values = {};
+      const savedFetch = window.fetch;
+      const savedClipboard = Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard");
+      const savedTimeout = window.setTimeout;
+
+      elements.tmuxAttachOverlay.hidden = false;
+      const tmuxEscape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+      elements.tmuxAttachOverlay.dispatchEvent(tmuxEscape);
+      values.tmuxEscape = tmuxEscape.defaultPrevented;
+
+      const response = (ok, body, status = ok ? 200 : 500) => ({
+        ok,
+        status,
+        json: async () => body
+      });
+      window.fetch = async () => { throw "toggle denied"; };
+      elements.autoUpdateChecks.checked = true;
+      elements.autoUpdateChecks.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => savedTimeout(resolve, 20));
+      window.fetch = async () => { throw "interval denied"; };
+      elements.updateCheckIntervalHours.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => savedTimeout(resolve, 20));
+      saveAutomaticUpdatePreferences({ configured: true, enabled: true, intervalHours: 1 });
+      window.fetch = async () => response(true, { ok: true, preferences: {} });
+      elements.updateCheckIntervalHours.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => savedTimeout(resolve, 20));
+      stopAutomaticUpdateChecks();
+
+      handleBridgeMessage({ type: "terminalMessages", messages: {}, requestId: "missing-list" });
+      handleBridgeMessage({ type: "terminalMessages", messages: [null], requestId: "missing-entry" });
+      handleBridgeMessage({ type: "terminalMessagesExpired", ids: {} });
+      values.messagesAfterInvalidFrames = state.terminalMessages.size;
+
+      const terminal = addTerminal({ title: "Alternate branches" });
+      terminal.pendingCommand = "\0";
+      terminal.pendingCommandEnter = false;
+      handleBridgeMessage({
+        type: "created",
+        id: terminal.id,
+        cwd: "",
+        pid: 707,
+        title: terminal.titleInput.value
+      });
+      state.statistics.terminalId = null;
+      handleBridgeMessage({ type: "error", message: "Unsupported message type: statistics" });
+      values.defaultShellTitle = terminalShellTitle(null);
+
+      Object.defineProperty(Navigator.prototype, "clipboard", {
+        configurable: true,
+        get: () => ({ writeText: () => Promise.reject("selection denied"), readText: async () => "" })
+      });
+      state.settings.copyOnSelect = true;
+      terminal.term.selectAll();
+      terminal.term._core._onSelectionChange.fire();
+      await new Promise((resolve) => savedTimeout(resolve, 0));
+      state.settings.copyOnSelect = false;
+
+      terminal.screen.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        deltaY: 100
+      }));
+
+      const nativeGetSelection = terminal.term.getSelection.bind(terminal.term);
+      const nativeGetSelectionPosition = terminal.term.getSelectionPosition.bind(terminal.term);
+      terminal.contextSelection = "same cell";
+      terminal.selectionSnapshotPosition = { start: { x: 1, y: 1 }, end: { x: 1, y: 1 } };
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: () => "" });
+      terminal.pane.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 10,
+        clientY: 10
+      }));
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: () => "selection" });
+      Object.defineProperty(terminal.term, "getSelectionPosition", { configurable: true, value: () => null });
+      terminal.term.element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }));
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: nativeGetSelection });
+      Object.defineProperty(terminal.term, "getSelectionPosition", { configurable: true, value: nativeGetSelectionPosition });
+
+      startHeaderActionDrag({ dataTransfer: null, preventDefault() {} }, terminal.id, "clear", terminal.pane);
+      finishHeaderActionDrag();
+      const nativeFlyoutRect = elements.headerActionScopeFlyout.getBoundingClientRect;
+      elements.headerActionScopeFlyout.getBoundingClientRect = () => ({ width: 120, height: 100 });
+      positionHeaderActionScopeFlyout({ right: 200, top: 600, bottom: 700 });
+      elements.headerActionScopeFlyout.getBoundingClientRect = nativeFlyoutRect;
+      state.settings.headerActionDragScope = "ask";
+      const clearButton = terminal.pane.querySelector('[data-action="clear"]');
+      const destination = headerActionPlacement(terminal, "clear") === "menu" ? "header" : "menu";
+      requestHeaderActionPlacement(terminal, "clear", destination, clearButton);
+      for (const radio of elements.headerActionScopeFlyout.querySelectorAll('input[name="headerActionScope"]')) radio.checked = false;
+      elements.headerActionScopeApply.click();
+      runHeaderAction(terminal, "unknown");
+
+      terminal.minimized = true;
+      state.settings.minimizedScope = "global";
+      updateMinimizedDock();
+      elements.minimizedDock.querySelector(".min-dock-toggle")?.click();
+
+      terminal.titleInput.value = "";
+      terminal.createdAt = -10000;
+      state.activeId = null;
+      state.settings.notifySilence = true;
+      const silenceCallbacks = [];
+      window.setTimeout = (callback) => {
+        silenceCallbacks.push(callback);
+        return 1;
+      };
+      handleOutputNotifications(terminal);
+      silenceCallbacks.forEach((callback) => callback());
+      window.setTimeout = savedTimeout;
+      state.settings.notifySilence = false;
+
+      state.terminalSearch = "needle";
+      terminal.searchText = "";
+      appendTerminalSearchText(terminal, "needle");
+      values.normalizedTitleFallback = normalizeTitleFontScale("not-a-number");
+      values.normalizedHeaderDefaults = normalizeHeaderActionsInMenu("not-an-array");
+      values.invalidOverrideCount = Object.keys(normalizeHeaderActionOverrides({ clear: "invalid" })).length;
+
+      state.activeId = null;
+      getCommands().find((command) => command.label === "Dequeue next command").run();
+      palette.open = true;
+      closePalette();
+      renderTmuxSessions([{ session: "coverage", distro: "Ubuntu", windows: 0, attached: false }]);
+
+      elements.aboutOverlay.hidden = false;
+      elements.aboutOverlay.classList.add("is-open");
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true, cancelable: true }));
+      closeAbout();
+
+      state.activeId = terminal.id;
+      terminal.contextSelection = "context branch";
+      terminal.selectionSnapshot = "";
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: () => "" });
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      terminal.contextSelection = "";
+      terminal.selectionSnapshot = "snapshot branch";
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      terminal.selectionSnapshot = "";
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: nativeGetSelection });
+      state.activeId = null;
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "q", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+
+      terminal.lastFindCount = 0;
+      state.findAll.query = "needle";
+      state.findAll.order = [terminal.id];
+      state.findAll.ti = 9;
+      state.findAll.li = -1;
+      findAllNav(-1);
+      terminal.lastFindCount = 3;
+      state.findAll.ti = 0;
+      state.findAll.li = 0;
+      findAllNav(1);
+      state.findAll.li = 2;
+      findAllNav(-1);
+      terminal.lastFindCount = 0;
+      state.findAll.li = 0;
+      findAllNav(-1);
+      state.findAll.order = ["missing"];
+      state.findAll.ti = 0;
+      state.findAll.li = 0;
+      findAllNav(1);
+      state.findAll.order = ["missing", terminal.id];
+      state.findAll.ti = 1;
+      state.findAll.li = 0;
+      values.findCountFallback = findAllCountLabel();
+
+      state.pages = [
+        { id: "branch-page-a", name: "Branch A" },
+        { id: "branch-page-b", name: "Branch B" }
+      ];
+      state.activePageId = "branch-page-a";
+      terminal.pageId = "branch-page-a";
+      removePage("branch-page-a");
+      values.invalidPagerPlacement = normalizedPagerPlacement("diagonal");
+      renderPager();
+      elements.pagerList.querySelector(".pager-chip")?.remove();
+      syncPageOrderFromPager();
+
+      const savedPagerList = elements.pagerList;
+      const pagerHandlers = {};
+      elements.pagerList = {
+        addEventListener(type, callback) { pagerHandlers[type] = callback; }
+      };
+      bindPager();
+      elements.pagerList = savedPagerList;
+      draggedPageId = "branch-page-b";
+      pageDragChanged = false;
+      originalPageOrder = null;
+      pagerHandlers.dragstart({
+        target: { closest: () => ({ dataset: { pageId: "branch-page-b" }, classList: { add() {} } }) },
+        dataTransfer: null,
+        preventDefault() {}
+      });
+      pagerHandlers.dragover({
+        target: { closest: () => null },
+        dataTransfer: null,
+        preventDefault() {}
+      });
+      pageDragChanged = false;
+      pagerHandlers.dragend({ target: { closest: () => null } });
+      elements.pager.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+      window.fetch = savedFetch;
+      if (savedClipboard) Object.defineProperty(Navigator.prototype, "clipboard", savedClipboard);
+      state.settings.keepSessionsOnClose = true;
+      state.settings.notifySilence = false;
+      closeAllTerminals();
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      defaultShellTitle: "PowerShell",
+      invalidOverrideCount: 0,
+      invalidPagerPlacement: "bottom",
+      messagesAfterInvalidFrames: 0,
+      normalizedTitleFallback: 110,
+      tmuxEscape: true
+    });
+    expect(result.normalizedHeaderDefaults.length).toBeGreaterThan(0);
+  });
+
+  test("covers artifact, connection, message, and statistics fallback truth tables @full", async () => {
+    const result = await page.evaluate(async () => {
+      closeAllTerminals();
+      const values = {};
+      const savedFetch = window.fetch;
+      const savedSocket = state.socket;
+      const savedSocketReady = state.socketReady;
+      const savedTimeout = window.setTimeout;
+      const first = addTerminal({ title: "Artifact branch source" });
+      const second = addTerminal({ title: "Artifact branch target" });
+      first.status = "live";
+      second.status = "live";
+
+      values.nonStringCommand = normalizeQueueItem({ command: 42 }, 0, "bad");
+      values.explicitQueueTime = normalizeQueueItem({
+        command: "echo timed",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }, 0, "timed").createdAt;
+      localStorage.setItem(TERMINAL_ARTIFACTS_STORAGE_KEY, JSON.stringify({
+        terminals: {
+          invalidQueue: { queue: {} }
+        },
+        recoveredNotes: [
+          { id: "explicit-note", notes: "one" },
+          { id: "", notes: "two" }
+        ],
+        unparentedQueue: {}
+      }));
+      values.alternateArtifacts = loadTerminalArtifacts();
+      localStorage.setItem(TERMINAL_ARTIFACTS_STORAGE_KEY, JSON.stringify({
+        terminals: null,
+        recoveredNotes: null,
+        unparentedQueue: null
+      }));
+      values.nullArtifactCollections = loadTerminalArtifacts();
+
+      const blankTerminal = {
+        id: "blank-artifact",
+        pid: null,
+        startedAt: null,
+        titleInput: { value: "" },
+        shell: "",
+        cwd: ""
+      };
+      values.blankMetadata = terminalArtifactMetadata(blankTerminal);
+
+      state.terminalArtifacts = emptyTerminalArtifacts();
+      state.terminalArtifacts.unparentedQueue = Array.from({ length: 100 }, (_, index) => ({
+        id: `pending-${index}`,
+        command: `echo ${index}`,
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }));
+      state.terminalArtifacts.terminals[first.id] = {
+        ...terminalArtifactMetadata(first),
+        notes: "",
+        queue: Array.from({ length: 10 }, (_, index) => ({
+          id: `queue-${index}`,
+          command: `echo ${index}`,
+          createdAt: "2026-01-01T00:00:00.000Z"
+        }))
+      };
+      updateTerminalArtifactIndicators();
+      values.largeArtifactBadge = elements.terminalArtifactsBadge.textContent;
+      values.largePaneBadge = first.pane.querySelector(".pane-artifacts-badge").textContent;
+
+      const savedArtifactBadge = elements.terminalArtifactsBadge;
+      const savedArtifactToggle = elements.terminalArtifactsToggle;
+      elements.terminalArtifactsBadge = null;
+      elements.terminalArtifactsToggle = null;
+      updateTerminalArtifactIndicators();
+      elements.terminalArtifactsBadge = savedArtifactBadge;
+      elements.terminalArtifactsToggle = savedArtifactToggle;
+
+      first.titleInput.value = "";
+      first.pid = null;
+      elements.terminalArtifactsTarget.value = "";
+      state.activeId = first.id;
+      refreshTerminalArtifactTargets();
+      values.activeArtifactTarget = elements.terminalArtifactsTarget.value;
+      refreshUnparentedQueueTargets("missing");
+      values.fallbackUnparentedTarget = elements.unparentedQueueTarget.value;
+
+      first.status = "exited";
+      second.status = "exited";
+      elements.terminalArtifactsTarget.value = "";
+      state.activeId = null;
+      refreshTerminalArtifactTargets();
+      values.noLiveArtifactTarget = elements.terminalArtifactsTarget.value;
+      first.status = "live";
+      second.status = "live";
+
+      state.terminalArtifacts.recoveredNotes = [{
+        id: "blank-recovered",
+        title: "",
+        notes: "recovered",
+        recoveredAt: "2026-01-01T00:00:00.000Z"
+      }];
+      renderRecoveredNotes();
+      values.recoveredTitle = elements.recoveredNotesList.querySelector("strong").textContent;
+
+      refreshTerminalArtifactTargets(first.id);
+      elements.terminalArtifactsTarget.value = first.id;
+      renderTerminalArtifacts();
+      values.blankLiveIdentity = elements.terminalNotesIdentity.textContent;
+      elements.commandQueueInput.value = "";
+      addCommandQueueItem();
+
+      elements.terminalArtifactsTarget.value = "missing-terminal";
+      values.missingSelectedQueue = selectedArtifactQueue();
+      values.unavailableUnparented = dequeueQueueItem({
+        items: [{ id: "unavailable", command: "echo unavailable" }],
+        terminal: null,
+        id: "unavailable",
+        source: "unparented",
+        sourceTerminal: null,
+        closeArtifacts: false
+      });
+      delete state.terminalArtifacts.terminals[first.id];
+      values.missingTerminalQueue = dequeueTerminalCommand(first, "missing");
+
+      const focusSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      focusSvg.setAttribute("tabindex", "0");
+      document.body.append(focusSvg);
+      focusSvg.focus();
+      state.activeId = first.id;
+      openTerminalArtifacts("missing-terminal");
+      values.artifactFallbackOpen = elements.terminalArtifactsTarget.value;
+      elements.commandQueueInput.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "x",
+        bubbles: true,
+        cancelable: true
+      }));
+      elements.commandQueueList.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      closeTerminalArtifacts({ restoreFocus: false });
+      focusSvg.remove();
+
+      localStorage.setItem("multiterm.terminalLinks", JSON.stringify({ not: "an array" }));
+      values.nonArrayLinks = loadTerminalLinks().size;
+      localStorage.setItem("multiterm.terminalLinks", JSON.stringify([
+        { sourceId: 42, targetId: false }
+      ]));
+      values.nonStringLinks = loadTerminalLinks().size;
+
+      values.upwardGeometry = connectorPathGeometry(
+        { left: 0, right: 20, top: 100, bottom: 120 },
+        { left: 0, right: 20, top: 0, bottom: 20 },
+        { left: 0, top: 0 },
+        0,
+        2
+      ).d;
+      values.routeIdFallback = routeTerminalTitle("missing-route", "");
+      positionTerminalConnectorAction({ midX: 100, midY: 40 });
+      values.connectorSide = elements.terminalConnectorAction.dataset.side;
+
+      state.terminalLinks = new Map([[terminalLinkKey(first.id, second.id), {
+        sourceId: first.id,
+        targetId: second.id,
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }]]);
+      first.titleInput.value = "";
+      second.titleInput.value = "Short title";
+      renderMessageConnectionMap(terminalConnectionRoutes());
+      values.blankMessageNode = elements.messageConnectionsMap.textContent.includes("Terminal");
+      values.blankMessageLabel = messageTerminalLabel(first);
+
+      const normalizedMessage = normalizeIncomingTerminalMessage({
+        id: "fallback-message",
+        kind: "text",
+        sourceId: first.id,
+        targetId: second.id,
+        createdAt: 42,
+        sourceTitle: 42,
+        targetTitle: 42,
+        text: 42
+      });
+      values.normalizedMessage = normalizedMessage;
+
+      state.terminalMessages.clear();
+      for (let index = 0; index < 100; index += 1) {
+        state.terminalMessages.set(`message-${index}`, {
+          ...normalizedMessage,
+          id: `message-${index}`
+        });
+      }
+      updateTerminalMessageIndicators();
+      values.largeMessageBadge = elements.terminalMessagesBadge.textContent;
+      elements.terminalMessagesOverlay.classList.add("is-open");
+      state.terminalMessages = new Map([["path-message", {
+        ...normalizedMessage,
+        id: "path-message",
+        kind: "path",
+        path: "D:\\coverage"
+      }]]);
+      renderTerminalMessages();
+      values.pathMessageClass = elements.terminalMessagesList.querySelector(".terminal-message-content").className;
+
+      state.socketReady = false;
+      values.defaultMessageFailure = await actOnRenderedTerminalMessage("path-message", "dismiss");
+      state.terminalMessages.set("orphan-insert", {
+        ...normalizedMessage,
+        id: "orphan-insert",
+        targetId: "missing-target"
+      });
+      state.socket = { readyState: WebSocket.OPEN, send() {} };
+      state.socketReady = true;
+      const insertPromise = actOnRenderedTerminalMessage("orphan-insert", "insert");
+      const insertRequestId = [...pendingBridgeRequests.keys()].at(-1);
+      handleBridgeMessage({ type: "messageActionResult", requestId: insertRequestId });
+      values.orphanInsert = await insertPromise;
+
+      focusSvg.setAttribute("tabindex", "0");
+      document.body.append(focusSvg);
+      focusSvg.focus();
+      openTerminalMessages(first.id, second.id);
+      values.messageReturnFocusWasNull = state.terminalMessagesHub.returnFocus === null;
+      const closeCallbacks = [];
+      window.setTimeout = (callback) => {
+        closeCallbacks.push(callback);
+        return 1;
+      };
+      closeTerminalMessages({ restoreFocus: false });
+      elements.terminalMessagesOverlay.classList.add("is-open");
+      closeCallbacks.forEach((callback) => callback());
+      window.setTimeout = savedTimeout;
+      elements.terminalMessagesOverlay.classList.remove("is-open");
+      elements.terminalMessagesOverlay.hidden = false;
+      document.querySelector(".app-shell").inert = false;
+      focusSvg.remove();
+
+      for (const type of ["pointerover", "pointerout", "focusin", "focusout"]) {
+        elements.terminalConnectionPaths.dispatchEvent(new Event(type, { bubbles: true }));
+      }
+      elements.messageText.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      elements.terminalMessagesList.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      elements.messageConnectionsList.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+      values.savedCurrentPreferences = saveAutomaticUpdatePreferences({});
+      window.fetch = async () => ({ ok: false, status: 418, json: async () => ({}) });
+      values.loadHttpFallback = await loadPersistedAutomaticUpdatePreferences().then(
+        () => "",
+        (error) => error.message
+      );
+      values.persistHttpFallback = await persistAutomaticUpdatePreferences({}).then(
+        () => "",
+        (error) => error.message
+      );
+      saveAutomaticUpdatePreferences({ configured: false, enabled: false });
+      window.fetch = async () => { throw "hydrate string failure"; };
+      await hydrateAutomaticUpdatePreferences();
+      saveAutomaticUpdatePreferences({ configured: true, enabled: false });
+      await hydrateAutomaticUpdatePreferences();
+      await acceptAutomaticUpdateChecks();
+      await declineAutomaticUpdateChecks();
+
+      values.statisticsFormatting = {
+        count: formatStatisticCount("not-a-number"),
+        cpuMissing: formatStatisticCpu(null),
+        cpuInvalid: formatStatisticCpu("not-a-number"),
+        memoryMissing: formatStatisticMemory(undefined),
+        untitledMetric: createStatisticMetric("Label", "Value").title
+      };
+      values.blankStatisticsTable = createStatisticsTable([{}]).textContent;
+      renderStatistics(null);
+      values.emptyAllStatistics = elements.statisticsBody.textContent;
+      renderStatistics({ scope: "terminal", sessions: [] });
+      values.emptyTerminalStatistics = elements.statisticsBody.textContent;
+      renderStatistics({
+        scope: "all",
+        sessions: [{
+          id: "missing-stat-terminal",
+          title: "",
+          pid: 0,
+          keystrokesIn: "bad",
+          keystrokesOut: "bad",
+          bytesIn: "bad",
+          bytesOut: "bad",
+          cpuPercent: "bad",
+          memoryBytes: "bad"
+        }]
+      });
+      first.titleInput.value = "";
+      renderStatistics({
+        scope: "terminal",
+        sessions: [{
+          id: first.id,
+          title: "Session fallback",
+          pid: 0,
+          keystrokesIn: 0,
+          keystrokesOut: 0,
+          bytesIn: 0,
+          bytesOut: 0,
+          cpuPercent: 0,
+          memoryBytes: 0
+        }]
+      });
+      values.terminalStatisticsSubtitle = elements.statisticsSubtitle.textContent;
+
+      document.body.append(focusSvg);
+      focusSvg.focus();
+      openStatistics();
+      values.statisticsReturnFocusWasNull = state.statistics.returnFocus === null;
+      elements.statisticsRefresh.focus();
+      const statisticsTab = new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true
+      });
+      elements.statisticsOverlay.dispatchEvent(statisticsTab);
+      values.statisticsForwardWrapped = statisticsTab.defaultPrevented;
+      closeStatistics();
+      focusSvg.remove();
+
+      state.settings.rightClickAction = "menu";
+      first.contextSelection = "same cell";
+      first.selectionSnapshotPosition = { start: { x: 1, y: 1 }, end: { x: 1, y: 1 } };
+      const nativeGetSelection = first.term.getSelection.bind(first.term);
+      const nativeGetSelectionPosition = first.term.getSelectionPosition.bind(first.term);
+      Object.defineProperty(first.term, "getSelection", { configurable: true, value: () => "" });
+      Object.defineProperty(first.term, "getSelectionPosition", {
+        configurable: true,
+        value: () => ({ start: { x: 1, y: 1 }, end: { x: 1, y: 1 } })
+      });
+      openTerminalContextMenu({ clientX: 10, clientY: 10 }, first);
+      await Promise.resolve();
+      Object.defineProperty(first.term, "getSelection", { configurable: true, value: nativeGetSelection });
+      Object.defineProperty(first.term, "getSelectionPosition", { configurable: true, value: nativeGetSelectionPosition });
+      hideContextMenu();
+
+      state.settings.snippets = [{ name: "", command: "" }];
+      buildContextMenu(first, "");
+      hideContextMenu();
+      state.settings.headerActionsInMenu = [];
+      first.headerActionOverrides = {};
+      first.pane.classList.remove("is-narrow");
+      elements.host.classList.remove("compact");
+      buildPaneOverflowMenu(first);
+      values.emptyOverflowInfo = elements.contextMenu.textContent.includes("Drag a header button here");
+      hideContextMenu();
+
+      window.fetch = savedFetch;
+      state.socket = savedSocket;
+      state.socketReady = savedSocketReady;
+      state.settings.keepSessionsOnClose = true;
+      state.settings.snippets = [];
+      closeAllTerminals();
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      activeArtifactTarget: expect.any(String),
+      connectorSide: "below",
+      defaultMessageFailure: false,
+      emptyOverflowInfo: true,
+      largeArtifactBadge: "99+",
+      largeMessageBadge: "99+",
+      largePaneBadge: "9+",
+      noLiveArtifactTarget: "__unparented__",
+      nonArrayLinks: 0,
+      nonStringCommand: null,
+      nonStringLinks: 0,
+      orphanInsert: true,
+      recoveredTitle: "Terminal",
+      routeIdFallback: "missing-route",
+      statisticsForwardWrapped: true
+    });
+    expect(result.loadHttpFallback).toContain("HTTP 418");
+    expect(result.persistHttpFallback).toContain("HTTP 418");
+    expect(result.pathMessageClass).toContain("terminal-message-path");
+  });
+
+  test("covers final context-menu, settings, and UI branch alternatives @full", async () => {
+    const result = await page.evaluate(async () => {
+      closeAllTerminals();
+      const values = {};
+      const savedFetch = window.fetch;
+      const response = { ok: true, status: 200, json: async () => ({ ok: true, preferences: {} }) };
+
+      elements.tmuxAttachOverlay.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "x",
+        bubbles: true,
+        cancelable: true
+      }));
+      saveAutomaticUpdatePreferences({ configured: true, enabled: false, intervalHours: 1 });
+      window.fetch = async () => response;
+      elements.updateCheckIntervalHours.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      stopAutomaticUpdateChecks();
+
+      const terminal = addTerminal({ title: "Final branch terminal" });
+      terminal.status = "live";
+      refreshTerminalArtifactTargets("missing-artifact-target");
+      values.liveArtifactFallback = elements.terminalArtifactsTarget.value === terminal.id;
+      state.statistics.terminalId = terminal.id;
+      handleBridgeMessage({ type: "error", message: "Unsupported message type: statistics" });
+
+      const nativeGetSelection = terminal.term.getSelection.bind(terminal.term);
+      const nativeGetSelectionPosition = terminal.term.getSelectionPosition.bind(terminal.term);
+      terminal.contextSelection = "same cell";
+      terminal.selectionSnapshotPosition = { start: { x: 1, y: 1 }, end: { x: 1, y: 1 } };
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: () => "" });
+      Object.defineProperty(terminal.term, "getSelectionPosition", { configurable: true, value: () => null });
+      terminal.term.element.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 12,
+        clientY: 12
+      }));
+      hideContextMenu();
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: nativeGetSelection });
+      Object.defineProperty(terminal.term, "getSelectionPosition", { configurable: true, value: nativeGetSelectionPosition });
+
+      terminal.minimized = true;
+      state.settings.minimizedScope = "page";
+      updateMinimizedDock();
+      elements.minimizedDock.querySelector(".min-dock-toggle")?.click();
+      terminal.minimized = false;
+
+      state.activeId = terminal.id;
+      getCommands().find((command) => command.label === "Dequeue next command").run();
+      hideContextMenu();
+      terminal.contextSelection = "context branch";
+      terminal.selectionSnapshot = "";
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: () => "" });
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      terminal.contextSelection = "";
+      terminal.selectionSnapshot = "snapshot branch";
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      terminal.selectionSnapshot = "";
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "c", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+      Object.defineProperty(terminal.term, "getSelection", { configurable: true, value: nativeGetSelection });
+      state.activeId = null;
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "q", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true
+      }));
+
+      terminal.lastFindCount = 3;
+      state.findAll.query = "branch";
+      state.findAll.order = ["missing", terminal.id];
+      state.findAll.ti = 1;
+      state.findAll.li = 0;
+      values.findFallbackCount = findAllCountLabel();
+
+      state.pages = [
+        { id: "final-page-a", name: "Final A" },
+        { id: "final-page-b", name: "Final B" }
+      ];
+      state.activePageId = "final-page-a";
+      terminal.pageId = "final-page-a";
+      renderPager();
+      const savedPagerList = elements.pagerList;
+      const pagerHandlers = {};
+      const fakeList = {
+        lastElementChild: null,
+        addEventListener(type, callback) { pagerHandlers[type] = callback; },
+        querySelector() { return null; }
+      };
+      elements.pagerList = fakeList;
+      bindPager();
+      elements.pagerList = savedPagerList;
+      const fakeChip = {
+        dataset: { pageId: "final-page-a" },
+        classList: { add() {}, remove() {} }
+      };
+      pagerHandlers.dragstart({
+        target: {
+          closest(selector) {
+            return selector === ".pager-chip" ? fakeChip : null;
+          }
+        },
+        dataTransfer: null,
+        preventDefault() {}
+      });
+      draggedPageId = "final-page-a";
+      pagerHandlers.dragover({
+        target: { closest: () => null },
+        dataTransfer: null,
+        preventDefault() {}
+      });
+      fakeList.closest = () => null;
+      fakeList.lastElementChild = fakeChip;
+      fakeList.querySelector = () => fakeChip;
+      pagerHandlers.dragover({
+        target: fakeList,
+        dataTransfer: null,
+        preventDefault() {}
+      });
+      elements.pagerCollapse.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true
+      }));
+
+      values.downwardGeometry = connectorPathGeometry(
+        { left: 0, right: 20, top: 0, bottom: 20 },
+        { left: 0, right: 20, top: 100, bottom: 120 },
+        { left: 0, top: 0 },
+        0,
+        2
+      ).d;
+      const second = addTerminal({ title: "A terminal title longer than eighteen characters" });
+      second.status = "live";
+      refreshMessageRoutes(terminal.id, second.id);
+      elements.messageKind.value = "text";
+      elements.messageText.value = "message error coverage";
+      const savedRequestBridge = requestBridge;
+      try {
+        requestBridge = async () => ({
+          type: "messageError",
+          message: "Deliberate message failure"
+        });
+        values.namedMessageFailure = await sendComposedTerminalMessage();
+        values.namedMessageError = elements.messageComposerError.textContent;
+      } finally {
+        requestBridge = savedRequestBridge;
+      }
+      state.terminalLinks = new Map([[terminalLinkKey(terminal.id, second.id), {
+        sourceId: terminal.id,
+        targetId: second.id,
+        createdAt: "2026-01-01T00:00:00.000Z"
+      }]]);
+      renderMessageConnectionMap(terminalConnectionRoutes());
+      values.truncatedMapTitle = elements.messageConnectionsMap.textContent.includes("…");
+
+      renderStatistics({
+        scope: "terminal",
+        sessions: [{
+          id: "",
+          title: "",
+          pid: 0,
+          keystrokesIn: 0,
+          keystrokesOut: 0,
+          bytesIn: 0,
+          bytesOut: 0,
+          cpuPercent: 0,
+          memoryBytes: 0
+        }]
+      });
+      values.fallbackStatisticsTitle = elements.statisticsSubtitle.textContent;
+      elements.statisticsOverlay.hidden = false;
+      elements.statisticsOverlay.classList.add("is-open");
+      state.statistics.loading = false;
+      elements.statisticsClose.disabled = false;
+      elements.statisticsRefresh.disabled = false;
+      elements.statisticsRefresh.focus();
+      const forwardTab = new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true
+      });
+      elements.statisticsOverlay.dispatchEvent(forwardTab);
+      values.forwardStatisticsTab = forwardTab.defaultPrevented;
+      elements.statisticsClose.focus();
+      elements.statisticsOverlay.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true
+      }));
+      closeStatistics();
+
+      values.normalizedNoSections = normalizeContextMenuLayout({ sections: {} });
+      values.normalizedFalsySection = normalizeContextMenuLayout({
+        sections: [{ id: null }, { id: "valid", items: {} }]
+      });
+      contextMenuLayout = {
+        version: CONTEXT_MENU_LAYOUT_VERSION,
+        sections: [{ id: "empty-name", name: "", custom: true, items: [] }],
+        hidden: []
+      };
+      values.emptyNamedSection = buildCustomizableContextMenu([
+        { group: "Generated group" },
+        { label: "Generated action", icon: "copy", run() {} }
+      ]).items[0].group;
+
+      values.emptyShortcutKey = normalizeContextShortcutKey(null);
+      values.spaceShortcutKey = normalizeContextShortcutKey(" ");
+      values.allModifierSignature = contextShortcutSignature({
+        ctrl: true, alt: true, shift: true, meta: true, key: "k"
+      });
+      values.allModifierLabel = formatContextShortcut({
+        ctrl: true, alt: true, shift: true, meta: true, key: "k"
+      });
+      values.clearedMissingShortcut = clearContextMenuShortcut("missing.action");
+      ctxRenderedItems = [];
+      values.missingShortcutLabel = contextShortcutActionLabel("missing.action");
+
+      ctxCustomizationModel = {
+        version: CONTEXT_MENU_LAYOUT_VERSION,
+        sections: [
+          { id: "one", name: "One", custom: false, items: ["item.one", "item.two"] },
+          { id: "two", name: "Two", custom: false, items: [] }
+        ],
+        hidden: new Set(),
+        hiddenCurrentCount: 0
+      };
+      const dragElement = document.createElement("div");
+      startContextCustomizationDrag(
+        { dataTransfer: null },
+        { customizationId: "item.one", customizationSectionId: "one", label: "" },
+        dragElement
+      );
+      const dragPayloads = [];
+      startContextCustomizationDrag(
+        {
+          dataTransfer: {
+            effectAllowed: "",
+            setData(type, value) { dragPayloads.push([type, value]); }
+          }
+        },
+        { customizationId: "item.one", customizationSectionId: "one", label: "" },
+        dragElement
+      );
+      values.dragFallbackPayload = dragPayloads.find(([type]) => type === "text/plain")?.[1];
+      values.moveWithoutReference = moveContextMenuItem("item.one", "two", "missing-reference", false);
+      values.moveAfterReference = moveContextMenuItem("item.two", "two", "item.one", true);
+
+      const dropHandlers = {};
+      const fakeGroup = {
+        addEventListener(type, callback) { dropHandlers[type] = callback; },
+        contains() { return false; }
+      };
+      const fakeBody = {
+        classList: { add() {} },
+        contains() { return false; }
+      };
+      ctxCustomizationDrag = { itemId: "item.two", sectionId: "two" };
+      bindContextMenuSectionDropTarget(fakeGroup, fakeBody, "two");
+      values.nonElementDropLocation = dropHandlers.dragover({
+        target: {},
+        dataTransfer: null,
+        preventDefault() {}
+      });
+      finishContextCustomizationDrag();
+
+      elements.contextMenu.hidden = true;
+      ctxEditingSectionId = "one";
+      ctxNewSectionId = null;
+      cancelContextSectionRename();
+      ctxEditingSectionId = "one";
+      commitContextSectionRename("one", "Renamed while closed");
+
+      renderContextMenu([
+        { group: "No search", groupId: "one" },
+        { customizationId: "item.one", label: "One", icon: "copy", run() {} }
+      ], { customizable: true, grouped: true, searchable: false });
+      elements.contextMenu.hidden = false;
+      startContextSectionRename("one");
+      const sectionInput = elements.contextMenu.querySelector(".ctx-group-title-input");
+      sectionInput?.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      cancelContextSectionRename();
+      renderContextMenu([
+        { group: "No search", groupId: "one" },
+        { customizationId: "item.one", label: "One", icon: "copy", run() {} }
+      ], { customizable: true, grouped: true, searchable: false });
+      addContextMenuSection();
+      cancelContextSectionRename();
+
+      let groupedAcceleratorRuns = 0;
+      ctxSuppressCustomizationClick = false;
+      renderContextMenu([
+        { group: "Accelerator group", groupId: "accelerator" },
+        { label: "Alpha", icon: "copy", run() { groupedAcceleratorRuns += 1; } }
+      ], { grouped: true });
+      elements.contextMenu.hidden = false;
+      onContextMenuKeydown(new KeyboardEvent("keydown", {
+        key: "a",
+        bubbles: true,
+        cancelable: true
+      }));
+      values.groupedAcceleratorRuns = groupedAcceleratorRuns;
+
+      renderContextMenu([
+        { group: "Separators" },
+        { separator: true }
+      ], { grouped: true });
+      renderContextMenu([
+        { group: "Ungrouped heading" }
+      ], { grouped: false });
+      renderContextMenu([
+        { label: "Invalid shortcut", icon: "copy", shortcutId: "", run() {} }
+      ], { shortcutEditor: true });
+
+      contextMenuLayout = {
+        version: CONTEXT_MENU_LAYOUT_VERSION,
+        sections: [{ id: "hidden", name: "Hidden", custom: false, items: ["hidden.one", "hidden.two"] }],
+        hidden: ["hidden.one", "hidden.two"]
+      };
+      renderContextMenu([
+        { group: "Hidden", groupId: "hidden" },
+        { customizationId: "hidden.one", label: "Hidden one", icon: "copy", run() {} },
+        { customizationId: "hidden.two", label: "Hidden two", icon: "copy", run() {} }
+      ], {
+        customizable: true,
+        grouped: true
+      });
+      values.hiddenPluralTitle = elements.contextMenu.querySelector(".ctx-show-hidden").title;
+
+      renderContextMenu([{ group: "Empty group" }], { grouped: true, searchable: true });
+      filterContextMenu("");
+      renderContextMenu([{ group: "No empty marker" }], { grouped: true, searchable: false });
+      filterContextMenu("missing");
+      subFocusables = [];
+      subKeyIndex = -1;
+      setSubmenuFocus(0);
+
+      const shortcutItem = {
+        label: "Shortcut item",
+        icon: "copy",
+        shortcutId: "shortcut.item",
+        run() {}
+      };
+      renderContextMenu([shortcutItem], { shortcutEditor: true });
+      elements.contextMenu.hidden = false;
+      beginContextShortcutCapture(shortcutItem);
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Delete",
+        bubbles: true,
+        cancelable: true
+      }));
+
+      ctxShortcutEditing = true;
+      renderContextMenu([shortcutItem], { shortcutEditor: true });
+      elements.contextMenu.hidden = false;
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", bubbles: true, cancelable: true }));
+
+      renderContextMenu([
+        { label: "Search first", icon: "copy", run() {} },
+        { label: "Search second", icon: "copy", run() {} }
+      ], { searchable: true });
+      elements.contextMenu.hidden = false;
+      const searchInput = elements.contextMenu.querySelector(".ctx-menu-search-input");
+      searchInput.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab",
+        bubbles: true,
+        cancelable: true
+      }));
+      searchInput.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        cancelable: true
+      }));
+      ctxKeyIndex = -1;
+      searchInput.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
+      renderContextMenu([], { searchable: true });
+      elements.contextMenu.hidden = false;
+      const emptySearch = elements.contextMenu.querySelector(".ctx-menu-search-input");
+      ctxFocusables = [];
+      ctxKeyIndex = -1;
+      emptySearch.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
+
+      elements.contextSubmenu.hidden = false;
+      subFocusables = [];
+      subKeyIndex = 0;
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true
+      }));
+      hideContextSubmenu();
+
+      renderContextMenu([{ label: "Plain", icon: "copy", run() {} }]);
+      elements.contextMenu.hidden = false;
+      ctxFocusables = [];
+      ctxKeyIndex = -1;
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+        cancelable: true
+      }));
+      renderContextMenu([{
+        label: "Information submenu",
+        icon: "copy",
+        submenu: [{ label: "Information", icon: "info", info: true }],
+        run() {}
+      }]);
+      elements.contextMenu.hidden = false;
+      setContextFocus(0);
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+        cancelable: true
+      }));
+
+      const nativeTextarea = Object.getOwnPropertyDescriptor(terminal.term, "textarea");
+      Object.defineProperty(terminal.term, "textarea", { configurable: true, value: null });
+      showContextMenu(20, 20, terminal, "");
+      if (nativeTextarea) Object.defineProperty(terminal.term, "textarea", nativeTextarea);
+      else delete terminal.term.textarea;
+      hideContextMenu();
+
+      const activeDescriptor = Object.getOwnPropertyDescriptor(document, "activeElement");
+      const nonHtmlFocus = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      Object.defineProperty(document, "activeElement", { configurable: true, value: nonHtmlFocus });
+      elements.contextMenu.hidden = true;
+      showBuiltContextMenu(20, 20);
+      if (activeDescriptor) Object.defineProperty(document, "activeElement", activeDescriptor);
+      else delete document.activeElement;
+      hideContextMenu();
+
+      const comboInput = elements.layoutMode.parentElement.querySelector(".combobox-input");
+      const comboGroup = settingsPanelGroups.find((group) => group.section.contains(elements.layoutMode));
+      setSettingsGroupExpanded(comboGroup, true);
+      comboInput.dispatchEvent(new FocusEvent("focus"));
+      comboInput.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        bubbles: true,
+        cancelable: true
+      }));
+      values.comboStayedOpenForArrow = comboInput.getAttribute("aria-expanded");
+      setSettingsGroupExpanded(comboGroup, false);
+      values.comboClosedWithGroup = comboInput.getAttribute("aria-expanded");
+
+      settingsSearchSnapshot = null;
+      elements.settingsSearch.value = "";
+      applySettingsFilter();
+      elements.settingsSearch.value = "definitely-no-setting-matches-this";
+      applySettingsFilter();
+      applySettingsFilter();
+      elements.settingsSearch.value = "";
+      applySettingsFilter();
+
+      const savedControlPanel = elements.controlPanel;
+      const savedSettingsGroupCount = settingsPanelGroups.length;
+      const isolatedPanel = document.createElement("div");
+      const headingless = document.createElement("section");
+      headingless.className = "control-section";
+      headingless.append(document.createElement("div"));
+      const punctuation = document.createElement("section");
+      punctuation.className = "control-section";
+      const punctuationHeading = document.createElement("h2");
+      punctuationHeading.textContent = "!!!";
+      punctuation.append(punctuationHeading, document.createElement("div"));
+      isolatedPanel.append(headingless, punctuation);
+      elements.controlPanel = isolatedPanel;
+      initializeSettingsPanel();
+      values.isolatedSettingsGroups = isolatedPanel.querySelectorAll(".settings-group-toggle").length;
+      elements.controlPanel = savedControlPanel;
+      settingsPanelGroups.splice(savedSettingsGroupCount);
+
+      window.fetch = savedFetch;
+      ctxShortcutEditing = false;
+      contextMenuLayout = normalizeContextMenuLayout(null);
+      state.settings.keepSessionsOnClose = true;
+      closeAllTerminals();
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      allModifierLabel: "Ctrl+Alt+Shift+Meta+K",
+      allModifierSignature: "ctrl+alt+shift+meta+k",
+      clearedMissingShortcut: false,
+      comboClosedWithGroup: "false",
+      comboStayedOpenForArrow: "true",
+      dragFallbackPayload: "item.one",
+      emptyNamedSection: "Section",
+      forwardStatisticsTab: true,
+      groupedAcceleratorRuns: 1,
+      isolatedSettingsGroups: 2,
+      liveArtifactFallback: true,
+      missingShortcutLabel: "another action",
+      moveAfterReference: true,
+      moveWithoutReference: true,
+      namedMessageFailure: false,
+      spaceShortcutKey: "space",
+      truncatedMapTitle: true
+    });
+    expect(result.fallbackStatisticsTitle).toContain("Terminal");
+    expect(result.hiddenPluralTitle).toContain("2 hidden menu items");
+    expect(result.namedMessageError).toBe("Deliberate message failure");
   });
 });

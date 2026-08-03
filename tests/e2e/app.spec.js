@@ -65,6 +65,24 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator(".action-cluster > :last-child")).toHaveAttribute("id", "addTerminal");
   });
 
+  test("numbers a new Command Prompt from the selected shell", async () => {
+    const panes = page.locator(".terminal-pane");
+    const before = await panes.count();
+    const expectedTitle = await page.evaluate(() => `Command Prompt ${state.nextIndex}`);
+
+    await setNative("#shellSelect", "cmd", "change");
+    await page.locator("#addTerminal").click();
+
+    await expect(panes).toHaveCount(before + 1);
+    await expect(panes.last().locator(".pane-title")).toHaveValue(expectedTitle);
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()].at(-1)?.shell)).toBe("cmd");
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()].at(-1)?.status)).toBe("live");
+
+    await panes.last().locator('[data-action="close"]').click();
+    await expect(panes).toHaveCount(before);
+    await setNative("#shellSelect", "pwsh", "change");
+  });
+
   test("keeps New terminal fully reachable in a compressed desktop header", async () => {
     try {
       for (const width of [1041, 1145, 1270, 1280]) {
@@ -845,6 +863,26 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(measurements.paddingBottom).toBe("1px");
   });
 
+  test("makes terminal titles 10% larger by default and supports an override", async () => {
+    const title = page.locator(".terminal-pane").first().locator(".pane-title");
+    const titleScale = async () => title.evaluate((input) => {
+      const titleSize = Number.parseFloat(getComputedStyle(input).fontSize);
+      const baseSize = Number.parseFloat(getComputedStyle(input.parentElement).fontSize);
+      return titleSize / baseSize;
+    });
+
+    expect(await page.evaluate(() => state.settings.titleFontScale)).toBe(110);
+    await expect(page.locator("#titleFontScaleValue")).toHaveText("110%");
+    expect(await titleScale()).toBeCloseTo(1.1, 2);
+
+    await setNative("#titleFontScale", "125", "input");
+    await expect(page.locator("#titleFontScaleValue")).toHaveText("125%");
+    expect(await titleScale()).toBeCloseTo(1.25, 2);
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").titleFontScale)).toBe(125);
+
+    await setNative("#titleFontScale", "110", "input");
+  });
+
   test("uses the traditional copy glyph for the title-bar copy action", async () => {
     const copy = page.locator('.terminal-pane').first().locator('[data-action="copy"]');
     await expect(copy).toHaveAttribute("title", "Copy output");
@@ -1268,9 +1306,11 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("saves and restores a workspace", async () => {
     await page.locator("#settings-group-workspaces").click();
+    await setNative("#titleFontScale", "125", "input");
     await page.locator("#workspaceName").fill("My Layout");
     await page.locator("#workspaceSave").click();
     await expect(page.locator("#workspaceSelect option", { hasText: "My Layout" })).toHaveCount(1);
+    await setNative("#titleFontScale", "90", "input");
     await page.evaluate(() => {
       const sel = document.querySelector("#workspaceSelect");
       const opt = [...sel.options].find((o) => o.textContent.includes("My Layout"));
@@ -1279,6 +1319,8 @@ test.describe("MultiTerm Workbench UI", () => {
     });
     await page.evaluate(() => document.querySelector("#workspaceRestore").click());
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator("#titleFontScaleValue")).toHaveText("125%");
+    expect(await page.evaluate(() => state.settings.titleFontScale)).toBe(125);
     await page.locator("#settings-group-workspaces").click();
   });
 
@@ -1288,6 +1330,7 @@ test.describe("MultiTerm Workbench UI", () => {
       ["#paneHeight", "360"],
       ["#focusWidth", "70"],
       ["#paneGap", "12"],
+      ["#titleFontScale", "130"],
       ["#rowCount", "3"],
       ["#columnCount", "2"]
     ]) {
@@ -1311,6 +1354,8 @@ test.describe("MultiTerm Workbench UI", () => {
 
     await page.evaluate(() => document.querySelector("#fitAll").click());
     await page.evaluate(() => document.querySelector("#resetLayout").click());
+    await expect(page.locator("#titleFontScaleValue")).toHaveText("110%");
+    expect(await page.evaluate(() => state.settings.titleFontScale)).toBe(110);
   });
 
   test("handles keyboard shortcuts and palette commands", async () => {

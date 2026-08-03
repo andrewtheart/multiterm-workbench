@@ -88,6 +88,7 @@
   --pane-height: 320px;
   --focus-width: 65%;
   --stage-pad: 12px;
+  --title-font-scale: 110%;
   --rest-count: 1;
   --grid-cols: 2;
   --grid-rows: 1;
@@ -366,7 +367,7 @@ input[type="range"] {
   display: grid;
   grid-template-rows: [topbar] auto [broadcast] auto [pager-top] auto [workbench] 1fr [pager-bottom] auto [status] auto;
   height: 100vh;
-  overflow: hidden;
+  overflow: clip;
 }
 
 .chrome-controls {
@@ -420,54 +421,14 @@ input[type="range"] {
   pointer-events: none;
 }
 
-/* The floating header/sidecar toggles act as restore buttons — only visible
-   when their area is hidden. In-context buttons handle hiding. */
+/* The top-bar restore floats only while the bar is hidden. Panel restores are
+  docked in the status bar so they never cover the workbench or each other. */
 body:not(.header-hidden) .chrome-controls #toggleHeader {
   display: none;
 }
 
-body:not(.sidecar-hidden) .chrome-controls #toggleSidecar {
-  display: none;
-}
-
-.chrome-controls #togglePager {
-  display: none;
-}
-
-body.pager-panel-collapsed[data-pager-placement="left"] .chrome-controls #togglePager,
-body.pager-panel-collapsed[data-pager-placement="right"] .chrome-controls #togglePager {
-  display: inline-flex;
-  position: fixed;
-}
-
-body.pager-panel-collapsed[data-pager-placement="left"] .chrome-controls #togglePager {
-  left: calc(var(--sidecar-width) + 14px);
-}
-
-body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="left"] .chrome-controls #togglePager {
-  left: 14px;
-}
-
-body.pager-panel-collapsed[data-pager-placement="right"] .chrome-controls #togglePager {
-  left: auto;
-  right: 14px;
-}
-
-/* The "show layout controls" restore button floats at the bottom-left edge of
-   the window while the panel is collapsed. (When the panel is expanded this
-   button is hidden and the in-panel "hide" button takes over at the panel's
-   bottom-right corner.) */
-.chrome-controls #toggleSidecar {
-  position: fixed;
-  bottom: 46px;
-  left: 14px;
-  right: auto;
-  top: auto;
-  z-index: 40;
-}
-
 /* The "expand top bar" restore chevron floats at the top-right, where the bar
-  it reveals lives — not alongside the bottom-left sidecar toggle. */
+  it reveals lives. */
 .chrome-controls #toggleHeader {
   position: fixed;
   top: 14px;
@@ -475,6 +436,15 @@ body.pager-panel-collapsed[data-pager-placement="right"] .chrome-controls #toggl
   bottom: auto;
   left: auto;
   z-index: 40;
+}
+
+.pager #toggleHeader {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: transparent;
+  box-shadow: none;
+  min-height: 28px;
+  width: 30px;
 }
 
 /* "Hide layout controls" toggle sits at the bottom-right INSIDE the left control
@@ -892,6 +862,34 @@ body.sidecar-hidden .control-panel {
   grid-row: status;
   min-height: 32px;
   padding: 0 16px;
+}
+
+.status-restores {
+  align-items: center;
+  display: none;
+  flex: none;
+  gap: 4px;
+}
+
+body.sidecar-hidden .status-restores,
+body.pager-panel-collapsed[data-pager-placement="left"] .status-restores,
+body.pager-panel-collapsed[data-pager-placement="right"] .status-restores {
+  display: inline-flex;
+}
+
+body:not(.sidecar-hidden) #toggleSidecar,
+#togglePager {
+  display: none;
+}
+
+body.pager-panel-collapsed[data-pager-placement="left"] #togglePager,
+body.pager-panel-collapsed[data-pager-placement="right"] #togglePager {
+  display: inline-flex;
+}
+
+.status-restore:hover {
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .status-item {
@@ -1604,10 +1602,6 @@ body[data-pager-placement="left"] .pager {
   border-right: 1px solid var(--border);
 }
 
-body.sidecar-hidden[data-pager-placement="left"] .pager {
-  padding-bottom: 58px;
-}
-
 body[data-pager-placement="right"] .pager {
   border-left: 1px solid var(--border);
 }
@@ -1655,14 +1649,6 @@ body[data-pager-placement="right"] .pager-header {
 .pager-collapse svg {
   height: 16px;
   width: 16px;
-}
-
-/* When the left control panel is collapsed, the floating "show layout controls"
-  button parks at the window's bottom-left (left: 14px, 40px wide) — right on top
-  of a bottom pager's first page tab. Reserve that lane only at the bottom;
-  a top pager cannot overlap the fixed restore button. */
-body.sidecar-hidden[data-pager-placement="bottom"] .pager {
-  padding-left: 62px;
 }
 
 .pager-list {
@@ -3646,6 +3632,14 @@ body[data-pager-placement="right"] .pager-add {
   width: min(760px, calc(100vw - 16px));
 }
 
+.context-menu.is-customizable .ctx-groups {
+  max-height: calc(100vh - 116px);
+}
+
+.context-menu.is-customizable.is-shortcut-editing .ctx-groups {
+  max-height: calc(100vh - 164px);
+}
+
 .header-action-scope-flyout {
   background: var(--surface-high);
   border: 1px solid var(--border-strong);
@@ -3960,8 +3954,56 @@ body[data-pager-placement="right"] .pager-add {
   text-transform: uppercase;
 }
 
+.ctx-group-title.is-editable {
+  cursor: text;
+}
+
+.ctx-group-title.is-editable:hover {
+  background: color-mix(in srgb, var(--primary) 9%, var(--surface-high));
+  color: var(--text);
+}
+
+.ctx-group-title.is-editable:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.ctx-group-title-input,
+.ctx-group-title-input:hover,
+.ctx-group-title-input:focus,
+.ctx-group-title-input:focus-visible {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--primary);
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px var(--primary);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  padding: 4px 6px;
+  text-transform: none;
+  width: 100%;
+}
+
 .ctx-group-body {
+  min-height: 34px;
   padding: 3px;
+}
+
+.ctx-group-body.is-item-drop-target {
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 50%, transparent);
+}
+
+.ctx-group-empty {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 11px;
+  justify-content: center;
+  min-height: 30px;
+  opacity: 0.72;
+  pointer-events: none;
 }
 
 .ctx-group .ctx-item {
@@ -3997,9 +4039,84 @@ body[data-pager-placement="right"] .pager-add {
   pointer-events: none;
 }
 
+.context-menu.is-customizable .ctx-item[aria-disabled="true"][data-customization-id] {
+  pointer-events: auto;
+}
+
 .ctx-item[aria-disabled="true"][data-header-action] {
   cursor: grab;
   pointer-events: auto;
+}
+
+.context-menu.is-customizable .ctx-item[data-customization-id] {
+  cursor: grab;
+}
+
+.ctx-item.is-context-item-dragging {
+  opacity: 0.38;
+}
+
+.ctx-item.is-item-drop-before {
+  box-shadow: inset 0 2px 0 var(--primary);
+}
+
+.ctx-item.is-item-drop-after {
+  box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.ctx-item.is-customization-hidden {
+  opacity: 0.58;
+}
+
+.ctx-hidden-badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 2px 5px;
+  text-transform: uppercase;
+}
+
+.ctx-customize-footer {
+  align-items: center;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  min-height: 28px;
+  padding: 7px 2px 0;
+}
+
+.ctx-add-section,
+.ctx-show-hidden {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 4px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ctx-show-hidden {
+  margin-left: auto;
+}
+
+.ctx-add-section:hover,
+.ctx-show-hidden:hover {
+  color: var(--text);
+}
+
+.ctx-add-section:focus-visible,
+.ctx-show-hidden:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 @media (max-width: 720px) {
@@ -5136,6 +5253,7 @@ body.is-pane-dragging {
   border-radius: var(--radius-xs);
   color: var(--text);
   flex: 0 1 180px;
+  font-size: var(--title-font-scale);
   font-weight: 550;
   max-width: 180px;
   min-height: 28px;
@@ -5464,10 +5582,6 @@ body.is-pane-dragging {
     grid-template-areas: "stage";
     grid-template-columns: 1fr;
     grid-template-rows: 1fr;
-  }
-
-  body.pager-panel-collapsed[data-pager-placement="left"] .chrome-controls #togglePager {
-    left: 14px;
   }
 
   .control-panel {

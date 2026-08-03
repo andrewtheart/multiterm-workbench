@@ -16,6 +16,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
+
 const defaultSettings = {
   appTheme: "dark",
   bellNotify: false,
@@ -30,6 +32,7 @@ const defaultSettings = {
   focusWidth: 65,
   fontFamily: "Cascadia Mono",
   fontSize: 14,
+  titleFontScale: TITLE_FONT_SCALE_BOUNDS.fallback,
   gap: 10,
   headerHidden: false,
   headerActionDragScope: "ask",
@@ -74,6 +77,7 @@ const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94
 const SETTINGS_SEARCH_ALIASES = Object.freeze({
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
   fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
+  titleFontScale: "terminal pane title header label text font size scale percentage larger smaller",
   cursorStyle: "caret insertion point beam bar block underline pointer shape",
   cursorBlink: "caret flashing flash pulse animation animate",
   layoutMode: "arrangement arrange tiling tile panes splits split grid mosaic stack strip rail master carousel spotlight bento canvas automatic",
@@ -269,6 +273,7 @@ const themes = {
 const elements = {
   addTerminal: document.querySelector("#addTerminal"),
   appShell: document.querySelector(".app-shell"),
+  chromeControls: document.querySelector(".chrome-controls"),
   attachTmux: document.querySelector("#attachTmux"),
   appTheme: document.querySelector("#appTheme"),
   aboutClose: document.querySelector("#aboutClose"),
@@ -315,6 +320,8 @@ const elements = {
   fontFamily: document.querySelector("#fontFamily"),
   fontSize: document.querySelector("#fontSize"),
   fontSizeValue: document.querySelector("#fontSizeValue"),
+  titleFontScale: document.querySelector("#titleFontScale"),
+  titleFontScaleValue: document.querySelector("#titleFontScaleValue"),
   headerActionScopeApply: document.querySelector("#headerActionScopeApply"),
   headerActionScopeCancel: document.querySelector("#headerActionScopeCancel"),
   headerActionScopeFlyout: document.querySelector("#headerActionScopeFlyout"),
@@ -669,6 +676,7 @@ function bindControls() {
   elements.focusWidth.value = state.settings.focusWidth;
   elements.paneGap.value = state.settings.gap;
   elements.fontSize.value = state.settings.fontSize;
+  elements.titleFontScale.value = state.settings.titleFontScale;
   elements.terminalTheme.value = state.settings.theme;
   elements.appTheme.value = state.settings.appTheme;
   elements.fontFamily.value = state.settings.fontFamily;
@@ -794,6 +802,7 @@ function bindControls() {
   bindSetting(elements.focusWidth, "focusWidth", "input", Number);
   bindSetting(elements.paneGap, "gap", "input", Number);
   bindSetting(elements.fontSize, "fontSize", "input", Number);
+  bindSetting(elements.titleFontScale, "titleFontScale", "input", normalizeTitleFontScale);
   bindSetting(elements.terminalTheme, "theme", "change", (value) => value);
   bindSetting(elements.appTheme, "appTheme", "change", (value) => value);
   bindSetting(elements.fontFamily, "fontFamily", "change", (value) => value);
@@ -1417,6 +1426,14 @@ function markSessionLostWhileOffline(terminal) {
   log.info("session", `Session lost while offline: ${terminal.titleInput.value}`, { id: terminal.id });
 }
 
+function terminalShellTitle(shell) {
+  const value = String(shell || "").trim().toLowerCase();
+  if (value === "cmd" || value === "cmd.exe" || value === "command prompt") return "Command Prompt";
+  if (value === "powershell" || value === "powershell.exe" || value === "windows powershell") return "Windows PowerShell";
+  if (value === "wsl" || value === "wsl.exe") return "WSL";
+  return "PowerShell";
+}
+
 function addTerminal(options = {}) {
   if (options.reveal) {
     clearTerminalSearch();
@@ -1432,7 +1449,8 @@ function addTerminal(options = {}) {
   const session = options.session || {};
   const savedMeta = options.savedMeta || null;
   const id = session.id || createId();
-  const title = savedMeta?.title || session.title || options.title || `PowerShell ${state.nextIndex}`;
+  const shell = options.shell || session.shell || elements.shellSelect.value;
+  const title = savedMeta?.title || session.title || options.title || `${terminalShellTitle(shell)} ${state.nextIndex}`;
   const rawFontSizeOverride = savedMeta?.fontSizeOverride ?? options.fontSizeOverride;
   const fontSizeOverride = Number.isFinite(Number(rawFontSizeOverride))
     ? Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(Number(rawFontSizeOverride))))
@@ -1523,7 +1541,7 @@ function addTerminal(options = {}) {
     webglLossTimes: [],
     webglRecoveryHandle: 0,
     screen,
-    shell: options.shell || session.shell || elements.shellSelect.value,
+    shell,
     startedAt: session.startedAt || null,
     status: options.reattach ? "live" : "starting",
     statusElement: status,
@@ -2138,7 +2156,7 @@ function bindPaneControls(terminal) {
 
 function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   if (!terminal) return;
-  const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : "PowerShell";
+  const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : terminalShellTitle(terminal.shell);
   terminal.titleInput.value = title;
   if (state.terminalArtifacts.terminals[terminal.id]) syncTerminalArtifacts(terminal);
   refreshTerminalSearchText(terminal);
@@ -3671,6 +3689,7 @@ function applySettings() {
   elements.host.style.setProperty("--pane-height", `${state.settings.paneHeight}px`);
   elements.host.style.setProperty("--focus-width", `${state.settings.focusWidth}%`);
   elements.host.style.setProperty("--pane-gap", `${state.settings.gap}px`);
+  elements.host.style.setProperty("--title-font-scale", `${state.settings.titleFontScale}%`);
 
   elements.layoutMode.value = state.settings.layout;
   elements.minWidthValue.textContent = `${state.settings.minWidth}px`;
@@ -3680,6 +3699,7 @@ function applySettings() {
   elements.focusWidthValue.textContent = `${state.settings.focusWidth}%`;
   elements.paneGapValue.textContent = `${state.settings.gap}px`;
   elements.fontSizeValue.textContent = `${state.settings.fontSize}px`;
+  elements.titleFontScaleValue.textContent = `${state.settings.titleFontScale}%`;
   updateChromeToggles();
   applySnapLayout();
 
@@ -3891,6 +3911,7 @@ function resetLayout() {
     elements.focusWidth.value = state.settings.focusWidth;
     elements.paneGap.value = state.settings.gap;
     elements.fontSize.value = state.settings.fontSize;
+    elements.titleFontScale.value = state.settings.titleFontScale;
     elements.compactChrome.checked = state.settings.compactChrome;
     elements.syncInput.checked = state.settings.syncInput;
     applySettings();
@@ -4084,10 +4105,24 @@ function loadSettings() {
     const settings = { ...defaultSettings, ...JSON.parse(localStorage.getItem("multiterm.settings") || "{}") };
     settings.headerActionDragScope = normalizeHeaderActionDragScope(settings.headerActionDragScope);
     settings.headerActionsInMenu = normalizeHeaderActionsInMenu(settings.headerActionsInMenu);
+    settings.titleFontScale = normalizeTitleFontScale(settings.titleFontScale);
     return settings;
   } catch {
     return { ...defaultSettings };
   }
+}
+
+function normalizeTitleFontScale(value) {
+  const requested = Number(value);
+  return Number.isFinite(requested)
+    ? Math.min(
+        TITLE_FONT_SCALE_BOUNDS.max,
+        Math.max(
+          TITLE_FONT_SCALE_BOUNDS.min,
+          Math.round(requested / TITLE_FONT_SCALE_BOUNDS.step) * TITLE_FONT_SCALE_BOUNDS.step
+        )
+      )
+    : TITLE_FONT_SCALE_BOUNDS.fallback;
 }
 
 function normalizeHeaderActionDragScope(value) {
@@ -4544,7 +4579,7 @@ function getCommands() {
     { label: "New terminal", hint: "Ctrl+T", run: () => addTerminal({ reveal: true, runStartup: true }) },
     { label: "New PowerShell 7 terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "pwsh", title: "PowerShell 7" }) },
     { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell", title: "Windows PowerShell" }) },
-    { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd", title: "Command Prompt" }) },
+    { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd" }) },
     { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl", title: "WSL" }) },
     { label: "Attach WSL tmux session…", run: openTmuxAttach },
     { label: "New Administrator terminal", run: () => newAdminTerminal() },
@@ -6470,6 +6505,7 @@ function applyPagerPlacement() {
     elements.appShell.insertBefore(elements.pager, document.querySelector(".status-bar"));
   }
 
+  placeHeaderRestoreToggle(placement);
   const edge = placement === "right" ? "right" : "left";
   elements.pagerCollapse.innerHTML = `<i data-lucide="panel-${edge}-close"></i>`;
   elements.togglePager.innerHTML = `<i data-lucide="panel-${edge}-open"></i>`;
@@ -6479,6 +6515,14 @@ function applyPagerPlacement() {
   refreshIcons(elements.pager);
   refreshIcons(elements.togglePager);
   window.requestAnimationFrame(() => fitAllTerminals());
+}
+
+function placeHeaderRestoreToggle(placement) {
+  if (state.settings.headerHidden && placement === "top") {
+    elements.pagerAdd.after(elements.toggleHeader);
+    return;
+  }
+  elements.chromeControls.append(elements.toggleHeader);
 }
 
 function setPagerPlacement(placement) {
@@ -6854,6 +6898,7 @@ function restoreWorkspace(name) {
   state.settings = { ...defaultSettings, ...workspace.settings };
   state.settings.headerActionDragScope = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
   state.settings.headerActionsInMenu = normalizeHeaderActionsInMenu(state.settings.headerActionsInMenu);
+  state.settings.titleFontScale = normalizeTitleFontScale(state.settings.titleFontScale);
   syncControlsFromSettings();
   clearSnapLayout(false);
   applySettings();
@@ -6926,6 +6971,7 @@ function syncControlsFromSettings() {
   elements.focusWidth.value = state.settings.focusWidth;
   elements.paneGap.value = state.settings.gap;
   elements.fontSize.value = state.settings.fontSize;
+  elements.titleFontScale.value = state.settings.titleFontScale;
   elements.terminalTheme.value = state.settings.theme;
   elements.appTheme.value = state.settings.appTheme;
   elements.fontFamily.value = state.settings.fontFamily;
@@ -9575,6 +9621,7 @@ function buildLoggingMenuItems(terminal) {
     {
       icon: "circle-dot",
       label: `Logging to ${file}. Stop logging`,
+      customizationId: "terminal.logging.toggle",
       parts: [
         { text: "Logging to " },
         { text: file, title: terminal.logPath, className: "ctx-link", run: () => openLogFile(terminal) },
@@ -9652,12 +9699,12 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   }));
 
   const items = [
-    { group: "Clipboard" },
+    { group: "Clipboard", groupId: "clipboard" },
     { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", shortcutId: "terminal.copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
     { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { terminal.term.clearSelection(); copyTerminalOutput(terminal.id); } },
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
     { label: "Select all", hint: "Ctrl+A", icon: "text-select", shortcutId: "terminal.select-all", run: () => terminal.term.selectAll() },
-    { group: "Find & context" },
+    { group: "Find & context", groupId: "find-context" },
     { label: "Find\u2026", hint: "Ctrl+F", icon: "search", shortcutId: "terminal.find", run: () => openFind(terminal) },
     { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", shortcutId: "terminal.find-all", run: openFindAll },
     { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", shortcutId: "terminal.clear", run: () => clearTerminal(terminal.id) },
@@ -9666,7 +9713,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Notes\u2026", icon: "notebook-pen", shortcutId: "terminal.notes", run: () => openTerminalArtifacts(terminal.id) },
     { label: "Send to terminal\u2026", icon: "messages-square", shortcutId: "terminal.send-message", run: () => openTerminalMessages(terminal.id) },
     buildCommandQueueMenuItem(terminal),
-    { group: "Tools & automation" },
+    { group: "Tools & automation", groupId: "tools-automation" },
     { label: "Open folder", icon: "folder-open", shortcutId: "terminal.open-folder", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
     {
@@ -9680,6 +9727,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       input: true,
       label: "Copilot model",
       icon: "bot",
+      customizationId: "terminal.copilot-model",
       placeholder: "model name",
       run: (value) => sendTerminalSlashCommand(terminal, "model", value)
     },
@@ -9687,6 +9735,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       input: true,
       label: "Copilot CWD",
       icon: "folder-input",
+      customizationId: "terminal.copilot-cwd",
       placeholder: terminal.cwd || "path",
       value: terminal.cwd || "",
       run: (value) => sendTerminalSlashCommand(terminal, "cwd", value)
@@ -9694,8 +9743,8 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "New Administrator terminal", icon: "shield", shortcutId: "terminal.new-admin", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
     { label: "Run script\u2026", icon: "file-code", shortcutId: "terminal.run-script", run: () => browseAndRunScript(terminal.id) },
     ...buildLoggingMenuItems(terminal),
-    ...(snippetItems.length ? [{ group: "Snippets" }, ...snippetItems] : []),
-    { group: "Session" },
+    ...(snippetItems.length ? [{ group: "Snippets", groupId: "snippets" }, ...snippetItems] : []),
+    { group: "Session", groupId: "session" },
     {
       label: "Split (duplicate)",
       icon: "copy-plus",
@@ -9714,7 +9763,12 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Close", hint: "Ctrl+Shift+W", icon: "x", shortcutId: "terminal.close", danger: true, run: () => removeTerminal(terminal.id) }
   ];
 
-  renderContextMenu(items, { grouped: true, searchable: true, shortcutEditor: true });
+  renderContextMenu(items, {
+    customizable: true,
+    grouped: true,
+    searchable: true,
+    shortcutEditor: true
+  });
 }
 
 // The value arrives from a free-text field in the context menu, so it is filtered
@@ -9759,7 +9813,7 @@ function buildSurfaceContextMenu() {
     { separator: true },
     { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", title: "PowerShell 7", cwd: here || undefined }) },
     { label: "New Windows PowerShell terminal", icon: "terminal", run: () => newTerminal({ shell: "powershell", title: "Windows PowerShell", cwd: here || undefined }) },
-    { label: "New Command Prompt terminal", icon: "terminal", run: () => newTerminal({ shell: "cmd", title: "Command Prompt", cwd: here || undefined }) },
+    { label: "New Command Prompt terminal", icon: "terminal", run: () => newTerminal({ shell: "cmd", cwd: here || undefined }) },
     { label: "New WSL terminal", icon: "terminal", run: () => newTerminal({ shell: "wsl", title: "WSL", cwd: here || undefined }) },
     { separator: true },
     { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", disabled: !hasTerminals, run: openFindAll },
@@ -9816,9 +9870,197 @@ function buildPaneOverflowMenu(terminal) {
   }]);
 }
 
+const CONTEXT_MENU_LAYOUT_STORAGE_KEY = "multiterm.contextMenuLayout";
+const CONTEXT_MENU_LAYOUT_VERSION = 1;
+const CONTEXT_MENU_MAX_SECTIONS = 32;
+const CONTEXT_MENU_MAX_ITEMS = 512;
+const CONTEXT_MENU_ID_PATTERN = /^[a-z0-9][a-z0-9:._-]{0,159}$/;
+const CONTEXT_MENU_SECTION_ID_PATTERN = /^[a-z0-9][a-z0-9:._-]{0,79}$/;
 const CONTEXT_SHORTCUT_STORAGE_KEY = "multiterm.contextMenuShortcuts";
-const CONTEXT_SHORTCUT_ID_PATTERN = /^[a-z0-9][a-z0-9:._-]{0,159}$/;
+const CONTEXT_SHORTCUT_ID_PATTERN = CONTEXT_MENU_ID_PATTERN;
 const CONTEXT_SHORTCUT_MODIFIER_KEYS = new Set(["alt", "altgraph", "control", "meta", "shift"]);
+
+function normalizeContextMenuSectionName(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 48);
+}
+
+function normalizeContextMenuLayout(value) {
+  const empty = { version: CONTEXT_MENU_LAYOUT_VERSION, sections: [], hidden: [] };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return empty;
+  if (value.version != null && Number(value.version) !== CONTEXT_MENU_LAYOUT_VERSION) return empty;
+
+  const sections = [];
+  const sectionIds = new Set();
+  const placedItemIds = new Set();
+  const sourceSections = Array.isArray(value.sections) ? value.sections : [];
+  for (const source of sourceSections.slice(0, CONTEXT_MENU_MAX_SECTIONS)) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+    const id = String(source.id || "");
+    if (!CONTEXT_MENU_SECTION_ID_PATTERN.test(id) || sectionIds.has(id)) continue;
+    sectionIds.add(id);
+    const items = [];
+    const sourceItems = Array.isArray(source.items) ? source.items : [];
+    for (const rawItemId of sourceItems) {
+      const itemId = String(rawItemId || "");
+      if (!CONTEXT_MENU_ID_PATTERN.test(itemId) || placedItemIds.has(itemId)) continue;
+      placedItemIds.add(itemId);
+      items.push(itemId);
+      if (placedItemIds.size >= CONTEXT_MENU_MAX_ITEMS) break;
+    }
+    sections.push({
+      id,
+      name: normalizeContextMenuSectionName(source.name),
+      custom: Boolean(source.custom) || id.startsWith("custom:"),
+      items
+    });
+    if (placedItemIds.size >= CONTEXT_MENU_MAX_ITEMS) break;
+  }
+
+  const hidden = [];
+  const hiddenIds = new Set();
+  const sourceHidden = Array.isArray(value.hidden) ? value.hidden : [];
+  for (const rawItemId of sourceHidden.slice(0, CONTEXT_MENU_MAX_ITEMS)) {
+    const itemId = String(rawItemId || "");
+    if (!CONTEXT_MENU_ID_PATTERN.test(itemId) || hiddenIds.has(itemId)) continue;
+    hiddenIds.add(itemId);
+    hidden.push(itemId);
+  }
+  return { version: CONTEXT_MENU_LAYOUT_VERSION, sections, hidden };
+}
+
+function loadContextMenuLayout() {
+  try {
+    const stored = localStorage.getItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY);
+    if (!stored || stored.length > 64 * 1024) return normalizeContextMenuLayout(null);
+    return normalizeContextMenuLayout(JSON.parse(stored));
+  } catch {
+    return normalizeContextMenuLayout(null);
+  }
+}
+
+function saveContextMenuLayout(layout) {
+  contextMenuLayout = normalizeContextMenuLayout(layout);
+  try {
+    localStorage.setItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY, JSON.stringify(contextMenuLayout));
+  } catch (error) {
+    log.warn("context-menu", "Could not persist context-menu layout", { error: String(error) });
+  }
+  return contextMenuLayout;
+}
+
+function contextMenuItemCustomizationId(item, sectionId, index) {
+  const explicit = String(item.customizationId || item.shortcutId || "");
+  if (CONTEXT_MENU_ID_PATTERN.test(explicit)) return explicit;
+  return `generated:${stableContextActionToken(`${sectionId}\n${item.label || ""}\n${item.icon || ""}\n${index}`)}`;
+}
+
+function buildCustomizableContextMenu(items) {
+  const defaultSections = [];
+  const defaultSectionById = new Map();
+  const itemById = new Map();
+  let currentSection = null;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.group) {
+      let id = String(item.groupId || "");
+      if (!CONTEXT_MENU_SECTION_ID_PATTERN.test(id)) {
+        id = `default:${stableContextActionToken(item.group)}`;
+      }
+      currentSection = defaultSectionById.get(id);
+      if (!currentSection) {
+        currentSection = {
+          id,
+          name: normalizeContextMenuSectionName(item.group) || "Section",
+          custom: false,
+          items: []
+        };
+        defaultSections.push(currentSection);
+        defaultSectionById.set(id, currentSection);
+      }
+      continue;
+    }
+    if (item.separator) continue;
+    if (!currentSection) {
+      currentSection = { id: "other", name: "Other", custom: false, items: [] };
+      defaultSections.push(currentSection);
+      defaultSectionById.set(currentSection.id, currentSection);
+    }
+
+    let itemId = contextMenuItemCustomizationId(item, currentSection.id, index);
+    if (itemById.has(itemId)) {
+      itemId = `generated:${stableContextActionToken(`${itemId}\n${index}`)}`;
+    }
+    currentSection.items.push(itemId);
+    itemById.set(itemId, { ...item, customizationId: itemId });
+  }
+
+  const saved = normalizeContextMenuLayout(contextMenuLayout);
+  const sections = saved.sections.map((section) => ({
+    ...section,
+    items: [...section.items]
+  }));
+  const sectionById = new Map(sections.map((section) => [section.id, section]));
+  for (const defaultSection of defaultSections) {
+    const existing = sectionById.get(defaultSection.id);
+    if (existing) {
+      if (!existing.name) existing.name = defaultSection.name;
+      continue;
+    }
+    const section = { ...defaultSection, items: [] };
+    sections.push(section);
+    sectionById.set(section.id, section);
+  }
+
+  const placedItemIds = new Set(sections.flatMap((section) => section.items));
+  for (const defaultSection of defaultSections) {
+    const target = sectionById.get(defaultSection.id);
+    for (const itemId of defaultSection.items) {
+      if (placedItemIds.has(itemId)) continue;
+      target.items.push(itemId);
+      placedItemIds.add(itemId);
+    }
+  }
+
+  const hidden = new Set(saved.hidden);
+  let hiddenCurrentCount = 0;
+  const renderedItems = [];
+  for (const section of sections) {
+    renderedItems.push({
+      group: section.name || "Section",
+      groupId: section.id,
+      customSection: section.custom
+    });
+    for (const itemId of section.items) {
+      const item = itemById.get(itemId);
+      if (!item) continue;
+      const customizationHidden = hidden.has(itemId);
+      if (customizationHidden) hiddenCurrentCount += 1;
+      if (customizationHidden && !ctxShowHiddenItems) continue;
+      renderedItems.push({
+        ...item,
+        customizationHidden,
+        customizationSectionId: section.id
+      });
+    }
+  }
+
+  return {
+    items: renderedItems,
+    model: {
+      version: CONTEXT_MENU_LAYOUT_VERSION,
+      sections,
+      hidden,
+      hiddenCurrentCount
+    }
+  };
+}
+
+let contextMenuLayout = loadContextMenuLayout();
 
 function normalizeContextShortcutKey(value) {
   const rawKey = String(value || "");
@@ -9961,6 +10203,12 @@ let ctxShortcutCapture = null;
 let ctxShortcutEditing = false;
 let ctxShortcutStatus = "";
 let ctxSearchFocusRequest = 0;
+let ctxCustomizationModel = null;
+let ctxCustomizationDrag = null;
+let ctxEditingSectionId = null;
+let ctxNewSectionId = null;
+let ctxShowHiddenItems = false;
+let ctxSuppressCustomizationClick = false;
 
 // A submenu-parent row (currently just "Command queue") hangs a second panel off
 // its right edge on hover. These track that panel's rows, keyboard highlight and
@@ -9996,13 +10244,212 @@ function clampOpenContextMenu() {
 function rerenderOpenContextMenu({ focusSearch = true } = {}) {
   const items = ctxRenderedItems;
   const options = ctxRenderOptions;
+  const searchValue = elements.contextMenu.querySelector(".ctx-menu-search-input")?.value || "";
   renderContextMenu(items, options);
   refreshIcons(elements.contextMenu);
   clampOpenContextMenu();
-  const focusTarget = focusSearch
-    ? elements.contextMenu.querySelector(".ctx-menu-search-input")
-    : elements.contextMenu;
+  const searchInput = elements.contextMenu.querySelector(".ctx-menu-search-input");
+  if (searchInput && searchValue) {
+    searchInput.value = searchValue;
+    filterContextMenu(searchValue);
+  }
+  const sectionEditor = ctxEditingSectionId
+    ? elements.contextMenu.querySelector(`.ctx-group[data-section-id="${CSS.escape(ctxEditingSectionId)}"] .ctx-group-title-input`)
+    : null;
+  const focusTarget = sectionEditor || (focusSearch ? searchInput : elements.contextMenu);
   focusTarget?.focus({ preventScroll: true });
+  if (sectionEditor) sectionEditor.select();
+}
+
+function persistContextMenuCustomizationModel() {
+  if (!ctxCustomizationModel) return;
+  saveContextMenuLayout({
+    version: CONTEXT_MENU_LAYOUT_VERSION,
+    sections: ctxCustomizationModel.sections,
+    hidden: [...ctxCustomizationModel.hidden]
+  });
+}
+
+function contextMenuSection(sectionId) {
+  return ctxCustomizationModel?.sections.find((section) => section.id === sectionId) || null;
+}
+
+function clearContextCustomizationDropIndicators() {
+  for (const element of elements.contextMenu.querySelectorAll(
+    ".is-item-drop-target, .is-item-drop-before, .is-item-drop-after"
+  )) {
+    element.classList.remove("is-item-drop-target", "is-item-drop-before", "is-item-drop-after");
+  }
+}
+
+function finishContextCustomizationDrag() {
+  clearContextCustomizationDropIndicators();
+  elements.contextMenu.querySelector(".ctx-item.is-context-item-dragging")
+    ?.classList.remove("is-context-item-dragging");
+  ctxCustomizationDrag = null;
+  window.setTimeout(() => { ctxSuppressCustomizationClick = false; }, 0);
+}
+
+function startContextCustomizationDrag(event, item, element) {
+  if (!item.customizationId || !item.customizationSectionId || !ctxCustomizationModel) return;
+  hideContextSubmenu();
+  ctxCustomizationDrag = {
+    itemId: item.customizationId,
+    sectionId: item.customizationSectionId
+  };
+  ctxSuppressCustomizationClick = true;
+  element.classList.add("is-context-item-dragging");
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-multiterm-context-item", item.customizationId);
+    event.dataTransfer.setData("text/plain", item.label || item.customizationId);
+  }
+}
+
+function moveContextMenuItem(itemId, targetSectionId, referenceItemId, placeAfter) {
+  if (!ctxCustomizationModel || itemId === referenceItemId) return false;
+  const target = contextMenuSection(targetSectionId);
+  if (!target) return false;
+
+  let found = false;
+  for (const section of ctxCustomizationModel.sections) {
+    const index = section.items.indexOf(itemId);
+    if (index < 0) continue;
+    section.items.splice(index, 1);
+    found = true;
+    break;
+  }
+  if (!found) return false;
+
+  let insertionIndex = target.items.length;
+  if (referenceItemId) {
+    const referenceIndex = target.items.indexOf(referenceItemId);
+    if (referenceIndex >= 0) insertionIndex = referenceIndex + (placeAfter ? 1 : 0);
+  }
+  target.items.splice(insertionIndex, 0, itemId);
+  persistContextMenuCustomizationModel();
+  return true;
+}
+
+function bindContextMenuSectionDropTarget(group, body, sectionId) {
+  const updateIndicator = (event) => {
+    if (!ctxCustomizationDrag) return null;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    clearContextCustomizationDropIndicators();
+    body.classList.add("is-item-drop-target");
+
+    const target = event.target instanceof Element
+      ? event.target.closest(".ctx-item[data-customization-id]")
+      : null;
+    if (!target || !body.contains(target) || target.dataset.customizationId === ctxCustomizationDrag.itemId) {
+      return { referenceItemId: null, placeAfter: true };
+    }
+    const placeAfter = event.clientY >= target.getBoundingClientRect().top + (target.getBoundingClientRect().height / 2);
+    target.classList.add(placeAfter ? "is-item-drop-after" : "is-item-drop-before");
+    return { referenceItemId: target.dataset.customizationId, placeAfter };
+  };
+
+  group.addEventListener("dragover", updateIndicator);
+  group.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget instanceof Node && group.contains(event.relatedTarget)) return;
+    clearContextCustomizationDropIndicators();
+  });
+  group.addEventListener("drop", (event) => {
+    if (!ctxCustomizationDrag) return;
+    const location = updateIndicator(event);
+    event.preventDefault();
+    event.stopPropagation();
+    const moved = moveContextMenuItem(
+      ctxCustomizationDrag.itemId,
+      sectionId,
+      location?.referenceItemId,
+      location?.placeAfter
+    );
+    finishContextCustomizationDrag();
+    if (moved) rerenderOpenContextMenu({ focusSearch: false });
+  });
+}
+
+function cancelContextSectionRename() {
+  if (!ctxEditingSectionId) return;
+  if (ctxEditingSectionId === ctxNewSectionId && ctxCustomizationModel) {
+    ctxCustomizationModel.sections = ctxCustomizationModel.sections
+      .filter((section) => section.id !== ctxNewSectionId);
+    persistContextMenuCustomizationModel();
+  }
+  ctxEditingSectionId = null;
+  ctxNewSectionId = null;
+  if (!elements.contextMenu.hidden) rerenderOpenContextMenu();
+}
+
+function commitContextSectionRename(sectionId, rawName) {
+  if (ctxEditingSectionId !== sectionId) return;
+  const section = contextMenuSection(sectionId);
+  const name = normalizeContextMenuSectionName(rawName);
+  if (section && name) section.name = name;
+  if (!name && sectionId === ctxNewSectionId && ctxCustomizationModel) {
+    ctxCustomizationModel.sections = ctxCustomizationModel.sections
+      .filter((entry) => entry.id !== sectionId);
+  }
+  ctxEditingSectionId = null;
+  ctxNewSectionId = null;
+  persistContextMenuCustomizationModel();
+  if (!elements.contextMenu.hidden) rerenderOpenContextMenu();
+}
+
+function startContextSectionRename(sectionId) {
+  if (!contextMenuSection(sectionId)) return;
+  const searchInput = elements.contextMenu.querySelector(".ctx-menu-search-input");
+  if (searchInput) searchInput.value = "";
+  ctxEditingSectionId = sectionId;
+  rerenderOpenContextMenu({ focusSearch: false });
+}
+
+function addContextMenuSection() {
+  if (!ctxCustomizationModel) return;
+  if (ctxCustomizationModel.sections.length >= CONTEXT_MENU_MAX_SECTIONS) {
+    toast(`Context menus support up to ${CONTEXT_MENU_MAX_SECTIONS} sections`, "error", 2200);
+    return;
+  }
+  let id;
+  do {
+    id = `custom:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  } while (contextMenuSection(id));
+  ctxCustomizationModel.sections.push({ id, name: "New section", custom: true, items: [] });
+  ctxEditingSectionId = id;
+  ctxNewSectionId = id;
+  persistContextMenuCustomizationModel();
+  const searchInput = elements.contextMenu.querySelector(".ctx-menu-search-input");
+  if (searchInput) searchInput.value = "";
+  rerenderOpenContextMenu({ focusSearch: false });
+}
+
+function setContextMenuItemHidden(itemId, hidden) {
+  if (!ctxCustomizationModel || !CONTEXT_MENU_ID_PATTERN.test(itemId)) return;
+  if (hidden) ctxCustomizationModel.hidden.add(itemId);
+  else ctxCustomizationModel.hidden.delete(itemId);
+  persistContextMenuCustomizationModel();
+  hideContextSubmenu();
+  rerenderOpenContextMenu();
+}
+
+function toggleContextMenuHiddenItems() {
+  ctxShowHiddenItems = !ctxShowHiddenItems;
+  rerenderOpenContextMenu();
+}
+
+function showContextCustomizationMenu(event, item) {
+  event.preventDefault();
+  event.stopPropagation();
+  const hidden = ctxCustomizationModel?.hidden.has(item.customizationId);
+  renderContextSubmenu([{
+    label: hidden ? "Show item" : "Hide item",
+    icon: hidden ? "eye" : "eye-off",
+    keepMenuOpen: true,
+    run: () => setContextMenuItemHidden(item.customizationId, !hidden)
+  }]);
+  showContextSubmenuAt(event.clientX, event.clientY);
 }
 
 function toggleContextShortcutEditor() {
@@ -10071,10 +10518,27 @@ function renderAccelLabel(text, index) {
   return label;
 }
 
-function renderContextMenu(items, { grouped = false, searchable = false, shortcutEditor = false } = {}) {
+function renderContextMenu(items, {
+  customizable = false,
+  grouped = false,
+  searchable = false,
+  shortcutEditor = false
+} = {}) {
   hideContextSubmenu();
   ctxRenderedItems = items;
-  ctxRenderOptions = { grouped, searchable, shortcutEditor };
+  ctxRenderOptions = { customizable, grouped, searchable, shortcutEditor };
+  let renderItems = items;
+  if (customizable) {
+    const customized = buildCustomizableContextMenu(items);
+    renderItems = customized.items;
+    ctxCustomizationModel = customized.model;
+  } else {
+    ctxCustomizationModel = null;
+    ctxCustomizationDrag = null;
+    ctxEditingSectionId = null;
+    ctxNewSectionId = null;
+    ctxShowHiddenItems = false;
+  }
   if (!shortcutEditor) {
     ctxShortcutCapture = null;
     ctxShortcutEditing = false;
@@ -10084,6 +10548,7 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
   elements.contextMenu.classList.toggle("is-grouped", grouped);
   elements.contextMenu.classList.toggle("has-search", searchable);
   elements.contextMenu.classList.toggle("is-shortcut-editing", shortcutEditor && ctxShortcutEditing);
+  elements.contextMenu.classList.toggle("is-customizable", customizable);
   ctxFocusables = [];
   ctxAllFocusables = [];
   ctxKeyIndex = -1;
@@ -10173,23 +10638,69 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     itemContainer = groupsRoot;
   }
 
-  for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
-    const item = items[itemIndex];
+  for (let itemIndex = 0; itemIndex < renderItems.length; itemIndex += 1) {
+    const item = renderItems[itemIndex];
     if (item.group) {
       let groupWeight = 0;
-      for (let nextIndex = itemIndex + 1; nextIndex < items.length && !items[nextIndex].group; nextIndex += 1) {
-        if (!items[nextIndex].separator) groupWeight += 1;
+      for (let nextIndex = itemIndex + 1; nextIndex < renderItems.length && !renderItems[nextIndex].group; nextIndex += 1) {
+        if (!renderItems[nextIndex].separator) groupWeight += 1;
       }
       const columnIndex = groupColumnWeights[0] <= groupColumnWeights[1] ? 0 : 1;
       groupColumnWeights[columnIndex] += groupWeight;
       const group = document.createElement("section");
       group.className = "ctx-group";
+      if (item.customSection) group.classList.add("is-custom-section");
+      if (item.groupId) group.dataset.sectionId = item.groupId;
       group.dataset.groupSearch = item.group.toLowerCase();
       const title = document.createElement("h3");
       title.className = "ctx-group-title";
-      title.textContent = item.group;
       const body = document.createElement("div");
       body.className = "ctx-group-body";
+      if (customizable && item.groupId) {
+        if (ctxEditingSectionId === item.groupId) {
+          const input = document.createElement("input");
+          input.className = "ctx-group-title-input ctx-customization-control";
+          input.type = "text";
+          input.maxLength = 48;
+          input.autocomplete = "off";
+          input.spellcheck = false;
+          input.value = item.group;
+          input.setAttribute("aria-label", `Rename ${item.group} section`);
+          input.addEventListener("click", (event) => event.stopPropagation());
+          input.addEventListener("pointerdown", (event) => event.stopPropagation());
+          input.addEventListener("keydown", (event) => {
+            event.stopPropagation();
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commitContextSectionRename(item.groupId, input.value);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              cancelContextSectionRename();
+            }
+          });
+          input.addEventListener("blur", () => {
+            commitContextSectionRename(item.groupId, input.value);
+          });
+          title.append(input);
+        } else {
+          title.textContent = item.group;
+          title.classList.add("is-editable");
+          title.tabIndex = 0;
+          title.setAttribute("role", "button");
+          title.title = "Click to rename section";
+          title.setAttribute("aria-label", `Rename ${item.group} section`);
+          title.addEventListener("click", () => startContextSectionRename(item.groupId));
+          title.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.stopPropagation();
+            startContextSectionRename(item.groupId);
+          });
+        }
+        bindContextMenuSectionDropTarget(group, body, item.groupId);
+      } else {
+        title.textContent = item.group;
+      }
       group.append(title, body);
       (groupColumns?.[columnIndex] || groupsRoot || elements.contextMenu).append(group);
       itemContainer = body;
@@ -10203,9 +10714,18 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     }
 
     const el = document.createElement("div");
-    el.className = `ctx-item${item.danger ? " danger" : ""}${item.info ? " ctx-info" : ""}`;
+    el.className = `ctx-item${item.danger ? " danger" : ""}${item.info ? " ctx-info" : ""}${item.customizationHidden ? " is-customization-hidden" : ""}`;
     if (item.shortcutId) el.dataset.shortcutId = item.shortcutId;
-    if (item.headerAction && item.headerActionTerminalId) {
+    if (customizable && item.customizationId && item.customizationSectionId) {
+      el.dataset.customizationId = item.customizationId;
+      el.dataset.customizationSectionId = item.customizationSectionId;
+      el.draggable = true;
+      el.addEventListener("dragstart", (event) => {
+        startContextCustomizationDrag(event, item, el);
+      });
+      el.addEventListener("dragend", finishContextCustomizationDrag);
+      el.addEventListener("contextmenu", (event) => showContextCustomizationMenu(event, item));
+    } else if (item.headerAction && item.headerActionTerminalId) {
       el.dataset.headerAction = item.headerAction;
       el.draggable = true;
       el.addEventListener("dragstart", (event) => {
@@ -10220,13 +10740,13 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     // An info row reports a fact rather than offering an action, so it is not a
     // menuitem and must not be reachable or announced as one.
     el.setAttribute("role", item.info ? "presentation" : "menuitem");
-    if (item.disabled) el.setAttribute("aria-disabled", "true");
+    if (item.disabled || item.customizationHidden) el.setAttribute("aria-disabled", "true");
 
     const icon = document.createElement("i");
     icon.setAttribute("data-lucide", item.icon);
     el.append(icon);
 
-    if (item.input) {
+    if (item.input && !item.customizationHidden) {
       el.classList.add("ctx-input-row");
       el.setAttribute("role", "presentation");
       const field = document.createElement("label");
@@ -10261,7 +10781,7 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     // A row can carry several independent actions (the logging row offers both the
     // log file and a stop control), in which case the row itself is not clickable
     // and each part handles its own activation.
-    if (item.parts) {
+    if (item.parts && !item.customizationHidden) {
       el.classList.add("ctx-multi");
       const label = document.createElement("span");
       label.className = "ctx-parts";
@@ -10289,7 +10809,7 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     }
 
     // A plain row you can actually run is the only kind that earns an accelerator.
-    const actionable = Boolean(item.run) && !item.disabled && !item.info;
+    const actionable = Boolean(item.run) && !item.disabled && !item.info && !item.customizationHidden;
     const shortcutEligible = shortcutEditor && actionable && CONTEXT_SHORTCUT_ID_PATTERN.test(item.shortcutId || "");
     const customBinding = shortcutEditor && item.shortcutId
       ? contextMenuShortcuts.get(item.shortcutId)
@@ -10305,7 +10825,12 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
 
     // The keyboard hint and the number badge share a right-aligned tail so they
     // never collide with the label; a submenu parent adds a chevron at the end.
-    if (item.hint || number != null || item.submenu || customBinding || (ctxShortcutEditing && shortcutEligible)) {
+    if (item.hint
+      || number != null
+      || item.submenu
+      || customBinding
+      || item.customizationHidden
+      || (ctxShortcutEditing && shortcutEligible)) {
       const accessories = document.createElement("span");
       accessories.className = "ctx-accessories";
       if (item.hint) {
@@ -10345,6 +10870,12 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
         shortcut.setAttribute("aria-label", `Custom shortcut ${shortcut.textContent}`);
         accessories.append(shortcut);
       }
+      if (item.customizationHidden) {
+        const hidden = document.createElement("span");
+        hidden.className = "ctx-hidden-badge";
+        hidden.textContent = "Hidden";
+        accessories.append(hidden);
+      }
       if (item.submenu) {
         const caret = document.createElement("span");
         caret.className = "ctx-submenu-caret";
@@ -10360,6 +10891,7 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     if (actionable) {
       el.id = `ctx-item-${rowId++}`;
       el.addEventListener("click", () => {
+        if (ctxSuppressCustomizationClick) return;
         runContextMenuAction(item.run);
       });
       // Keep the keyboard highlight in step with the pointer so the two input
@@ -10395,12 +10927,48 @@ function renderContextMenu(items, { grouped = false, searchable = false, shortcu
     itemContainer.append(el);
   }
 
+  if (customizable) {
+    for (const body of elements.contextMenu.querySelectorAll(".ctx-group-body")) {
+      if (body.querySelector(".ctx-item")) continue;
+      const empty = document.createElement("div");
+      empty.className = "ctx-group-empty";
+      empty.textContent = "Drop items here";
+      body.append(empty);
+    }
+  }
+
   if (searchable) {
     const empty = document.createElement("p");
     empty.className = "ctx-search-empty";
     empty.textContent = "No matching actions";
     empty.hidden = true;
     elements.contextMenu.append(empty);
+  }
+  if (customizable) {
+    const footer = document.createElement("div");
+    footer.className = "ctx-customize-footer";
+    const addSection = document.createElement("button");
+    addSection.type = "button";
+    addSection.className = "ctx-add-section ctx-customization-control";
+    addSection.textContent = "Add section";
+    addSection.addEventListener("click", (event) => {
+      event.stopPropagation();
+      addContextMenuSection();
+    });
+    footer.append(addSection);
+    if (ctxCustomizationModel?.hiddenCurrentCount > 0) {
+      const showHidden = document.createElement("button");
+      showHidden.type = "button";
+      showHidden.className = "ctx-show-hidden ctx-customization-control";
+      showHidden.textContent = ctxShowHiddenItems ? "Hide hidden items" : "Show hidden items";
+      showHidden.title = `${ctxCustomizationModel.hiddenCurrentCount} hidden menu item${ctxCustomizationModel.hiddenCurrentCount === 1 ? "" : "s"}`;
+      showHidden.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleContextMenuHiddenItems();
+      });
+      footer.append(showHidden);
+    }
+    elements.contextMenu.append(footer);
   }
 }
 
@@ -10416,13 +10984,13 @@ function filterContextMenu(value) {
       row.hidden = !visible;
       if (visible) groupRows += 1;
     }
-    group.hidden = groupRows === 0;
+    group.hidden = query ? groupRows === 0 : !ctxRenderOptions.customizable && groupRows === 0;
     visibleRows += groupRows;
   }
   ctxFocusables = ctxAllFocusables.filter((row) => !row.hidden && !row.closest(".ctx-group")?.hidden);
   setContextFocus(-1);
   const empty = elements.contextMenu.querySelector(".ctx-search-empty");
-  if (empty) empty.hidden = visibleRows > 0;
+  if (empty) empty.hidden = !query || visibleRows > 0;
 }
 
 // Renders the rows of the hover submenu into its own panel. Kept separate from
@@ -10453,7 +11021,12 @@ function renderContextSubmenu(items) {
 
     if (item.run && !item.info) {
       el.addEventListener("click", () => {
-        runContextMenuAction(item.run);
+        if (item.keepMenuOpen) {
+          hideContextSubmenu();
+          item.run();
+        } else {
+          runContextMenuAction(item.run);
+        }
       });
       el.addEventListener("pointerenter", () => setSubmenuFocus(subFocusables.indexOf(el)));
       subFocusables.push(el);
@@ -10461,6 +11034,26 @@ function renderContextSubmenu(items) {
 
     menu.append(el);
   }
+}
+
+function showContextSubmenuAt(x, y) {
+  cancelSubmenuClose();
+  if (activeSubmenuParent) {
+    activeSubmenuParent.setAttribute("aria-expanded", "false");
+    activeSubmenuParent = null;
+  }
+  const menu = elements.contextSubmenu;
+  menu.classList.add("is-positioning");
+  menu.hidden = false;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  refreshIcons(menu);
+  const rect = menu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
+  const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.classList.remove("is-positioning");
 }
 
 // Opens (or keeps open) the submenu belonging to a parent row, anchored to that
@@ -10576,7 +11169,8 @@ function moveContextFocus(delta) {
 // leak into the terminal underneath.
 function onContextMenuKeydown(event) {
   if (elements.contextMenu.hidden) return;
-  if (event.target instanceof Element && event.target.closest(".ctx-command-input")) return;
+  if (event.target instanceof Element
+    && event.target.closest(".ctx-command-input, .ctx-customization-control, .ctx-group-title.is-editable")) return;
   const key = event.key;
   const stop = () => {
     event.preventDefault();
@@ -10914,6 +11508,13 @@ function hideContextMenu() {
     ctxShortcutStatus = "";
     ctxRenderedItems = [];
     ctxRenderOptions = {};
+    ctxCustomizationModel = null;
+    ctxCustomizationDrag = null;
+    ctxEditingSectionId = null;
+    ctxNewSectionId = null;
+    ctxShowHiddenItems = false;
+    ctxSuppressCustomizationClick = false;
+    clearContextCustomizationDropIndicators();
     elements.contextMenu.removeAttribute("aria-activedescendant");
   }
   for (const button of elements.host.querySelectorAll('button[data-action="more"][aria-expanded="true"]')) {

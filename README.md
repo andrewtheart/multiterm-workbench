@@ -93,7 +93,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🖱️ Deep right-click context menu</h3>
-      Copy, paste, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away.
+      Copy, paste, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions between sections, rename or add sections, and hide actions you do not use.
     </td>
     <td align="center" width="33%">
       <h3>🔔 Activity and input alerts</h3>

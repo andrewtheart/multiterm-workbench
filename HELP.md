@@ -40,6 +40,15 @@ Right-click a pane or its title bar to:
 
 The terminal context menu organizes these actions into two columns of named groups. Its search field is focused immediately, so you can type an action name without an extra click. Press <kbd>Down</kbd> or <kbd>Tab</kbd> to enter the filtered results, then use the arrow keys and Enter. On narrow windows the groups collapse to one column.
 
+Customize that menu directly:
+
+- drag an action to reorder it within a section or move it into another section;
+- select a section heading to rename it;
+- select **Add section** at the bottom-left to create and name a new section; or
+- right-click an action and choose **Hide item**.
+
+When at least one action is hidden, **Show hidden items** appears at the bottom-right. Revealed hidden actions remain disabled so they cannot run accidentally; right-click one and choose **Show item** to restore it. Section names, custom sections, action order, placement, and hidden actions are stored in the current browser profile and merge with newly added application actions after an upgrade.
+
 Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to **All terminals**; choose **This terminal** for a per-terminal layout, or select **Always take this action (don't ask me again)** to remember the scope. Change **Header drag scope** under **Terminal** to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.
 
 #### Custom context-menu shortcuts
@@ -282,7 +291,7 @@ Every settings group starts collapsed. Select a group header or its chevron to e
 Settings cover:
 
 - app and terminal color themes;
-- terminal font, size, weight, cursor, opacity, and scrollback;
+- terminal font, text size, title size, weight, cursor, opacity, and scrollback;
 - layouts, gaps, dimensions, and minimized-terminal scope;
 - startup commands and initial terminal count;
 - clipboard, right-click, broadcast, and synchronized-input behavior;
@@ -290,6 +299,8 @@ Settings cover:
 - activity, inactivity, and bell notifications;
 - update-check behavior; and
 - header and layout-panel visibility.
+
+**Title size** scales terminal-title text from 80% to 150% and defaults to 110%. Choose 100% to restore the original title size.
 
 Changes are stored locally in the app's browser profile. Use **Reset settings** to return to defaults.
 

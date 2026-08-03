@@ -90,6 +90,17 @@ test.describe("Surface context menu", () => {
     return menu;
   };
 
+  const openTerminalMenu = async (page) => {
+    const screen = page.locator(".terminal-screen").first();
+    const box = await screen.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: "right" });
+    const menu = page.locator("#contextMenu");
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveClass(/is-customizable/);
+    return menu;
+  };
+
   const stubStatisticsReplies = (page) => page.evaluate(() => {
     const socket = state.socket;
     const originalSend = state.socket.send.bind(state.socket);
@@ -256,7 +267,7 @@ test.describe("Surface context menu", () => {
 
     await expect(menu).toBeHidden();
     await expect(page.locator(".terminal-pane")).toHaveCount(start + 1);
-    await expect(page.locator(".pane-title").last()).toHaveValue("Command Prompt");
+    await expect(page.locator(".pane-title").last()).toHaveValue(/^Command Prompt \d+$/);
 
     await page.locator('.terminal-pane [data-action="close"]').last().click();
     await expect(page.locator(".terminal-pane")).toHaveCount(start);
@@ -384,6 +395,298 @@ test.describe("Surface context menu", () => {
     } finally {
       await page.setViewportSize({ width: 1280, height: 720 });
     }
+  });
+
+  test("reorders items across sections and persists renamed and custom sections", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      localStorage.removeItem("multiterm.contextMenuLayout");
+      contextMenuLayout = loadContextMenuLayout();
+    });
+
+    const menu = await openTerminalMenu(page);
+    const section = (id) => menu.locator(`.ctx-group[data-section-id="${id}"]`);
+    const itemIds = (id) => section(id).locator(".ctx-item").evaluateAll((rows) =>
+      rows.map((row) => row.dataset.customizationId)
+    );
+
+    await section("session").locator(".ctx-group-title").click();
+    const rename = section("session").locator(".ctx-group-title-input");
+    await expect(rename).toBeFocused();
+    await rename.fill("Lifecycle");
+    await rename.press("Enter");
+    await expect(section("session").locator(".ctx-group-title")).toHaveText("Lifecycle");
+
+    await menu.locator(".ctx-add-section").click();
+    const newSectionInput = menu.locator(".ctx-group-title-input");
+    await expect(newSectionInput).toBeFocused();
+    await newSectionInput.fill("Favorites");
+    await newSectionInput.press("Enter");
+    const favorites = menu.locator(".ctx-group.is-custom-section").filter({ hasText: "Favorites" });
+    await expect(favorites).toBeVisible();
+    const favoritesId = await favorites.getAttribute("data-section-id");
+    expect(favoritesId).toMatch(/^custom:/);
+
+    await menu.locator('[data-customization-id="terminal.select-all"]').dragTo(
+      menu.locator('[data-customization-id="terminal.copy"]'),
+      { targetPosition: { x: 8, y: 2 } }
+    );
+    await expect.poll(() => itemIds("clipboard")).toEqual([
+      "terminal.select-all",
+      "terminal.copy",
+      "terminal.copy-all",
+      "terminal.paste"
+    ]);
+
+    await menu.locator('[data-customization-id="terminal.paste"]').dragTo(
+      menu.locator('[data-customization-id="terminal.restart"]'),
+      { targetPosition: { x: 8, y: 2 } }
+    );
+    await expect.poll(() => itemIds("session")).toEqual(expect.arrayContaining([
+      "terminal.paste",
+      "terminal.restart"
+    ]));
+    const sessionIds = await itemIds("session");
+    expect(sessionIds.indexOf("terminal.paste")).toBeLessThan(sessionIds.indexOf("terminal.restart"));
+
+    await menu.locator('[data-customization-id="terminal.notes"]').dragTo(
+      favorites.locator(".ctx-group-body")
+    );
+    await expect(favorites.locator(".ctx-item")).toHaveCount(1);
+    await expect(favorites.locator(".ctx-item")).toHaveAttribute("data-customization-id", "terminal.notes");
+
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.contextMenuLayout")));
+    expect(stored.sections.find((entry) => entry.id === "session").name).toBe("Lifecycle");
+    expect(stored.sections.find((entry) => entry.id === favoritesId)).toMatchObject({
+      name: "Favorites",
+      custom: true,
+      items: ["terminal.notes"]
+    });
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const restoredMenu = await openTerminalMenu(page);
+    await expect(restoredMenu.locator('.ctx-group[data-section-id="session"] .ctx-group-title')).toHaveText("Lifecycle");
+    await expect(restoredMenu.locator(`.ctx-group[data-section-id="${favoritesId}"] .ctx-group-title`)).toHaveText("Favorites");
+    await expect(restoredMenu.locator(`.ctx-group[data-section-id="${favoritesId}"] .ctx-item`))
+      .toHaveAttribute("data-customization-id", "terminal.notes");
+    const restoredSessionIds = await restoredMenu.locator('.ctx-group[data-section-id="session"] .ctx-item')
+      .evaluateAll((rows) => rows.map((row) => row.dataset.customizationId));
+    expect(restoredSessionIds.indexOf("terminal.paste")).toBeLessThan(restoredSessionIds.indexOf("terminal.restart"));
+  });
+
+  test("hides menu items and exposes the bottom-right hidden-items control", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      localStorage.removeItem("multiterm.contextMenuLayout");
+      contextMenuLayout = loadContextMenuLayout();
+    });
+
+    let menu = await openTerminalMenu(page);
+    await menu.locator('[data-customization-id="terminal.clear"]').click({ button: "right" });
+    const itemMenu = page.locator("#contextSubmenu");
+    await expect(itemMenu).toBeVisible();
+    await itemMenu.locator(".ctx-item", { hasText: "Hide item" }).click();
+
+    await expect(menu).toBeVisible();
+    await expect(menu.locator('[data-customization-id="terminal.clear"]')).toHaveCount(0);
+    const showHidden = menu.locator(".ctx-show-hidden");
+    await expect(showHidden).toHaveText("Show hidden items");
+    const footerAlignment = await showHidden.evaluate((button) => {
+      const buttonRect = button.getBoundingClientRect();
+      const footerRect = button.parentElement.getBoundingClientRect();
+      return Math.abs(footerRect.right - buttonRect.right);
+    });
+    expect(footerAlignment).toBeLessThan(8);
+    expect(await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("multiterm.contextMenuLayout")).hidden
+    )).toContain("terminal.clear");
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    menu = await openTerminalMenu(page);
+    await expect(menu.locator('[data-customization-id="terminal.clear"]')).toHaveCount(0);
+    await menu.locator(".ctx-show-hidden").click();
+
+    const hiddenClear = menu.locator('[data-customization-id="terminal.clear"]');
+    await expect(hiddenClear).toBeVisible();
+    await expect(hiddenClear).toHaveClass(/is-customization-hidden/);
+    await expect(hiddenClear).toHaveAttribute("aria-disabled", "true");
+    await expect(menu.locator(".ctx-show-hidden")).toHaveText("Hide hidden items");
+
+    const hiddenBox = await hiddenClear.boundingBox();
+    expect(hiddenBox).not.toBeNull();
+    await page.mouse.click(hiddenBox.x + hiddenBox.width / 2, hiddenBox.y + hiddenBox.height / 2, {
+      button: "right"
+    });
+    await expect(itemMenu).toBeVisible();
+    await itemMenu.locator(".ctx-item", { hasText: "Show item" }).click();
+    await expect(menu.locator('[data-customization-id="terminal.clear"]')).toBeVisible();
+    await expect(menu.locator('[data-customization-id="terminal.clear"]')).not.toHaveClass(/is-customization-hidden/);
+    await expect(menu.locator(".ctx-show-hidden")).toHaveCount(0);
+    expect(await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("multiterm.contextMenuLayout")).hidden
+    )).not.toContain("terminal.clear");
+  });
+
+  test("normalizes malformed and oversized context-menu customization data", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const result = await page.evaluate(() => {
+      const itemIds = Array.from({ length: CONTEXT_MENU_MAX_ITEMS + 8 }, (_, index) => `item.${index}`);
+      const normalized = normalizeContextMenuLayout({
+        version: CONTEXT_MENU_LAYOUT_VERSION,
+        sections: [
+          null,
+          [],
+          { id: "Invalid ID", name: "Ignored", items: [] },
+          {
+            id: "valid",
+            name: "\u0000  Useful\n  tools  ",
+            items: [null, "Invalid ID", "terminal.copy", "terminal.copy"]
+          },
+          { id: "valid", name: "Duplicate", items: ["terminal.paste"] },
+          { id: "custom:saved", name: "Saved", custom: false, items: itemIds }
+        ],
+        hidden: [null, "Invalid ID", "terminal.copy", "terminal.copy", "terminal.paste"]
+      });
+      const tooManySections = normalizeContextMenuLayout({
+        sections: Array.from({ length: CONTEXT_MENU_MAX_SECTIONS + 4 }, (_, index) => ({
+          id: `section.${index}`,
+          name: `Section ${index}`,
+          items: []
+        }))
+      });
+      const wrongVersion = normalizeContextMenuLayout({ version: CONTEXT_MENU_LAYOUT_VERSION + 1, sections: [] });
+
+      localStorage.setItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY, "{");
+      const malformedStored = loadContextMenuLayout();
+      localStorage.setItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY, "x".repeat((64 * 1024) + 1));
+      const oversizedStored = loadContextMenuLayout();
+
+      const originalSetItem = Storage.prototype.setItem;
+      const warningCount = logStore.entries.length;
+      Storage.prototype.setItem = () => { throw new Error("storage denied"); };
+      const savedDespiteFailure = saveContextMenuLayout({
+        sections: [{ id: "clipboard", name: "Clipboard", items: ["terminal.copy"] }]
+      });
+      Storage.prototype.setItem = originalSetItem;
+      localStorage.removeItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY);
+      contextMenuLayout = loadContextMenuLayout();
+
+      return {
+        malformedStored,
+        normalized,
+        oversizedStored,
+        savedDespiteFailure,
+        storageWarnings: logStore.entries.slice(warningCount).filter((entry) =>
+          entry.source === "context-menu" && entry.message.includes("persist context-menu layout")
+        ).length,
+        tooManySections: tooManySections.sections.length,
+        wrongVersion
+      };
+    });
+
+    expect(result.normalized.sections).toHaveLength(2);
+    expect(result.normalized.sections[0]).toMatchObject({
+      id: "valid",
+      name: "Useful tools",
+      items: ["terminal.copy"]
+    });
+    expect(result.normalized.sections[1].custom).toBe(true);
+    expect(result.normalized.sections[1].items).toHaveLength(511);
+    expect(result.normalized.hidden).toEqual(["terminal.copy", "terminal.paste"]);
+    expect(result.tooManySections).toBe(32);
+    expect(result.wrongVersion).toMatchObject({ sections: [], hidden: [] });
+    expect(result.malformedStored).toMatchObject({ sections: [], hidden: [] });
+    expect(result.oversizedStored).toMatchObject({ sections: [], hidden: [] });
+    expect(result.savedDespiteFailure.sections[0].items).toEqual(["terminal.copy"]);
+    expect(result.storageWarnings).toBe(1);
+  });
+
+  test("supports keyboard section editing and safely rejects invalid customization operations", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      localStorage.removeItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY);
+      contextMenuLayout = loadContextMenuLayout();
+    });
+
+    const menu = await openTerminalMenu(page);
+    const sessionTitle = menu.locator('.ctx-group[data-section-id="session"] .ctx-group-title');
+    await sessionTitle.evaluate((title) => {
+      title.dispatchEvent(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
+    });
+    await expect(menu.locator(".ctx-group-title-input")).toHaveCount(0);
+    await sessionTitle.evaluate((title) => {
+      title.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
+    });
+    await expect(menu.locator('.ctx-group[data-section-id="session"] .ctx-group-title-input')).toBeFocused();
+    await menu.locator('.ctx-group[data-section-id="session"] .ctx-group-title-input').press("Escape");
+    await expect(menu.locator('.ctx-group[data-section-id="session"] .ctx-group-title')).toHaveText("Session");
+    await menu.locator('.ctx-group[data-section-id="session"] .ctx-group-title').evaluate((title) => {
+      title.dispatchEvent(new KeyboardEvent("keydown", { key: " ", cancelable: true }));
+    });
+    await expect(menu.locator('.ctx-group[data-section-id="session"] .ctx-group-title-input')).toBeFocused();
+    await menu.locator('.ctx-group[data-section-id="session"] .ctx-group-title-input').press("Escape");
+
+    await menu.locator(".ctx-add-section").click();
+    await expect(menu.locator(".ctx-group.is-custom-section")).toHaveCount(1);
+    await menu.locator(".ctx-group-title-input").press("Escape");
+    await expect(menu.locator(".ctx-group.is-custom-section")).toHaveCount(0);
+
+    await menu.locator(".ctx-add-section").click();
+    await menu.locator(".ctx-group-title-input").fill("   ");
+    await menu.locator(".ctx-group-title-input").press("Enter");
+    await expect(menu.locator(".ctx-group.is-custom-section")).toHaveCount(0);
+
+    const guards = await page.evaluate(() => {
+      const sectionCount = ctxCustomizationModel.sections.length;
+      const firstItem = ctxCustomizationModel.sections.flatMap((section) => section.items)[0];
+      const originalSections = ctxCustomizationModel.sections;
+      ctxCustomizationModel.sections = Array.from({ length: CONTEXT_MENU_MAX_SECTIONS }, (_, index) => ({
+        id: `custom:limit-${index}`,
+        name: `Limit ${index}`,
+        custom: true,
+        items: []
+      }));
+      addContextMenuSection();
+      const limitedCount = ctxCustomizationModel.sections.length;
+      const toastText = elements.toastHost.lastElementChild?.textContent || "";
+      ctxCustomizationModel.sections = originalSections;
+
+      return {
+        invalidHidePreserved: (() => {
+          const size = ctxCustomizationModel.hidden.size;
+          setContextMenuItemHidden("Invalid ID", true);
+          return ctxCustomizationModel.hidden.size === size;
+        })(),
+        invalidRenameIgnored: (() => {
+          startContextSectionRename("missing-section");
+          return ctxEditingSectionId === null;
+        })(),
+        limitedCount,
+        missingItemMove: moveContextMenuItem("missing-item", "session", null, false),
+        missingSectionMove: moveContextMenuItem(firstItem, "missing-section", null, false),
+        sameItemMove: moveContextMenuItem(firstItem, "session", firstItem, false),
+        sectionCount,
+        toastText
+      };
+    });
+
+    expect(guards).toMatchObject({
+      invalidHidePreserved: true,
+      invalidRenameIgnored: true,
+      limitedCount: 32,
+      missingItemMove: false,
+      missingSectionMove: false,
+      sameItemMove: false
+    });
+    expect(guards.sectionCount).toBeGreaterThan(0);
+    expect(guards.toastText).toContain("up to 32 sections");
   });
 
   test("autofocuses search consistently for body and header right-clicks", async ({ page }) => {

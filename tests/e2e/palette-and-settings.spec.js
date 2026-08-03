@@ -1123,6 +1123,19 @@ test.describe("Settings panel — every control has its expected effect", () => 
       await expect(page.locator("#fontSizeValue")).toHaveText("14px");
     });
 
+    test("Title size: scales every editable terminal title and mirrors the output", async () => {
+      await ensureTerminal();
+      await setNative("#titleFontScale", "125", "input");
+      await expect(page.locator("#titleFontScaleValue")).toHaveText("125%");
+      const ratios = await page.locator(".pane-title").evaluateAll((titles) => titles.map((title) => (
+        Number.parseFloat(getComputedStyle(title).fontSize)
+        / Number.parseFloat(getComputedStyle(title.parentElement).fontSize)
+      )));
+      expect(ratios.length).toBeGreaterThan(0);
+      for (const ratio of ratios) expect(ratio).toBeCloseTo(1.25, 2);
+      await setNative("#titleFontScale", "110", "input");
+    });
+
     test("Terminal theme: each palette applies its background to live terminals", async () => {
       await ensureTerminal();
       for (const name of ["graphite", "paper", "contrast", "ember"]) {
@@ -1328,7 +1341,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
       await expect(page.locator("body")).not.toHaveClass(/(^|\s)sidecar-hidden(\s|$)/);
     });
 
-    test("layout-panel chevrons anchor bottom-left (collapsed) / bottom-right of panel (expanded)", async () => {
+    test("layout-panel controls dock in the status bar (collapsed) / bottom-right of panel (expanded)", async () => {
       const vp = page.viewportSize();
       const nearBottom = (box) => box.y + box.height >= vp.height - 120;
 
@@ -1345,21 +1358,21 @@ test.describe("Settings panel — every control has its expected effect", () => 
       expect(hideBox.x + hideBox.width).toBeLessThan(340);
       expect(nearBottom(hideBox)).toBe(true);
 
-      // Collapsed: the "show" chevron floats at the bottom-LEFT edge of the
-      // window; the in-panel "hide" chevron is gone with the panel.
+      // Collapsed: the restore control joins the status bar instead of floating
+      // over the workbench; the in-panel "hide" chevron leaves with the panel.
       await domClick("#toggleSidecar");
       await expect(page.locator("body")).toHaveClass(/(^|\s)sidecar-hidden(\s|$)/);
       const showBox = await page.locator("#toggleSidecar").boundingBox();
       expect(showBox).not.toBeNull();
       expect(await page.locator("#toggleSidecarTop").boundingBox()).toBeNull();
-      expect(showBox.x).toBeLessThan(40); // hugs the left edge
       expect(nearBottom(showBox)).toBe(true);
-      // It really moved to the opposite corner from the expanded "hide" button.
-      expect(showBox.x).toBeLessThan(hideBox.x);
+      expect(await page.locator("#toggleSidecar").evaluate((element) => element.closest(".status-bar") !== null)).toBe(true);
+      expect(await page.locator("#toggleSidecar").evaluate((element) => getComputedStyle(element).position)).not.toBe("fixed");
+      const statusBox = await page.locator(".status-bar").boundingBox();
+      expect(showBox.y).toBeGreaterThanOrEqual(statusBox.y);
+      expect(showBox.y + showBox.height).toBeLessThanOrEqual(statusBox.y + statusBox.height);
 
-      // And it must NOT sit on top of the pager's first page pill (Page 1): a
-      // collapsed pager reserves a left lane so the floating button never covers
-      // a page chip.
+      // The docked control cannot cover the pager's first page pill (Page 1).
       const firstChip = await page.locator(".pager-chip").first().boundingBox();
       expect(firstChip).not.toBeNull();
       const rectsOverlap = (a, b) =>

@@ -534,6 +534,14 @@
 <li>minimize, maximize, recolor, rename, or close the pane.</li>
 </ul>
 <p>The terminal context menu organizes these actions into two columns of named groups. Its search field is focused immediately, so you can type an action name without an extra click. Press <kbd>Down</kbd> or <kbd>Tab</kbd> to enter the filtered results, then use the arrow keys and Enter. On narrow windows the groups collapse to one column.</p>
+<p>Customize that menu directly:</p>
+<ul>
+<li>drag an action to reorder it within a section or move it into another section;</li>
+<li>select a section heading to rename it;</li>
+<li>select <strong>Add section</strong> at the bottom-left to create and name a new section; or</li>
+<li>right-click an action and choose <strong>Hide item</strong>.</li>
+</ul>
+<p>When at least one action is hidden, <strong>Show hidden items</strong> appears at the bottom-right. Revealed hidden actions remain disabled so they cannot run accidentally; right-click one and choose <strong>Show item</strong> to restore it. Section names, custom sections, action order, placement, and hidden actions are stored in the current browser profile and merge with newly added application actions after an upgrade.</p>
 <p>Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to <strong>All terminals</strong>; choose <strong>This terminal</strong> for a per-terminal layout, or select <strong>Always take this action (don't ask me again)</strong> to remember the scope. Change <strong>Header drag scope</strong> under <strong>Terminal</strong> to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.</p>
 <h4 id="custom-context-menu-shortcuts">Custom context-menu shortcuts</h4>
 <p>Open a terminal's context menu and select the keyboard button beside Search to edit shortcuts in place. Select <strong>Set</strong> beside an executable action, then press either:</p>
@@ -729,7 +737,7 @@
 <p>Settings cover:</p>
 <ul>
 <li>app and terminal color themes;</li>
-<li>terminal font, size, weight, cursor, opacity, and scrollback;</li>
+<li>terminal font, text size, title size, weight, cursor, opacity, and scrollback;</li>
 <li>layouts, gaps, dimensions, and minimized-terminal scope;</li>
 <li>startup commands and initial terminal count;</li>
 <li>clipboard, right-click, broadcast, and synchronized-input behavior;</li>
@@ -738,6 +746,7 @@
 <li>update-check behavior; and</li>
 <li>header and layout-panel visibility.</li>
 </ul>
+<p><strong>Title size</strong> scales terminal-title text from 80% to 150% and defaults to 110%. Choose 100% to restore the original title size.</p>
 <p>Changes are stored locally in the app's browser profile. Use <strong>Reset settings</strong> to return to defaults.</p>
 <h2 id="keyboard-shortcuts">Keyboard shortcuts</h2>
 <table>

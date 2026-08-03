@@ -220,7 +220,7 @@ test.describe("Pages and the quick switcher", () => {
     expect(bottom.parent).toBe("app-shell");
     expect(bottom.pager.top).toBeGreaterThanOrEqual(bottom.workbench.bottom - 1);
 
-    const hiddenSidecarPadding = await page.evaluate(() => {
+    const dockedSidecarPadding = await page.evaluate(() => {
       state.settings.sidecarHidden = true;
       applySettings();
       setPagerPlacement("top");
@@ -239,10 +239,10 @@ test.describe("Pages and the quick switcher", () => {
       applySettings();
       return { top, bottom };
     });
-    expect(hiddenSidecarPadding.top.paddingLeft).toBe("10px");
-    expect(hiddenSidecarPadding.top.tabInset).toBeLessThan(20);
-    expect(hiddenSidecarPadding.bottom.paddingLeft).toBe("62px");
-    expect(hiddenSidecarPadding.bottom.tabInset).toBeGreaterThanOrEqual(62);
+    expect(dockedSidecarPadding.top.paddingLeft).toBe("10px");
+    expect(dockedSidecarPadding.top.tabInset).toBeLessThan(20);
+    expect(dockedSidecarPadding.bottom.paddingLeft).toBe("10px");
+    expect(dockedSidecarPadding.bottom.tabInset).toBeLessThan(20);
 
     const left = await geometry("left");
     expect(left.parent).toBe("workbench");
@@ -293,7 +293,37 @@ test.describe("Pages and the quick switcher", () => {
     const narrowRestore = await page.locator("#togglePager").boundingBox();
     expect(narrowRestore.x).toBeGreaterThanOrEqual(0);
     expect(narrowRestore.x + narrowRestore.width).toBeLessThanOrEqual(320);
+
+    await page.evaluate(() => {
+      state.settings.sidecarHidden = true;
+      applySettings();
+    });
+    const combinedRestores = await page.evaluate(() => {
+      const box = (element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+      };
+      const sidecar = box(elements.toggleSidecar);
+      const pager = box(elements.togglePager);
+      const width = Math.max(0, Math.min(sidecar.right, pager.right) - Math.max(sidecar.left, pager.left));
+      const height = Math.max(0, Math.min(sidecar.bottom, pager.bottom) - Math.max(sidecar.top, pager.top));
+      return {
+        bothInStatusBar: elements.toggleSidecar.closest(".status-bar") === elements.togglePager.closest(".status-bar"),
+        overlap: width * height,
+        pager,
+        sidecar
+      };
+    });
+    expect(combinedRestores.bothInStatusBar).toBe(true);
+    expect(combinedRestores.overlap).toBe(0);
+    expect(combinedRestores.sidecar.left).toBeGreaterThanOrEqual(0);
+    expect(combinedRestores.pager.right).toBeLessThanOrEqual(320);
+
     await page.locator("#togglePager").click();
+    await page.evaluate(() => {
+      state.settings.sidecarHidden = false;
+      applySettings();
+    });
 
     await page.setViewportSize({ width: 1400, height: 900 });
     const overlap = await page.evaluate(() => {
@@ -337,6 +367,37 @@ test.describe("Pages and the quick switcher", () => {
     await expect(page.locator("#pagerPlacement")).toHaveValue("top");
     await expect(page.locator("#pagerPlacement").locator("xpath=..").locator(".combobox-input")).toHaveValue("Top");
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").pagerPlacement)).toBe("top");
+  });
+
+  test("docks the top-bar restore chevron after New page when pages are at the top", async () => {
+    await reset(0);
+    await page.evaluate(() => {
+      state.settings.headerHidden = true;
+      state.settings.pagerPlacement = "top";
+      applySettings();
+    });
+
+    const dockedToggle = page.locator("#pager > #pagerAdd + #toggleHeader");
+    await expect(dockedToggle).toBeVisible();
+    await expect(dockedToggle).toHaveAttribute("title", "Expand top bar");
+    const dockedBounds = await page.evaluate(() => {
+      const add = elements.pagerAdd.getBoundingClientRect();
+      const toggle = elements.toggleHeader.getBoundingClientRect();
+      return { addRight: add.right, toggleLeft: toggle.left };
+    });
+    expect(dockedBounds.toggleLeft).toBeGreaterThanOrEqual(dockedBounds.addRight);
+
+    await dockedToggle.click();
+    await expect(page.locator("body")).not.toHaveClass(/header-hidden/);
+    await expect(page.locator(".chrome-controls > #toggleHeader")).toBeHidden();
+
+    await page.evaluate(() => {
+      state.settings.headerHidden = true;
+      state.settings.pagerPlacement = "bottom";
+      applySettings();
+    });
+    await expect(page.locator(".chrome-controls > #toggleHeader")).toBeVisible();
+    await page.locator("#toggleHeader").click();
   });
 
   test("reorders pages by dragging on the pager axis and persists the order", async () => {

@@ -45,13 +45,6 @@
           <i class="icon-when-visible" data-lucide="chevron-up"></i>
           <i class="icon-when-hidden" data-lucide="chevron-down"></i>
         </button>
-        <button id="toggleSidecar" class="chrome-toggle" type="button" title="Hide layout controls" aria-label="Hide layout controls" aria-pressed="false">
-          <i class="icon-when-visible" data-lucide="panel-left-close"></i>
-          <i class="icon-when-hidden" data-lucide="panel-left-open"></i>
-        </button>
-        <button id="togglePager" class="chrome-toggle" type="button" title="Show pages panel" aria-label="Show pages panel" aria-controls="pager" aria-expanded="false">
-          <i data-lucide="panel-left-open"></i>
-        </button>
       </nav>
 
       <header class="topbar">
@@ -267,6 +260,12 @@
               <span>Font</span>
               <input id="fontSize" type="range" min="10" max="22" step="1">
               <output id="fontSizeValue"></output>
+            </label>
+
+            <label class="control-row range-row">
+              <span>Title size</span>
+              <input id="titleFontScale" type="range" min="80" max="150" step="5">
+              <output id="titleFontScaleValue"></output>
             </label>
 
             <label class="control-row">
@@ -528,6 +527,14 @@
       </nav>
 
       <footer class="status-bar" aria-label="Status bar">
+        <div class="status-restores" role="group" aria-label="Restore hidden panels">
+          <button id="toggleSidecar" class="status-btn status-icon-btn status-restore" type="button" title="Show layout controls" aria-label="Show layout controls" aria-pressed="false">
+            <i data-lucide="sliders-horizontal"></i>
+          </button>
+          <button id="togglePager" class="status-btn status-icon-btn status-restore" type="button" title="Show pages panel" aria-label="Show pages panel" aria-controls="pager" aria-expanded="false">
+            <i data-lucide="panel-left-open"></i>
+          </button>
+        </div>
         <button class="status-item status-mem" id="statusMem" type="button" aria-expanded="false" aria-describedby="statusMemText" title="Memory used by MultiTerm and its terminals — hover to read live usage">
           <i data-lucide="memory-stick"></i>
           <span class="status-mem-value" id="statusMemText" role="status" aria-live="polite"></span>

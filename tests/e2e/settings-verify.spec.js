@@ -119,6 +119,11 @@ test.describe("Settings panel verification", () => {
   });
 
   test("terminal settings", async () => {
+    await set("#titleFontScale", "125", "input");
+    expect(await setting("titleFontScale")).toBe(125);
+    expect(await hostVar("--title-font-scale")).toBe("125%");
+    await expect(page.locator("#titleFontScaleValue")).toHaveText("125%");
+
     await set("#terminalTheme", "paper", "change");
     expect(await setting("theme")).toBe("paper");
     const applied = await page.evaluate(() => { const t = [...state.terminals.values()][0]; return t.term.options.theme === themes.paper; });
@@ -265,6 +270,6 @@ test.describe("Settings panel verification", () => {
 
   test("settings persist to localStorage", async () => {
     const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")));
-    expect(persisted).toMatchObject({ scrollback: 5000, fontSize: 18, layout: "columns" });
+    expect(persisted).toMatchObject({ scrollback: 5000, fontSize: 18, titleFontScale: 125, layout: "columns" });
   });
 });
