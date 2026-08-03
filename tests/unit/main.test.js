@@ -1061,6 +1061,116 @@ describe("administrator elevation IPC", () => {
   });
 });
 
+describe("backend completion edge cases", () => {
+  it("rejects malformed internal URLs without throwing", () => {
+    expect(main.isInternalUrl("not a valid URL")).toBe(false);
+  });
+
+  it("force-kills a failed bridge shutdown once, even after duplicate failures", () => {
+    main.startServer();
+    const child = main.getServerProcess();
+    const request = new EventEmitter();
+    request.end = vi.fn();
+    request.destroy = vi.fn((error) => request.emit("error", error));
+    vi.spyOn(http, "request").mockReturnValue(request);
+    const callback = vi.fn();
+
+    main.requestServerShutdown(callback);
+    request.emit("timeout");
+    request.emit("error", new Error("duplicate failure"));
+
+    expect(request.destroy).toHaveBeenCalledWith(expect.objectContaining({ message: "Bridge shutdown timed out." }));
+    expect(child.kill).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledOnce();
+  });
+
+  it("settles watchdog suppression once after timeout and duplicate errors", () => {
+    const request = new EventEmitter();
+    request.end = vi.fn();
+    request.destroy = vi.fn((error) => request.emit("error", error));
+    vi.spyOn(http, "request").mockReturnValue(request);
+    const callback = vi.fn();
+
+    main.requestWatchdogSuppression(callback);
+    request.emit("timeout");
+    request.emit("error", new Error("duplicate failure"));
+
+    expect(request.destroy).toHaveBeenCalledWith(expect.objectContaining({ message: "Bridge watchdog update timed out." }));
+    expect(callback).toHaveBeenCalledOnce();
+  });
+
+  it("rejects malformed health JSON once when a later request error arrives", async () => {
+    const request = new EventEmitter();
+    request.destroy = vi.fn();
+    let response;
+    vi.spyOn(http, "get").mockImplementation((_options, callback) => {
+      response = new EventEmitter();
+      response.statusCode = 200;
+      response.setEncoding = vi.fn();
+      callback(response);
+      return request;
+    });
+
+    const result = main.probeServer();
+    response.emit("data", "{not json");
+    response.emit("end");
+    request.emit("error", new Error("late socket error"));
+
+    await expect(result).resolves.toBe(false);
+  });
+
+  it("does not ask a destroyed renderer for a close decision", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.webContents.isDestroyed.mockReturnValue(true);
+    win.webContents.send.mockClear();
+
+    main.requestCloseDecision("tray");
+
+    expect(win.webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("handles quitClose and rejects untrusted close and focus IPC", () => {
+    const response = new EventEmitter();
+    response.statusCode = 200;
+    response.resume = vi.fn();
+    const request = new EventEmitter();
+    request.destroy = vi.fn();
+    request.end = vi.fn(() => {
+      http.request.mock.calls.at(-1)[1](response);
+      response.emit("end");
+    });
+    vi.spyOn(http, "request").mockReturnValue(request);
+
+    main.handleCloseResponse("quitClose");
+    expect(electron.app.quit).toHaveBeenCalledOnce();
+
+    main.createWindow();
+    const win = main.getMainWindow();
+    main.registerCloseHandler();
+    const closeListener = electron.ipcMain.on.mock.calls.find(([name]) => name === "multiterm:close-response")[1];
+    const focusListener = electron.ipcMain.on.mock.calls.find(([name]) => name === "multiterm:focus-window")[1];
+    win.hide.mockClear();
+    win.focus.mockClear();
+    closeListener({ sender: {} }, "tray");
+    focusListener({ sender: {} });
+    expect(win.hide).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+  });
+
+  it("clamps installer limits and rejects an otherwise-valid asset without a digest", () => {
+    const fallback = main.DEFAULT_MAX_INSTALLER_SIZE_MB * 1024 * 1024;
+    expect(main.installerSizeLimitBytes(undefined)).toBe(fallback);
+    expect(main.installerSizeLimitBytes(1)).toBe(1024 * 1024);
+    expect(main.installerSizeLimitBytes(Number.MAX_VALUE)).toBe(fallback);
+    expect(main.isAllowedInstallerAsset({
+      name: "setup.exe",
+      size: 1,
+      url: "https://github.com/andrewtheart/multiterm-workbench/releases/download/v1.0.0/setup.exe"
+    })).toBe(false);
+  });
+});
+
 describe("update checker", () => {
   function digestFor(data) {
     return `sha256:${crypto.createHash("sha256").update(data).digest("hex")}`;
@@ -1211,6 +1321,13 @@ describe("update checker", () => {
 
       stubHttps(() => makeResponse({ status: 404 }));
       await expect(main.fetchLatestRelease()).rejects.toThrow(/HTTP 404/);
+    });
+
+    it("reports a response without an HTTP status as status zero", async () => {
+      const response = makeResponse();
+      response.statusCode = undefined;
+      stubHttps(() => response);
+      await expect(main.fetchLatestRelease()).rejects.toThrow(/HTTP 0/);
     });
 
     it("rejects redirect loops after the configured limit", async () => {
@@ -1408,6 +1525,27 @@ describe("update checker", () => {
       file.emit("finish");
       await expect(pending).rejects.toThrow(/SHA-256/);
       expect(fs.rm).toHaveBeenCalled();
+    });
+
+    it("stops an oversized stream once and ignores later stream events", async () => {
+      const response = makeResponse();
+      response.unpipe = vi.fn(() => { throw new Error("already detached"); });
+      stubHttps(() => response);
+      const file = new EventEmitter();
+      file.destroy = vi.fn();
+      vi.spyOn(fs, "createWriteStream").mockReturnValue(file);
+
+      const pending = main.downloadUpdate(installerAsset({ data: Buffer.alloc(1) }));
+      const assertion = expect(pending).rejects.toThrow(/exceeded trusted release metadata/);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      response.emit("data", Buffer.alloc(2));
+      file.emit("finish");
+      response.emit("error", new Error("late stream error"));
+
+      await assertion;
+      expect(response.unpipe).toHaveBeenCalledWith(file);
+      expect(file.destroy).toHaveBeenCalledOnce();
+      expect(fs.rm).toHaveBeenCalledOnce();
     });
   });
 

@@ -170,11 +170,18 @@ function requestServerShutdown(callback) {
 
   let finished = false;
   const finish = (force) => {
-    if (finished) return;
-    finished = true;
-    if (force && child && !child.killed) child.kill();
-    serverProcess = null;
-    callback();
+    if (finished) {
+      return;
+    } else {
+      finished = true;
+      if (force && child && !child.killed) {
+        child.kill();
+      } else {
+        // A successful shutdown, absent child, or already-stopped child needs no force kill.
+      }
+      serverProcess = null;
+      callback();
+    }
   };
   const request = http.request({
     host: HOST,
@@ -195,9 +202,12 @@ function requestServerShutdown(callback) {
 function requestWatchdogSuppression(callback) {
   let finished = false;
   const finish = () => {
-    if (finished) return;
-    finished = true;
-    callback();
+    if (finished) {
+      return;
+    } else {
+      finished = true;
+      callback();
+    }
   };
   const request = http.request({
     host: HOST,
@@ -219,9 +229,12 @@ function probeServer(timeoutMs = 500) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (ready) => {
-      if (settled) return;
-      settled = true;
-      resolve(ready);
+      if (settled) {
+        return;
+      } else {
+        settled = true;
+        resolve(ready);
+      }
     };
     const request = http.get({ host: HOST, port: PORT, path: "/health", timeout: timeoutMs }, (response) => {
       let body = "";
@@ -379,7 +392,11 @@ function showMainWindow() {
 function requestCloseDecision(source) {
   showMainWindow();
   const wc = mainWindow && mainWindow.webContents;
-  if (wc && !wc.isDestroyed()) wc.send("multiterm:close-request", source);
+  if (wc && !wc.isDestroyed()) {
+    wc.send("multiterm:close-request", source);
+  } else {
+    // A destroyed renderer cannot participate in the close decision.
+  }
 }
 
 // Explicit, user-initiated quit after the renderer has made the bridge decision.
@@ -431,12 +448,18 @@ function registerCloseHandler() {
     ipcMain.removeAllListeners("multiterm:focus-window");
   }
   ipcMain.on("multiterm:close-response", (event, action) => {
-    if (!isTrustedIpcSender(event)) return;
-    handleCloseResponse(action);
+    if (!isTrustedIpcSender(event)) {
+      return;
+    } else {
+      handleCloseResponse(action);
+    }
   });
   ipcMain.on("multiterm:focus-window", (event) => {
-    if (!isTrustedIpcSender(event)) return;
-    showMainWindow();
+    if (!isTrustedIpcSender(event)) {
+      return;
+    } else {
+      showMainWindow();
+    }
   });
 }
 
@@ -500,8 +523,9 @@ function registerScriptPicker() {
     });
     if (!result || result.canceled || !Array.isArray(result.filePaths) || result.filePaths.length === 0) {
       return null;
+    } else {
+      return result.filePaths[0];
     }
-    return result.filePaths[0];
   });
 }
 
@@ -539,7 +563,11 @@ function ensureElevationChecked() {
     elevationChecked = true;
     try {
       childProcess.exec("net session", { windowsHide: true, timeout: 4000 }, (error) => {
-        if (!error) appIsElevated = true;
+        if (!error) {
+          appIsElevated = true;
+        } else {
+          // A failed probe means the process is not elevated.
+        }
         resolve();
       });
     } catch {
@@ -585,9 +613,12 @@ const DEFAULT_MAX_INSTALLER_SIZE_MB = 256;
 
 function installerSizeLimitBytes(value) {
   const requested = Math.round(Number(value));
-  const megabytes = Number.isFinite(requested) && requested > 0
-    ? requested
-    : DEFAULT_MAX_INSTALLER_SIZE_MB;
+  let megabytes;
+  if (Number.isFinite(requested) && requested > 0) {
+    megabytes = requested;
+  } else {
+    megabytes = DEFAULT_MAX_INSTALLER_SIZE_MB;
+  }
   const bytes = megabytes * 1024 * 1024;
   return Number.isSafeInteger(bytes) ? bytes : DEFAULT_MAX_INSTALLER_SIZE_MB * 1024 * 1024;
 }
@@ -617,7 +648,11 @@ function getCurrentVersion() {
   try {
     if (app && typeof app.getVersion === "function") {
       const version = app.getVersion();
-      if (version) return String(version);
+      if (version) {
+        return String(version);
+      } else {
+        // Before Electron is ready, fall through to package metadata.
+      }
     }
   } catch {
     /* not running under Electron (tests) — fall back to package.json */
@@ -660,8 +695,9 @@ function openHttpsStream(url, { accept } = {}, redirects = 0) {
           response.resume();
           reject(new Error(`GitHub returned HTTP ${status}.`));
           return;
+        } else {
+          resolve(response);
         }
-        resolve(response);
       });
     } catch (err) {
       reject(err);
@@ -734,28 +770,31 @@ async function checkForUpdate() {
 }
 
 function isAllowedInstallerAsset(asset, maxInstallerSizeMb = DEFAULT_MAX_INSTALLER_SIZE_MB) {
-  if (!asset || typeof asset.url !== "string") return false;
-  try {
-    const parsed = new URL(asset.url);
-    const releasePrefix = `/${UPDATE_REPO}/releases/download/`.toLowerCase();
-    const urlName = decodeURIComponent(path.posix.basename(parsed.pathname));
-    const size = Number(asset.size);
-    return parsed.protocol === "https:"
-      && parsed.hostname === "github.com"
-      && parsed.port === ""
-      && parsed.username === ""
-      && parsed.password === ""
-      && parsed.search === ""
-      && parsed.hash === ""
-      && parsed.pathname.toLowerCase().startsWith(releasePrefix)
-      && /\.exe$/i.test(urlName)
-      && (asset.name === undefined || asset.name === urlName)
-      && Number.isSafeInteger(size)
-      && size > 0
-      && size <= installerSizeLimitBytes(maxInstallerSizeMb)
-      && /^sha256:[a-f0-9]{64}$/i.test(asset.digest || "");
-  } catch {
+  if (!asset || typeof asset.url !== "string") {
     return false;
+  } else {
+    try {
+      const parsed = new URL(asset.url);
+      const releasePrefix = `/${UPDATE_REPO}/releases/download/`.toLowerCase();
+      const urlName = decodeURIComponent(path.posix.basename(parsed.pathname));
+      const size = Number(asset.size);
+      return parsed.protocol === "https:"
+        && parsed.hostname === "github.com"
+        && parsed.port === ""
+        && parsed.username === ""
+        && parsed.password === ""
+        && parsed.search === ""
+        && parsed.hash === ""
+        && parsed.pathname.toLowerCase().startsWith(releasePrefix)
+        && /\.exe$/i.test(urlName)
+        && (asset.name === undefined || asset.name === urlName)
+        && Number.isSafeInteger(size)
+        && size > 0
+        && size <= installerSizeLimitBytes(maxInstallerSizeMb)
+        && /^sha256:[a-f0-9]{64}$/i.test(asset.digest || "");
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -806,32 +845,51 @@ function downloadUpdate(asset, onProgress, maxInstallerSizeMb = DEFAULT_MAX_INST
       const hash = crypto.createHash("sha256");
       const file = fs.createWriteStream(target);
       const fail = (err) => {
-        if (settled) return;
-        settled = true;
-        try { response.unpipe?.(file); } catch { /* stream already detached */ }
-        try { file.destroy(); } catch { /* already closed */ }
-        fs.rm(downloadDir, { recursive: true, force: true }, () => reject(err));
+        if (settled) {
+          return;
+        } else {
+          settled = true;
+          try {
+            response.unpipe?.(file);
+          } catch {
+            // The stream was already detached.
+          }
+          try {
+            file.destroy();
+          } catch {
+            // The file was already closed.
+          }
+          fs.rm(downloadDir, { recursive: true, force: true }, () => reject(err));
+        }
       };
       response.on("data", (chunk) => {
         received += chunk.length;
         if (received > maxInstallerSize || received > expectedSize) {
           fail(new Error("The installer download exceeded trusted release metadata."));
           return;
+        } else {
+          hash.update(chunk);
+          if (typeof onProgress === "function") {
+            onProgress({ received, total });
+          } else {
+            // Progress reporting is optional.
+          }
         }
-        hash.update(chunk);
-        if (typeof onProgress === "function") onProgress({ received, total });
       });
       response.on("error", fail);
       file.on("error", fail);
       file.on("finish", () => {
-        if (settled) return;
-        const actualDigest = `sha256:${hash.digest("hex")}`;
-        if (received !== expectedSize || actualDigest !== expectedDigest) {
-          fail(new Error("The installer failed SHA-256 integrity verification."));
+        if (settled) {
           return;
+        } else {
+          const actualDigest = `sha256:${hash.digest("hex")}`;
+          if (received !== expectedSize || actualDigest !== expectedDigest) {
+            fail(new Error("The installer failed SHA-256 integrity verification."));
+            return;
+          }
+          settled = true;
+          resolve(target);
         }
-        settled = true;
-        resolve(target);
       });
       response.pipe(file);
     })
