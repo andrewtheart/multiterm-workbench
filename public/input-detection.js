@@ -282,9 +282,27 @@
     return classifyInputPrompt(line, context) !== null;
   }
 
+  function copilotScreenLines(lines) {
+    const values = Array.isArray(lines) ? lines : [lines];
+    return values.map((line) => normalize(line));
+  }
+
+  function isCopilotTui(lines) {
+    const screen = copilotScreenLines(lines).join(" ");
+    return /\bCopilot\s+v[\d.]+\s+uses\s+AI\b/i.test(screen);
+  }
+
+  function isCopilotPromptReady(lines, knownCopilot) {
+    const screen = copilotScreenLines(lines);
+    return (knownCopilot === true || isCopilotTui(screen))
+      && screen.some((line) => /^\s*\/\s*commands\s*·\s*\?\s*help\b/i.test(line));
+  }
+
   return {
     stripAnsi,
     isShellPrompt,
+    isCopilotTui,
+    isCopilotPromptReady,
     looksLikeInputPrompt,
     classifyInputPrompt,
     looksLikeInputPromptBlock,

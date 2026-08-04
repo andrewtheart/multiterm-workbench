@@ -24,7 +24,9 @@ const {
   stripAnsi,
   classifyInputPrompt,
   looksLikeInputPromptBlock,
-  classifyInputPromptBlock
+  classifyInputPromptBlock,
+  isCopilotTui,
+  isCopilotPromptReady
 } = detector;
 
 describe("input-detection: module surface", () => {
@@ -35,7 +37,53 @@ describe("input-detection: module surface", () => {
     expect(typeof classifyInputPrompt).toBe("function");
     expect(typeof looksLikeInputPromptBlock).toBe("function");
     expect(typeof classifyInputPromptBlock).toBe("function");
+    expect(typeof isCopilotTui).toBe("function");
+    expect(typeof isCopilotPromptReady).toBe("function");
     expect(Array.isArray(detector.PROMPT_PATTERNS)).toBe(true);
+  });
+});
+
+describe("input-detection: Copilot CLI TUI readiness", () => {
+  const header = "  Copilot v1.0.78 uses AI.";
+
+  it("recognises the empty composer as ready", () => {
+    const screen = [
+      header,
+      "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+      "┃",
+      "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+      " / commands · ? help · tab next tab   Claude Opus 5 · 1M context"
+    ];
+    expect(isCopilotTui(screen)).toBe(true);
+    expect(isCopilotPromptReady(screen)).toBe(true);
+  });
+
+  it.each([
+    " ◉ Loading: 32 skills                   Claude Opus 5 · 1M context",
+    " ○ Working esc interrupt                Claude Opus 5 · 1M context",
+    " @ files · # issues                     Claude Opus 5 · 1M context"
+  ])("rejects a non-ready footer: %s", (footer) => {
+    expect(isCopilotPromptReady([header, footer])).toBe(false);
+  });
+
+  it("does not classify another alternate-screen application as Copilot", () => {
+    const screen = ["Vim 9.1", " / commands · ? help"];
+    expect(isCopilotTui(screen)).toBe(false);
+    expect(isCopilotPromptReady(screen)).toBe(false);
+  });
+
+  it("recognises the ready footer after a known reattached Copilot header scrolls away", () => {
+    expect(isCopilotPromptReady([
+      " ● Previous response",
+      " / commands · ? help · tab next tab"
+    ], true)).toBe(true);
+  });
+
+  it("handles ANSI-coloured Copilot screen text", () => {
+    expect(isCopilotPromptReady([
+      "\u001b[36mCopilot v1.0.78 uses AI.\u001b[0m",
+      "\u001b[2m / commands · ? help · tab next tab\u001b[0m"
+    ])).toBe(true);
   });
 });
 
