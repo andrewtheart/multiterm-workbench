@@ -12,7 +12,7 @@ const readme = fs.readFileSync(path.resolve(__dirname, "../../README.md"), "utf8
 const gridHeadings = [
   "📊 Per-terminal bridge and process statistics",
   "🔗 Attach running WSL tmux sessions",
-  "❓ Built-in generated help",
+  "🧹 Copy and prepare selected text",
   "🔒 Locked down by default",
   "🖱️ Deep right-click context menu",
   "📝 PID-bound notes and command queues",
@@ -52,9 +52,9 @@ describe("README feature grid", () => {
     expect(cell.html).not.toContain("colspan");
   });
 
-  it("places statistics, tmux attachment, and generated help in one complete row", () => {
+  it("places statistics, tmux attachment, and Copy and prepare in one complete row", () => {
     expect(readme).toMatch(
-      /<tr>\s*<td[^>]*>\s*<h3>📊[^]*?<\/td>\s*<td[^>]*>\s*<h3>🔗[^]*?<\/td>\s*<td[^>]*>\s*<h3>❓[^]*?<\/td>\s*<\/tr>/
+      /<tr>\s*<td[^>]*>\s*<h3>📊[^]*?<\/td>\s*<td[^>]*>\s*<h3>🔗[^]*?<\/td>\s*<td[^>]*>\s*<h3>🧹[^]*?<\/td>\s*<\/tr>/
     );
   });
 
