@@ -54,6 +54,8 @@ test.describe("Copy and prepare editor", () => {
     });
     const action = page.locator("#contextMenu .ctx-item", { hasText: "Copy and prepare" }).first();
     await expect(action).toBeVisible();
+    await expect(action.locator("xpath=preceding-sibling::*[contains(@class, 'ctx-item')][1]"))
+      .toHaveAttribute("data-customization-id", "terminal.copy");
     await action.click();
 
     await expect(page.locator("#prepareOverlay")).toBeVisible();

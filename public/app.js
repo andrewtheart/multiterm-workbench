@@ -11451,9 +11451,25 @@ function buildCustomizableContextMenu(items) {
   const placedItemIds = new Set(sections.flatMap((section) => section.items));
   for (const defaultSection of defaultSections) {
     const target = sectionById.get(defaultSection.id) || sections[0];
-    for (const itemId of defaultSection.items) {
+    for (let itemIndex = 0; itemIndex < defaultSection.items.length; itemIndex += 1) {
+      const itemId = defaultSection.items[itemIndex];
       if (placedItemIds.has(itemId)) continue;
-      target.items.push(itemId);
+      let insertionIndex = -1;
+      for (let siblingIndex = itemIndex - 1; siblingIndex >= 0; siblingIndex -= 1) {
+        const placedIndex = target.items.indexOf(defaultSection.items[siblingIndex]);
+        if (placedIndex < 0) continue;
+        insertionIndex = placedIndex + 1;
+        break;
+      }
+      if (insertionIndex < 0) {
+        for (let siblingIndex = itemIndex + 1; siblingIndex < defaultSection.items.length; siblingIndex += 1) {
+          const placedIndex = target.items.indexOf(defaultSection.items[siblingIndex]);
+          if (placedIndex < 0) continue;
+          insertionIndex = placedIndex;
+          break;
+        }
+      }
+      target.items.splice(insertionIndex < 0 ? target.items.length : insertionIndex, 0, itemId);
       placedItemIds.add(itemId);
     }
   }

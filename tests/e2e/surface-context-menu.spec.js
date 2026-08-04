@@ -704,6 +704,63 @@ test.describe("Surface context menu", () => {
     expect(result.storageWarnings).toBe(1);
   });
 
+  test("inserts new default actions at the nearest default sibling", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const mergedItems = await page.evaluate(() => {
+      const savedLayout = contextMenuLayout;
+      const merge = (sections, actionIds) => {
+        contextMenuLayout = normalizeContextMenuLayout({ sections });
+        return buildCustomizableContextMenu([
+          { group: "Clipboard", groupId: "clipboard" },
+          ...actionIds.map((id) => ({ customizationId: id, label: id }))
+        ]).model.sections.map((section) => ({ id: section.id, items: section.items }));
+      };
+      try {
+        return {
+          afterPredecessor: merge([{
+            id: "clipboard",
+            name: "Clipboard",
+            items: ["terminal.copy", "terminal.copy-all", "terminal.paste", "terminal.select-all"]
+          }], [
+            "terminal.copy",
+            "terminal.copy-prepare",
+            "terminal.copy-all",
+            "terminal.paste",
+            "terminal.select-all"
+          ]),
+          beforeFollowing: merge([{
+            id: "clipboard",
+            name: "Clipboard",
+            items: ["action.d"]
+          }], ["action.a", "action.b", "action.c", "action.d"]),
+          afterEarlierPredecessor: merge([
+            { id: "clipboard", name: "Clipboard", items: ["action.a"] },
+            { id: "custom:moved", name: "Moved", custom: true, items: ["action.b"] }
+          ], ["action.a", "action.b", "action.c"]),
+          appendWithoutSibling: merge([{
+            id: "clipboard",
+            name: "Clipboard",
+            items: ["custom.saved"]
+          }], ["action.a", "action.b"])
+        };
+      } finally {
+        contextMenuLayout = savedLayout;
+      }
+    });
+
+    expect(mergedItems.afterPredecessor[0].items).toEqual([
+      "terminal.copy", "terminal.copy-prepare", "terminal.copy-all", "terminal.paste", "terminal.select-all"
+    ]);
+    expect(mergedItems.beforeFollowing[0].items).toEqual(["action.a", "action.b", "action.c", "action.d"]);
+    expect(mergedItems.afterEarlierPredecessor).toEqual([
+      { id: "clipboard", items: ["action.a", "action.c"] },
+      { id: "custom:moved", items: ["action.b"] }
+    ]);
+    expect(mergedItems.appendWithoutSibling[0].items).toEqual(["custom.saved", "action.a", "action.b"]);
+  });
+
   test("supports keyboard section editing and safely rejects invalid customization operations", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
