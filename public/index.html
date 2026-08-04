@@ -36,6 +36,7 @@
     <script defer src="vendor/lucide.js"></script>
     <script defer src="input-detection.js"></script>
     <script defer src="terminal-messaging.js"></script>
+    <script defer src="automations.js"></script>
     <script defer src="app.js"></script>
   </head>
   <body>
@@ -102,6 +103,10 @@
               <i data-lucide="messages-square"></i>
               <span id="terminalMessagesBadge" class="message-toggle-badge" hidden>0</span>
             </button>
+            <button id="automationsToggle" class="icon-button automation-toggle" type="button" title="Automations" aria-label="Automations">
+              <i data-lucide="workflow"></i>
+              <span id="automationsBadge" class="message-toggle-badge" hidden>0</span>
+            </button>
             <button id="copilotSessionsToggle" class="icon-button" type="button" title="Resume a Copilot session" aria-label="Resume a Copilot session">
               <i data-lucide="history"></i>
             </button>
@@ -145,7 +150,9 @@
                 <i data-lucide="search" aria-hidden="true"></i>
                 <input id="settingsSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search settings or related terms" aria-label="Search settings or related terms">
               </label>
-              <button id="settingsShowAll" type="button" aria-pressed="false">Show all</button>
+              <button id="settingsShowAll" class="icon-button" type="button" aria-pressed="false" aria-label="Show all settings" title="Show all settings">
+                <i data-lucide="chevrons-down" aria-hidden="true"></i>
+              </button>
             </div>
           </div>
 
@@ -1097,6 +1104,102 @@
       </div>
     </div>
 
+    <div id="automationsOverlay" class="palette-overlay" hidden>
+      <div class="palette automation-studio" role="dialog" aria-modal="true" aria-labelledby="automationsTitle" aria-describedby="automationsSubtitle">
+        <header class="automation-head">
+          <i data-lucide="workflow" aria-hidden="true"></i>
+          <div>
+            <h2 id="automationsTitle">Automations</h2>
+            <p id="automationsSubtitle">Scheduled commands and terminal handoffs.</p>
+          </div>
+          <button id="automationsPause" class="automation-pause" type="button" aria-pressed="false">
+            <i data-lucide="pause"></i><span>Pause</span>
+          </button>
+          <button id="automationsClose" class="icon-button" type="button" title="Close" aria-label="Close automations"><i data-lucide="x"></i></button>
+        </header>
+
+        <nav class="automation-tabs" role="tablist" aria-label="Automation views">
+          <button type="button" role="tab" data-automation-view="schedules" aria-selected="true"><i data-lucide="calendar-clock"></i><span>Schedules</span></button>
+          <button type="button" role="tab" data-automation-view="routes" aria-selected="false"><i data-lucide="route"></i><span>Handoff routes</span></button>
+          <button type="button" role="tab" data-automation-view="activity" aria-selected="false"><i data-lucide="activity"></i><span>Activity</span></button>
+        </nav>
+
+        <section id="automationSchedulesView" class="automation-view is-active" data-automation-panel="schedules" role="tabpanel">
+          <aside class="automation-rule-rail">
+            <div class="automation-rule-tools">
+              <label class="automation-search"><i data-lucide="search"></i><input id="automationSearch" type="search" placeholder="Filter schedules" aria-label="Filter schedules"></label>
+              <button id="automationNew" class="primary-action" type="button"><i data-lucide="plus"></i><span>New</span></button>
+            </div>
+            <div id="automationRuleList" class="automation-rule-list"></div>
+            <p id="automationRuleEmpty" class="artifact-empty">No scheduled automations.</p>
+          </aside>
+
+          <form id="automationEditor" class="automation-editor" hidden>
+            <div class="automation-editor-head">
+              <div><span class="automation-eyebrow">Schedule</span><h3 id="automationEditorTitle">New automation</h3></div>
+              <button id="automationDelete" class="icon-button automation-delete" type="button" title="Delete automation" aria-label="Delete automation"><i data-lucide="trash-2"></i></button>
+            </div>
+            <label class="automation-field automation-name-field"><span>Name</span><input id="automationName" type="text" maxlength="160" autocomplete="off" required></label>
+
+            <fieldset class="automation-block">
+              <legend>When</legend>
+              <div class="automation-segments" role="group" aria-label="Schedule cadence">
+                <button type="button" data-schedule-mode="interval" aria-pressed="true">Interval</button>
+                <button type="button" data-schedule-mode="daily" aria-pressed="false">Daily</button>
+                <button type="button" data-schedule-mode="weekly" aria-pressed="false">Weekly</button>
+              </div>
+              <div id="automationIntervalFields" class="automation-inline-fields">
+                <span>Every</span><input id="automationInterval" type="number" min="1" step="1" value="60" aria-label="Interval value">
+                <select id="automationIntervalUnit" aria-label="Interval unit"><option value="minutes">minutes</option><option value="hours">hours</option></select>
+              </div>
+              <div id="automationClockFields" class="automation-clock-fields" hidden>
+                <label><span>At</span><input id="automationTime" type="time" value="09:00"></label>
+                <div id="automationDays" class="automation-days" aria-label="Run on days" hidden>
+                  <button type="button" data-day="1" aria-pressed="true">M</button><button type="button" data-day="2" aria-pressed="true">T</button><button type="button" data-day="3" aria-pressed="true">W</button><button type="button" data-day="4" aria-pressed="true">T</button><button type="button" data-day="5" aria-pressed="true">F</button><button type="button" data-day="6" aria-pressed="false">S</button><button type="button" data-day="0" aria-pressed="false">S</button>
+                </div>
+              </div>
+              <label class="automation-check"><input id="automationCatchUp" type="checkbox"><span>Run once after sleep or reconnect</span></label>
+            </fieldset>
+
+            <fieldset class="automation-block">
+              <legend>Then</legend>
+              <div id="automationActionList" class="automation-action-list"></div>
+              <button id="automationActionAdd" class="secondary-action automation-action-add" type="button"><i data-lucide="plus"></i><span>Add action</span></button>
+            </fieldset>
+
+            <div class="automation-preview"><i data-lucide="sparkles"></i><span id="automationPreview">Every 60 minutes</span></div>
+            <footer class="automation-editor-actions">
+              <button id="automationCancel" class="secondary-action" type="button">Cancel</button>
+              <button id="automationRunNow" class="secondary-action" type="button"><i data-lucide="play"></i><span>Run now</span></button>
+              <button id="automationSave" class="confirm-proceed" type="submit"><i data-lucide="check"></i><span>Save &amp; enable</span></button>
+            </footer>
+          </form>
+
+          <div id="automationWelcome" class="automation-welcome">
+            <i data-lucide="calendar-clock"></i><h3>Schedule terminal work</h3><p>Choose a schedule to edit or create a new one.</p>
+            <button id="automationWelcomeNew" class="primary-action" type="button"><i data-lucide="plus"></i><span>New automation</span></button>
+          </div>
+        </section>
+
+        <section id="automationRoutesView" class="automation-view" data-automation-panel="routes" role="tabpanel" hidden>
+          <div class="automation-section-head"><div><h3>Handoff routes</h3><p>Producer output to consumer input.</p></div></div>
+          <div id="automationRouteList" class="automation-route-list"></div>
+          <p id="automationRouteEmpty" class="artifact-empty">Drag a producer grip to a consumer grip to create a route.</p>
+        </section>
+
+        <section id="automationActivityView" class="automation-view" data-automation-panel="activity" role="tabpanel" hidden>
+          <div class="automation-section-head">
+            <div><h3>Activity</h3><p>Recent schedules and handoffs.</p></div>
+            <label class="automation-activity-filter"><span>Show</span><select id="automationActivityFilter" aria-label="Filter automation activity"><option value="all">All events</option><option value="schedules">Schedules</option><option value="handoffs">Handoffs</option><option value="attention">Needs attention</option></select></label>
+            <label class="automation-retention"><span>Keep</span><input id="automationHistoryLimit" type="number" min="0" step="10"><span>events</span></label>
+            <button id="automationActivityClear" class="secondary-action" type="button">Clear</button>
+          </div>
+          <div id="automationActivityList" class="automation-activity-list"></div>
+          <p id="automationActivityEmpty" class="artifact-empty">No automation activity yet.</p>
+        </section>
+      </div>
+    </div>
+
     <div id="terminalArtifactsOverlay" class="palette-overlay" hidden>
       <div class="palette terminal-artifacts" role="dialog" aria-modal="true" aria-labelledby="terminalArtifactsTitle" aria-describedby="terminalArtifactsSubtitle">
         <div class="terminal-artifacts-head">
@@ -1215,6 +1318,58 @@
       </div>
     </div>
 
+    <div id="terminalNotificationFlyout" class="terminal-notification-flyout" role="dialog" aria-modal="false" aria-labelledby="terminalNotificationTitle" hidden>
+      <div class="terminal-notification-head">
+        <i data-lucide="bell"></i>
+        <div>
+          <h2 id="terminalNotificationTitle">Terminal notifications</h2>
+          <p id="terminalNotificationSubtitle">Overrides for this terminal</p>
+        </div>
+      </div>
+      <div class="terminal-notification-options">
+        <div class="terminal-notification-row" data-notification-channel="activity">
+          <span class="terminal-notification-label">
+            <i data-lucide="activity"></i>
+            <strong>Activity</strong>
+          </span>
+          <div class="terminal-notification-segments" role="radiogroup" aria-label="Activity notifications">
+            <button type="button" role="radio" data-notification-value="global">Global</button>
+            <button type="button" role="radio" data-notification-value="on">On</button>
+            <button type="button" role="radio" data-notification-value="off">Off</button>
+          </div>
+        </div>
+        <div class="terminal-notification-row" data-notification-channel="idle">
+          <span class="terminal-notification-label">
+            <i data-lucide="timer"></i>
+            <strong>Idle</strong>
+          </span>
+          <div class="terminal-notification-segments" role="radiogroup" aria-label="Idle notifications">
+            <button type="button" role="radio" data-notification-value="global">Global</button>
+            <button type="button" role="radio" data-notification-value="on">On</button>
+            <button type="button" role="radio" data-notification-value="off">Off</button>
+          </div>
+        </div>
+        <div class="terminal-notification-row" data-notification-channel="bell">
+          <span class="terminal-notification-label">
+            <i data-lucide="bell-ring"></i>
+            <strong>Bell</strong>
+          </span>
+          <div class="terminal-notification-segments" role="radiogroup" aria-label="Bell notifications">
+            <button type="button" role="radio" data-notification-value="global">Global</button>
+            <button type="button" role="radio" data-notification-value="on">On</button>
+            <button type="button" role="radio" data-notification-value="off">Off</button>
+          </div>
+        </div>
+      </div>
+      <div class="terminal-notification-footer">
+        <p id="terminalNotificationGlobalSummary">Global defaults</p>
+        <button id="terminalNotificationReset" type="button">
+          <i data-lucide="rotate-ccw"></i>
+          <span>Use global for all</span>
+        </button>
+      </div>
+    </div>
+
     <div id="contextMenu" class="context-menu" role="menu" tabindex="-1" hidden></div>
     <div id="contextSubmenu" class="context-menu context-submenu" role="menu" hidden></div>
     <template id="paneTemplate">
@@ -1231,6 +1386,9 @@
               <i data-lucide="shield"></i>
               <span>ADMIN</span>
             </span>
+            <button type="button" class="pane-notification-compact" data-action="notifications-compact" title="Notifications for this terminal" aria-label="Notifications for this terminal" aria-haspopup="dialog" aria-expanded="false">
+              <i data-lucide="bell"></i>
+            </button>
             <span class="pane-title-region">
               <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
               <span class="pane-title-display" aria-hidden="true"></span>
@@ -1266,6 +1424,9 @@
               <i data-lucide="notebook-tabs"></i>
               <span class="pane-artifacts-badge" hidden>0</span>
             </button>
+            <button type="button" data-action="notifications" class="pane-notifications" title="Notifications for this terminal" aria-label="Notifications for this terminal" aria-haspopup="dialog" aria-expanded="false">
+              <i data-lucide="bell"></i>
+            </button>
             <button type="button" data-action="more" title="More terminal actions" aria-label="More terminal actions" aria-haspopup="menu" aria-expanded="false">
               <i data-lucide="menu"></i>
             </button>
@@ -1287,6 +1448,12 @@
           </div>
         </header>
         <div class="terminal-screen">
+          <button class="pane-handoff-grip is-input" type="button" data-handoff-grip="input" title="Connect as handoff consumer" aria-label="Connect this terminal as a handoff consumer">
+            <i data-lucide="grip-vertical"></i>
+          </button>
+          <button class="pane-handoff-grip is-output" type="button" data-handoff-grip="output" title="Drag to a handoff consumer" aria-label="Connect this terminal as a handoff producer" aria-pressed="false">
+            <i data-lucide="grip-vertical"></i>
+          </button>
           <button class="pane-queue-add" type="button" title="Queue a command for when this terminal is ready" aria-label="Queue a command" aria-expanded="false">
             <i data-lucide="plus"></i>
             <span class="pane-queue-add-badge" hidden>0</span>

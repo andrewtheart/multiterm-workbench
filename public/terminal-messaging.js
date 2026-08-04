@@ -16,6 +16,7 @@
   "use strict";
 
   const MESSAGE_KINDS = Object.freeze(["command", "text", "path", "status", "task", "result"]);
+  const DELIVERY_MODES = Object.freeze(["review", "whenReady"]);
   const MESSAGE_KIND_SET = new Set(MESSAGE_KINDS);
   const ALIAS_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/;
   const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -43,6 +44,9 @@
   function normalizeMessageRequest(input, maxBytes) {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       return { ok: false, error: "Message must be an object." };
+    }
+    if (input.persist !== undefined && typeof input.persist !== "boolean") {
+      return { ok: false, error: "Message persistence must be a boolean." };
     }
 
     const kind = String(input.kind || "").trim().toLowerCase();
@@ -76,9 +80,10 @@
     return {
       ok: true,
       value: {
+        delivery: input.delivery === "whenReady" ? "whenReady" : "review",
         kind,
         path: messagePath,
-        persist: Boolean(input.persist),
+        persist: input.persist === true,
         sourceId,
         status,
         targetId,
@@ -89,6 +94,7 @@
   }
 
   return Object.freeze({
+    DELIVERY_MODES,
     MESSAGE_KINDS,
     normalizeAlias,
     normalizeMessageRequest,

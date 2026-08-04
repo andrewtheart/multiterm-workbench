@@ -73,7 +73,7 @@ test.describe("MultiTerm Workbench UI", () => {
   test("numbers a new Command Prompt from the selected shell", async () => {
     const panes = page.locator(".terminal-pane");
     const before = await panes.count();
-    const expectedTitle = await page.evaluate(() => `Command Prompt ${state.nextIndex}`);
+    const expectedTitle = await page.evaluate(() => nextTerminalTitle("cmd"));
 
     await setNative("#shellSelect", "cmd", "change");
     await page.locator("#addTerminal").click();
@@ -86,6 +86,32 @@ test.describe("MultiTerm Workbench UI", () => {
     await panes.last().locator('[data-action="close"]').click();
     await expect(panes).toHaveCount(before);
     await setNative("#shellSelect", "pwsh", "change");
+  });
+
+  // Palette and context-menu entries used to pass a fixed title such as "WSL",
+  // so those terminals opened unnumbered and indistinguishable from each other.
+  test("numbers every shell on its own sequence", async () => {
+    const panes = page.locator(".terminal-pane");
+    const before = await panes.count();
+    const titles = await page.evaluate(() => {
+      const opened = ["wsl", "wsl", "cmd", "wsl"].map((shell) => addTerminal({ shell }).titleInput.value);
+      getCommands().find((command) => command.label === "New WSL terminal").run();
+      return { opened, viaPalette: [...state.terminals.values()].at(-1).titleInput.value };
+    });
+
+    expect(titles.opened).toEqual(["WSL 1", "WSL 2", "Command Prompt 1", "WSL 3"]);
+    expect(titles.viaPalette).toBe("WSL 4");
+
+    await expect(panes).toHaveCount(before + 5);
+    // WSL may or may not have a distro on the host; either way the pane must
+    // settle before it is closed so no bridge session is orphaned.
+    await expect
+      .poll(() => page.evaluate(() => [...state.terminals.values()].every((t) => t.status !== "starting")), {
+        timeout: 20000
+      })
+      .toBe(true);
+    for (let i = 0; i < 5; i += 1) await panes.last().locator('[data-action="close"]').click();
+    await expect(panes).toHaveCount(before);
   });
 
   test("keeps New terminal fully reachable in a compressed desktop header", async () => {
@@ -272,7 +298,8 @@ test.describe("MultiTerm Workbench UI", () => {
 
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsSearch")).toHaveValue("");
-    await expect(page.locator("#settingsShowAll")).toHaveText("Collapse all");
+    await expect(page.locator("#settingsShowAll")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("#settingsShowAll")).toHaveAttribute("title", "Collapse all settings");
     await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(10);
 
     await page.locator("#settingsSearch").fill("startup");
@@ -280,9 +307,17 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#settingsSearch")).toHaveValue("");
     await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(10);
 
+    // The single glyph flips instead of swapping icons, so lucide never re-renders it.
+    const chevronRotation = () => page.locator("#settingsShowAll svg").evaluate(
+      (svg) => getComputedStyle(svg).transform
+    );
+    await expect.poll(chevronRotation).toBe("matrix(-1, 0, 0, -1, 0, 0)");
+
     await page.locator("#settingsShowAll").click();
-    await expect(page.locator("#settingsShowAll")).toHaveText("Show all");
+    await expect(page.locator("#settingsShowAll")).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator("#settingsShowAll")).toHaveAttribute("title", "Show all settings");
     await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(10);
+    await expect.poll(chevronRotation).toBe("none");
   });
 
   test("finds settings through comprehensive related terms without rescanning the DOM", async () => {
@@ -734,7 +769,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
     await expect(firstPane).toHaveClass(/is-narrow/);
     await expect(overflow).toBeVisible();
-    for (const action of ["move-left", "move-right", "color", "duplicate", "find"]) {
+    for (const action of ["move-left", "move-right", "color", "duplicate", "find", "notifications"]) {
       await expect(firstPane.locator(`[data-action="${action}"]`)).toBeHidden();
     }
     // Primary actions stay in the header even when narrow.
@@ -745,12 +780,21 @@ test.describe("MultiTerm Workbench UI", () => {
     const menu = page.locator("#contextMenu");
     await expect(menu).toBeVisible();
     await expect(menu.locator(".ctx-item")).toHaveText([
+      "Notifications\u2026",
       "Move left",
       "Move right",
       "Cycle label color",
       "Find…Ctrl+F",
       "Duplicate"
     ]);
+    await menu.locator(".ctx-item", { hasText: "Notifications" }).click();
+    await expect(page.locator("#terminalNotificationFlyout")).toBeVisible();
+    await expect(menu).toBeHidden();
+    await expect(overflow).toHaveAttribute("aria-expanded", "false");
+    await overflow.click();
+    await expect(page.locator("#terminalNotificationFlyout")).toBeHidden();
+    await expect(menu).toBeVisible();
+    await expect(overflow).toHaveAttribute("aria-expanded", "true");
     const disabledMove = menu.locator(".ctx-item", { hasText: "Move left" });
     await expect(disabledMove).toHaveAttribute("aria-disabled", "true");
     await expect(disabledMove).toHaveAttribute("draggable", "true");
@@ -786,6 +830,7 @@ test.describe("MultiTerm Workbench UI", () => {
     for (const action of ["find", "duplicate"]) {
       await expect(firstPane.locator(`[data-action="${action}"]`)).toBeHidden();
     }
+    await expect(firstPane.locator('[data-action="notifications"]')).toBeVisible();
 
     await firstPane.locator('[data-action="more"]').click();
     const menu = page.locator("#contextMenu");
@@ -1797,6 +1842,62 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#workspaceSelect option", { hasText: "My Layout" })).toHaveCount(0);
   });
 
+  // Copilot's TUI turns on xterm's modifyOtherKeys so it can bind Ctrl+Enter to
+  // "queue this message". xterm.js has no support for the protocol, so both keys
+  // used to collapse to CR and the binding could never fire.
+  test("reports modified Enter once a TUI negotiates modifyOtherKeys", async () => {
+    const negotiate = (sequence) =>
+      page.evaluate((data) => new Promise((resolve) => {
+        [...state.terminals.values()][0].term.write(data, resolve);
+      }), sequence);
+
+    const framesFor = async (key) => {
+      await page.evaluate(() => { window.__keyFrames = []; });
+      await page.keyboard.press(key);
+      await page.waitForTimeout(120);
+      return page.evaluate(() => window.__keyFrames.slice());
+    };
+
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      setActiveTerminal(terminal.id);
+      terminal.term.focus();
+      window.__keyFrames = [];
+      window.__origSendBridge = window.sendBridge;
+      window.sendBridge = function (message) {
+        if (message && message.type === "input") window.__keyFrames.push(message.data);
+        return window.__origSendBridge.apply(this, arguments);
+      };
+    });
+
+    try {
+      // Without negotiation Ctrl+Enter stays indistinguishable from Enter.
+      expect(await framesFor("Control+Enter")).toEqual(["\r"]);
+
+      await negotiate("\x1b[>4;2m");
+      expect(await page.evaluate(() => [...state.terminals.values()][0].modifyOtherKeys)).toBe(2);
+      expect(await framesFor("Control+Enter")).toEqual(["\x1b[27;5;13~"]);
+      expect(await framesFor("Shift+Enter")).toEqual(["\x1b[27;2;13~"]);
+      // Unmodified keys are never reported, so a bare Enter still submits.
+      expect(await framesFor("Enter")).toEqual(["\r"]);
+
+      // Level 1 leaves the shift form alone because it has no unique sequence.
+      await negotiate("\x1b[>4;1m");
+      expect(await framesFor("Shift+Enter")).toEqual(["\r"]);
+      expect(await framesFor("Control+Enter")).toEqual(["\x1b[27;5;13~"]);
+
+      await negotiate("\x1b[>4;0m");
+      expect(await page.evaluate(() => [...state.terminals.values()][0].modifyOtherKeys)).toBe(0);
+      expect(await framesFor("Control+Enter")).toEqual(["\r"]);
+    } finally {
+      await page.evaluate(() => {
+        window.sendBridge = window.__origSendBridge;
+        delete window.__origSendBridge;
+        delete window.__keyFrames;
+      });
+    }
+  });
+
   test("recovers the WebGL renderer after a GPU context loss", async () => {
     // Probe a pane's screen for a live WebGL canvas. The link-layer canvas is 2D,
     // so getContext('webgl') returns null there and is skipped.
@@ -1901,6 +2002,44 @@ test.describe("MultiTerm Workbench UI", () => {
     // A resize with no active window drag is forwarded immediately.
     expect(result.immediate).toBe(2);
     expect(result.sent[1].cols).toBe(88);
+  });
+
+  // The workspace-zoom slider relays out every pane on every step, so a drag is
+  // the same WINCH storm as a window drag and must be deferred the same way.
+  test("holds the PTY resize while the workspace zoom slider is dragged", async () => {
+    const result = await page.evaluate(async () => {
+      const term = state.terminals.get(state.activeId) || state.terminals.values().next().value;
+      const id = term.id;
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const origSend = window.sendBridge;
+      const sends = [];
+      window.sendBridge = (msg) => {
+        if (msg && msg.type === "resize" && msg.id === id) sends.push({ cols: msg.cols, rows: msg.rows });
+        return origSend(msg);
+      };
+      term.lastSentCols = 0;
+      term.lastSentRows = 0;
+      const startCols = term.term.cols;
+      let refitDuringDrag = false;
+      for (const step of [95, 90, 85, 80, 75, 70]) {
+        setWorkspaceZoom(step, { announce: true });
+        await sleep(30);
+        if (term.term.cols !== startCols) refitDuringDrag = true;
+      }
+      const during = sends.length;
+      await sleep(300); // > RESIZE_DRAG_IDLE_MS
+      const afterDrag = sends.length;
+      setWorkspaceZoom(100);
+      await sleep(400);
+      window.sendBridge = origSend;
+      return { during, afterDrag, refitDuringDrag, zoom: state.settings.workspaceZoom };
+    });
+
+    // The panes still refit visually on every step; only the pty is spared.
+    expect(result.refitDuringDrag).toBe(true);
+    expect(result.during).toBe(0);
+    expect(result.afterDrag).toBe(1);
+    expect(result.zoom).toBe(100);
   });
 
   test("keeps pane headers attached to equally-sized terminals while the host scrolls", async () => {

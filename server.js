@@ -40,17 +40,25 @@ const maxClients = 32;
 const maxSessions = 64;
 const maxTerminalMessages = 500;
 const maxTerminalMessageStoreBytes = 4 * 1024 * 1024;
+const terminalMessageClaimMs = 15000;
 const updatePreferencesMaxSize = 4096;
+const openFolderMaxSize = 32768;
 const websocketAcceptHash = ["sha", "1"].join("");
 const copilotImportContextKbBounds = { min: 8, max: 1024, fallback: 64 };
 
 const sessions = new Map();
 const clients = new Set();
+// Folders forwarded by Explorer or the VS Code extension before any renderer was
+// connected; the first renderer receives them in its welcome frame.
+const pendingOpenFolders = [];
 const terminalMessages = new Map();
 const copilotSessionCatalog = new Map();
 let instanceFilePath = null;
 let terminalMessageMaxBytes = 64 * 1024;
 let terminalInboxCapacity = 500;
+let automationLeaseOwner = "";
+let automationLeaseExpiresAt = 0;
+const automationOccurrences = new Map();
 let watchdogSuppressed = false;
 const copilotSessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -198,6 +206,56 @@ function applyCommunicationConfig(client, message) {
     terminalInboxCapacity,
     terminalMessageMaxKb: terminalMessageMaxBytes / 1024
   });
+}
+
+function handleAutomationLease(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const action = typeof message.action === "string" ? message.action : "";
+  const now = Date.now();
+  const requestedTtl = Math.round(Number(message.ttlMs));
+  const ttlMs = Number.isSafeInteger(requestedTtl) ? Math.min(10000, Math.max(1000, requestedTtl)) : 4000;
+  let acquired = false;
+  let occurrenceClaimed = false;
+  let released = false;
+  if (action === "release") {
+    if (automationLeaseOwner === client.id) {
+      automationLeaseOwner = "";
+      automationLeaseExpiresAt = 0;
+      released = true;
+    }
+  } else if (action === "acquire") {
+    if (!automationLeaseOwner || automationLeaseExpiresAt <= now || automationLeaseOwner === client.id) {
+      automationLeaseOwner = client.id;
+      automationLeaseExpiresAt = now + ttlMs;
+      acquired = true;
+    }
+  } else if (action === "claimOccurrence") {
+    const ruleId = typeof message.ruleId === "string" && /^[a-zA-Z0-9_-]{8,96}$/.test(message.ruleId)
+      ? message.ruleId
+      : "";
+    const dueAt = typeof message.dueAt === "string" ? Date.parse(message.dueAt) : NaN;
+    const previousDueAt = automationOccurrences.get(ruleId) || 0;
+    if (ruleId && Number.isFinite(dueAt)
+        && automationLeaseOwner === client.id && automationLeaseExpiresAt > now
+        && dueAt > previousDueAt) {
+      automationOccurrences.set(ruleId, dueAt);
+      occurrenceClaimed = true;
+    }
+  }
+  client.send({
+    type: "automationLease",
+    requestId,
+    acquired,
+    occurrenceClaimed,
+    released,
+    expiresAt: acquired ? automationLeaseExpiresAt : 0
+  });
+}
+
+function releaseAutomationLease(client) {
+  if (automationLeaseOwner !== client.id) return;
+  automationLeaseOwner = "";
+  automationLeaseExpiresAt = 0;
 }
 
 function hasPendingOutput(session) {
@@ -378,6 +436,11 @@ const server = http.createServer((request, response) => {
     return;
   }
 
+  if (pathname === "/open-folder") {
+    handleOpenFolderRequest(request, response);
+    return;
+  }
+
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.writeHead(405, { Allow: "GET, HEAD" });
     response.end("Method not allowed");
@@ -437,6 +500,104 @@ function handleWatchdogKeepRequest(request, response) {
   return true;
 }
 
+// File Explorer and the VS Code extension launch a fresh PowerShell process. When
+// a bridge is already running that process forwards the selected folder here
+// instead of starting a second MultiTerm, so this route must exist in both
+// bridges or the running app silently rejects the request.
+function normalizeOpenFolder(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  } else {
+    // A non-empty string may still name something that is not a directory.
+  }
+  try {
+    const folder = path.resolve(value.trim());
+    return fs.statSync(folder).isDirectory() ? folder : null;
+  } catch {
+    return null;
+  }
+}
+
+// Only a renderer can turn a folder into a terminal, so hold the request until
+// one is present rather than dropping it.
+function dispatchOpenFolder(folder) {
+  for (const client of clients) {
+    if (client.renderer) {
+      client.send({ type: "openFolder", path: folder });
+      return true;
+    } else {
+      // Relay helpers and other non-renderer clients cannot open terminals.
+    }
+  }
+  pendingOpenFolders.push(folder);
+  return false;
+}
+
+function handleOpenFolderRequest(request, response) {
+  if (request.method !== "POST") {
+    response.writeHead(405, { Allow: "POST", "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Method not allowed");
+    return;
+  }
+  if (!isLocalAddress(request.socket?.remoteAddress)
+      || request.headers["x-multiterm-request"] !== "Explorer") {
+    response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("Forbidden");
+    return;
+  }
+
+  const declaredSize = Number(request.headers["content-length"]);
+  if (Number.isFinite(declaredSize) && declaredSize > openFolderMaxSize) {
+    request.resume();
+    sendJsonResponse(response, 413, { ok: false, error: "Request too large" });
+    return;
+  }
+
+  let body = "";
+  let tooLarge = false;
+  request.setEncoding("utf8");
+  request.on("data", (chunk) => {
+    if (tooLarge) {
+      return;
+    } else {
+      body += chunk;
+      if (Buffer.byteLength(body, "utf8") > openFolderMaxSize) {
+        tooLarge = true;
+        body = "";
+      }
+    }
+  });
+  request.on("error", (error) => {
+    if (!response.headersSent) {
+      sendJsonResponse(response, 400, { ok: false, error: String(error.message || error) });
+    } else {
+      // The response has already completed; there is nothing left to send.
+    }
+  });
+  request.on("end", () => {
+    if (tooLarge) {
+      sendJsonResponse(response, 413, { ok: false, error: "Request too large" });
+      return;
+    } else {
+      // Parse only a request body that remained under the safety limit.
+    }
+    let folder = null;
+    try {
+      folder = normalizeOpenFolder(JSON.parse(body).path);
+    } catch {
+      folder = null;
+    }
+    if (folder === null) {
+      sendJsonResponse(response, 400, { ok: false, error: "Invalid folder" });
+      return;
+    } else {
+      // The folder resolved to a real directory and can be handed to a renderer.
+    }
+    dispatchOpenFolder(folder);
+    sendJsonResponse(response, 200, { ok: true });
+  });
+}
+
 server.on("upgrade", (request, socket) => {
   const pathname = getPathname(request.url);
 
@@ -494,6 +655,7 @@ server.on("upgrade", (request, socket) => {
 
   const client = {
     buffer: Buffer.alloc(0),
+    id: crypto.randomUUID(),
     renderer: false,
     socket,
     send(message) {
@@ -512,7 +674,8 @@ server.on("upgrade", (request, socket) => {
   client.send({
     type: "welcome",
     cwd: process.cwd(),
-    sessions: [...sessions.values()].map(toSessionSummary)
+    sessions: [...sessions.values()].map(toSessionSummary),
+    openFolders: pendingOpenFolders.splice(0)
   });
 
   if (memStatsEnabled) {
@@ -541,8 +704,12 @@ server.on("upgrade", (request, socket) => {
       }
     }
   });
-  socket.on("close", () => clients.delete(client));
-  socket.on("error", () => clients.delete(client));
+  const removeClient = () => {
+    clients.delete(client);
+    releaseAutomationLease(client);
+  };
+  socket.on("close", removeClient);
+  socket.on("error", removeClient);
 });
 
 server.on("close", unregisterInstance);
@@ -974,6 +1141,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     case "communicationConfig":
       applyCommunicationConfig(client, message);
       break;
+    case "automationLease":
+      handleAutomationLease(client, message);
+      break;
     case "messageSend":
       sendTerminalMessage(client, message);
       break;
@@ -1004,7 +1174,7 @@ function countRendererClients() {
 function terminalInboxCount(targetId) {
   let count = 0;
   for (const message of terminalMessages.values()) {
-    count += Number(message.targetId === targetId && message.state === "pending");
+    count += Number(message.targetId === targetId && (message.state === "pending" || message.state === "claimed"));
   }
   return count;
 }
@@ -1015,6 +1185,19 @@ function terminalMessageStoreBytes() {
     bytes += terminalMessaging.utf8ByteLength(JSON.stringify(message));
   }
   return bytes;
+}
+
+function releaseExpiredTerminalMessageClaims(now = Date.now()) {
+  const released = [];
+  for (const message of terminalMessages.values()) {
+    if (message.state !== "claimed" || !Number.isFinite(message.claimUntil) || message.claimUntil > now) continue;
+    message.state = "pending";
+    delete message.claimId;
+    delete message.claimUntil;
+    released.push(message);
+  }
+  for (const message of released) broadcast({ type: "terminalMessage", message });
+  return released;
 }
 
 function expireTerminalMessagesForSession(targetId) {
@@ -1070,6 +1253,7 @@ function sendTerminalMessage(client, request) {
 
   const terminalMessage = {
     createdAt: new Date().toISOString(),
+    delivery: normalized.value.delivery,
     id: crypto.randomUUID(),
     kind: normalized.value.kind,
     path: normalized.value.path,
@@ -1094,6 +1278,7 @@ function sendTerminalMessage(client, request) {
 }
 
 function listTerminalMessages(client, request) {
+  releaseExpiredTerminalMessageClaims();
   const requestId = typeof request.requestId === "string" ? request.requestId : "";
   client.send({
     type: "terminalMessages",
@@ -1112,17 +1297,78 @@ function terminalMessageInsertText(message) {
   }
 }
 
+function validateReadinessPasteData(value) {
+  if (typeof value !== "string" || !value
+      || terminalMessaging.utf8ByteLength(value) > terminalMessageMaxBytes + 12) return null;
+  const prefix = "\u001b[200~";
+  const suffix = "\u001b[201~";
+  const wrapped = value.startsWith(prefix) && value.endsWith(suffix);
+  const payload = wrapped ? value.slice(prefix.length, -suffix.length) : value;
+  if (!payload.trim()) return null;
+  if (wrapped) {
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(payload)) return null;
+  } else if (/[\u0000-\u001f\u007f-\u009f]/u.test(payload)) {
+    return null;
+  }
+  return value;
+}
+
 function actOnTerminalMessage(client, request) {
+  releaseExpiredTerminalMessageClaims();
   const requestId = typeof request.requestId === "string" ? request.requestId : "";
   const id = typeof request.id === "string" ? request.id : "";
   const action = typeof request.action === "string" ? request.action : "";
   const terminalMessage = terminalMessages.get(id);
   let pendingMessage;
-  if (!terminalMessage || terminalMessage.state !== "pending") {
+  if (!terminalMessage) {
     client.send({ type: "messageError", requestId, message: "That terminal message is no longer pending." });
     return;
   } else {
     pendingMessage = terminalMessage;
+  }
+
+  const clientId = typeof client.id === "string" && client.id ? client.id : "anonymous";
+  if (action === "claim") {
+    if (pendingMessage.delivery !== "whenReady" || pendingMessage.state !== "pending") {
+      client.send({ type: "messageError", requestId, message: "That handoff is not available to claim." });
+      return;
+    }
+    pendingMessage.state = "claimed";
+    pendingMessage.claimId = clientId;
+    pendingMessage.claimUntil = Date.now() + terminalMessageClaimMs;
+    broadcast({ type: "terminalMessageChanged", id, state: "claimed" });
+    client.send({ type: "messageActionResult", requestId, id, state: "claimed", message: pendingMessage });
+    return;
+  }
+  if (action === "deliver" || action === "release") {
+    if (pendingMessage.state !== "claimed" || pendingMessage.claimId !== clientId) {
+      client.send({ type: "messageError", requestId, message: "That handoff claim is no longer owned by this renderer." });
+      return;
+    }
+    if (action === "release") {
+      pendingMessage.state = "pending";
+      delete pendingMessage.claimId;
+      delete pendingMessage.claimUntil;
+      broadcast({ type: "terminalMessage", message: pendingMessage });
+      client.send({ type: "messageActionResult", requestId, id, state: "pending" });
+    } else {
+      if (action === "deliver") {
+        const target = sessions.get(pendingMessage.targetId);
+        const data = validateReadinessPasteData(request.data);
+        if (!isSessionRunning(target) || target.closing || !data || !writeSession(target.id, data)) {
+          client.send({ type: "messageError", requestId, message: "The handoff could not be staged in the target terminal." });
+          return;
+        }
+      }
+      terminalMessages.delete(id);
+      broadcast({ type: "terminalMessageChanged", id, state: "completed" });
+      client.send({ type: "messageActionResult", requestId, id, state: "completed" });
+    }
+    return;
+  }
+  if (pendingMessage.state !== "pending") {
+    client.send({ type: "messageError", requestId, message: "That terminal message is no longer pending." });
+    return;
   }
 
   if (action === "insert") {
@@ -3268,6 +3514,8 @@ module.exports = {
     maxTerminalMessages,
     maxTerminalMessageStoreBytes,
     updatePreferencesMaxSize,
+    openFolderMaxSize,
+    pendingOpenFolders,
     __setMemStatsEnabled,
     getPathname,
     setSecurityHeaders,
@@ -3278,6 +3526,9 @@ module.exports = {
     unregisterInstance,
     handleShutdownRequest,
     handleWatchdogKeepRequest,
+    normalizeOpenFolder,
+    dispatchOpenFolder,
+    handleOpenFolderRequest,
     getUpdatePreferencesPath,
     normalizeUpdatePreferences,
     readUpdatePreferences,
@@ -3301,6 +3552,7 @@ module.exports = {
     getOutputCoalesceMs,
     applyClientConfig,
     applyCommunicationConfig,
+    handleAutomationLease,
     queueSessionOutput,
     scheduleOutputFlush,
     flushSessionOutput,
@@ -3395,6 +3647,8 @@ module.exports = {
     listTerminalMessages,
     actOnTerminalMessage,
     terminalMessageInsertText,
+    validateReadinessPasteData,
     terminalMessageStoreBytes,
-  expireTerminalMessagesForSession
+    expireTerminalMessagesForSession,
+    releaseExpiredTerminalMessageClaims
 };

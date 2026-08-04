@@ -157,6 +157,90 @@ describe("HTTP server", () => {
   });
 });
 
+// Explorer and the VS Code extension forward the selected folder to whichever
+// bridge is already running. The Node bridge used to answer 405 here, so a
+// running MultiTerm silently refused the folder and the launcher started a
+// second instance instead.
+describe("open-folder forwarding", () => {
+  let baseUrl;
+  const folder = process.cwd();
+
+  const post = (body, headers = { "X-MultiTerm-Request": "Explorer" }, method = "POST") =>
+    fetch(`${baseUrl}/open-folder`, {
+      method,
+      headers: { "Content-Type": "application/json", ...headers },
+      body: method === "POST" ? body : undefined
+    });
+
+  beforeAll(async () => {
+    const info = await new Promise((resolve) => app.start(resolve, 0, "127.0.0.1"));
+    baseUrl = `http://127.0.0.1:${info.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise((resolve) => app.server.close(resolve));
+  });
+
+  beforeEach(() => {
+    app.pendingOpenFolders.length = 0;
+  });
+
+  it("rejects methods, untrusted callers, oversized bodies, and non-directories", async () => {
+    const wrongMethod = await post(undefined, {}, "GET");
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("allow")).toBe("POST");
+
+    expect((await post(JSON.stringify({ path: folder }), {})).status).toBe(403);
+    expect((await post(JSON.stringify({ path: `${folder}\\does-not-exist` }))).status).toBe(400);
+    expect((await post("{not json")).status).toBe(400);
+    expect((await post(JSON.stringify({ path: "   " }))).status).toBe(400);
+
+    const oversized = await post(JSON.stringify({ path: "x".repeat(app.openFolderMaxSize) }));
+    expect(oversized.status).toBe(413);
+    expect(app.pendingOpenFolders).toEqual([]);
+  });
+
+  it("queues a folder until a renderer connects and hands it over in the welcome", async () => {
+    const res = await post(JSON.stringify({ path: folder }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(app.pendingOpenFolders).toEqual([folder]);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${new URL(baseUrl).port}/ws`);
+    const welcome = await new Promise((resolve, reject) => {
+      ws.addEventListener("message", (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "welcome") resolve(msg);
+      });
+      ws.addEventListener("error", reject);
+    });
+    ws.close();
+
+    expect(welcome.openFolders).toEqual([folder]);
+    // Handing it over must also clear it, or every reconnect reopens the folder.
+    expect(app.pendingOpenFolders).toEqual([]);
+  });
+
+  it("delivers straight to a live renderer instead of queueing", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${new URL(baseUrl).port}/ws`);
+    const opened = new Promise((resolve, reject) => {
+      ws.addEventListener("message", (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "welcome") {
+          ws.send(JSON.stringify({ type: "rendererPresence" }));
+          post(JSON.stringify({ path: folder }));
+        }
+        if (msg.type === "openFolder") resolve(msg);
+      });
+      ws.addEventListener("error", reject);
+    });
+
+    expect((await opened).path).toBe(folder);
+    ws.close();
+    expect(app.pendingOpenFolders).toEqual([]);
+  });
+});
+
 describe("WebSocket upgrade guards", () => {
   afterEach(() => {
     app.clients.clear();

@@ -682,8 +682,8 @@ test.describe("Renderer coverage completion", () => {
       resizeDragActive = true;
       queueResize(terminal, 9, 9);
       resizeDragActive = false;
-      noteWindowResizeDrag();
-      endWindowResizeDrag();
+      noteResizeGesture();
+      endResizeGesture();
       state.socketReady = oldSocketReady;
 
       const manualA = defaultManualLayout(-5);

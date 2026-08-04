@@ -17,18 +17,34 @@ describe("PowerShell bridge terminal messaging", () => {
   });
 
   it("supports the same configurable routing operations as the Node bridge", () => {
-    for (const type of ["communicationConfig", "messageSend", "messageList", "messageAction"]) {
+    for (const type of ["communicationConfig", "automationLease", "messageSend", "messageList", "messageAction"]) {
       expect(bridgeScript).toContain(`else if (type == "${type}")`);
     }
     expect(bridgeScript).toContain('Json.GetInt(message, "terminalMessageMaxKb"');
     expect(bridgeScript).toContain('Json.GetInt(message, "terminalInboxCapacity"');
   });
 
+  it("arbitrates automation scheduling under a bridge-owned lock", () => {
+    expect(bridgeScript).toContain("lock (this.automationLeaseLock)");
+    expect(bridgeScript).toContain("this.automationLeaseOwner == client.Id");
+    expect(bridgeScript).toContain("this.automationLeaseUntil <= now");
+    expect(bridgeScript).toContain('action == "claimOccurrence"');
+    expect(bridgeScript).toContain("this.automationOccurrences[ruleId] = dueAt");
+    expect(bridgeScript).toContain('\\"occurrenceClaimed\\":');
+    expect(bridgeScript).toContain("this.ReleaseAutomationLease(client.Id)");
+  });
+
   it("stores pending messages under a lock and rejects unsupported persistence", () => {
     expect(bridgeScript).toContain("lock (this.terminalMessageLock)");
     expect(bridgeScript).toContain("this.terminalMessages[terminalMessage.Id] = terminalMessage");
     expect(bridgeScript).toContain("Durable terminal messages are not enabled yet.");
+    expect(bridgeScript).toContain("Message persistence must be a boolean.");
+    expect(bridgeScript).toContain('request.ContainsKey("persist") && !Json.IsBoolean(request, "persist")');
+    expect(bridgeScript).toContain("result.TokenKeys.Add(key)");
+    expect(bridgeScript).toContain("string text = Json.GetString(request, \"text\").Trim()");
+    expect(bridgeScript).toContain('value == "true" || value == "false"');
     expect(bridgeScript).toContain("The target terminal inbox is full under the configured capacity.");
+    expect(bridgeScript).toContain('(message.State == "pending" || message.State == "claimed")');
   });
 
   it("validates and confirms insertion before removing the message", () => {
@@ -40,6 +56,17 @@ describe("PowerShell bridge terminal messaging", () => {
     expect(action[0]).not.toContain('data + "\\r"');
     expect(action[0].indexOf("target.TryWrite(data)"))
       .toBeLessThan(action[0].indexOf("this.terminalMessages.Remove(id)"));
+  });
+
+  it("writes and consumes claimed handoffs atomically without accepting Enter", () => {
+    const readiness = bridgeScript.match(/private void ActOnReadinessTerminalMessage[\s\S]*?private void SendMessageError/);
+    expect(readiness).toBeTruthy();
+    expect(readiness[0]).toContain('action == "deliver"');
+    expect(readiness[0]).toContain("this.ValidateReadinessPasteData(data)");
+    expect(readiness[0]).toContain("target.TryWrite(data)");
+    expect(readiness[0].indexOf("target.TryWrite(data)"))
+      .toBeLessThan(readiness[0].indexOf("this.terminalMessages.Remove(id)"));
+    expect(bridgeScript).toContain("character != '\\r' && character != '\\n' && character != '\\t'");
   });
 
   it("bounds aggregate storage and expires target messages", () => {

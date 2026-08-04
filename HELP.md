@@ -151,6 +151,45 @@ Copilot CLI uses its own kitty-keyboard Enter sequence, which MultiTerm sends af
 
 If a terminal exits while commands remain, its queue moves to **Unparented queues**. Unparented commands remain reusable and can be inserted into another live terminal.
 
+## Automations
+
+Open **Automations** from the workflow button in the header or the command palette. The Studio separates **Schedules**, **Handoff routes**, and **Activity** so recurring commands and terminal-to-terminal work remain visible and reviewable.
+
+### Scheduled terminal work
+
+Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. Destinations use terminal names, so give scheduled terminals distinct titles.
+
+Each action has an explicit delivery mode:
+
+- **Run when ready** uses the existing automatic command queue and presses Enter only after a regular shell prompt or empty Copilot prompt is confirmed.
+- **Stage when ready** pastes the command or prompt without Enter, leaving it visible for review. Accepted staged actions survive a UI reload while their terminal session remains available.
+
+Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. **Run once after sleep or reconnect** catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.
+
+Use the global **Pause** control to stop both scheduled delivery and automatic handoffs. The Activity view records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible **Keep _ events** setting controls persisted history retention; `0` keeps no history.
+
+### Visual handoff routes
+
+Hover a terminal body to reveal its small side grips. Drag the producer's right output grip to the consumer's left input grip. Keyboard users can activate the producer grip and then the consumer grip. The resulting solid directional arrow reuses MultiTerm's existing terminal-link graph; creating a grip route upgrades an existing message-only link to allow handoffs. In **Handoff routes**, turn handoffs off temporarily without deleting the saved directional link.
+
+A connected Copilot CLI producer can request a handoff by ending a completed response with a marker and payload:
+
+```text
+**HAND OFF** Tests
+Run the focused checkout tests. Report failures and changed files.
+```
+
+The name on the marker must resolve to exactly one connected live consumer, case-insensitively. The payload is queued in the bridge until the consumer is ready, then pasted without Enter. A regular terminal is ready only when no command is active and its shell prompt has returned. Copilot CLI is ready only after it finishes responding and shows its empty prompt. Multiple UI windows cannot insert the same handoff: the bridge grants one expiring delivery claim and returns abandoned claims to the queue.
+
+An unnamed marker creates a PowerShell terminal on the producer's current page and working directory, launches `copilot --yolo`, creates the route, waits specifically for the new Copilot prompt, and stages the payload without Enter:
+
+```text
+**HAND OFF**
+Continue this investigation from the context below.
+```
+
+Markers are read only from completed Copilot output after its ready prompt returns. Duplicate marker rows are ignored. Missing or ambiguous named consumers are recorded as blocked instead of being guessed. Handoffs inherit the user-configured Communication message-size and per-terminal inbox limits.
+
 ## Terminal messaging
 
 Open **Terminal messages** from the header, choose two live terminals in the current MultiTerm instance, and send a structured handoff. A terminal's right-click **Send to terminal...** action opens the same composer with that terminal selected as the sender.
@@ -166,7 +205,7 @@ Messages are rendered as literal text and are never executed automatically. Inse
 
 Per-pane Administrator terminals are not message targets yet because their relay cannot confirm that the elevated PTY accepted an Insert. MultiTerm rejects that route instead of reporting an ambiguous success.
 
-This first version routes messages between live terminals and connected windows in one running MultiTerm instance. Durable/offline delivery, stable aliases, shell/agent CLI senders, cross-instance routing, replies, and explicitly confirmed automation rules are planned but are not enabled yet.
+Terminal messages and automated handoffs route between live terminals and connected windows in one running MultiTerm instance. Durable/offline delivery, cross-instance routing, and replies are not enabled.
 
 The **Communication** settings control message size and pending inbox capacity. Capacity `0` disables the per-terminal quota, but the bridge always caps the shared store at 500 pending messages or 4 MiB. Both settings are stored with the existing user settings and enforced by either bridge.
 
@@ -295,7 +334,7 @@ Use **Log to file...** from a terminal context menu to capture output. Stop logg
 
 ## Notifications, tray, and closing
 
-Settings can notify you about terminal activity, inactivity, or the terminal bell. Browser notification permission may be required.
+Settings define the default notifications for terminal activity, inactivity, and the terminal bell. To change one terminal, use its **bell** button and set each channel to **Global**, **On**, or **Off**. Global follows Settings; On and Off override that channel only for the selected terminal. On mobile, the bell stays beside the terminal title; on narrow desktop panes, the same control is under **More terminal actions**. Per-terminal choices follow restored sessions, duplicated terminals, restarted terminals, and saved workspaces. Browser notification permission may be required.
 
 In the Electron desktop app, closing the window asks whether to:
 
@@ -342,7 +381,7 @@ Each normal installed, CLI, or taskbar launch requests an independent app instan
 
 ## Settings
 
-Every settings group starts collapsed. Select a group header or its chevron to expand it. The search box remains at the top of the panel while you scroll and filters individual settings by labels, option names, descriptions, placeholders, control names, and related terminology. For example, **tabs** finds **Pages location**, **macros** finds **Snippets**, and **projects** finds **Workspaces** even when the typed word is not visible in the setting label. Multi-word searches may use related terms in any order. Matching groups expand temporarily; clearing the search restores the groups you had open before searching. Select **Show all** to clear any filter and expand every group; select **Collapse all** to close them again.
+Every settings group starts collapsed. Select a group header or its chevron to expand it. The search box remains at the top of the panel while you scroll and filters individual settings by labels, option names, descriptions, placeholders, control names, and related terminology. For example, **tabs** finds **Pages location**, **macros** finds **Snippets**, and **projects** finds **Workspaces** even when the typed word is not visible in the setting label. Multi-word searches may use related terms in any order. Matching groups expand temporarily; clearing the search restores the groups you had open before searching. Select the double chevron beside the search box to clear any filter and expand every group; select it again — it now points up — to collapse them.
 
 Settings cover:
 

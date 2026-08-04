@@ -6,8 +6,8 @@
 
 const server = require("../../server.js");
 
-function client() {
-  return { send: vi.fn() };
+function client(id = "test-client") {
+  return { id, send: vi.fn() };
 }
 
 function session(id, title) {
@@ -114,6 +114,124 @@ describe("Node bridge terminal messaging", () => {
       id: message.id,
       state: "inserted"
     });
+  });
+
+  it("claims readiness handoffs atomically and releases them without bridge-side input", () => {
+    server.sendTerminalMessage(client("sender"), {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "Run focused tests.\nReturn changed files."
+    });
+    const message = [...server.terminalMessages.values()][0];
+    expect(message.delivery).toBe("whenReady");
+
+    const owner = client("renderer-a");
+    server.actOnTerminalMessage(owner, { requestId: "claim-1", id: message.id, action: "claim" });
+    expect(message.state).toBe("claimed");
+    expect(owner.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "messageActionResult",
+      requestId: "claim-1",
+      state: "claimed",
+      message: expect.objectContaining({ text: "Run focused tests.\nReturn changed files." })
+    }));
+    expect(server.sessions.get("target001").terminal.write).not.toHaveBeenCalled();
+
+    const other = client("renderer-b");
+    server.actOnTerminalMessage(other, { requestId: "claim-2", id: message.id, action: "claim" });
+    expect(other.send).toHaveBeenCalledWith(expect.objectContaining({ type: "messageError" }));
+
+    server.actOnTerminalMessage(owner, { requestId: "release-1", id: message.id, action: "release" });
+    expect(message.state).toBe("pending");
+    server.actOnTerminalMessage(owner, { requestId: "claim-3", id: message.id, action: "claim" });
+    server.actOnTerminalMessage(owner, { requestId: "release-2", id: message.id, action: "release" });
+    expect(message.state).toBe("pending");
+  });
+
+  it("atomically stages a claimed handoff and consumes it only after the PTY write", () => {
+    server.sendTerminalMessage(client("sender"), {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "Run focused tests"
+    });
+    const message = [...server.terminalMessages.values()][0];
+    const owner = client("renderer-deliver");
+    server.actOnTerminalMessage(owner, { id: message.id, action: "claim" });
+    server.actOnTerminalMessage(owner, {
+      requestId: "deliver-1",
+      id: message.id,
+      action: "deliver",
+      data: "Run focused tests"
+    });
+
+    expect(server.sessions.get("target001").terminal.write).toHaveBeenCalledWith("Run focused tests");
+    expect(server.terminalMessages.has(message.id)).toBe(false);
+    expect(owner.send).toHaveBeenLastCalledWith({
+      type: "messageActionResult",
+      requestId: "deliver-1",
+      id: message.id,
+      state: "completed"
+    });
+  });
+
+  it("keeps a claim when atomic delivery contains an Enter key", () => {
+    server.sendTerminalMessage(client("sender"), {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "Run focused tests"
+    });
+    const message = [...server.terminalMessages.values()][0];
+    const owner = client("renderer-no-enter");
+    server.actOnTerminalMessage(owner, { id: message.id, action: "claim" });
+    server.actOnTerminalMessage(owner, { id: message.id, action: "deliver", data: "Run focused tests\r" });
+
+    expect(server.sessions.get("target001").terminal.write).not.toHaveBeenCalled();
+    expect(server.terminalMessages.has(message.id)).toBe(true);
+    expect(message.state).toBe("claimed");
+  });
+
+  it("does not resurrect a delivered handoff when its acknowledgement is lost", () => {
+    server.sendTerminalMessage(client("sender"), {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "Run focused tests"
+    });
+    const message = [...server.terminalMessages.values()][0];
+    const owner = client("renderer-lost-ack");
+    server.actOnTerminalMessage(owner, { id: message.id, action: "claim" });
+    owner.send.mockImplementationOnce(() => {
+      throw new Error("socket closed before acknowledgement");
+    });
+
+    expect(() => server.actOnTerminalMessage(owner, {
+      id: message.id,
+      action: "deliver",
+      data: "\u001b[200~Run focused\ntests\u001b[201~"
+    })).toThrow(/socket closed/i);
+    expect(server.sessions.get("target001").terminal.write).toHaveBeenCalledTimes(1);
+    expect(server.terminalMessages.has(message.id)).toBe(false);
+  });
+
+  it("returns expired readiness claims to the pending inbox", () => {
+    server.sendTerminalMessage(client("sender"), {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "Continue the investigation"
+    });
+    const message = [...server.terminalMessages.values()][0];
+    server.actOnTerminalMessage(client("renderer-a"), { id: message.id, action: "claim" });
+    message.claimUntil = Date.now() - 1;
+    expect(server.releaseExpiredTerminalMessageClaims()).toEqual([message]);
+    expect(message.state).toBe("pending");
   });
 
   it("extracts path and status insertion content without adding controls", () => {
@@ -248,6 +366,35 @@ describe("Node bridge terminal messaging", () => {
     expect(oversized.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "messageError",
       message: expect.stringMatching(/configured/i)
+    }));
+  });
+
+  it("counts claimed handoffs against the configured target capacity", () => {
+    server.applyCommunicationConfig(client(), {
+      terminalInboxCapacity: 1,
+      terminalMessageMaxKb: 64
+    });
+    server.sendTerminalMessage(client(), {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "First"
+    });
+    const message = [...server.terminalMessages.values()][0];
+    server.actOnTerminalMessage(client("renderer-a"), { id: message.id, action: "claim" });
+
+    const full = client();
+    server.sendTerminalMessage(full, {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "Second"
+    });
+    expect(full.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "messageError",
+      message: expect.stringMatching(/inbox is full/i)
     }));
   });
 
@@ -452,5 +599,50 @@ describe("Node bridge terminal messaging", () => {
       "terminalMessages",
       "messageActionResult"
     ]));
+  });
+
+  it("grants the scheduler lease to only one renderer at a time", () => {
+    const first = client("renderer-first");
+    const second = client("renderer-second");
+
+    server.handleAutomationLease(first, { requestId: "lease-1", action: "acquire", ttlMs: 4000 });
+    server.handleAutomationLease(second, { requestId: "lease-2", action: "acquire", ttlMs: 4000 });
+    expect(first.send).toHaveBeenLastCalledWith(expect.objectContaining({ type: "automationLease", acquired: true }));
+    expect(second.send).toHaveBeenLastCalledWith(expect.objectContaining({ type: "automationLease", acquired: false }));
+
+    server.handleAutomationLease(first, { action: "release" });
+    server.handleAutomationLease(second, { requestId: "lease-3", action: "acquire", ttlMs: 4000 });
+    expect(second.send).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "automationLease",
+      requestId: "lease-3",
+      acquired: true
+    }));
+    server.handleAutomationLease(second, { action: "release" });
+  });
+
+  it("fences a due occurrence after lease ownership changes", () => {
+    const first = client("renderer-occurrence-first");
+    const second = client("renderer-occurrence-second");
+    const dueAt = "2026-08-04T13:00:00.000Z";
+
+    server.handleAutomationLease(first, { action: "acquire", ttlMs: 4000 });
+    server.handleAutomationLease(first, {
+      requestId: "occurrence-1",
+      action: "claimOccurrence",
+      ruleId: "automation-fence1",
+      dueAt
+    });
+    expect(first.send).toHaveBeenLastCalledWith(expect.objectContaining({ occurrenceClaimed: true }));
+
+    server.handleAutomationLease(first, { action: "release" });
+    server.handleAutomationLease(second, { action: "acquire", ttlMs: 4000 });
+    server.handleAutomationLease(second, {
+      requestId: "occurrence-2",
+      action: "claimOccurrence",
+      ruleId: "automation-fence1",
+      dueAt
+    });
+    expect(second.send).toHaveBeenLastCalledWith(expect.objectContaining({ occurrenceClaimed: false }));
+    server.handleAutomationLease(second, { action: "release" });
   });
 });

@@ -103,11 +103,17 @@ function Get-RunningMultiTermInstances {
 
       $record | Add-Member -NotePropertyName StateFile -NotePropertyValue $file.FullName -Force
       $record | Add-Member -NotePropertyName IsResponsive -NotePropertyValue $true -Force
+      # A bridge older than the rendererClients field is assumed to have a window,
+      # so an upgrade in progress never loses a perfectly good instance.
+      $rendererClients = $health.PSObject.Properties['rendererClients']
+      $hasRenderer = if ($rendererClients) { [int]$rendererClients.Value -gt 0 } else { $true }
+      $record | Add-Member -NotePropertyName HasRenderer -NotePropertyValue $hasRenderer -Force
       $instances += $record
     } catch {
       if ($IncludeUnresponsive.IsPresent -and $recordOwnsProcess) {
         $record | Add-Member -NotePropertyName StateFile -NotePropertyValue $file.FullName -Force
         $record | Add-Member -NotePropertyName IsResponsive -NotePropertyValue $false -Force
+        $record | Add-Member -NotePropertyName HasRenderer -NotePropertyValue $false -Force
         $instances += $record
       } elseif ($recordPid -le 0 -or $null -eq (Get-Process -Id $recordPid -ErrorAction SilentlyContinue)) {
         Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
@@ -264,6 +270,10 @@ if ($Stop.IsPresent) {
 
 if ($resolvedOpenFolder -and -not $portWasSpecified -and -not $NewInstance.IsPresent) {
   foreach ($instance in @(Get-RunningMultiTermInstances)) {
+    # A bridge with no renderer attached has no window to show the folder in, so
+    # forwarding there would queue it out of sight and look like the click did
+    # nothing. Fall through and start an instance that opens a window instead.
+    if (-not $instance.HasRenderer) { continue }
     try {
       $payload = @{ path = $resolvedOpenFolder } | ConvertTo-Json -Compress
       Invoke-WebRequest `
@@ -1194,7 +1204,10 @@ namespace MultiTerm.PowerShellBridge
 
     internal sealed class TerminalMessage
     {
+        public string ClaimId;
+        public DateTime ClaimUntil;
         public string Id;
+        public string Delivery;
         public string Kind;
         public string Text;
         public string Path;
@@ -1209,6 +1222,7 @@ namespace MultiTerm.PowerShellBridge
         public string ToJson()
         {
             return "{\"id\":" + Json.Quote(this.Id)
+                + ",\"delivery\":" + Json.Quote(this.Delivery)
                 + ",\"kind\":" + Json.Quote(this.Kind)
                 + ",\"text\":" + Json.Quote(this.Text)
                 + ",\"path\":" + Json.Quote(this.Path)
@@ -1251,10 +1265,15 @@ namespace MultiTerm.PowerShellBridge
         private readonly ConcurrentDictionary<string, CopilotSessionMetadata> copilotSessionCatalog = new ConcurrentDictionary<string, CopilotSessionMetadata>();
         private readonly object terminalMessageLock = new object();
         private readonly Dictionary<string, TerminalMessage> terminalMessages = new Dictionary<string, TerminalMessage>(StringComparer.Ordinal);
+        private readonly object automationLeaseLock = new object();
+        private string automationLeaseOwner = String.Empty;
+        private DateTime automationLeaseUntil = DateTime.MinValue;
+        private readonly Dictionary<string, long> automationOccurrences = new Dictionary<string, long>(StringComparer.Ordinal);
         private int terminalMessageMaxBytes = 64 * 1024;
         private int terminalInboxCapacity = 500;
         private const int MaxTerminalMessages = 500;
         private const int MaxTerminalMessageStoreBytes = 4 * 1024 * 1024;
+        private const int TerminalMessageClaimSeconds = 15;
         private readonly ConcurrentDictionary<string, OutputBatch> outputBatches = new ConcurrentDictionary<string, OutputBatch>();
         private int outputCoalesceMs = 8;
 
@@ -2684,6 +2703,7 @@ namespace MultiTerm.PowerShellBridge
             {
                 BridgeClient removed;
                 this.clients.TryRemove(client.Id, out removed);
+                this.ReleaseAutomationLease(client.Id);
                 client.Close();
                 this.Log("info", "Client disconnected: " + client.Id + "; " + this.clients.Count + " active");
             }
@@ -2855,6 +2875,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.ApplyCommunicationConfig(client, message);
             }
+            else if (type == "automationLease")
+            {
+                this.HandleAutomationLease(client, message);
+            }
             else if (type == "messageSend")
             {
                 this.SendTerminalMessage(client, message);
@@ -2890,6 +2914,75 @@ namespace MultiTerm.PowerShellBridge
                 + (this.terminalMessageMaxBytes / 1024) + "}");
         }
 
+        private void HandleAutomationLease(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.GetString(message, "requestId");
+            string action = Json.GetString(message, "action");
+            int ttlMs = Math.Min(10000, Math.Max(1000, Json.GetInt(message, "ttlMs", 4000)));
+            bool acquired = false;
+            bool occurrenceClaimed = false;
+            bool released = false;
+            long expiresAt = 0;
+            lock (this.automationLeaseLock)
+            {
+                DateTime now = DateTime.UtcNow;
+                if (action == "release")
+                {
+                    if (this.automationLeaseOwner == client.Id)
+                    {
+                        this.automationLeaseOwner = String.Empty;
+                        this.automationLeaseUntil = DateTime.MinValue;
+                        released = true;
+                    }
+                }
+                else if (action == "acquire"
+                    && (String.IsNullOrEmpty(this.automationLeaseOwner)
+                        || this.automationLeaseUntil <= now
+                        || this.automationLeaseOwner == client.Id))
+                {
+                    this.automationLeaseOwner = client.Id;
+                    this.automationLeaseUntil = now.AddMilliseconds(ttlMs);
+                    acquired = true;
+                    expiresAt = (long)(this.automationLeaseUntil - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+                }
+                else if (action == "claimOccurrence")
+                {
+                    string ruleId = Json.Get(message, "ruleId");
+                    DateTimeOffset due;
+                    long previousDueAt;
+                    if (Regex.IsMatch(ruleId, "^[a-zA-Z0-9_-]{8,96}$")
+                        && DateTimeOffset.TryParse(Json.Get(message, "dueAt"), CultureInfo.InvariantCulture,
+                            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out due)
+                        && this.automationLeaseOwner == client.Id
+                        && this.automationLeaseUntil > now)
+                    {
+                        long dueAt = due.ToUnixTimeMilliseconds();
+                        this.automationOccurrences.TryGetValue(ruleId, out previousDueAt);
+                        if (dueAt > previousDueAt)
+                        {
+                            this.automationOccurrences[ruleId] = dueAt;
+                            occurrenceClaimed = true;
+                        }
+                    }
+                }
+            }
+            client.Send("{\"type\":\"automationLease\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"acquired\":" + (acquired ? "true" : "false")
+                + ",\"occurrenceClaimed\":" + (occurrenceClaimed ? "true" : "false")
+                + ",\"released\":" + (released ? "true" : "false")
+                + ",\"expiresAt\":" + expiresAt + "}");
+        }
+
+        private void ReleaseAutomationLease(string clientId)
+        {
+            lock (this.automationLeaseLock)
+            {
+                if (this.automationLeaseOwner != clientId) return;
+                this.automationLeaseOwner = String.Empty;
+                this.automationLeaseUntil = DateTime.MinValue;
+            }
+        }
+
         private static bool IsTerminalMessageKind(string kind)
         {
             return kind == "command" || kind == "text" || kind == "path"
@@ -2906,12 +2999,35 @@ namespace MultiTerm.PowerShellBridge
             return false;
         }
 
+        private bool ValidateReadinessPasteData(string value)
+        {
+            if (String.IsNullOrEmpty(value) || Encoding.UTF8.GetByteCount(value) > this.terminalMessageMaxBytes + 12) return false;
+            const string prefix = "\u001b[200~";
+            const string suffix = "\u001b[201~";
+            bool wrapped = value.StartsWith(prefix, StringComparison.Ordinal) && value.EndsWith(suffix, StringComparison.Ordinal);
+            string payload = wrapped ? value.Substring(prefix.Length, value.Length - prefix.Length - suffix.Length) : value;
+            if (String.IsNullOrWhiteSpace(payload)) return false;
+            foreach (char character in payload)
+            {
+                if (wrapped)
+                {
+                    if ((character <= '\u001f' && character != '\r' && character != '\n' && character != '\t')
+                        || (character >= '\u007f' && character <= '\u009f')) return false;
+                }
+                else if (character <= '\u001f' || (character >= '\u007f' && character <= '\u009f'))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         private int TerminalInboxCount(string targetId)
         {
             int count = 0;
             foreach (TerminalMessage message in this.terminalMessages.Values)
             {
-                if (message.TargetId == targetId && message.State == "pending") count++;
+                if (message.TargetId == targetId && (message.State == "pending" || message.State == "claimed")) count++;
             }
             return count;
         }
@@ -2924,6 +3040,25 @@ namespace MultiTerm.PowerShellBridge
                 bytes += Encoding.UTF8.GetByteCount(message.ToJson());
             }
             return bytes;
+        }
+
+        private void ReleaseExpiredTerminalMessageClaims()
+        {
+            List<TerminalMessage> released = new List<TerminalMessage>();
+            lock (this.terminalMessageLock)
+            {
+                foreach (TerminalMessage message in this.terminalMessages.Values)
+                {
+                    if (message.State != "claimed" || message.ClaimUntil > DateTime.UtcNow) continue;
+                    message.State = "pending";
+                    message.ClaimId = null;
+                    released.Add(message);
+                }
+            }
+            foreach (TerminalMessage message in released)
+            {
+                this.Broadcast("{\"type\":\"terminalMessage\",\"message\":" + message.ToJson() + "}");
+            }
         }
 
         private void ExpireTerminalMessagesForSession(string targetId)
@@ -2951,13 +3086,15 @@ namespace MultiTerm.PowerShellBridge
 
         private void SendTerminalMessage(BridgeClient client, Dictionary<string, string> request)
         {
-            string requestId = Json.Get(request, "requestId");
-            string sourceId = Json.Get(request, "sourceId");
-            string targetId = Json.Get(request, "targetId");
-            string kind = Json.Get(request, "kind").Trim().ToLowerInvariant();
-            string text = Json.Get(request, "text").Trim();
-            string messagePath = Json.Get(request, "path").Trim();
-            string status = Json.Get(request, "status").Trim().ToLowerInvariant();
+            string requestId = Json.GetString(request, "requestId");
+            string sourceId = Json.GetString(request, "sourceId");
+            string targetId = Json.GetString(request, "targetId");
+            string delivery = Json.GetString(request, "delivery") == "whenReady" ? "whenReady" : "review";
+            string kind = Json.GetString(request, "kind").Trim().ToLowerInvariant();
+            string text = Json.GetString(request, "text").Trim();
+            string messagePath = Json.GetString(request, "path").Trim();
+            string status = Json.GetString(request, "status").Trim().ToLowerInvariant();
+            string persist = Json.Get(request, "persist");
             TerminalSession source;
             TerminalSession target;
 
@@ -2983,7 +3120,12 @@ namespace MultiTerm.PowerShellBridge
                 this.SendMessageError(client, requestId, "Terminal message exceeds the configured size limit.");
                 return;
             }
-            if (String.Equals(Json.Get(request, "persist"), "true", StringComparison.OrdinalIgnoreCase))
+            if (request.ContainsKey("persist") && !Json.IsBoolean(request, "persist"))
+            {
+                this.SendMessageError(client, requestId, "Message persistence must be a boolean.");
+                return;
+            }
+            if (String.Equals(persist, "true", StringComparison.OrdinalIgnoreCase))
             {
                 this.SendMessageError(client, requestId, "Durable terminal messages are not enabled yet.");
                 return;
@@ -3022,6 +3164,7 @@ namespace MultiTerm.PowerShellBridge
                 terminalMessage = new TerminalMessage
                 {
                     Id = Guid.NewGuid().ToString("D"),
+                    Delivery = delivery,
                     Kind = kind,
                     Text = text,
                     Path = messagePath,
@@ -3051,6 +3194,7 @@ namespace MultiTerm.PowerShellBridge
 
         private void ListTerminalMessages(BridgeClient client, Dictionary<string, string> request)
         {
+            this.ReleaseExpiredTerminalMessageClaims();
             StringBuilder builder = new StringBuilder("[");
             lock (this.terminalMessageLock)
             {
@@ -3065,14 +3209,20 @@ namespace MultiTerm.PowerShellBridge
             }
             builder.Append(']');
             client.Send("{\"type\":\"terminalMessages\",\"requestId\":"
-                + Json.Quote(Json.Get(request, "requestId")) + ",\"messages\":" + builder + "}");
+                + Json.Quote(Json.GetString(request, "requestId")) + ",\"messages\":" + builder + "}");
         }
 
         private void ActOnTerminalMessage(BridgeClient client, Dictionary<string, string> request)
         {
-            string requestId = Json.Get(request, "requestId");
-            string id = Json.Get(request, "id");
-            string action = Json.Get(request, "action");
+            this.ReleaseExpiredTerminalMessageClaims();
+            string requestId = Json.GetString(request, "requestId");
+            string id = Json.GetString(request, "id");
+            string action = Json.GetString(request, "action");
+            if (action == "claim" || action == "deliver" || action == "release")
+            {
+                this.ActOnReadinessTerminalMessage(client, requestId, id, action, Json.GetString(request, "data"));
+                return;
+            }
             TerminalMessage message;
             TerminalSession target = null;
             string data = null;
@@ -3122,6 +3272,71 @@ namespace MultiTerm.PowerShellBridge
                 + ",\"state\":" + Json.Quote(message.State) + "}");
             client.Send("{\"type\":\"messageActionResult\",\"requestId\":" + Json.Quote(requestId)
                 + ",\"id\":" + Json.Quote(id) + ",\"state\":" + Json.Quote(message.State) + "}");
+        }
+
+        private void ActOnReadinessTerminalMessage(BridgeClient client, string requestId, string id, string action, string data)
+        {
+            TerminalMessage message;
+            string broadcastJson;
+            string state;
+            lock (this.terminalMessageLock)
+            {
+                if (!this.terminalMessages.TryGetValue(id, out message))
+                {
+                    this.SendMessageError(client, requestId, "That handoff is no longer pending.");
+                    return;
+                }
+                if (action == "claim")
+                {
+                    if (message.Delivery != "whenReady" || message.State != "pending")
+                    {
+                        this.SendMessageError(client, requestId, "That handoff is not available to claim.");
+                        return;
+                    }
+                    message.State = "claimed";
+                    message.ClaimId = client.Id;
+                    message.ClaimUntil = DateTime.UtcNow.AddSeconds(TerminalMessageClaimSeconds);
+                    state = "claimed";
+                    broadcastJson = "{\"type\":\"terminalMessageChanged\",\"id\":" + Json.Quote(id) + ",\"state\":\"claimed\"}";
+                }
+                else
+                {
+                    if (message.State != "claimed" || message.ClaimId != client.Id)
+                    {
+                        this.SendMessageError(client, requestId, "That handoff claim is no longer owned by this renderer.");
+                        return;
+                    }
+                    if (action == "release")
+                    {
+                        message.State = "pending";
+                        message.ClaimId = null;
+                        state = "pending";
+                        broadcastJson = "{\"type\":\"terminalMessage\",\"message\":" + message.ToJson() + "}";
+                    }
+                    else
+                    {
+                        if (action == "deliver")
+                        {
+                            TerminalSession target;
+                            if (!this.sessions.TryGetValue(message.TargetId, out target) || !target.IsAvailable
+                                || !this.ValidateReadinessPasteData(data) || !target.TryWrite(data))
+                            {
+                                this.SendMessageError(client, requestId, "The handoff could not be staged in the target terminal.");
+                                return;
+                            }
+                        }
+                        this.terminalMessages.Remove(id);
+                        state = "completed";
+                        broadcastJson = "{\"type\":\"terminalMessageChanged\",\"id\":" + Json.Quote(id) + ",\"state\":\"completed\"}";
+                    }
+                }
+            }
+
+            this.Broadcast(broadcastJson);
+            string response = "{\"type\":\"messageActionResult\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"id\":" + Json.Quote(id) + ",\"state\":" + Json.Quote(state);
+            if (state == "claimed") response += ",\"message\":" + message.ToJson();
+            client.Send(response + "}");
         }
 
         private void SendMessageError(BridgeClient client, string requestId, string message)
@@ -6121,12 +6336,40 @@ namespace MultiTerm.PowerShellBridge
         }
     }
 
+    internal sealed class JsonObject : Dictionary<string, string>
+    {
+        public readonly HashSet<string> TokenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        public JsonObject() : base(StringComparer.OrdinalIgnoreCase) { }
+    }
+
     internal static class Json
     {
+
         public static string Get(Dictionary<string, string> values, string key)
         {
             string value;
             return values.TryGetValue(key, out value) ? value : String.Empty;
+        }
+
+        public static string GetString(Dictionary<string, string> values, string key)
+        {
+            return IsString(values, key) ? Get(values, key) : String.Empty;
+        }
+
+        public static bool IsString(Dictionary<string, string> values, string key)
+        {
+            JsonObject jsonObject = values as JsonObject;
+            return values.ContainsKey(key) && (jsonObject == null || !jsonObject.TokenKeys.Contains(key));
+        }
+
+        public static bool IsBoolean(Dictionary<string, string> values, string key)
+        {
+            string value;
+            JsonObject jsonObject = values as JsonObject;
+            return jsonObject != null && jsonObject.TokenKeys.Contains(key)
+                && values.TryGetValue(key, out value)
+                && (value == "true" || value == "false");
         }
 
         public static int GetInt(Dictionary<string, string> values, string key, int fallback)
@@ -6209,7 +6452,7 @@ namespace MultiTerm.PowerShellBridge
 
         public Dictionary<string, string> ReadObject()
         {
-            Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            JsonObject result = new JsonObject();
             this.SkipWhitespace();
             this.Expect('{');
             this.SkipWhitespace();
@@ -6234,6 +6477,7 @@ namespace MultiTerm.PowerShellBridge
                 else
                 {
                     value = this.ReadToken();
+                    result.TokenKeys.Add(key);
                 }
                 result[key] = value;
                 this.SkipWhitespace();

@@ -65,6 +65,15 @@ describe("File Explorer integration", () => {
     );
   });
 
+  // A bridge whose window is closed still answers /open-folder, so forwarding
+  // there queues the folder out of sight and looks like the click did nothing.
+  it("only forwards a folder to a bridge that still has a renderer", () => {
+    expect(bridge).toContain("Add-Member -NotePropertyName HasRenderer");
+    expect(bridge).toContain("if (-not $instance.HasRenderer) { continue }");
+    // Skipping every instance must still fall through to starting a visible one.
+    expect(bridge).toMatch(/if \(-not \$instance\.HasRenderer\)[\s\S]{0,1500}\$useAutomaticPort = \$true/);
+  });
+
   it("removes package, certificate, and classic verbs on uninstall", () => {
     expect(installer).toContain("[UninstallRun]");
     expect(installScript).toContain("Remove-ModernPackage");

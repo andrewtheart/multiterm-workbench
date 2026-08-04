@@ -457,6 +457,11 @@
 <li><a href="#pid-bound-notes" id="toc-pid-bound-notes">PID-bound notes</a></li>
 <li><a href="#command-queues" id="toc-command-queues">Command queues</a></li>
 </ul></li>
+<li><a href="#automations" id="toc-automations">Automations</a>
+<ul>
+<li><a href="#scheduled-terminal-work" id="toc-scheduled-terminal-work">Scheduled terminal work</a></li>
+<li><a href="#visual-handoff-routes" id="toc-visual-handoff-routes">Visual handoff routes</a></li>
+</ul></li>
 <li><a href="#terminal-messaging" id="toc-terminal-messaging">Terminal messaging</a>
 <ul>
 <li><a href="#developer-examples-by-message-kind" id="toc-developer-examples-by-message-kind">Developer examples by message kind</a></li>
@@ -662,6 +667,27 @@
 <li>Reorder or remove items from the queue manager.</li>
 </ul>
 <p>If a terminal exits while commands remain, its queue moves to <strong>Unparented queues</strong>. Unparented commands remain reusable and can be inserted into another live terminal.</p>
+<h2 id="automations">Automations</h2>
+<p>Open <strong>Automations</strong> from the workflow button in the header or the command palette. The Studio separates <strong>Schedules</strong>, <strong>Handoff routes</strong>, and <strong>Activity</strong> so recurring commands and terminal-to-terminal work remain visible and reviewable.</p>
+<h3 id="scheduled-terminal-work">Scheduled terminal work</h3>
+<p>Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. Destinations use terminal names, so give scheduled terminals distinct titles.</p>
+<p>Each action has an explicit delivery mode:</p>
+<ul>
+<li><strong>Run when ready</strong> uses the existing automatic command queue and presses Enter only after a regular shell prompt or empty Copilot prompt is confirmed.</li>
+<li><strong>Stage when ready</strong> pastes the command or prompt without Enter, leaving it visible for review. Accepted staged actions survive a UI reload while their terminal session remains available.</li>
+</ul>
+<p>Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. <strong>Run once after sleep or reconnect</strong> catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.</p>
+<p>Use the global <strong>Pause</strong> control to stop both scheduled delivery and automatic handoffs. The Activity view records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible <strong>Keep _ events</strong> setting controls persisted history retention; <code>0</code> keeps no history.</p>
+<h3 id="visual-handoff-routes">Visual handoff routes</h3>
+<p>Hover a terminal body to reveal its small side grips. Drag the producer's right output grip to the consumer's left input grip. Keyboard users can activate the producer grip and then the consumer grip. The resulting solid directional arrow reuses MultiTerm's existing terminal-link graph; creating a grip route upgrades an existing message-only link to allow handoffs. In <strong>Handoff routes</strong>, turn handoffs off temporarily without deleting the saved directional link.</p>
+<p>A connected Copilot CLI producer can request a handoff by ending a completed response with a marker and payload:</p>
+<pre class="text"><code>**HAND OFF** Tests
+Run the focused checkout tests. Report failures and changed files.</code></pre>
+<p>The name on the marker must resolve to exactly one connected live consumer, case-insensitively. The payload is queued in the bridge until the consumer is ready, then pasted without Enter. A regular terminal is ready only when no command is active and its shell prompt has returned. Copilot CLI is ready only after it finishes responding and shows its empty prompt. Multiple UI windows cannot insert the same handoff: the bridge grants one expiring delivery claim and returns abandoned claims to the queue.</p>
+<p>An unnamed marker creates a PowerShell terminal on the producer's current page and working directory, launches <code>copilot --yolo</code>, creates the route, waits specifically for the new Copilot prompt, and stages the payload without Enter:</p>
+<pre class="text"><code>**HAND OFF**
+Continue this investigation from the context below.</code></pre>
+<p>Markers are read only from completed Copilot output after its ready prompt returns. Duplicate marker rows are ignored. Missing or ambiguous named consumers are recorded as blocked instead of being guessed. Handoffs inherit the user-configured Communication message-size and per-terminal inbox limits.</p>
 <h2 id="terminal-messaging">Terminal messaging</h2>
 <p>Open <strong>Terminal messages</strong> from the header, choose two live terminals in the current MultiTerm instance, and send a structured handoff. A terminal's right-click <strong>Send to terminal...</strong> action opens the same composer with that terminal selected as the sender.</p>
 <p>Terminal messages are most useful when the destination is busy, on another page, or receiving context from a terminal or agent programmatically. They preserve the selected source context, message kind, destination, and timestamp while requiring the receiver to approve insertion. When both terminals are visible and you only need to type a one-off command, direct terminal input is usually faster.</p>
@@ -672,7 +698,7 @@
 </ul>
 <p>Messages are rendered as literal text and are never executed automatically. Insert revalidates the stored content and rejects terminal control characters, including Enter, tab, escape sequences, DEL, and C1 controls. A message stays pending if the target cannot accept the write, and messages expire when their target session exits. The selected source terminal is context, not authenticated sender identity.</p>
 <p>Per-pane Administrator terminals are not message targets yet because their relay cannot confirm that the elevated PTY accepted an Insert. MultiTerm rejects that route instead of reporting an ambiguous success.</p>
-<p>This first version routes messages between live terminals and connected windows in one running MultiTerm instance. Durable/offline delivery, stable aliases, shell/agent CLI senders, cross-instance routing, replies, and explicitly confirmed automation rules are planned but are not enabled yet.</p>
+<p>Terminal messages and automated handoffs route between live terminals and connected windows in one running MultiTerm instance. Durable/offline delivery, cross-instance routing, and replies are not enabled.</p>
 <p>The <strong>Communication</strong> settings control message size and pending inbox capacity. Capacity <code>0</code> disables the per-terminal quota, but the bridge always caps the shared store at 500 pending messages or 4 MiB. Both settings are stored with the existing user settings and enforced by either bridge.</p>
 <h3 id="developer-examples-by-message-kind">Developer examples by message kind</h3>
 <p>Each kind records the same route and timestamp, but choosing the closest kind makes the receiver's inbox easier to scan.</p>
@@ -743,7 +769,7 @@
 <h3 id="logging">Logging</h3>
 <p>Use <strong>Log to file...</strong> from a terminal context menu to capture output. Stop logging from the same menu, then use <strong>Reveal last log</strong> or <strong>Reveal log folder</strong> to locate the file.</p>
 <h2 id="notifications-tray-and-closing">Notifications, tray, and closing</h2>
-<p>Settings can notify you about terminal activity, inactivity, or the terminal bell. Browser notification permission may be required.</p>
+<p>Settings define the default notifications for terminal activity, inactivity, and the terminal bell. To change one terminal, use its <strong>bell</strong> button and set each channel to <strong>Global</strong>, <strong>On</strong>, or <strong>Off</strong>. Global follows Settings; On and Off override that channel only for the selected terminal. On mobile, the bell stays beside the terminal title; on narrow desktop panes, the same control is under <strong>More terminal actions</strong>. Per-terminal choices follow restored sessions, duplicated terminals, restarted terminals, and saved workspaces. Browser notification permission may be required.</p>
 <p>In the Electron desktop app, closing the window asks whether to:</p>
 <ul>
 <li>keep MultiTerm running in the system tray;</li>
@@ -768,11 +794,11 @@
 <p>The installer can also add MultiTerm commands to Visual Studio Code's Explorer. Right-click a file to open its containing folder, right-click a folder to open that folder, or use <strong>Open Workspace in MultiTerm</strong> from the Explorer when no resource is selected. The command reuses a live MultiTerm instance or starts one if necessary. For a nonstandard installation, set <code>multiterm.launcherPath</code> in VS Code.</p>
 <h3 id="command-line">Command line</h3>
 <p>The installer can optionally add MultiTerm's protected installation directory to the system <code>PATH</code>. After opening a new shell, run:</p>
-<div class="sourceCode" id="cb1"><pre class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>multiterm</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>multiterm <span class="st">&quot;C:\src\my-project&quot;</span></span></code></pre></div>
+<div class="sourceCode" id="cb3"><pre class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a>multiterm</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>multiterm <span class="st">&quot;C:\src\my-project&quot;</span></span></code></pre></div>
 <p>Each normal installed, CLI, or taskbar launch requests an independent app instance with its own bridge port, browser profile, state record, and log. Multiple installed instances can therefore run concurrently.</p>
 <h2 id="settings">Settings</h2>
-<p>Every settings group starts collapsed. Select a group header or its chevron to expand it. The search box remains at the top of the panel while you scroll and filters individual settings by labels, option names, descriptions, placeholders, control names, and related terminology. For example, <strong>tabs</strong> finds <strong>Pages location</strong>, <strong>macros</strong> finds <strong>Snippets</strong>, and <strong>projects</strong> finds <strong>Workspaces</strong> even when the typed word is not visible in the setting label. Multi-word searches may use related terms in any order. Matching groups expand temporarily; clearing the search restores the groups you had open before searching. Select <strong>Show all</strong> to clear any filter and expand every group; select <strong>Collapse all</strong> to close them again.</p>
+<p>Every settings group starts collapsed. Select a group header or its chevron to expand it. The search box remains at the top of the panel while you scroll and filters individual settings by labels, option names, descriptions, placeholders, control names, and related terminology. For example, <strong>tabs</strong> finds <strong>Pages location</strong>, <strong>macros</strong> finds <strong>Snippets</strong>, and <strong>projects</strong> finds <strong>Workspaces</strong> even when the typed word is not visible in the setting label. Multi-word searches may use related terms in any order. Matching groups expand temporarily; clearing the search restores the groups you had open before searching. Select the double chevron beside the search box to clear any filter and expand every group; select it again — it now points up — to collapse them.</p>
 <p>Settings cover:</p>
 <ul>
 <li>app and terminal color themes;</li>

@@ -195,22 +195,20 @@ test.describe("Terminal messaging", () => {
         };
       };
       const stage = elements.stage.getBoundingClientRect();
-      const source = state.terminals.get(sourceId).pane.getBoundingClientRect();
-      const target = state.terminals.get(targetId).pane.getBoundingClientRect();
+      const source = state.terminals.get(sourceId).pane.querySelector('[data-handoff-grip="output"]').getBoundingClientRect();
+      const target = state.terminals.get(targetId).pane.querySelector('[data-handoff-grip="input"]').getBoundingClientRect();
       const path = document.querySelector('.terminal-connector-path.is-link');
       const start = path.getPointAtLength(0);
       const end = path.getPointAtLength(path.getTotalLength());
-      const distanceToRect = (point, rect) => Math.min(
-        Math.abs(point.x - (rect.left - stage.left)),
-        Math.abs(point.x - (rect.right - stage.left)),
-        Math.abs(point.y - (rect.top - stage.top)),
-        Math.abs(point.y - (rect.bottom - stage.top))
+      const distanceToCenter = (point, rect) => Math.hypot(
+        point.x - ((rect.left + rect.right) / 2 - stage.left),
+        point.y - ((rect.top + rect.bottom) / 2 - stage.top)
       );
       return {
         link: inspect('.terminal-connector-path.is-link'),
         pending: inspect('.terminal-connector-path.is-pending'),
-        startDistance: distanceToRect(start, source),
-        endDistance: distanceToRect(end, target)
+        startDistance: distanceToCenter(start, source),
+        endDistance: distanceToCenter(end, target)
       };
     }, route);
     expect(before.link.stroke).not.toBe(before.pending.stroke);
@@ -219,10 +217,8 @@ test.describe("Terminal messaging", () => {
     expect(before.link.markerStart).not.toBe(before.pending.markerStart);
     expect(before.link.markerEnd).not.toBe(before.pending.markerEnd);
     expect(before.link.d).not.toBe(before.pending.d);
-    expect(before.startDistance).toBeGreaterThanOrEqual(23);
-    expect(before.startDistance).toBeLessThanOrEqual(25);
-    expect(before.endDistance).toBeGreaterThanOrEqual(23);
-    expect(before.endDistance).toBeLessThanOrEqual(25);
+    expect(before.startDistance).toBeLessThan(11);
+    expect(before.endDistance).toBeLessThan(11);
 
     await page.evaluate(() => {
       state.settings.layout = "rows";
@@ -249,14 +245,12 @@ test.describe("Terminal messaging", () => {
       ]]), null);
       await new Promise((resolve) => setTimeout(resolve, 70));
       const stage = elements.stage.getBoundingClientRect();
-      const moving = terminal.pane.getBoundingClientRect();
+      const moving = terminal.pane.querySelector('[data-handoff-grip="output"]').getBoundingClientRect();
       const currentPath = document.querySelector('.terminal-connector-path.is-link');
       const start = currentPath.getPointAtLength(0);
-      const distance = Math.min(
-        Math.abs(start.x - (moving.left - stage.left)),
-        Math.abs(start.x - (moving.right - stage.left)),
-        Math.abs(start.y - (moving.top - stage.top)),
-        Math.abs(start.y - (moving.bottom - stage.top))
+      const distance = Math.hypot(
+        start.x - ((moving.left + moving.right) / 2 - stage.left),
+        start.y - ((moving.top + moving.bottom) / 2 - stage.top)
       );
       return {
         animationFrame: state.terminalConnections.animationFrame,
@@ -266,8 +260,7 @@ test.describe("Terminal messaging", () => {
     }, route.sourceId);
     expect(flip.animationFrame).not.toBe(0);
     expect(flip.pathChanged).toBe(true);
-    expect(flip.distance).toBeGreaterThanOrEqual(22);
-    expect(flip.distance).toBeLessThanOrEqual(26);
+    expect(flip.distance).toBeLessThan(11);
     await expect.poll(() => page.evaluate(() => state.terminalConnections.animationFrame)).toBe(0);
 
     await page.locator('[data-message-action="insert"]').click();

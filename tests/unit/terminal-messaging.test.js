@@ -42,6 +42,8 @@ describe("terminal messaging contract", () => {
     expect(messaging.normalizeMessageRequest({ kind: "path", sourceId: "a", targetId: "b" }, 100).ok).toBe(false);
     expect(messaging.normalizeMessageRequest({ kind: "text", sourceId: "a", targetId: "b", text: "éé" }, 3).ok).toBe(false);
     expect(messaging.normalizeMessageRequest({ kind: "text", sourceId: "a", targetId: "b", text: "x" }, 0).ok).toBe(false);
+    expect(messaging.normalizeMessageRequest({ kind: "text", persist: "false", sourceId: "a", targetId: "b", text: "x" }, 100))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/boolean/i) });
   });
 
   it("allows printable insertion text and rejects terminal controls", () => {

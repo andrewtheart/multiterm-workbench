@@ -612,6 +612,42 @@ test.describe("Pages and the quick switcher", () => {
     expect(buffer).toContain(marker);
   });
 
+  // A maximized pane hides every sibling in the stage. Scoping that to the page
+  // that owns it is what stops another page from looking empty while its
+  // sessions are still running.
+  test("a maximized pane only blanks its own page", async () => {
+    await reset(4);
+    const arrangement = await page.evaluate(() => {
+      const ids = [...state.terminals.keys()];
+      const second = addPage({ name: "Second", activate: false });
+      moveTerminalToPage(ids[2], second);
+      moveTerminalToPage(ids[3], second);
+      setActivePage("page-1");
+      toggleZoomPane(ids[0]);
+      return { ids, second };
+    });
+
+    const visibleCount = () =>
+      page.locator(".terminal-pane:not(.is-page-hidden)").evaluateAll(
+        (panes) => panes.filter((pane) => getComputedStyle(pane).display !== "none").length
+      );
+
+    expect(await visibleCount()).toBe(1);
+
+    await page.evaluate((pid) => setActivePage(pid), arrangement.second);
+    expect(await visibleCount()).toBe(2);
+    await expect(page.locator("#terminalHost")).not.toHaveClass(/has-zoom/);
+    // The zoom is only suppressed while off-page, not forgotten.
+    expect(await page.evaluate(() => state.zoomedId)).toBe(arrangement.ids[0]);
+
+    await page.evaluate(() => setActivePage("page-1"));
+    await expect(page.locator("#terminalHost")).toHaveClass(/has-zoom/);
+    expect(await visibleCount()).toBe(1);
+
+    await page.evaluate((id) => toggleZoomPane(id), arrangement.ids[0]);
+    expect(await visibleCount()).toBe(2);
+  });
+
   test("switching pages promotes a visible terminal to primary", async () => {
     await reset(2);
     const result = await page.evaluate(() => {

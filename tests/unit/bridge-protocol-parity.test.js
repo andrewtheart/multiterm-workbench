@@ -28,6 +28,15 @@ function installedMessageTypes() {
   return [...handler.matchAll(/type == "([^"]+)"/g)].map((match) => match[1]).sort();
 }
 
+// Node performs the WebSocket upgrade in its own handler rather than as an HTTP
+// route, so it is the one path that legitimately differs.
+function httpRoutes(source, pattern) {
+  return [...source.matchAll(pattern)]
+    .map((match) => match[1])
+    .filter((route) => route !== "/ws")
+    .sort();
+}
+
 describe("bridge protocol parity", () => {
   it("keeps client message dispatch aligned except for the documented tmux discovery gap", () => {
     const nodeTypes = nodeMessageTypes();
@@ -37,5 +46,15 @@ describe("bridge protocol parity", () => {
 
     expect(nodeOnly).toEqual(["listTmux"]);
     expect(installedOnly).toEqual([]);
+  });
+
+  // The Node bridge shipped without /open-folder, so Explorer and the VS Code
+  // extension could not hand a folder to a running MultiTerm.
+  it("exposes the same HTTP routes from both bridges", () => {
+    const nodeRoutes = httpRoutes(nodeBridge, /if \(pathname === "([^"]+)"\)/g);
+    const installedRoutes = httpRoutes(installedBridge, /if \([^)]*path == "([^"]+)"\)/g);
+
+    expect(nodeRoutes).toContain("/open-folder");
+    expect(nodeRoutes).toEqual(installedRoutes);
   });
 });

@@ -21,6 +21,7 @@ const WORKSPACE_ZOOM_BOUNDS = { min: 50, max: 150, step: 5, fallback: 100 };
 
 const defaultSettings = {
   appTheme: "dark",
+  automationHistoryLimit: 200,
   bellNotify: false,
   broadcastSendEnter: true,
   closeAction: "ask",
@@ -77,6 +78,11 @@ const defaultSettings = {
 };
 
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
+const TERMINAL_NOTIFICATION_SETTINGS = Object.freeze({
+  activity: "notifyActivity",
+  idle: "notifySilence",
+  bell: "bellNotify"
+});
 
 const SETTINGS_SEARCH_ALIASES = Object.freeze({
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
@@ -166,6 +172,7 @@ const HEADER_ACTIONS = Object.freeze({
 
 // Bumped on each rebuild. See /memories/repo for the convention.
 const APP_VERSION = "0.1.65";
+const AUTOMATIONS_STORAGE_KEY = "multiterm.automations";
 const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
 const MIN_FONT_SIZE = 10;
@@ -173,6 +180,7 @@ const MAX_FONT_SIZE = 22;
 const COPILOT_YOLO_COMMAND = "copilot --yolo";
 const COPILOT_RESUME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const terminalMessaging = window.TerminalMessaging;
+const automationApi = window.MultiTermAutomations;
 
 // xterm reports focus changes back to the shell as data when the application
 // enables DECSET 1004 (which ConPTY does): ESC [ I on focus in, ESC [ O on
@@ -300,6 +308,41 @@ const elements = {
   aboutVersion: document.querySelector("#aboutVersion"),
   aboutVersionText: document.querySelector("#aboutVersionText"),
   autoUpdateChecks: document.querySelector("#autoUpdateChecks"),
+  automationActionAdd: document.querySelector("#automationActionAdd"),
+  automationActionList: document.querySelector("#automationActionList"),
+  automationActivityClear: document.querySelector("#automationActivityClear"),
+  automationActivityEmpty: document.querySelector("#automationActivityEmpty"),
+  automationActivityFilter: document.querySelector("#automationActivityFilter"),
+  automationActivityList: document.querySelector("#automationActivityList"),
+  automationBadge: document.querySelector("#automationsBadge"),
+  automationCancel: document.querySelector("#automationCancel"),
+  automationCatchUp: document.querySelector("#automationCatchUp"),
+  automationClockFields: document.querySelector("#automationClockFields"),
+  automationClose: document.querySelector("#automationsClose"),
+  automationDays: document.querySelector("#automationDays"),
+  automationDelete: document.querySelector("#automationDelete"),
+  automationEditor: document.querySelector("#automationEditor"),
+  automationEditorTitle: document.querySelector("#automationEditorTitle"),
+  automationHistoryLimit: document.querySelector("#automationHistoryLimit"),
+  automationInterval: document.querySelector("#automationInterval"),
+  automationIntervalFields: document.querySelector("#automationIntervalFields"),
+  automationIntervalUnit: document.querySelector("#automationIntervalUnit"),
+  automationName: document.querySelector("#automationName"),
+  automationNew: document.querySelector("#automationNew"),
+  automationOverlay: document.querySelector("#automationsOverlay"),
+  automationPause: document.querySelector("#automationsPause"),
+  automationPreview: document.querySelector("#automationPreview"),
+  automationRouteEmpty: document.querySelector("#automationRouteEmpty"),
+  automationRouteList: document.querySelector("#automationRouteList"),
+  automationRuleEmpty: document.querySelector("#automationRuleEmpty"),
+  automationRuleList: document.querySelector("#automationRuleList"),
+  automationRunNow: document.querySelector("#automationRunNow"),
+  automationSave: document.querySelector("#automationSave"),
+  automationSearch: document.querySelector("#automationSearch"),
+  automationTime: document.querySelector("#automationTime"),
+  automationToggle: document.querySelector("#automationsToggle"),
+  automationWelcome: document.querySelector("#automationWelcome"),
+  automationWelcomeNew: document.querySelector("#automationWelcomeNew"),
   bellNotify: document.querySelector("#bellNotify"),
   bridgeStatus: document.querySelector("#bridgeStatus"),
   findAllBar: document.querySelector("#findAllBar"),
@@ -540,6 +583,10 @@ const elements = {
   terminalArtifactsToggle: document.querySelector("#terminalArtifactsToggle"),
   terminalInboxCapacity: document.querySelector("#terminalInboxCapacity"),
   terminalMessageMaxKb: document.querySelector("#terminalMessageMaxKb"),
+  terminalNotificationFlyout: document.querySelector("#terminalNotificationFlyout"),
+  terminalNotificationGlobalSummary: document.querySelector("#terminalNotificationGlobalSummary"),
+  terminalNotificationReset: document.querySelector("#terminalNotificationReset"),
+  terminalNotificationSubtitle: document.querySelector("#terminalNotificationSubtitle"),
   terminalMessagesBadge: document.querySelector("#terminalMessagesBadge"),
   terminalMessagesClose: document.querySelector("#terminalMessagesClose"),
   terminalMessagesEmpty: document.querySelector("#terminalMessagesEmpty"),
@@ -587,6 +634,8 @@ const fullscreenFocus = {
 };
 let draggedHeaderAction = null;
 let pendingHeaderActionMove = null;
+let terminalNotificationFlyoutId = null;
+let terminalNotificationFlyoutAnchor = null;
 
 const COPILOT_CWD_HISTORY_STORAGE_KEY = "multiterm.copilotCwdHistory";
 const COPILOT_CWD_HISTORY_LIMIT = 10;
@@ -621,11 +670,16 @@ function loadCopilotCwdHistory() {
   }
 }
 
+const initialSettings = loadSettings();
+
 const state = {
   activeId: null,
   activePageId: null,
   analytics: loadTerminalAnalytics(),
   analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
+  automations: loadAutomationStore(initialSettings.automationHistoryLimit),
+  automationRuntime: { lastMessageRefresh: 0, lastTickAt: Date.now(), ticking: false, timer: 0 },
+  automationStudio: { editingId: null, returnFocus: null, view: "schedules" },
   bridgeClosingDown: false,
   closeDisposition: "",
   closeRequestSource: "window",
@@ -637,12 +691,11 @@ const state = {
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
   mem: { open: false, timer: null, requested: false, stats: null, unsupported: false, unsupportedReason: null },
-  nextIndex: 1,
   pages: loadPages(),
   primaryId: null,
   reconnectAttempts: 0,
   reconnectTimer: null,
-  settings: loadSettings(),
+  settings: initialSettings,
   snap: null,
   socket: null,
   socketReady: false,
@@ -652,7 +705,7 @@ const state = {
   terminalMessages: new Map(),
   terminalMessagesHub: { returnFocus: null },
   terminalLinks: loadTerminalLinks(),
-  terminalConnections: { actionHideTimer: 0, animationFrame: 0, animationUntil: 0, frame: 0, mutationObserver: null, resizeObserver: null },
+  terminalConnections: { actionHideTimer: 0, animationFrame: 0, animationUntil: 0, frame: 0, linkMoved: false, linkPointerId: null, linkPoint: null, linkSourceId: null, linkTargetId: null, mutationObserver: null, resizeObserver: null },
   terminalPages: loadTerminalPages(),
   terminalSearch: "",
   terminals: new Map(),
@@ -732,6 +785,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initializeSettingsPanel();
   bindControls();
   bindHeaderActionCustomization();
+  bindTerminalNotificationFlyout();
   applyVersion();
   applySettings();
   enhanceComboboxes();
@@ -751,12 +805,13 @@ window.addEventListener("DOMContentLoaded", () => {
   bindPrepareEditor();
   bindTerminalArtifactsHub();
   bindTerminalMessages();
+  bindAutomationStudio();
   bindMemStatus();
   bindWorkspaceBackgroundZoom();
   bindGlobalShortcuts();
   bindFullscreenEvents();
   bindFindAll();
-  window.addEventListener("resize", noteWindowResizeDrag);
+  window.addEventListener("resize", noteResizeGesture);
   document.addEventListener("visibilitychange", flushAllTerminalOutput);
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
@@ -778,6 +833,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
 window.addEventListener("beforeunload", () => {
   shutdownTerminalAnalytics();
+  stopAutomationRunner();
   state.bridgeClosingDown = true;
   stopAutomaticUpdateChecks();
   window.clearTimeout(state.reconnectTimer);
@@ -967,7 +1023,9 @@ function bindControls() {
   bindSetting(elements.paneHeight, "paneHeight", "input", Number);
   bindSetting(elements.focusWidth, "focusWidth", "input", Number);
   bindSetting(elements.paneGap, "gap", "input", Number);
-  bindSetting(elements.workspaceZoom, "workspaceZoom", "input", normalizeWorkspaceZoom);
+  elements.workspaceZoom.addEventListener("input", () => {
+    setWorkspaceZoom(elements.workspaceZoom.value, { announce: true });
+  });
   bindSetting(elements.fontSize, "fontSize", "input", Number);
   bindSetting(elements.titleFontScale, "titleFontScale", "input", normalizeTitleFontScale);
   bindSetting(elements.terminalTheme, "theme", "change", (value) => value);
@@ -1058,6 +1116,8 @@ function bindControls() {
   elements.bellNotify.addEventListener("change", () => {
     state.settings.bellNotify = elements.bellNotify.checked;
     saveSettings();
+    for (const terminal of state.terminals.values()) updateTerminalNotificationButton(terminal);
+    if (!elements.terminalNotificationFlyout.hidden) renderTerminalNotificationFlyout();
     if (elements.bellNotify.checked && "Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
     }
@@ -1250,6 +1310,7 @@ function handleBridgeMessage(message) {
     }
     updateTerminalMessageIndicators();
     renderTerminalMessages();
+    scheduleAllTerminalHandoffDeliveries();
     resolveBridgeRequest(message, message);
     return;
   }
@@ -1268,7 +1329,7 @@ function handleBridgeMessage(message) {
     return;
   }
 
-  if (message.type === "messageSent" || message.type === "messageActionResult" || message.type === "messageError") {
+  if (message.type === "automationLease" || message.type === "messageSent" || message.type === "messageActionResult" || message.type === "messageError") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -1365,6 +1426,7 @@ function handleBridgeMessage(message) {
               color: meta.color,
               fontSizeOverride: meta.fontSizeOverride,
               headerActionOverrides: meta.headerActionOverrides,
+              notificationOverrides: meta.notificationOverrides,
               tmux: meta.tmux
             });
             if (meta.minimized && restored) minimizeTerminal(restored.id);
@@ -1456,7 +1518,17 @@ function handleBridgeMessage(message) {
         if (liveTerminal?.status === "live") invokeCopilotCli(liveTerminal);
       }, 500);
     }
+    if (terminal.pendingHandoff) {
+      const pendingHandoff = terminal.pendingHandoff;
+      terminal.pendingHandoff = null;
+      const source = state.terminals.get(pendingHandoff.sourceId);
+      if (source?.status === "live") {
+        addTerminalLink(source.id, terminal.id, { handoffEnabled: true });
+        sendTerminalHandoff(source, terminal, pendingHandoff.payload);
+      }
+    }
     scheduleAutomaticQueueCheck(terminal, 150);
+    scheduleTerminalHandoffDelivery(terminal, 150);
     return;
   }
 
@@ -1592,6 +1664,9 @@ function handleBridgeMessage(message) {
 
 function openFolderInNewTerminal(folder) {
   if (typeof folder !== "string" || !folder.trim()) return null;
+  // The request came from Explorer or VS Code, so the window that answers it has
+  // to come forward or the click looks like it did nothing.
+  focusAppWindow();
   return addTerminal({
     reveal: true,
     runStartup: true,
@@ -1642,6 +1717,26 @@ function terminalShellTitle(shell) {
   return "PowerShell";
 }
 
+// Each label keeps its own sequence, so the first WSL pane is "WSL 1" even when
+// PowerShell panes already exist. Reuses gaps left by closed terminals.
+function nextTitleForLabel(label) {
+  const prefix = `${label} `;
+  const used = new Set();
+  for (const terminal of state.terminals.values()) {
+    const value = String(terminal.titleInput?.value || "");
+    if (!value.startsWith(prefix)) continue;
+    const suffix = value.slice(prefix.length);
+    if (/^\d+$/.test(suffix)) used.add(Number(suffix));
+  }
+  let index = 1;
+  while (used.has(index)) index += 1;
+  return `${label} ${index}`;
+}
+
+function nextTerminalTitle(shell) {
+  return nextTitleForLabel(terminalShellTitle(shell));
+}
+
 function addTerminal(options = {}) {
   if (options.reveal) {
     clearTerminalSearch();
@@ -1658,7 +1753,7 @@ function addTerminal(options = {}) {
   const savedMeta = options.savedMeta || null;
   const id = session.id || createId();
   const shell = options.shell || session.shell || elements.shellSelect.value;
-  const title = savedMeta?.title || session.title || options.title || `${terminalShellTitle(shell)} ${state.nextIndex}`;
+  const title = savedMeta?.title || session.title || options.title || nextTerminalTitle(shell);
   const rawFontSizeOverride = savedMeta?.fontSizeOverride ?? options.fontSizeOverride;
   const fontSizeOverride = Number.isFinite(Number(rawFontSizeOverride))
     ? Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(Number(rawFontSizeOverride))))
@@ -1731,9 +1826,16 @@ function addTerminal(options = {}) {
     fontZoomIndicatorTimer: 0,
     fontZoomWheelDelta: 0,
     id,
+    handoffDispatching: false,
+    handoffDeliveryTimer: 0,
+    handoffRequiresCopilot: options.pendingHandoff?.requireCopilot === true,
+    handoffScanTimer: 0,
+    lastHandoffRow: -1,
     logging: false,
     logPath: null,
     minimized: false,
+    modifyOtherKeys: 0,
+    notificationOverrides: normalizeNotificationOverrides(savedMeta?.notificationOverrides ?? options.notificationOverrides),
     observer: null,
     pane,
     pendingCopilotYolo: Boolean(options.pendingCopilotYolo),
@@ -1741,6 +1843,7 @@ function addTerminal(options = {}) {
     pendingCommandEnter: options.pendingCommandEnter !== false,
     pendingPaste: typeof options.pendingPaste === "string" ? options.pendingPaste : null,
     pendingPasteEnter: Boolean(options.pendingPasteEnter),
+    pendingHandoff: options.pendingHandoff && typeof options.pendingHandoff === "object" ? options.pendingHandoff : null,
     pendingOutput: [],
     pendingOutputBytes: 0,
     outputFlushHandle: 0,
@@ -1780,15 +1883,16 @@ function addTerminal(options = {}) {
   state.terminals.set(id, terminal);
   ensureTerminalAnalyticsRecord(terminal);
   syncTerminalArtifacts(terminal);
-  state.nextIndex += 1;
   updateTerminalActions();
   terminal.observer.observe(screen);
   terminal.observer.observe(pane);
   bindPaneControls(terminal);
   applyHeaderActionPlacement(terminal);
+  updateTerminalNotificationButton(terminal);
   bindPaneDrag(terminal);
   bindPaneResize(terminal);
   bindPaneQuickQueue(terminal);
+  bindTerminalHandoffGrips(terminal);
   bindPaneFind(terminal);
   applyPaneColor(terminal);
   if (terminal.elevated) pane.classList.add("is-admin");
@@ -1805,9 +1909,14 @@ function addTerminal(options = {}) {
   bindTerminalFontZoom(terminal);
   bindTerminalSelectionHandling(terminal);
   registerCwdTracking(terminal);
+  registerModifiedKeyReporting(terminal);
 
   term.onData((data) => {
     if (!data) return;
+    if (terminal.targetedPasteCapture) {
+      terminal.targetedPasteCapture.push(data);
+      return;
+    }
     // Merely clicking away from a terminal blocked on a prompt would otherwise
     // clear its awaiting flag, erasing the indicator meant to call you back.
     const isUserInput = !FOCUS_REPORT_SEQUENCE.test(data);
@@ -1817,13 +1926,18 @@ function addTerminal(options = {}) {
       : state.settings.syncInput
         ? [...state.terminals.keys()]
         : [id];
+    let sentToAllTargets = true;
     for (const targetId of targets) {
       const target = state.terminals.get(targetId);
       if (target && isUserInput) {
         if (clearsSelection) forgetTerminalSelection(target);
         setAwaitingInput(target, false);
       }
-      sendBridge({ type: "input", id: targetId, data });
+      sentToAllTargets = sendBridge({ type: "input", id: targetId, data }) && sentToAllTargets;
+    }
+    if (terminal.targetedPaste) {
+      terminal.targetedPasteObserved = true;
+      terminal.targetedPasteSent = terminal.targetedPasteSent && sentToAllTargets;
     }
   });
 
@@ -1942,6 +2056,14 @@ function bindTerminalKeyHandling(terminal) {
       event.preventDefault();
       event.stopPropagation();
       sendBridge({ type: "input", id: terminal.id, data: event.shiftKey ? "\x1b[Z" : "\t" });
+      return;
+    }
+
+    const modifiedEnter = modifiedEnterSequence(terminal, event);
+    if (modifiedEnter) {
+      event.preventDefault();
+      event.stopPropagation();
+      sendBridge({ type: "input", id: terminal.id, data: modifiedEnter });
     }
   }, true);
 }
@@ -2003,6 +2125,9 @@ function showWorkspaceZoomIndicator() {
 function setWorkspaceZoom(value, { announce = false } = {}) {
   state.settings.workspaceZoom = normalizeWorkspaceZoom(value);
   elements.workspaceZoom.value = state.settings.workspaceZoom;
+  // Dragging a zoom slider relays out every pane per step, so hold the pty
+  // resizes back until the gesture settles.
+  noteResizeGesture();
   applySettings();
   saveSettings();
   if (announce) showWorkspaceZoomIndicator();
@@ -2363,6 +2488,188 @@ function bindHeaderActionCustomization() {
   }, true);
 }
 
+function terminalNotificationOverrideValue(terminal, channel) {
+  const value = terminal?.notificationOverrides?.[channel];
+  return typeof value === "boolean" ? (value ? "on" : "off") : "global";
+}
+
+function terminalNotificationSummary(terminal) {
+  const labels = { activity: "Activity", idle: "Idle", bell: "Bell" };
+  return Object.keys(TERMINAL_NOTIFICATION_SETTINGS).map((channel) => {
+    const override = terminal?.notificationOverrides?.[channel];
+    if (typeof override === "boolean") return `${labels[channel]}: ${override ? "On" : "Off"}`;
+    return `${labels[channel]}: Global ${terminalNotificationEnabled(terminal, channel) ? "on" : "off"}`;
+  }).join(" / ");
+}
+
+function replaceTerminalNotificationIcon(button, iconName) {
+  if (!button || button.dataset.notificationIcon === iconName) return;
+  const icon = document.createElement("i");
+  icon.dataset.lucide = iconName;
+  button.replaceChildren(icon);
+  button.dataset.notificationIcon = iconName;
+  refreshIcons(button);
+}
+
+function updateTerminalNotificationButton(terminal) {
+  const buttons = terminal?.pane?.querySelectorAll('button[data-action="notifications"], button[data-action="notifications-compact"]');
+  if (!buttons?.length) return;
+  const hasOverride = Object.keys(terminal.notificationOverrides).length > 0;
+  const anyEnabled = Object.keys(TERMINAL_NOTIFICATION_SETTINGS)
+    .some((channel) => terminalNotificationEnabled(terminal, channel));
+  const stateName = hasOverride ? (anyEnabled ? "enabled" : "muted") : "global";
+  const summary = terminalNotificationSummary(terminal);
+  for (const button of buttons) {
+    button.dataset.notificationState = stateName;
+    replaceTerminalNotificationIcon(button, hasOverride ? (anyEnabled ? "bell-ring" : "bell-off") : "bell");
+    button.title = `Notifications - ${summary}`;
+    button.setAttribute("aria-label", `Notifications for ${terminal.titleInput.value || "terminal"}. ${summary}`);
+  }
+}
+
+function renderTerminalNotificationFlyout() {
+  const terminal = state.terminals.get(terminalNotificationFlyoutId);
+  if (!terminal) {
+    closeTerminalNotificationFlyout();
+    return;
+  }
+  elements.terminalNotificationSubtitle.textContent = terminal.titleInput.value || "Terminal";
+  elements.terminalNotificationGlobalSummary.textContent = [
+    `Global: Activity ${state.settings.notifyActivity ? "on" : "off"}`,
+    `Idle ${state.settings.notifySilence ? "on" : "off"} (${Math.max(2, Number(state.settings.silenceSeconds) || 10)}s)`,
+    `Bell ${state.settings.bellNotify ? "on" : "off"}`
+  ].join(" / ");
+  for (const row of elements.terminalNotificationFlyout.querySelectorAll("[data-notification-channel]")) {
+    const selected = terminalNotificationOverrideValue(terminal, row.dataset.notificationChannel);
+    for (const button of row.querySelectorAll("[data-notification-value]")) {
+      const checked = button.dataset.notificationValue === selected;
+      button.setAttribute("aria-checked", String(checked));
+      button.tabIndex = checked ? 0 : -1;
+    }
+  }
+  elements.terminalNotificationReset.disabled = Object.keys(terminal.notificationOverrides).length === 0;
+}
+
+function positionTerminalNotificationFlyout(anchor) {
+  const flyout = elements.terminalNotificationFlyout;
+  const anchorRect = anchor.getBoundingClientRect();
+  flyout.classList.add("is-positioning");
+  flyout.hidden = false;
+  flyout.style.left = "0px";
+  flyout.style.top = "0px";
+  const rect = flyout.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - 8));
+  const below = anchorRect.bottom + 7;
+  const top = below + rect.height <= window.innerHeight - 8
+    ? below
+    : Math.max(8, anchorRect.top - rect.height - 7);
+  flyout.style.left = `${left}px`;
+  flyout.style.top = `${top}px`;
+  flyout.classList.remove("is-positioning");
+}
+
+function openTerminalNotificationFlyout(terminal, anchor) {
+  closeHeaderActionScopeFlyout();
+  hideContextMenu();
+  if (terminalNotificationFlyoutAnchor && terminalNotificationFlyoutAnchor !== anchor) {
+    terminalNotificationFlyoutAnchor.setAttribute("aria-expanded", "false");
+  }
+  terminalNotificationFlyoutId = terminal.id;
+  terminalNotificationFlyoutAnchor = anchor;
+  if (anchor.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "true");
+  renderTerminalNotificationFlyout();
+  refreshIcons(elements.terminalNotificationFlyout);
+  positionTerminalNotificationFlyout(anchor);
+  elements.terminalNotificationFlyout.querySelector('[aria-checked="true"]')?.focus({ preventScroll: true });
+}
+
+function closeTerminalNotificationFlyout({ restoreFocus = false } = {}) {
+  const anchor = terminalNotificationFlyoutAnchor;
+  elements.terminalNotificationFlyout.hidden = true;
+  terminalNotificationFlyoutId = null;
+  terminalNotificationFlyoutAnchor = null;
+  if (anchor?.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
+}
+
+function toggleTerminalNotificationFlyout(terminal, anchor) {
+  if (terminalNotificationFlyoutId === terminal.id && terminalNotificationFlyoutAnchor === anchor
+      && !elements.terminalNotificationFlyout.hidden) {
+    closeTerminalNotificationFlyout({ restoreFocus: true });
+    return;
+  }
+  openTerminalNotificationFlyout(terminal, anchor);
+}
+
+function setTerminalNotificationOverride(channel, value) {
+  const terminal = state.terminals.get(terminalNotificationFlyoutId);
+  if (!terminal || !Object.prototype.hasOwnProperty.call(TERMINAL_NOTIFICATION_SETTINGS, channel)) return;
+  if (value === "global") delete terminal.notificationOverrides[channel];
+  else if (value === "on" || value === "off") terminal.notificationOverrides[channel] = value === "on";
+  else return;
+  if (channel === "idle" && !terminalNotificationEnabled(terminal, "idle")) {
+    window.clearTimeout(terminal.silenceTimer);
+    terminal.hadOutput = false;
+  }
+  if (value === "on" && "Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+  updateTerminalNotificationButton(terminal);
+  renderTerminalNotificationFlyout();
+  saveSessionSnapshot();
+}
+
+function bindTerminalNotificationFlyout() {
+  elements.terminalNotificationFlyout.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-notification-value]");
+    const row = button?.closest("[data-notification-channel]");
+    if (!button || !row) return;
+    setTerminalNotificationOverride(row.dataset.notificationChannel, button.dataset.notificationValue);
+  });
+  elements.terminalNotificationFlyout.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeTerminalNotificationFlyout({ restoreFocus: true });
+      return;
+    }
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    const current = event.target.closest("button[data-notification-value]");
+    if (!current) return;
+    const buttons = [...current.parentElement.querySelectorAll("button[data-notification-value]")];
+    const delta = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+    const next = buttons[(buttons.indexOf(current) + delta + buttons.length) % buttons.length];
+    event.preventDefault();
+    next.click();
+    next.focus({ preventScroll: true });
+  });
+  elements.terminalNotificationReset.addEventListener("click", () => {
+    const terminal = state.terminals.get(terminalNotificationFlyoutId);
+    if (!terminal) return;
+    terminal.notificationOverrides = {};
+    if (!terminalNotificationEnabled(terminal, "idle")) {
+      window.clearTimeout(terminal.silenceTimer);
+      terminal.hadOutput = false;
+    }
+    updateTerminalNotificationButton(terminal);
+    renderTerminalNotificationFlyout();
+    saveSessionSnapshot();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (elements.terminalNotificationFlyout.hidden) return;
+    if (elements.terminalNotificationFlyout.contains(event.target) || terminalNotificationFlyoutAnchor?.contains(event.target)) return;
+    closeTerminalNotificationFlyout();
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || elements.terminalNotificationFlyout.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeTerminalNotificationFlyout({ restoreFocus: true });
+  }, true);
+  window.addEventListener("resize", () => {
+    if (!elements.terminalNotificationFlyout.hidden) closeTerminalNotificationFlyout();
+  });
+}
+
 function runHeaderAction(terminal, action) {
   if (action === "close") {
     removeTerminal(terminal.id);
@@ -2401,7 +2708,8 @@ function runHeaderAction(terminal, action) {
       title: `${terminal.titleInput.value} copy`,
       copilotCwd: terminal.copilotCwd,
       fontSizeOverride: terminal.fontSizeOverride,
-      headerActionOverrides: { ...terminal.headerActionOverrides }
+      headerActionOverrides: { ...terminal.headerActionOverrides },
+      notificationOverrides: { ...terminal.notificationOverrides }
     });
   } else if (action === "move-left") {
     moveTerminal(terminal.id, -1);
@@ -2431,9 +2739,18 @@ function bindPaneControls(terminal) {
     if (action === "more") {
       setActiveTerminal(terminal.id);
       showPaneOverflowMenu(button, terminal);
+    } else if (action === "notifications") {
+      setActiveTerminal(terminal.id);
+      toggleTerminalNotificationFlyout(terminal, button);
     } else if (HEADER_ACTION_ID_SET.has(action)) {
       runHeaderAction(terminal, action);
     }
+  });
+
+  const compactNotifications = terminal.pane.querySelector('button[data-action="notifications-compact"]');
+  compactNotifications.addEventListener("click", () => {
+    setActiveTerminal(terminal.id);
+    toggleTerminalNotificationFlyout(terminal, compactNotifications);
   });
 
   paneActions.addEventListener("dragstart", (event) => {
@@ -2501,6 +2818,8 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   updateTerminalSearchVisibility(terminal);
   updateTerminalConnectionViews();
   updateMinimizedDock();
+  updateTerminalNotificationButton(terminal);
+  if (terminalNotificationFlyoutId === terminal.id) renderTerminalNotificationFlyout();
   saveSessionSnapshot();
   if (notifyBridge) sendBridge({ type: "title", id: terminal.id, title });
 }
@@ -2992,6 +3311,8 @@ function requestSession(terminal) {
   }
 
   terminal.remoteRequested = true;
+  // The old process's keyboard-protocol negotiation dies with it.
+  terminal.modifyOtherKeys = 0;
   setTerminalStatus(terminal, "starting", "dead");
   log.debug("session", `Requesting session: ${terminal.titleInput.value}`, { id: terminal.id, shell: terminal.shell || elements.shellSelect.value });
   if (terminal.elevated) {
@@ -3087,6 +3408,7 @@ function closeAllTerminals() {
 
 function disposeTerminal(terminal) {
   const { id } = terminal;
+  if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
   if (state.snap?.id === id) {
     state.snap = null;
   }
@@ -3100,6 +3422,10 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.promptTimer);
   window.clearTimeout(terminal.autoQueueTimer);
   terminal.autoQueueTimer = 0;
+  window.clearTimeout(terminal.handoffScanTimer);
+  window.clearTimeout(terminal.handoffDeliveryTimer);
+  terminal.handoffScanTimer = 0;
+  terminal.handoffDeliveryTimer = 0;
   window.clearTimeout(terminal.fontZoomIndicatorTimer);
   window.clearTimeout(terminal.webglRecoveryHandle);
   terminal.webglRecoveryHandle = 0;
@@ -3479,7 +3805,8 @@ function isWebglVisibleCandidate(terminal) {
     || terminal.pane.classList.contains("is-search-hidden")
     || !isOnActivePage(terminal);
   if (hidden) return false;
-  return !state.zoomedId || state.zoomedId === terminal.id;
+  const zoomed = effectiveZoomedId();
+  return !zoomed || zoomed === terminal.id;
 }
 
 function preferredWebglTerminals() {
@@ -3679,6 +4006,8 @@ function writeTerminal(terminal, data) {
   handleOutputNotifications(terminal);
   scheduleInputPromptCheck(terminal);
   scheduleAutomaticQueueCheck(terminal);
+  scheduleTerminalHandoffScan(terminal);
+  scheduleTerminalHandoffDelivery(terminal);
   if (state.settings.scrollOnOutput) terminal.term.scrollToBottom();
 }
 
@@ -3690,18 +4019,19 @@ function handleOutputNotifications(terminal) {
   const isBackground = terminal.id !== state.activeId;
   const inStartupGrace = now - terminal.createdAt < 1500;
 
-  if (state.settings.notifyActivity && isBackground && !inStartupGrace) {
+  if (terminalNotificationEnabled(terminal, "activity") && isBackground && !inStartupGrace) {
     if (!terminal.lastActivityNotify || now - terminal.lastActivityNotify > 8000) {
       terminal.lastActivityNotify = now;
       notifyDesktop(`Activity in ${terminal.titleInput.value || "terminal"}`, terminal);
     }
   }
 
-  if (state.settings.notifySilence && !inStartupGrace) {
+  if (terminalNotificationEnabled(terminal, "idle") && !inStartupGrace) {
     terminal.hadOutput = true;
     window.clearTimeout(terminal.silenceTimer);
     const seconds = Math.max(2, Number(state.settings.silenceSeconds) || 10);
     terminal.silenceTimer = window.setTimeout(() => {
+      if (!terminalNotificationEnabled(terminal, "idle")) return;
       if (!terminal.hadOutput) return;
       terminal.hadOutput = false;
       if (terminal.id !== state.activeId || document.hidden) {
@@ -3711,11 +4041,15 @@ function handleOutputNotifications(terminal) {
   }
 }
 
-function focusNotifiedTerminal(terminal) {
+function focusAppWindow() {
   try {
     window.multiterm?.focusWindow?.();
   } catch { /* not running under Electron */ }
   window.focus();
+}
+
+function focusNotifiedTerminal(terminal) {
+  focusAppWindow();
   if (!terminal || !state.terminals.has(terminal.id)) return;
   if (terminal.pageId !== state.activePageId) setActivePage(terminal.pageId, { focusTerm: false });
   setActiveTerminal(terminal.id);
@@ -3830,11 +4164,26 @@ function terminalEnterSequence(terminal) {
 function pasteIntoSpecificTerminal(terminal, text) {
   if (!terminal || !text || !state.socketReady) return false;
   terminal.targetedPaste = true;
+  terminal.targetedPasteObserved = false;
+  terminal.targetedPasteSent = true;
   try {
     terminal.term.paste(text);
-    return true;
+    return terminal.targetedPasteObserved && terminal.targetedPasteSent;
   } finally {
     terminal.targetedPaste = false;
+    terminal.targetedPasteObserved = false;
+    terminal.targetedPasteSent = false;
+  }
+}
+
+function capturePasteForSpecificTerminal(terminal, text) {
+  if (!terminal || !text) return "";
+  terminal.targetedPasteCapture = [];
+  try {
+    terminal.term.paste(text);
+    return terminal.targetedPasteCapture.join("");
+  } finally {
+    terminal.targetedPasteCapture = null;
   }
 }
 
@@ -4250,7 +4599,7 @@ function newAdminTerminal(options = {}) {
     elevated: true,
     shell,
     cwd: options.cwd,
-    title: options.title || `Administrator ${state.nextIndex}`,
+    title: options.title || nextTitleForLabel("Administrator"),
     pendingCommand: options.pendingCommand,
     runStartup: Boolean(options.runStartup),
     reveal: true
@@ -4374,8 +4723,10 @@ function applySettings() {
     terminal.term.options.theme = themes[state.settings.theme];
     terminal.term.options.scrollback = effectiveScrollback();
     applyManualLayout(terminal, ensureManualLayout(terminal.id));
+    updateTerminalNotificationButton(terminal);
     scheduleFit(terminal);
   }
+  if (!elements.terminalNotificationFlyout.hidden) renderTerminalNotificationFlyout();
   if (!state.settings.highlightInputPrompts) {
     for (const terminal of state.terminals.values()) setAwaitingInput(terminal, false);
   }
@@ -4459,38 +4810,40 @@ function fitAllTerminals() {
 }
 
 // A continuous window drag fires the ResizeObserver — and thus the VISUAL fit
-// below — dozens of times per second. That fit is cheap and keeps the panes
+// below — dozens of times per second, and so does dragging the workspace-zoom
+// slider. That fit is cheap and keeps the panes
 // tracking the layout smoothly, but forwarding every intermediate size to the
 // shell makes its line editor (PSReadLine) repaint the prompt at dozens of
 // widths per second; those repaints race xterm's own reflow and corrupt the
-// rendered line, stranding the cursor far from the visible prompt. So while a
-// window drag is in flight we hold the PTY resize (WINCH) back and forward a
-// single settled size once the drag stops — the shell then repaints exactly
-// once, at the size the drag landed on.
+// rendered line, stranding the cursor far from the visible prompt. So while such
+// a gesture is in flight we hold the PTY resize (WINCH) back and forward a
+// single settled size once it stops — the shell then repaints exactly
+// once, at the size the gesture landed on.
 //
-// Crucially the deferral is gated on an ACTIVE window-resize drag. Terminal
+// Crucially the deferral is gated on an ACTIVE gesture. Terminal
 // creation and pane/layout changes drive the ResizeObserver too, but WITHOUT a
-// window "resize" event, so those forward immediately (identical to the historic
+// window "resize" event or a zoom step, so those forward immediately (identical to the historic
 // behaviour). A delayed creation/layout resize would let the shell's resize
 // repaint land after other code wrote straight into the buffer and clobber it.
 const RESIZE_DRAG_IDLE_MS = 150;
 let resizeDragActive = false;
 let resizeDragIdleHandle = 0;
 
-// Fired on every window "resize" event: mark a drag in flight and (re)arm the
-// idle timer that ends it. A one-off resize (maximize/snap) trips this once and
+// Fired on every window "resize" event and every workspace-zoom step: mark a
+// gesture in flight and (re)arm the idle timer that ends it. A one-off resize
+// (maximize/snap) trips this once and
 // settles after RESIZE_DRAG_IDLE_MS; a drag keeps it armed until motion stops.
-function noteWindowResizeDrag() {
+function noteResizeGesture() {
   resizeDragActive = true;
   if (resizeDragIdleHandle) {
     window.clearTimeout(resizeDragIdleHandle);
   }
-  resizeDragIdleHandle = window.setTimeout(endWindowResizeDrag, RESIZE_DRAG_IDLE_MS);
+  resizeDragIdleHandle = window.setTimeout(endResizeGesture, RESIZE_DRAG_IDLE_MS);
 }
 
-// The drag has settled: forward the final size of every terminal so each shell
-// repaints once at the width the drag ended on.
-function endWindowResizeDrag() {
+// The gesture has settled: forward the final size of every terminal so each shell
+// repaints once at the size it ended on.
+function endResizeGesture() {
   resizeDragIdleHandle = 0;
   resizeDragActive = false;
   for (const terminal of state.terminals.values()) {
@@ -5092,6 +5445,19 @@ function normalizeHeaderActionOverrides(value) {
   return Object.fromEntries(Object.entries(value).filter(([action, placement]) => (
     HEADER_ACTION_ID_SET.has(action) && (placement === "header" || placement === "menu")
   )));
+}
+
+function normalizeNotificationOverrides(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.keys(TERMINAL_NOTIFICATION_SETTINGS)
+    .filter((channel) => typeof value[channel] === "boolean")
+    .map((channel) => [channel, value[channel]]));
+}
+
+function terminalNotificationEnabled(terminal, channel) {
+  const override = terminal?.notificationOverrides?.[channel];
+  if (typeof override === "boolean") return override;
+  return Boolean(state.settings[TERMINAL_NOTIFICATION_SETTINGS[channel]]);
 }
 
 function saveSettings() {
@@ -6166,10 +6532,10 @@ function getCommands() {
   const commands = [
     { label: "Toggle fullscreen", hint: "F11", run: toggleFullscreenFocus },
     { label: "New terminal", hint: "Ctrl+T", run: () => addTerminal({ reveal: true, runStartup: true }) },
-    { label: "New PowerShell 7 terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "pwsh", title: "PowerShell 7" }) },
-    { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell", title: "Windows PowerShell" }) },
+    { label: "New PowerShell 7 terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "pwsh" }) },
+    { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell" }) },
     { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd" }) },
-    { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl", title: "WSL" }) },
+    { label: "New WSL terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "wsl" }) },
     { label: "Attach WSL tmux session…", run: openTmuxAttach },
     { label: "New Administrator terminal", run: () => newAdminTerminal() },
     { label: "Restart as Administrator", run: restartAsAdmin },
@@ -6192,6 +6558,8 @@ function getCommands() {
     { label: "Dequeue next command", hint: "Ctrl+Shift+Q", run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
     { label: "Terminal notes & command queue…", run: () => openTerminalArtifacts(state.activeId) },
     { label: "Send to terminal…", run: () => openTerminalMessages(state.activeId) },
+    { label: "Automations…", run: () => openAutomationStudio() },
+    { label: "Automation activity…", run: () => openAutomationStudio("activity") },
     { label: "Paste into active terminal", hint: "Ctrl+Shift+V", run: pasteIntoActive },
     { label: "Maximize / restore active pane", hint: "Ctrl+Shift+X", run: () => toggleZoomPane(state.activeId) },
     { label: "Browse & run script in active terminal\u2026", run: () => browseAndRunScript(state.activeId) },
@@ -7283,6 +7651,7 @@ function restartSession(id) {
     color: terminal.color,
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
+    notificationOverrides: { ...terminal.notificationOverrides },
     pageId: terminal.pageId,
     tmux: terminal.tmux
   };
@@ -7299,6 +7668,7 @@ function restartSession(id) {
     color: meta.color,
     fontSizeOverride: meta.fontSizeOverride,
     headerActionOverrides: meta.headerActionOverrides,
+    notificationOverrides: meta.notificationOverrides,
     pageId: meta.pageId,
     tmux: meta.tmux
   });
@@ -7784,9 +8154,18 @@ function toggleZoomPane(id) {
   applyZoom();
 }
 
+// A maximized pane hides every sibling, so the zoom may only take effect while
+// its own page is showing. Otherwise switching pages leaves the new page blank
+// even though its sessions are alive.
+function effectiveZoomedId() {
+  const terminal = state.zoomedId ? state.terminals.get(state.zoomedId) : null;
+  if (!terminal || terminal.minimized || !isOnActivePage(terminal)) return null;
+  return terminal.id;
+}
+
 function applyZoom() {
-  const zoomed = state.zoomedId && state.terminals.has(state.zoomedId) ? state.zoomedId : null;
-  state.zoomedId = zoomed;
+  if (state.zoomedId && !state.terminals.has(state.zoomedId)) state.zoomedId = null;
+  const zoomed = effectiveZoomedId();
   elements.host.classList.toggle("has-zoom", Boolean(zoomed));
   let glyphChanged = false;
   for (const terminal of state.terminals.values()) {
@@ -7854,6 +8233,37 @@ function registerCwdTracking(terminal) {
     }
     return false;
   });
+}
+
+// Copilot's TUI (like many modern TUIs) turns on xterm's modifyOtherKeys with
+// `CSI > 4 ; 2 m` so it can tell Ctrl+Enter from Enter. xterm.js does not
+// implement the protocol, so both keys collapsed to CR and the TUI's own
+// "queue this message" binding could never fire.
+function registerModifiedKeyReporting(terminal) {
+  const parser = terminal.term.parser;
+  if (!parser || typeof parser.registerCsiHandler !== "function") return;
+
+  parser.registerCsiHandler({ prefix: ">", final: "m" }, (params) => {
+    if (params[0] === 4) terminal.modifyOtherKeys = Number(params[1]) || 0;
+    return true;
+  });
+}
+
+// Level 1 reports only modified keys that have no unique escape sequence of
+// their own; level 2 also reports the shift/alt forms. Unmodified keys are
+// never reported, so plain Enter keeps sending CR.
+function modifiedEnterSequence(terminal, event) {
+  if (event.code !== "Enter" && event.code !== "NumpadEnter") return "";
+  if (event.isComposing) return "";
+  const level = terminal.modifyOtherKeys;
+  const ctrlOrMeta = event.ctrlKey || event.metaKey;
+  if (level < 1 || (level < 2 && !ctrlOrMeta)) return "";
+  const modifier = 1
+    + (event.shiftKey ? 1 : 0)
+    + (event.altKey ? 2 : 0)
+    + (event.ctrlKey ? 4 : 0)
+    + (event.metaKey ? 8 : 0);
+  return modifier === 1 ? "" : `\x1b[27;${modifier};13~`;
 }
 
 function updateTerminalCwd(terminal, dir) {
@@ -9103,6 +9513,7 @@ function saveWorkspace(rawName) {
       color: terminal.color,
       fontSizeOverride: terminal.fontSizeOverride,
       headerActionOverrides: { ...terminal.headerActionOverrides },
+      notificationOverrides: { ...terminal.notificationOverrides },
       pageId: terminal.pageId
     }))
   };
@@ -9166,6 +9577,7 @@ function restoreWorkspace(name) {
         color: meta.color,
         fontSizeOverride: meta.fontSizeOverride,
         headerActionOverrides: meta.headerActionOverrides,
+        notificationOverrides: meta.notificationOverrides,
         pageId: meta.pageId
       });
     }
@@ -9267,7 +9679,7 @@ function cyclePaneColor(terminal) {
 /* ---------------- Bell notifications --------------- */
 
 function handleBell(terminal) {
-  if (!state.settings.bellNotify) return;
+  if (!terminalNotificationEnabled(terminal, "bell")) return;
 
   const name = terminal.titleInput.value || "Terminal";
   if (terminal.id !== state.activeId || document.hidden) {
@@ -9289,6 +9701,7 @@ function saveSessionSnapshot() {
     color: terminal.color,
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
+    notificationOverrides: { ...terminal.notificationOverrides },
     minimized: terminal.minimized,
     pageId: terminal.pageId,
     tmux: terminal.tmux
@@ -9364,6 +9777,7 @@ function normalizeQueueItem(item, index, prefix) {
     id: typeof item.id === "string" && item.id ? item.id : `${prefix}-${index}-${Date.now()}`,
     command,
     createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+    occurrenceKey: typeof item.occurrenceKey === "string" ? item.occurrenceKey.slice(0, 320) : "",
     // Automatic execution is intentionally runtime-only. Persisted profile data
     // is untrusted and must never arm a command after reload without a fresh click.
     runWhenReady: false
@@ -9495,7 +9909,7 @@ function bindPaneQuickQueue(terminal) {
   });
 }
 
-function queueAutomaticTerminalCommand(terminal, rawCommand) {
+function queueAutomaticTerminalCommand(terminal, rawCommand, options = {}) {
   if (!artifactTerminalIsAvailable(terminal)) {
     toast("That terminal is no longer available.", "error", 2200);
     return false;
@@ -9512,10 +9926,20 @@ function queueAutomaticTerminalCommand(terminal, rawCommand) {
     return false;
   }
 
-  ensureTerminalArtifact(terminal).queue.push({
+  const queue = ensureTerminalArtifact(terminal).queue;
+  const occurrenceKey = typeof options.occurrenceKey === "string" ? options.occurrenceKey.slice(0, 320) : "";
+  const existing = occurrenceKey ? queue.find((item) => item.occurrenceKey === occurrenceKey) : null;
+  if (existing) {
+    existing.runWhenReady = true;
+    saveTerminalArtifacts();
+    scheduleAutomaticQueueCheck(terminal, 150);
+    return true;
+  }
+  queue.push({
     id: createId(),
     command,
     createdAt: new Date().toISOString(),
+    occurrenceKey,
     runWhenReady: true
   });
   saveTerminalArtifacts();
@@ -10139,6 +10563,910 @@ function bindTerminalArtifactsHub() {
   });
 }
 
+/* ---------------- Automations --------------- */
+
+function automationHistoryLimit() {
+  const value = Number(state?.settings?.automationHistoryLimit ?? defaultSettings.automationHistoryLimit);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : defaultSettings.automationHistoryLimit;
+}
+
+function loadAutomationStore(historyLimit = defaultSettings.automationHistoryLimit) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(AUTOMATIONS_STORAGE_KEY) || "null");
+    return automationApi.normalizeStore(raw, historyLimit);
+  } catch {
+    return automationApi.normalizeStore(null, historyLimit);
+  }
+}
+
+function saveAutomationStore() {
+  state.automations = automationApi.normalizeStore(state.automations, automationHistoryLimit());
+  localStorage.setItem(AUTOMATIONS_STORAGE_KEY, JSON.stringify(state.automations));
+  updateAutomationBadge();
+}
+
+function addAutomationHistory(status, title, detail = "", automationId = null) {
+  state.automations.history.push({
+    automationId,
+    detail,
+    id: createId(),
+    occurredAt: new Date().toISOString(),
+    status,
+    title
+  });
+  saveAutomationStore();
+  renderAutomationActivity();
+  renderAutomationRuleList();
+}
+
+function automationScheduleSummary(rule) {
+  const trigger = rule?.trigger || {};
+  if (trigger.mode === "daily") return `Daily at ${trigger.time}`;
+  if (trigger.mode === "weekly") {
+    const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    return `${trigger.days.map((day) => labels[day]).join(", ")} at ${trigger.time}`;
+  }
+  const minutes = Number(trigger.intervalMinutes) || 60;
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `Every ${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  return `Every ${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+function automationNextRunLabel(rule) {
+  if (!rule.enabled) return "Disabled";
+  const next = automationApi.nextScheduledAt(rule, new Date());
+  if (!next) return "Schedule unavailable";
+  return `Next ${next.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+}
+
+function automationLastOutcome(rule) {
+  const entry = [...state.automations.history].reverse().find((item) => item.automationId === rule.id);
+  if (!entry) return { label: "No activity yet", status: "none" };
+  const occurredAt = new Date(entry.occurredAt);
+  const when = Number.isFinite(occurredAt.getTime())
+    ? occurredAt.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : "Unknown time";
+  return { label: `Last ${entry.status} · ${when}`, status: entry.status };
+}
+
+function updateAutomationBadge() {
+  if (!elements.automationBadge || !elements.automationToggle) return;
+  const pending = state.automations.pendingStages.length;
+  const enabled = state.automations.rules.filter((rule) => rule.enabled).length;
+  elements.automationBadge.hidden = pending === 0;
+  elements.automationBadge.textContent = pending > 99 ? "99+" : String(pending);
+  const status = state.automations.paused ? "paused" : `${enabled} enabled`;
+  elements.automationToggle.title = `Automations: ${status}`;
+  elements.automationToggle.setAttribute("aria-label", `Automations: ${status}`);
+}
+
+function automationTerminalOptions(selectedName = "") {
+  const names = [...state.terminals.values()]
+    .filter((terminal) => terminal.status === "live")
+    .map((terminal) => terminal.titleInput.value || "Terminal");
+  if (selectedName && !names.some((name) => automationApi.terminalName(name) === automationApi.terminalName(selectedName))) {
+    names.unshift(selectedName);
+  }
+  return [...new Set(names)];
+}
+
+function createAutomationActionRow(action = {}) {
+  const row = document.createElement("div");
+  row.className = "automation-action-row";
+  row.dataset.actionId = action.id || createId();
+
+  const targetLabel = document.createElement("label");
+  const targetCaption = document.createElement("span");
+  targetCaption.textContent = "Terminal";
+  const target = document.createElement("select");
+  target.className = "automation-action-target";
+  target.required = true;
+  for (const name of automationTerminalOptions(action.targetName || "")) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    target.append(option);
+  }
+  if (!target.options.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No live terminals";
+    target.append(option);
+  }
+  target.value = action.targetName || target.options[0].value;
+  targetLabel.append(targetCaption, target);
+
+  const commandLabel = document.createElement("label");
+  const commandCaption = document.createElement("span");
+  commandCaption.textContent = "Command or prompt";
+  const command = document.createElement("input");
+  command.className = "automation-action-command";
+  command.type = "text";
+  command.maxLength = MAX_TERMINAL_COMMAND_LENGTH;
+  command.required = true;
+  command.autocomplete = "off";
+  command.spellcheck = false;
+  command.value = action.command || "";
+  commandLabel.append(commandCaption, command);
+
+  const deliveryLabel = document.createElement("label");
+  const deliveryCaption = document.createElement("span");
+  deliveryCaption.textContent = "Delivery";
+  const delivery = document.createElement("select");
+  delivery.className = "automation-action-delivery";
+  delivery.innerHTML = '<option value="run">Run when ready</option><option value="stage">Stage when ready</option>';
+  delivery.value = action.submit === false ? "stage" : "run";
+  deliveryLabel.append(deliveryCaption, delivery);
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "icon-button automation-action-remove";
+  remove.title = "Remove action";
+  remove.setAttribute("aria-label", "Remove action");
+  remove.innerHTML = '<i data-lucide="x"></i>';
+  remove.addEventListener("click", () => {
+    row.remove();
+    if (!elements.automationActionList.children.length) createAutomationActionRow();
+    updateAutomationPreview();
+  });
+  row.addEventListener("input", updateAutomationPreview);
+  row.append(targetLabel, commandLabel, deliveryLabel, remove);
+  elements.automationActionList.append(row);
+  refreshIcons(row);
+  return row;
+}
+
+function selectedAutomationScheduleMode() {
+  return elements.automationEditor.querySelector("[data-schedule-mode][aria-pressed='true']")?.dataset.scheduleMode || "interval";
+}
+
+function setAutomationScheduleMode(mode) {
+  const normalized = ["daily", "weekly"].includes(mode) ? mode : "interval";
+  for (const button of elements.automationEditor.querySelectorAll("[data-schedule-mode]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.scheduleMode === normalized));
+  }
+  elements.automationIntervalFields.hidden = normalized !== "interval";
+  elements.automationClockFields.hidden = normalized === "interval";
+  elements.automationDays.hidden = normalized !== "weekly";
+  updateAutomationPreview();
+}
+
+function readAutomationEditorRule(existing = null) {
+  const mode = selectedAutomationScheduleMode();
+  const value = Math.max(1, Math.round(Number(elements.automationInterval.value) || 1));
+  const intervalMinutes = value * (elements.automationIntervalUnit.value === "hours" ? 60 : 1);
+  const days = [...elements.automationDays.querySelectorAll("[data-day][aria-pressed='true']")]
+    .map((button) => Number(button.dataset.day));
+  const actions = [...elements.automationActionList.querySelectorAll(".automation-action-row")].map((row) => ({
+    command: row.querySelector(".automation-action-command").value,
+    id: row.dataset.actionId,
+    submit: row.querySelector(".automation-action-delivery").value === "run",
+    targetName: row.querySelector(".automation-action-target").value
+  }));
+  return automationApi.normalizeRule({
+    actions,
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    enabled: existing?.enabled === true,
+    id: existing?.id || createId(),
+    lastRunAt: existing?.lastRunAt || null,
+    name: elements.automationName.value,
+    trigger: {
+      catchUp: elements.automationCatchUp.checked ? "once" : "skip",
+      days,
+      intervalMinutes,
+      mode,
+      time: elements.automationTime.value,
+      type: "schedule"
+    },
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function updateAutomationPreview() {
+  if (!elements.automationPreview) return;
+  const rule = readAutomationEditorRule(state.automations.rules.find((item) => item.id === state.automationStudio.editingId));
+  const actionCount = elements.automationActionList.children.length;
+  elements.automationPreview.textContent = rule
+    ? `${automationScheduleSummary(rule)} · ${actionCount} action${actionCount === 1 ? "" : "s"}`
+    : "Add at least one destination and command";
+}
+
+function openAutomationEditor(id = null) {
+  const rule = id ? state.automations.rules.find((item) => item.id === id) : null;
+  state.automationStudio.editingId = rule?.id || null;
+  elements.automationEditor.hidden = false;
+  elements.automationWelcome.hidden = true;
+  elements.automationEditorTitle.textContent = rule ? rule.name : "New automation";
+  elements.automationDelete.hidden = !rule;
+  elements.automationName.value = rule?.name || "";
+  elements.automationCatchUp.checked = rule?.trigger.catchUp === "once";
+  elements.automationTime.value = rule?.trigger.time || "09:00";
+  const intervalMinutes = rule?.trigger.intervalMinutes || 60;
+  const usesHours = intervalMinutes >= 60 && intervalMinutes % 60 === 0;
+  elements.automationInterval.value = String(usesHours ? intervalMinutes / 60 : intervalMinutes);
+  elements.automationIntervalUnit.value = usesHours ? "hours" : "minutes";
+  const selectedDays = new Set(rule?.trigger.days || [1, 2, 3, 4, 5]);
+  for (const button of elements.automationDays.querySelectorAll("[data-day]")) {
+    button.setAttribute("aria-pressed", String(selectedDays.has(Number(button.dataset.day))));
+  }
+  elements.automationActionList.textContent = "";
+  for (const action of rule?.actions || [{}]) createAutomationActionRow(action);
+  setAutomationScheduleMode(rule?.trigger.mode || "interval");
+  renderAutomationRuleList();
+  elements.automationName.focus();
+}
+
+function closeAutomationEditor() {
+  state.automationStudio.editingId = null;
+  elements.automationEditor.hidden = true;
+  elements.automationWelcome.hidden = false;
+  renderAutomationRuleList();
+}
+
+function saveAutomationEditor(event) {
+  event?.preventDefault();
+  const currentIndex = state.automations.rules.findIndex((item) => item.id === state.automationStudio.editingId);
+  const current = currentIndex >= 0 ? state.automations.rules[currentIndex] : null;
+  const rule = readAutomationEditorRule(current);
+  if (!rule) {
+    toast("Add a name, destination, and command", "info", 2200);
+    return false;
+  }
+  rule.enabled = true;
+  if (currentIndex >= 0) state.automations.rules.splice(currentIndex, 1, rule);
+  else state.automations.rules.push(rule);
+  state.automationStudio.editingId = rule.id;
+  saveAutomationStore();
+  renderAutomationStudio();
+  toast("Automation saved and enabled", "success", 1800);
+  return true;
+}
+
+function deleteAutomationEditor() {
+  const id = state.automationStudio.editingId;
+  const index = state.automations.rules.findIndex((item) => item.id === id);
+  if (index < 0) return;
+  const [removed] = state.automations.rules.splice(index, 1);
+  saveAutomationStore();
+  closeAutomationEditor();
+  toast(`Deleted ${removed.name}`, "info", 1600);
+}
+
+function toggleAutomationRule(id) {
+  const rule = state.automations.rules.find((item) => item.id === id);
+  if (!rule) return;
+  rule.enabled = !rule.enabled;
+  rule.updatedAt = new Date().toISOString();
+  saveAutomationStore();
+  renderAutomationRuleList();
+}
+
+function renderAutomationRuleList() {
+  if (!elements.automationRuleList) return;
+  const query = elements.automationSearch.value.trim().toLocaleLowerCase();
+  const rules = state.automations.rules.filter((rule) => !query || `${rule.name} ${automationScheduleSummary(rule)}`.toLocaleLowerCase().includes(query));
+  elements.automationRuleList.textContent = "";
+  elements.automationRuleEmpty.hidden = rules.length > 0;
+  for (const rule of rules) {
+    const row = document.createElement("div");
+    row.className = `automation-rule-row${rule.id === state.automationStudio.editingId ? " is-selected" : ""}`;
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "automation-rule-open";
+    open.dataset.automationEdit = rule.id;
+    const copy = document.createElement("span");
+    copy.className = "automation-rule-copy";
+    const name = document.createElement("strong");
+    name.textContent = rule.name;
+    const summary = document.createElement("span");
+    summary.textContent = `${automationScheduleSummary(rule)} · ${automationNextRunLabel(rule)}`;
+    const lastOutcome = automationLastOutcome(rule);
+    const outcome = document.createElement("span");
+    outcome.className = "automation-rule-outcome";
+    outcome.dataset.status = lastOutcome.status;
+    outcome.textContent = lastOutcome.label;
+    copy.append(name, summary, outcome);
+    open.append(copy);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = `automation-rule-state${rule.enabled ? " is-enabled" : ""}`;
+    toggle.dataset.automationToggle = rule.id;
+    toggle.setAttribute("aria-pressed", String(rule.enabled));
+    toggle.setAttribute("aria-label", `${rule.enabled ? "Disable" : "Enable"} ${rule.name}`);
+    toggle.textContent = rule.enabled ? "On" : "Off";
+    row.append(open, toggle);
+    elements.automationRuleList.append(row);
+  }
+}
+
+function renderAutomationRoutes() {
+  if (!elements.automationRouteList) return;
+  const links = [...state.terminalLinks.entries()];
+  elements.automationRouteList.textContent = "";
+  elements.automationRouteEmpty.hidden = links.length > 0;
+  for (const [key, link] of links) {
+    const source = state.terminals.get(link.sourceId);
+    const target = state.terminals.get(link.targetId);
+    const row = document.createElement("div");
+    row.className = "automation-route-row";
+    row.innerHTML = '<i class="automation-route-direction" data-lucide="arrow-right"></i>';
+    const copy = document.createElement("div");
+    copy.className = "automation-route-copy";
+    const title = document.createElement("strong");
+    title.textContent = `${source?.titleInput.value || link.sourceTitle || "Producer"} → ${target?.titleInput.value || link.targetTitle || "Consumer"}`;
+    const meta = document.createElement("span");
+    meta.textContent = link.handoffEnabled ? "Handoffs enabled" : "Handoffs disabled";
+    copy.append(title, meta);
+    const toggle = document.createElement("label");
+    toggle.className = "automation-route-toggle";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = link.handoffEnabled;
+    checkbox.dataset.automationRouteToggle = key;
+    checkbox.setAttribute("aria-label", `${link.handoffEnabled ? "Disable" : "Enable"} handoffs for ${title.textContent}`);
+    const toggleLabel = document.createElement("span");
+    toggleLabel.textContent = "Handoffs";
+    toggle.append(checkbox, toggleLabel);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-button";
+    remove.dataset.automationUnlink = key;
+    remove.title = "Remove route";
+    remove.setAttribute("aria-label", `Remove route ${title.textContent}`);
+    remove.innerHTML = '<i data-lucide="unlink-2"></i>';
+    row.append(copy, toggle, remove);
+    elements.automationRouteList.append(row);
+  }
+  refreshIcons(elements.automationRouteList);
+}
+
+function renderAutomationActivity() {
+  if (!elements.automationActivityList) return;
+  const filter = elements.automationActivityFilter.value;
+  const entries = [...state.automations.history].reverse().filter((entry) => {
+    if (filter === "schedules") return Boolean(entry.automationId);
+    if (filter === "handoffs") return !entry.automationId;
+    if (filter === "attention") return ["blocked", "failed", "skipped"].includes(entry.status);
+    return true;
+  });
+  elements.automationActivityList.textContent = "";
+  elements.automationActivityEmpty.hidden = entries.length > 0;
+  elements.automationActivityEmpty.textContent = state.automations.history.length
+    ? "No activity matches this filter."
+    : "No automation activity yet.";
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "automation-activity-row";
+    row.dataset.status = entry.status;
+    const tone = document.createElement("i");
+    tone.className = "automation-activity-tone";
+    const copy = document.createElement("div");
+    copy.className = "automation-activity-copy";
+    const title = document.createElement("strong");
+    title.textContent = entry.title;
+    const detail = document.createElement("span");
+    detail.textContent = entry.detail || entry.status;
+    copy.append(title, detail);
+    const time = document.createElement("time");
+    time.className = "automation-activity-time";
+    time.dateTime = entry.occurredAt;
+    time.textContent = new Date(entry.occurredAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    row.append(tone, copy, time);
+    elements.automationActivityList.append(row);
+  }
+}
+
+function switchAutomationView(view) {
+  const normalized = ["routes", "activity"].includes(view) ? view : "schedules";
+  state.automationStudio.view = normalized;
+  for (const tab of elements.automationOverlay.querySelectorAll("[data-automation-view]")) {
+    tab.setAttribute("aria-selected", String(tab.dataset.automationView === normalized));
+  }
+  for (const panel of elements.automationOverlay.querySelectorAll("[data-automation-panel]")) {
+    panel.hidden = panel.dataset.automationPanel !== normalized;
+  }
+  if (normalized === "routes") renderAutomationRoutes();
+  if (normalized === "activity") renderAutomationActivity();
+}
+
+function renderAutomationStudio() {
+  elements.automationPause.setAttribute("aria-pressed", String(state.automations.paused));
+  elements.automationPause.querySelector("span").textContent = state.automations.paused ? "Resume" : "Pause";
+  elements.automationHistoryLimit.value = String(automationHistoryLimit());
+  renderAutomationRuleList();
+  renderAutomationRoutes();
+  renderAutomationActivity();
+  updateAutomationBadge();
+}
+
+function openAutomationStudio(view = "schedules") {
+  closePalette();
+  hideContextMenu();
+  state.automationStudio.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  elements.appShell.inert = true;
+  elements.automationOverlay.hidden = false;
+  switchAutomationView(view);
+  renderAutomationStudio();
+  window.requestAnimationFrame(() => elements.automationOverlay.classList.add("is-open"));
+  elements.automationOverlay.querySelector(`[data-automation-view="${state.automationStudio.view}"]`)?.focus();
+}
+
+function closeAutomationStudio({ restoreFocus = true } = {}) {
+  const returnFocus = state.automationStudio.returnFocus;
+  state.automationStudio.returnFocus = null;
+  elements.automationOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    if (elements.automationOverlay.classList.contains("is-open")) return;
+    elements.automationOverlay.hidden = true;
+    elements.appShell.inert = false;
+    if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  }, 150);
+}
+
+function automationFocusableElements() {
+  return [...elements.automationOverlay.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )].filter((element) => !element.hidden && element.offsetParent !== null);
+}
+
+function bindAutomationStudio() {
+  if (!elements.automationOverlay) return;
+  elements.automationToggle.addEventListener("click", () => openAutomationStudio());
+  elements.automationClose.addEventListener("click", () => closeAutomationStudio());
+  elements.automationPause.addEventListener("click", () => {
+    state.automations.paused = !state.automations.paused;
+    saveAutomationStore();
+    renderAutomationStudio();
+  });
+  for (const tab of elements.automationOverlay.querySelectorAll("[data-automation-view]")) {
+    tab.addEventListener("click", () => switchAutomationView(tab.dataset.automationView));
+  }
+  for (const button of elements.automationEditor.querySelectorAll("[data-schedule-mode]")) {
+    button.addEventListener("click", () => setAutomationScheduleMode(button.dataset.scheduleMode));
+  }
+  for (const button of elements.automationDays.querySelectorAll("[data-day]")) {
+    button.addEventListener("click", () => {
+      button.setAttribute("aria-pressed", String(button.getAttribute("aria-pressed") !== "true"));
+      updateAutomationPreview();
+    });
+  }
+  elements.automationRuleList.addEventListener("click", (event) => {
+    const edit = event.target.closest("[data-automation-edit]");
+    const toggle = event.target.closest("[data-automation-toggle]");
+    if (edit) openAutomationEditor(edit.dataset.automationEdit);
+    if (toggle) toggleAutomationRule(toggle.dataset.automationToggle);
+  });
+  elements.automationRouteList.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-automation-unlink]");
+    if (remove) removeTerminalLink(remove.dataset.automationUnlink);
+  });
+  elements.automationRouteList.addEventListener("change", (event) => {
+    const toggle = event.target.closest("[data-automation-route-toggle]");
+    if (toggle) setTerminalLinkHandoffEnabled(toggle.dataset.automationRouteToggle, toggle.checked);
+  });
+  elements.automationSearch.addEventListener("input", renderAutomationRuleList);
+  elements.automationNew.addEventListener("click", () => openAutomationEditor());
+  elements.automationWelcomeNew.addEventListener("click", () => openAutomationEditor());
+  elements.automationActionAdd.addEventListener("click", () => createAutomationActionRow());
+  elements.automationEditor.addEventListener("submit", saveAutomationEditor);
+  elements.automationEditor.addEventListener("input", updateAutomationPreview);
+  elements.automationCancel.addEventListener("click", closeAutomationEditor);
+  elements.automationDelete.addEventListener("click", deleteAutomationEditor);
+  elements.automationRunNow.addEventListener("click", () => {
+    const rule = readAutomationEditorRule(state.automations.rules.find((item) => item.id === state.automationStudio.editingId));
+    if (rule) runAutomationRule(rule, { manual: true });
+  });
+  elements.automationHistoryLimit.addEventListener("change", () => {
+    const value = Number(elements.automationHistoryLimit.value);
+    state.settings.automationHistoryLimit = Number.isFinite(value) && value >= 0 ? Math.round(value) : defaultSettings.automationHistoryLimit;
+    saveSettings();
+    saveAutomationStore();
+    renderAutomationActivity();
+  });
+  elements.automationActivityFilter.addEventListener("change", renderAutomationActivity);
+  elements.automationActivityClear.addEventListener("click", () => {
+    state.automations.history = [];
+    saveAutomationStore();
+    renderAutomationActivity();
+  });
+  elements.automationOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.automationOverlay) closeAutomationStudio();
+  });
+  elements.automationOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAutomationStudio();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = automationFocusableElements();
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== AUTOMATIONS_STORAGE_KEY) return;
+    state.automations = loadAutomationStore(automationHistoryLimit());
+    renderAutomationStudio();
+  });
+  renderAutomationStudio();
+  startAutomationRunner();
+}
+
+async function acquireAutomationRunner() {
+  const response = await requestBridge({ type: "automationLease", action: "acquire", ttlMs: 4000 }, { timeout: 3000 });
+  return response?.type === "automationLease" && response.acquired === true;
+}
+
+async function claimAutomationOccurrence(ruleId, dueAt) {
+  const response = await requestBridge({
+    type: "automationLease",
+    action: "claimOccurrence",
+    ruleId,
+    dueAt: dueAt.toISOString()
+  }, { timeout: 3000 });
+  return response?.type === "automationLease" && response.occurrenceClaimed === true;
+}
+
+function releaseAutomationRunner() {
+  sendBridge({ type: "automationLease", action: "release" });
+}
+
+function automationDueAt(rule) {
+  const anchor = new Date(rule.lastRunAt || rule.createdAt);
+  if (!Number.isFinite(anchor.getTime())) return null;
+  return automationApi.nextScheduledAt(
+    { ...rule, createdAt: anchor.toISOString(), lastRunAt: null },
+    new Date(anchor.getTime() + 1)
+  );
+}
+
+function resolveAutomationTerminal(targetName) {
+  const normalized = automationApi.terminalName(targetName);
+  const matches = [...state.terminals.values()].filter((terminal) => (
+    terminal.status !== "exited" && terminal.status !== "error"
+      && automationApi.terminalName(terminal.titleInput.value) === normalized
+  ));
+  if (matches.length === 1) return { terminal: matches[0] };
+  return { error: matches.length > 1 ? `More than one live terminal is named ${targetName}` : `No live terminal is named ${targetName}` };
+}
+
+function pendingAutomationStage(terminal) {
+  return state.automations.pendingStages.find((entry) => entry.targetId === terminal.id) || null;
+}
+
+function queueAutomationStage(terminal, command, rule, options = {}) {
+  const payload = safeTerminalCommand(command);
+  if (!payload) return false;
+  const occurrenceKey = typeof options.occurrenceKey === "string" ? options.occurrenceKey.slice(0, 320) : "";
+  const existing = occurrenceKey
+    ? state.automations.pendingStages.find((entry) => entry.occurrenceKey === occurrenceKey)
+    : null;
+  if (existing) {
+    saveAutomationStore();
+    scheduleTerminalHandoffDelivery(terminal, 150);
+    return true;
+  }
+  state.automations.pendingStages.push({
+    automationId: rule.id,
+    createdAt: new Date().toISOString(),
+    id: createId(),
+    occurrenceKey,
+    payload,
+    targetId: terminal.id,
+    title: rule.name
+  });
+  saveAutomationStore();
+  scheduleTerminalHandoffDelivery(terminal, 150);
+  return true;
+}
+
+function runAutomationRule(rule, options = {}) {
+  let queued = 0;
+  for (const [actionIndex, action] of rule.actions.entries()) {
+    const resolution = resolveAutomationTerminal(action.targetName);
+    if (!resolution.terminal) {
+      addAutomationHistory("blocked", rule.name, resolution.error, rule.id);
+      continue;
+    }
+    const occurrenceKey = options.occurrenceAt ? `${rule.id}:${options.occurrenceAt}:${actionIndex}` : "";
+    const accepted = action.submit
+      ? queueAutomaticTerminalCommand(resolution.terminal, action.command, { occurrenceKey })
+      : queueAutomationStage(resolution.terminal, action.command, rule, { occurrenceKey });
+    if (accepted) {
+      queued += 1;
+      addAutomationHistory(
+        "queued",
+        rule.name,
+        `${action.submit ? "Run" : "Stage"} in ${resolution.terminal.titleInput.value}`,
+        rule.id
+      );
+    } else {
+      addAutomationHistory("failed", rule.name, `Could not queue action for ${action.targetName}`, rule.id);
+    }
+  }
+  if (options.manual && queued) toast(`Queued ${queued} automation action${queued === 1 ? "" : "s"}`, "success", 1800);
+  return queued;
+}
+
+async function tickAutomationSchedules(now = new Date()) {
+  const nowMs = now.getTime();
+  if (state.automationRuntime.ticking) return false;
+  state.automationRuntime.ticking = true;
+  try {
+    if (!await acquireAutomationRunner()) {
+      state.automationRuntime.lastTickAt = nowMs;
+      return false;
+    }
+    if (state.socketReady && nowMs - state.automationRuntime.lastMessageRefresh >= 5000) {
+      state.automationRuntime.lastMessageRefresh = nowMs;
+      requestTerminalMessages();
+    }
+    if (state.automations.paused) {
+      state.automationRuntime.lastTickAt = nowMs;
+      return false;
+    }
+
+    let changed = false;
+    const dueRules = [];
+    const wokeAfterGap = nowMs - state.automationRuntime.lastTickAt > 5000;
+    for (const rule of state.automations.rules) {
+      if (!rule.enabled) continue;
+      const due = automationDueAt(rule);
+      if (!due || due.getTime() > nowMs) continue;
+      if (!await claimAutomationOccurrence(rule.id, due)) continue;
+      const missedBeforeThisRenderer = due.getTime() < state.automationRuntime.lastTickAt;
+      const shouldSkip = rule.trigger.catchUp !== "once" && (missedBeforeThisRenderer || (wokeAfterGap && due.getTime() < nowMs - 5000));
+      dueRules.push({
+        id: rule.id,
+        occurrenceAt: due.toISOString(),
+        runAt: (shouldSkip || wokeAfterGap ? now : due).toISOString(),
+        skip: shouldSkip
+      });
+      changed = true;
+    }
+    if (changed) {
+      for (const dueRule of dueRules) {
+        const rule = state.automations.rules.find((item) => item.id === dueRule.id);
+        if (!rule) continue;
+        rule.lastRunAt = dueRule.runAt;
+        rule.updatedAt = now.toISOString();
+        if (dueRule.skip) addAutomationHistory("skipped", rule.name, "Missed occurrence skipped", rule.id);
+        else runAutomationRule(rule, { occurrenceAt: dueRule.occurrenceAt });
+      }
+      renderAutomationRuleList();
+    }
+    state.automationRuntime.lastTickAt = nowMs;
+    return changed;
+  } finally {
+    state.automationRuntime.ticking = false;
+  }
+}
+
+function scheduleAutomationTick() {
+  window.clearTimeout(state.automationRuntime.timer);
+  state.automationRuntime.timer = window.setTimeout(async () => {
+    state.automationRuntime.timer = 0;
+    await tickAutomationSchedules(new Date());
+    scheduleAutomationTick();
+  }, 1000);
+}
+
+function startAutomationRunner() {
+  state.automationRuntime.lastTickAt = Date.now();
+  scheduleAutomationTick();
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) void tickAutomationSchedules(new Date());
+  });
+}
+
+function stopAutomationRunner() {
+  window.clearTimeout(state.automationRuntime.timer);
+  state.automationRuntime.timer = 0;
+  releaseAutomationRunner();
+}
+
+function terminalHandoffRows(terminal) {
+  const buffer = terminal?.term?.buffer?.active;
+  if (!buffer) return [];
+  const maxChars = Math.max(1024, Number(state.settings.terminalMessageMaxKb) * 1024);
+  const rows = [];
+  let chars = 0;
+  for (let row = buffer.length - 1; row >= 0 && chars < maxChars; row -= 1) {
+    const line = readBufferLine(buffer, row);
+    chars += line.length + 1;
+    rows.unshift({ row, text: line });
+  }
+  return rows;
+}
+
+function scheduleTerminalHandoffScan(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
+  if (!terminal || terminal.status !== "live") return;
+  window.clearTimeout(terminal.handoffScanTimer);
+  terminal.handoffScanTimer = window.setTimeout(() => {
+    terminal.handoffScanTimer = 0;
+    scanTerminalHandoff(terminal);
+  }, delay);
+}
+
+function linkedHandoffTarget(source, requestedName) {
+  const normalizedName = automationApi.terminalName(requestedName);
+  const matches = [...state.terminalLinks.values()]
+    .filter((link) => link.handoffEnabled && link.sourceId === source.id)
+    .map((link) => state.terminals.get(link.targetId))
+    .filter((terminal) => terminal?.status === "live"
+      && automationApi.terminalName(terminal.titleInput.value) === normalizedName);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function uniqueHandoffTerminalTitle(source) {
+  const base = `Handoff from ${source.titleInput.value || "Copilot"}`;
+  let title = base;
+  let index = 2;
+  const existing = new Set([...state.terminals.values()].map((terminal) => automationApi.terminalName(terminal.titleInput.value)));
+  while (existing.has(automationApi.terminalName(title))) title = `${base} ${index++}`;
+  return title;
+}
+
+function openHandoffCopilotTerminal(source, payload) {
+  return addTerminal({
+    cwd: source.cwd,
+    pageId: source.pageId,
+    pendingCopilotYolo: true,
+    pendingHandoff: { payload, requireCopilot: true, sourceId: source.id },
+    reveal: true,
+    shell: "pwsh",
+    title: uniqueHandoffTerminalTitle(source)
+  });
+}
+
+async function sendTerminalHandoff(source, target, payload) {
+  if (source?.status !== "live" || target?.status !== "live") return false;
+  const normalized = terminalMessaging.normalizeMessageRequest({
+    delivery: "whenReady",
+    kind: "task",
+    path: "",
+    persist: false,
+    sourceId: source.id,
+    status: "",
+    targetId: target.id,
+    text: payload
+  }, Number(state.settings.terminalMessageMaxKb) * 1024);
+  if (!normalized.ok) {
+    addAutomationHistory("failed", "Handoff rejected", normalized.error);
+    return false;
+  }
+  const response = await requestBridge({ type: "messageSend", ...normalized.value }, { timeout: 12000 });
+  if (!response || response.type === "messageError") {
+    addAutomationHistory("failed", "Handoff failed", response?.message || "Bridge unavailable");
+    return false;
+  }
+  addAutomationHistory("queued", `${source.titleInput.value} → ${target.titleInput.value}`, "Waiting for the consumer prompt");
+  scheduleTerminalHandoffDelivery(target, 150);
+  return true;
+}
+
+function scanTerminalHandoff(terminal) {
+  if (!terminal || state.automations.paused || terminal.status !== "live") return false;
+  const readiness = terminalExecutionReadiness(terminal);
+  if (readiness.mode !== "copilot" || !readiness.ready) return false;
+  const handoff = automationApi.extractLatestHandoff(terminalHandoffRows(terminal), terminal.lastHandoffRow);
+  if (!handoff) return false;
+  terminal.lastHandoffRow = handoff.markerRow;
+
+  if (!handoff.targetName) {
+    openHandoffCopilotTerminal(terminal, handoff.payload);
+    addAutomationHistory("queued", `New handoff from ${terminal.titleInput.value}`, "Opening a Copilot YOLO consumer");
+    return true;
+  }
+
+  const target = linkedHandoffTarget(terminal, handoff.targetName);
+  if (!target) {
+    const detail = `No unique connected consumer named ${handoff.targetName}`;
+    addAutomationHistory("blocked", `Handoff from ${terminal.titleInput.value}`, detail);
+    toast(detail, "info", 3000);
+    return false;
+  }
+  sendTerminalHandoff(terminal, target, handoff.payload);
+  return true;
+}
+
+function readinessHandoffMessage(terminal) {
+  return [...state.terminalMessages.values()]
+    .filter((message) => message.delivery === "whenReady" && message.targetId === terminal.id && message.state === "pending")
+    .sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))[0] || null;
+}
+
+function scheduleTerminalHandoffDelivery(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
+  window.clearTimeout(terminal?.handoffDeliveryTimer);
+  if (!terminal || terminal.status !== "live" || (!readinessHandoffMessage(terminal) && !pendingAutomationStage(terminal))) return;
+  terminal.handoffDeliveryTimer = window.setTimeout(() => {
+    terminal.handoffDeliveryTimer = 0;
+    dispatchTerminalHandoff(terminal);
+  }, delay);
+}
+
+function scheduleAllTerminalHandoffDeliveries() {
+  for (const terminal of state.terminals.values()) scheduleTerminalHandoffDelivery(terminal, 150);
+}
+
+function handoffPastePayload(payload, mode) {
+  const value = String(payload || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+    .trim();
+  if (!value) return "";
+  return mode === "copilot" ? value : sanitizeTerminalCommand(value);
+}
+
+async function dispatchTerminalHandoff(terminal) {
+  if (!terminal || terminal.handoffDispatching || state.automations.paused) return false;
+  const message = readinessHandoffMessage(terminal);
+  const scheduledStage = pendingAutomationStage(terminal);
+  if (!message && !scheduledStage) return false;
+  const readiness = terminalExecutionReadiness(terminal);
+  if (terminal.handoffRequiresCopilot && readiness.mode !== "copilot") {
+    scheduleTerminalHandoffDelivery(terminal, AUTO_QUEUE_SETTLE_MS);
+    return false;
+  }
+  if (!readiness.ready) {
+    scheduleTerminalHandoffDelivery(terminal, AUTO_QUEUE_SETTLE_MS);
+    return false;
+  }
+  terminal.handoffDispatching = true;
+  try {
+    if (!message) {
+      const payload = handoffPastePayload(scheduledStage.payload, readiness.mode);
+      if (!payload || !pasteIntoSpecificTerminal(terminal, payload)) {
+        addAutomationHistory("failed", scheduledStage.title, "The staged action could not be inserted", scheduledStage.automationId);
+        return false;
+      }
+      state.automations.pendingStages = state.automations.pendingStages.filter((entry) => entry.id !== scheduledStage.id);
+      saveAutomationStore();
+      addAutomationHistory("staged", scheduledStage.title, `Staged in ${terminal.titleInput.value} without Enter`, scheduledStage.automationId);
+      return true;
+    }
+    const claim = await requestBridge({ type: "messageAction", id: message.id, action: "claim" }, { timeout: 12000 });
+    if (!claim || claim.type === "messageError" || claim.state !== "claimed") return false;
+    const claimedMessage = normalizeIncomingTerminalMessage(claim.message || message);
+    const payload = handoffPastePayload(terminalMessageContent(claimedMessage), readiness.mode);
+    const pasteData = payload ? capturePasteForSpecificTerminal(terminal, payload) : "";
+    if (!pasteData) {
+      await requestBridge({ type: "messageAction", id: message.id, action: "release" }, { timeout: 12000 });
+      addAutomationHistory("failed", `Handoff to ${terminal.titleInput.value}`, "The payload could not be staged");
+      return false;
+    }
+    const delivered = await requestBridge({
+      type: "messageAction",
+      id: message.id,
+      action: "deliver",
+      data: pasteData
+    }, { timeout: 12000 });
+    if (!delivered || delivered.type === "messageError") {
+      addAutomationHistory("failed", `Handoff to ${terminal.titleInput.value}`, "The bridge could not confirm atomic staging");
+      return false;
+    }
+    state.terminalMessages.delete(message.id);
+    terminal.handoffRequiresCopilot = false;
+    updateTerminalMessageIndicators();
+    addAutomationHistory("staged", `Handoff staged in ${terminal.titleInput.value}`, "Review the input and press Enter when ready");
+    toast(`Handoff staged in ${terminal.titleInput.value}`, "success", 2200);
+    return true;
+  } finally {
+    terminal.handoffDispatching = false;
+    scheduleTerminalHandoffDelivery(terminal, 150);
+  }
+}
+
 /* ---------------- Terminal messaging --------------- */
 
 function terminalLinkKey(sourceId, targetId) {
@@ -10160,8 +11488,11 @@ function loadTerminalLinks() {
           || sourceId === targetId) continue;
       const link = {
         createdAt: typeof value.createdAt === "string" ? value.createdAt.slice(0, 64) : new Date().toISOString(),
+        handoffEnabled: value.handoffEnabled === true,
         sourceId,
-        targetId
+        sourceTitle: typeof value.sourceTitle === "string" ? value.sourceTitle.slice(0, 160) : "",
+        targetId,
+        targetTitle: typeof value.targetTitle === "string" ? value.targetTitle.slice(0, 160) : ""
       };
       links.set(terminalLinkKey(sourceId, targetId), link);
     }
@@ -10210,6 +11541,10 @@ function pruneTerminalLinks() {
 function addSelectedTerminalLink() {
   const sourceId = elements.messageSource.value;
   const targetId = elements.messageTarget.value;
+  return addTerminalLink(sourceId, targetId, { handoffEnabled: false });
+}
+
+function addTerminalLink(sourceId, targetId, options = {}) {
   const source = state.terminals.get(sourceId);
   const target = state.terminals.get(targetId);
   if (source?.status !== "live" || target?.status !== "live" || sourceId === targetId) {
@@ -10218,14 +11553,32 @@ function addSelectedTerminalLink() {
   }
   const key = terminalLinkKey(sourceId, targetId);
   if (state.terminalLinks.has(key)) {
+    const existing = state.terminalLinks.get(key);
+    if (options.handoffEnabled === true && !existing.handoffEnabled) {
+      existing.handoffEnabled = true;
+      existing.sourceTitle = source.titleInput.value || existing.sourceTitle;
+      existing.targetTitle = target.titleInput.value || existing.targetTitle;
+      saveTerminalLinks();
+      updateTerminalConnectionViews();
+      updateMessageLinkAction();
+      toast("Handoffs enabled for this route", "success", 1800);
+      return true;
+    }
     toast("Those terminals are already linked in that direction", "info", 2200);
     return false;
   }
-  state.terminalLinks.set(key, { createdAt: new Date().toISOString(), sourceId, targetId });
+  state.terminalLinks.set(key, {
+    createdAt: new Date().toISOString(),
+    handoffEnabled: options.handoffEnabled === true,
+    sourceId,
+    sourceTitle: source.titleInput.value || "Producer",
+    targetId,
+    targetTitle: target.titleInput.value || "Consumer"
+  });
   saveTerminalLinks();
   updateTerminalConnectionViews();
   updateMessageLinkAction();
-  toast("Terminal link created", "success", 1600);
+  toast(options.handoffEnabled ? "Handoff route created" : "Terminal link created", "success", 1600);
   return true;
 }
 
@@ -10235,6 +11588,123 @@ function removeTerminalLink(key) {
   updateTerminalConnectionViews();
   updateMessageLinkAction();
   toast("Terminal link removed", "info", 1600);
+  return true;
+}
+
+function setTerminalLinkHandoffEnabled(key, enabled) {
+  const link = state.terminalLinks.get(key);
+  if (!link || link.handoffEnabled === enabled) return false;
+  link.handoffEnabled = enabled;
+  saveTerminalLinks();
+  updateTerminalConnectionViews();
+  toast(`Handoffs ${enabled ? "enabled" : "disabled"} for this route`, "success", 1600);
+  return true;
+}
+
+function terminalHandoffGrip(terminal, type) {
+  return terminal?.pane?.querySelector(`[data-handoff-grip="${type}"]`) || null;
+}
+
+function updateTerminalHandoffGripStates() {
+  const sourceId = state.terminalConnections.linkSourceId;
+  elements.host.classList.toggle("is-handoff-linking", Boolean(sourceId));
+  for (const terminal of state.terminals.values()) {
+    const output = terminalHandoffGrip(terminal, "output");
+    const input = terminalHandoffGrip(terminal, "input");
+    const hasRoute = [...state.terminalLinks.values()].some((link) => link.handoffEnabled && link.sourceId === terminal.id);
+    output?.classList.toggle("has-route", hasRoute);
+    output?.classList.toggle("is-linking", terminal.id === sourceId);
+    output?.setAttribute("aria-pressed", String(terminal.id === sourceId));
+    input?.classList.toggle("is-drop-target", terminal.id === state.terminalConnections.linkTargetId);
+    input?.toggleAttribute("disabled", Boolean(sourceId && terminal.id === sourceId));
+  }
+}
+
+function clearTerminalHandoffLinking() {
+  state.terminalConnections.linkMoved = false;
+  state.terminalConnections.linkPointerId = null;
+  state.terminalConnections.linkPoint = null;
+  state.terminalConnections.linkSourceId = null;
+  state.terminalConnections.linkTargetId = null;
+  updateTerminalHandoffGripStates();
+  scheduleTerminalConnections();
+}
+
+function beginTerminalHandoffLinking(sourceId, event = null) {
+  const source = state.terminals.get(sourceId);
+  if (source?.status !== "live") {
+    toast("The producer terminal must be live", "info", 1800);
+    return false;
+  }
+  state.terminalConnections.linkMoved = false;
+  state.terminalConnections.linkPointerId = Number.isInteger(event?.pointerId) ? event.pointerId : null;
+  state.terminalConnections.linkPoint = event ? { x: event.clientX, y: event.clientY } : null;
+  state.terminalConnections.linkSourceId = sourceId;
+  state.terminalConnections.linkTargetId = null;
+  updateTerminalHandoffGripStates();
+  scheduleTerminalConnections();
+  return true;
+}
+
+function handoffTargetAtPoint(x, y) {
+  const grip = document.elementFromPoint(x, y)?.closest?.('[data-handoff-grip="input"]');
+  const terminalId = grip?.closest(".terminal-pane")?.dataset.id;
+  return terminalId && terminalId !== state.terminalConnections.linkSourceId
+    && state.terminals.get(terminalId)?.status === "live"
+    ? terminalId
+    : null;
+}
+
+function completeTerminalHandoffLink(targetId) {
+  const sourceId = state.terminalConnections.linkSourceId;
+  if (!sourceId || !targetId || sourceId === targetId) return false;
+  const created = addTerminalLink(sourceId, targetId, { handoffEnabled: true });
+  clearTerminalHandoffLinking();
+  return created;
+}
+
+function bindTerminalHandoffGrips(terminal) {
+  const output = terminalHandoffGrip(terminal, "output");
+  const input = terminalHandoffGrip(terminal, "input");
+  if (!output || !input) return;
+  output.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    beginTerminalHandoffLinking(terminal.id, event);
+  });
+  output.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.terminalConnections.linkSourceId === terminal.id) return;
+    beginTerminalHandoffLinking(terminal.id);
+  });
+  input.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    completeTerminalHandoffLink(terminal.id);
+  });
+  updateTerminalHandoffGripStates();
+}
+
+function renderTerminalHandoffPreview(stageRect) {
+  const source = state.terminals.get(state.terminalConnections.linkSourceId);
+  const sourceGrip = terminalHandoffGrip(source, "output");
+  const point = state.terminalConnections.linkPoint;
+  if (!sourceGrip || !point) return false;
+  const target = state.terminals.get(state.terminalConnections.linkTargetId);
+  const targetGrip = terminalHandoffGrip(target, "input");
+  const targetRect = targetGrip?.getBoundingClientRect() || {
+    bottom: point.y + 1,
+    left: point.x,
+    right: point.x + 1,
+    top: point.y
+  };
+  const geometry = connectorPathGeometry(sourceGrip.getBoundingClientRect(), targetRect, stageRect, 0, 0);
+  elements.terminalConnectionPaths.append(createConnectionSvgElement("path", {
+    class: "terminal-connector-path is-preview",
+    d: geometry.d
+  }));
   return true;
 }
 
@@ -10441,12 +11911,14 @@ function renderWorkspaceTerminalConnections() {
     const source = state.terminals.get(route.sourceId);
     const target = state.terminals.get(route.targetId);
     if (!source?.pane || !target?.pane || source.pane.offsetParent === null || target.pane.offsetParent === null) continue;
+    const sourceAnchor = terminalHandoffGrip(source, "output") || source.pane;
+    const targetAnchor = terminalHandoffGrip(target, "input") || target.pane;
     const geometry = connectorPathGeometry(
-      source.pane.getBoundingClientRect(),
-      target.pane.getBoundingClientRect(),
+      sourceAnchor.getBoundingClientRect(),
+      targetAnchor.getBoundingClientRect(),
       stageRect,
       route.offset,
-      24
+      0
     );
     const path = createConnectionSvgElement("path", {
       class: `terminal-connector-path is-${route.type}`,
@@ -10482,6 +11954,7 @@ function renderWorkspaceTerminalConnections() {
     }
     rendered += 1;
   }
+  if (renderTerminalHandoffPreview(stageRect)) rendered += 1;
   overlay.hidden = rendered === 0;
   if (activeRouteId && !activeRouteRendered) hideTerminalConnectorAction();
 }
@@ -10628,6 +12101,8 @@ function trackTerminalConnectionAnimation(duration) {
 function updateTerminalConnectionViews() {
   scheduleTerminalConnections();
   renderMessageConnections();
+  renderAutomationRoutes();
+  updateTerminalHandoffGripStates();
 }
 
 function updateMessageLinkAction() {
@@ -10662,6 +12137,33 @@ function bindTerminalConnectionGeometry() {
     updateTerminalConnectionViews();
   });
   window.addEventListener("resize", scheduleTerminalConnections);
+  window.addEventListener("pointermove", (event) => {
+    if (!state.terminalConnections.linkSourceId || state.terminalConnections.linkPointerId == null) return;
+    if (event.pointerId !== state.terminalConnections.linkPointerId) return;
+    const previous = state.terminalConnections.linkPoint;
+    if (previous && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) > 3) {
+      state.terminalConnections.linkMoved = true;
+    }
+    state.terminalConnections.linkPoint = { x: event.clientX, y: event.clientY };
+    state.terminalConnections.linkTargetId = handoffTargetAtPoint(event.clientX, event.clientY);
+    updateTerminalHandoffGripStates();
+    scheduleTerminalConnections();
+  });
+  window.addEventListener("pointerup", (event) => {
+    if (!state.terminalConnections.linkSourceId || state.terminalConnections.linkPointerId == null) return;
+    if (event.pointerId !== state.terminalConnections.linkPointerId) return;
+    const targetId = handoffTargetAtPoint(event.clientX, event.clientY) || state.terminalConnections.linkTargetId;
+    if (targetId) completeTerminalHandoffLink(targetId);
+    else if (state.terminalConnections.linkMoved) clearTerminalHandoffLinking();
+    else {
+      state.terminalConnections.linkPointerId = null;
+      state.terminalConnections.linkPoint = null;
+      scheduleTerminalConnections();
+    }
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.terminalConnections.linkSourceId) clearTerminalHandoffLinking();
+  });
   scheduleTerminalConnections();
 }
 
@@ -10728,6 +12230,7 @@ function normalizeIncomingTerminalMessage(value) {
   if (typeof value.sourceId !== "string" || typeof value.targetId !== "string") return null;
   return {
     createdAt: typeof value.createdAt === "string" ? value.createdAt : new Date().toISOString(),
+    delivery: value.delivery === "whenReady" ? "whenReady" : "review",
     id: value.id,
     kind: value.kind,
     path: typeof value.path === "string" ? value.path : "",
@@ -10749,6 +12252,7 @@ function ingestTerminalMessage(value, notify = true) {
   state.terminalMessages.set(message.id, message);
   updateTerminalMessageIndicators();
   renderTerminalMessages();
+  if (message.delivery === "whenReady") scheduleTerminalHandoffDelivery(state.terminals.get(message.targetId), 150);
   if (notify && isNew && state.terminals.has(message.targetId)) {
     toast(`Message context ${message.sourceTitle} to ${message.targetTitle}`, "info", 2800);
   }
@@ -10788,7 +12292,7 @@ function renderTerminalMessages() {
     copy.className = "terminal-message-copy";
     const meta = document.createElement("span");
     meta.className = "terminal-message-meta";
-    meta.textContent = `Context: ${message.sourceTitle} \u2192 ${message.targetTitle} \u00b7 ${message.kind} \u00b7 ${artifactTimeLabel(message.createdAt)}`;
+    meta.textContent = `Context: ${message.sourceTitle} \u2192 ${message.targetTitle} \u00b7 ${message.kind}${message.delivery === "whenReady" ? " · waiting for ready" : ""} \u00b7 ${artifactTimeLabel(message.createdAt)}`;
     const content = document.createElement("div");
     content.className = `terminal-message-content${message.kind === "path" ? " terminal-message-path" : ""}`;
     content.textContent = terminalMessageContent(message);
@@ -10799,9 +12303,11 @@ function renderTerminalMessages() {
     const insert = document.createElement("button");
     insert.type = "button";
     insert.dataset.messageAction = "insert";
-    insert.textContent = "Insert";
-    insert.title = "Insert into the target terminal without pressing Enter";
-    insert.disabled = state.terminals.get(message.targetId)?.status !== "live";
+    insert.textContent = message.delivery === "whenReady" ? "Queued" : "Insert";
+    insert.title = message.delivery === "whenReady"
+      ? "This handoff will be staged when the target is ready"
+      : "Insert into the target terminal without pressing Enter";
+    insert.disabled = message.delivery === "whenReady" || state.terminals.get(message.targetId)?.status !== "live";
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.dataset.messageAction = "dismiss";
@@ -12243,7 +13749,8 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         title: `${terminal.titleInput.value} copy`,
         copilotCwd: terminal.copilotCwd,
         fontSizeOverride: terminal.fontSizeOverride,
-        headerActionOverrides: { ...terminal.headerActionOverrides }
+        headerActionOverrides: { ...terminal.headerActionOverrides },
+        notificationOverrides: { ...terminal.notificationOverrides }
       })
     },
     { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
@@ -12342,10 +13849,10 @@ function buildSurfaceContextMenu() {
       run: launchCopilotCli
     },
     { separator: true },
-    { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", title: "PowerShell 7", cwd: here || undefined }) },
-    { label: "New Windows PowerShell terminal", icon: "terminal", run: () => newTerminal({ shell: "powershell", title: "Windows PowerShell", cwd: here || undefined }) },
+    { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", cwd: here || undefined }) },
+    { label: "New Windows PowerShell terminal", icon: "terminal", run: () => newTerminal({ shell: "powershell", cwd: here || undefined }) },
     { label: "New Command Prompt terminal", icon: "terminal", run: () => newTerminal({ shell: "cmd", cwd: here || undefined }) },
-    { label: "New WSL terminal", icon: "terminal", run: () => newTerminal({ shell: "wsl", title: "WSL", cwd: here || undefined }) },
+    { label: "New WSL terminal", icon: "terminal", run: () => newTerminal({ shell: "wsl", cwd: here || undefined }) },
     { separator: true },
     { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", disabled: !hasTerminals, run: openFindAll },
     { label: "Broadcast command\u2026", hint: "Ctrl+Shift+B", icon: "megaphone", disabled: !hasTerminals, run: () => toggleBroadcast(true) },
@@ -12393,6 +13900,16 @@ function buildPaneOverflowMenu(terminal) {
         run: () => runHeaderAction(terminal, action)
       };
     });
+  if (narrow) {
+    items.unshift({
+      label: "Notifications\u2026",
+      icon: "bell",
+      run: () => openTerminalNotificationFlyout(
+        terminal,
+        terminal.pane.querySelector('button[data-action="more"]')
+      )
+    });
+  }
 
   renderContextMenu(items.length > 0 ? items : [{
     info: true,
@@ -14128,6 +15645,7 @@ function showSurfaceContextMenu(x, y) {
 }
 
 function showPaneOverflowMenu(button, terminal) {
+  if (!elements.terminalNotificationFlyout.hidden) closeTerminalNotificationFlyout();
   buildPaneOverflowMenu(terminal);
   button.setAttribute("aria-expanded", "true");
   const rect = button.getBoundingClientRect();
@@ -14622,7 +16140,9 @@ function setSettingsGroupExpanded(group, expanded) {
 function updateSettingsShowAllButton() {
   const searching = Boolean(normalizeSettingsSearchText(elements.settingsSearch.value));
   const allExpanded = !searching && settingsPanelGroups.every((group) => group.expanded);
-  elements.settingsShowAll.textContent = allExpanded ? "Collapse all" : "Show all";
+  const label = allExpanded ? "Collapse all settings" : "Show all settings";
+  elements.settingsShowAll.title = label;
+  elements.settingsShowAll.setAttribute("aria-label", label);
   elements.settingsShowAll.setAttribute("aria-pressed", String(allExpanded));
 }
 

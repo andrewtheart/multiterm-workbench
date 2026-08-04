@@ -83,7 +83,7 @@ test.describe("Enhancement milestone", () => {
       commitTerminalTitle(terminal, "Renamed source terminal");
       terminal.cwd = "D:\\multiTerm";
       elements.shellSelect.value = "cmd";
-      const expectedTitle = `Command Prompt ${state.nextIndex}`;
+      const expectedTitle = nextTerminalTitle("cmd");
       showContextMenu(20, 20, terminal, "");
       return { before: state.terminals.size, expectedTitle };
     });
@@ -606,6 +606,152 @@ test.describe("Enhancement milestone", () => {
     expect(result.terminals).toBe(0);
     await page.evaluate(() => addTerminal({ title: "Enhancement test" }));
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
+  });
+
+  test("overrides notification channels for one terminal and persists them", async () => {
+    await page.evaluate(() => {
+      closeAllTerminals();
+      state.settings.notifyActivity = false;
+      state.settings.notifySilence = false;
+      state.settings.bellNotify = false;
+      saveSettings();
+      addTerminal({ title: "Inherited notifications" });
+      addTerminal({ title: "Build watcher" });
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+
+    const target = page.locator(".terminal-pane").filter({ has: page.locator(".pane-title-display", { hasText: "Build watcher" }) });
+    const bellButton = target.locator('[data-action="notifications"]');
+    if (await bellButton.isVisible()) {
+      await bellButton.click();
+    } else {
+      await target.locator('[data-action="more"]').click();
+      await page.locator("#contextMenu .ctx-item", { hasText: "Notifications" }).click();
+    }
+    const flyout = page.locator("#terminalNotificationFlyout");
+    await expect(flyout).toBeVisible();
+    await expect(page.locator("#terminalNotificationSubtitle")).toHaveText("Build watcher");
+    await expect(flyout.locator('[data-notification-channel="activity"] [data-notification-value="global"]')).toHaveAttribute("aria-checked", "true");
+
+    await flyout.locator('[data-notification-channel="activity"] [data-notification-value="on"]').click();
+    await flyout.locator('[data-notification-channel="idle"] [data-notification-value="off"]').click();
+    await flyout.locator('[data-notification-channel="bell"] [data-notification-value="on"]').click();
+    await expect(bellButton).toHaveAttribute("data-notification-state", "enabled");
+
+    const result = await page.evaluate(() => {
+      const inherited = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Inherited notifications");
+      const targetTerminal = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Build watcher");
+      const NativeNotification = window.Notification;
+      const bodies = [];
+      class NotificationRecorder {
+        static permission = "granted";
+        constructor(_title, options) { bodies.push(options.body); }
+      }
+      window.Notification = NotificationRecorder;
+      setActiveTerminal(targetTerminal.id);
+      handleBell(inherited);
+      setActiveTerminal(inherited.id);
+      targetTerminal.createdAt = performance.now() - 3000;
+      handleOutputNotifications(targetTerminal);
+      handleBell(targetTerminal);
+      window.Notification = NativeNotification;
+      return {
+        bodies,
+        overrides: targetTerminal.notificationOverrides,
+        saved: JSON.parse(localStorage.getItem("multiterm.lastSession"))
+          .find((entry) => entry.id === targetTerminal.id)?.notificationOverrides
+      };
+    });
+    expect(result.bodies).toEqual(["Activity in Build watcher", "Bell in Build watcher"]);
+    expect(result.overrides).toEqual({ activity: true, idle: false, bell: true });
+    expect(result.saved).toEqual(result.overrides);
+
+    const inheritedIdle = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()].find((entry) => entry.titleInput.value === "Build watcher");
+      state.settings.notifySilence = true;
+      terminal.notificationOverrides = { activity: true };
+      terminal.hadOutput = true;
+      terminal.silenceTimer = window.setTimeout(() => {}, 60000);
+      const timer = terminal.silenceTimer;
+      renderTerminalNotificationFlyout();
+      return { timer, terminalId: terminal.id };
+    });
+    await page.locator("#terminalNotificationReset").click();
+    expect(await page.evaluate(({ timer, terminalId }) => {
+      const terminal = state.terminals.get(terminalId);
+      return { hadOutput: terminal.hadOutput, timerPreserved: terminal.silenceTimer === timer };
+    }, inheritedIdle)).toEqual({ hadOutput: true, timerPreserved: true });
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()].find((entry) => entry.titleInput.value === "Build watcher");
+      window.clearTimeout(terminal.silenceTimer);
+      terminal.hadOutput = false;
+      state.settings.notifySilence = false;
+      terminal.notificationOverrides = { activity: true, idle: false, bell: true };
+      updateTerminalNotificationButton(terminal);
+      renderTerminalNotificationFlyout();
+      saveSessionSnapshot();
+    });
+
+    await page.keyboard.press("Escape");
+    await expect(flyout).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const compactBell = target.locator('[data-action="notifications-compact"]');
+    await expect(compactBell).toBeVisible();
+    await compactBell.click();
+    await expect(flyout).toBeVisible();
+    const mobileBounds = await flyout.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        bottom: rect.bottom,
+        clientHeight: element.clientHeight,
+        clientWidth: element.clientWidth,
+        left: rect.left,
+        right: rect.right,
+        scrollHeight: element.scrollHeight,
+        scrollWidth: element.scrollWidth,
+        top: rect.top,
+        viewportHeight: innerHeight,
+        viewportWidth: innerWidth
+      };
+    });
+    expect(mobileBounds.left).toBeGreaterThanOrEqual(0);
+    expect(mobileBounds.top).toBeGreaterThanOrEqual(0);
+    expect(mobileBounds.right).toBeLessThanOrEqual(mobileBounds.viewportWidth);
+    expect(mobileBounds.bottom).toBeLessThanOrEqual(mobileBounds.viewportHeight);
+    expect(mobileBounds.scrollWidth).toBeLessThanOrEqual(mobileBounds.clientWidth);
+    expect(mobileBounds.scrollHeight).toBeLessThanOrEqual(mobileBounds.clientHeight);
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()]
+      .find((terminal) => terminal.titleInput.value === "Build watcher")?.notificationOverrides))
+      .toEqual({ activity: true, idle: false, bell: true });
+
+    const lifecycle = await page.evaluate(() => {
+      const expected = { activity: true, idle: false, bell: true };
+      const original = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Build watcher");
+      runHeaderAction(original, "duplicate");
+      const duplicate = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Build watcher copy");
+      const duplicated = { ...duplicate.notificationOverrides };
+      removeTerminal(duplicate.id);
+
+      restartSession(original.id);
+      const restartedTerminal = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Build watcher");
+      const restarted = { ...restartedTerminal.notificationOverrides };
+
+      saveWorkspace("Notification lifecycle");
+      restartedTerminal.notificationOverrides = {};
+      restoreWorkspace("Notification lifecycle");
+      const restoredTerminal = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Build watcher");
+      const restored = { ...restoredTerminal.notificationOverrides };
+      deleteWorkspace("Notification lifecycle");
+      return { duplicated, expected, restarted, restored };
+    });
+    expect(lifecycle.duplicated).toEqual(lifecycle.expected);
+    expect(lifecycle.restarted).toEqual(lifecycle.expected);
+    expect(lifecycle.restored).toEqual(lifecycle.expected);
   });
 
   test("notification focus selects the terminal and its page", async () => {
