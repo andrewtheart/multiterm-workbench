@@ -16,6 +16,18 @@ test.describe("Enhancement milestone", () => {
   let context;
   let page;
 
+  const bridgeSessionCount = () => page.evaluate(() => new Promise((resolve, reject) => {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const probe = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    probe.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type !== "welcome") return;
+      probe.close();
+      resolve(message.sessions.length);
+    });
+    probe.addEventListener("error", () => reject(new Error("probe socket failed")));
+  }));
+
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({
       baseURL: "http://127.0.0.1:3199",
@@ -57,6 +69,109 @@ test.describe("Enhancement milestone", () => {
     });
 
     expect(result).toEqual({ count: 2, cwd: "D:\\Explorer target", invalid: null, visible: true });
+  });
+
+  test("New terminal here uses the selected shell naming convention", async () => {
+    await page.evaluate(() => {
+      const terminals = [...state.terminals.values()];
+      terminals.slice(1).forEach((terminal) => removeTerminal(terminal.id));
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(1);
+    const setup = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      commitTerminalTitle(terminal, "Renamed source terminal");
+      terminal.cwd = "D:\\multiTerm";
+      elements.shellSelect.value = "cmd";
+      const expectedTitle = `Command Prompt ${state.nextIndex}`;
+      showContextMenu(20, 20, terminal, "");
+      return { before: state.terminals.size, expectedTitle };
+    });
+
+    await page.locator("#contextMenu .ctx-item", { hasText: "New terminal here" }).click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(setup.before + 1);
+    await expect(page.locator(".terminal-pane").last().locator(".pane-title")).toHaveValue(setup.expectedTitle);
+    expect(await page.evaluate(() => [...state.terminals.values()].at(-1).cwd)).toBe("D:\\multiTerm");
+
+    await page.evaluate(() => {
+      const created = [...state.terminals.values()].at(-1);
+      removeTerminal(created.id);
+      elements.shellSelect.value = "pwsh";
+    });
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(1);
+  });
+
+  test("remembers Copilot CWD per terminal and shows persistent cross-terminal history", async () => {
+    const setup = await page.evaluate(() => {
+      localStorage.removeItem("multiterm.copilotCwdHistory");
+      state.copilotCwdHistory = [];
+      const first = [...state.terminals.values()][0];
+      first.copilotCwd = "";
+      const second = addTerminal({ title: "Second CWD target" });
+      return { firstId: first.id, secondId: second.id };
+    });
+    await expect(page.locator(".pane-status.is-live")).toHaveCount(2);
+
+    const submitCwd = async (terminalId, value) => {
+      await page.evaluate((id) => showContextMenu(20, 20, state.terminals.get(id), ""), terminalId);
+      const input = page.locator('[data-customization-id="terminal.copilot-cwd"] .ctx-command-input');
+      await input.fill(value);
+      await input.press("Enter");
+    };
+    await submitCwd(setup.firstId, "D:\\first workspace");
+    await submitCwd(setup.secondId, "C:\\second workspace");
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await page.evaluate((id) => showContextMenu(20, 20, state.terminals.get(id), ""), setup.firstId);
+    const cwdRow = page.locator('[data-customization-id="terminal.copilot-cwd"]');
+    await expect(cwdRow.locator(".ctx-command-input")).toHaveValue("D:\\first workspace");
+    await expect(cwdRow.locator(".ctx-command-suggestion")).toHaveText([
+      "C:\\second workspace",
+      "D:\\first workspace"
+    ]);
+    await cwdRow.locator(".ctx-command-suggestion").first().click();
+    await expect(cwdRow.locator(".ctx-command-input")).toHaveValue("C:\\second workspace");
+    expect(await page.evaluate((id) => state.terminals.get(id).copilotCwd, setup.firstId)).toBe("D:\\first workspace");
+
+    const persistence = await page.evaluate(({ firstId, secondId }) => {
+      hideContextMenu();
+      const snapshot = JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]");
+      const history = JSON.parse(localStorage.getItem("multiterm.copilotCwdHistory") || "[]");
+      const first = state.terminals.get(firstId);
+      first.copilotCwd = "";
+      removeTerminal(secondId);
+      saveSessionSnapshot();
+      localStorage.removeItem("multiterm.copilotCwdHistory");
+      state.copilotCwdHistory = [];
+      return {
+        first: snapshot.find((entry) => entry.id === firstId)?.copilotCwd,
+        second: snapshot.find((entry) => entry.id === secondId)?.copilotCwd,
+        history
+      };
+    }, setup);
+    expect(persistence).toEqual({
+      first: "D:\\first workspace",
+      second: "C:\\second workspace",
+      history: ["C:\\second workspace", "D:\\first workspace"]
+    });
+
+    const capped = await page.evaluate((id) => {
+      for (let index = 0; index < 12; index += 1) rememberCopilotCwd(`D:\\history-${index}`);
+      showContextMenu(20, 20, state.terminals.get(id), "");
+      return state.copilotCwdHistory;
+    }, setup.firstId);
+    expect(capped).toHaveLength(10);
+    expect(capped[0]).toBe("D:\\history-11");
+    expect(capped.at(-1)).toBe("D:\\history-2");
+    await expect(page.locator('[data-customization-id="terminal.copilot-cwd"] .ctx-command-suggestion')).toHaveCount(10);
+    await page.evaluate(() => {
+      hideContextMenu();
+      localStorage.removeItem("multiterm.copilotCwdHistory");
+      state.copilotCwdHistory = [];
+    });
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(1);
   });
 
   test("Ctrl+V pastes and cleans copied Copilot border pipes", async () => {
@@ -104,7 +219,7 @@ test.describe("Enhancement milestone", () => {
     const action = page.locator('[data-customization-id="terminal.paste-execute"]');
     await expect(action).toBeVisible();
     await expect(action.locator("xpath=preceding-sibling::*[contains(@class, 'ctx-item')][1]"))
-      .toHaveAttribute("data-customization-id", "terminal.paste");
+      .toHaveAttribute("data-customization-id", "terminal.prepare-paste");
     await action.click();
     await expect.poll(() => page.evaluate(() => window.__pasteExecuteFrames
       .filter((frame) => frame.type === "input"
@@ -386,6 +501,95 @@ test.describe("Enhancement milestone", () => {
       data: "copilot --resume=62d43a25-c209-4933-af9a-24d9bff3789c --yolo\r"
     }]);
     await page.evaluate((id) => removeTerminal(id), secondId);
+  });
+
+  test("queries all Copilot clients from the main UI and continues an editor session in a new terminal", async () => {
+    const before = await page.locator(".terminal-pane").count();
+    await page.evaluate(() => {
+      const sessions = [
+        {
+          id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+          key: "cli:bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+          source: "cli",
+          name: "CLI history",
+          cwd: "D:\\multiTerm",
+          updatedAt: "2026-08-04T00:18:07.329Z"
+        },
+        {
+          id: "62d43a25-c209-4933-af9a-24d9bff3789c",
+          key: "vscode:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:62d43a25-c209-4933-af9a-24d9bff3789c",
+          source: "vscode",
+          name: "VS Code history",
+          cwd: "C:\\src\\Yagu",
+          updatedAt: "2026-08-03T20:47:02.240Z"
+        },
+        {
+          id: "70ea177d-5558-40c4-b068-2477e84b9325",
+          key: "visualstudio:70ea177d-5558-40c4-b068-2477e84b9325:123456789abc",
+          source: "visualstudio",
+          name: "Visual Studio history",
+          cwd: "D:\\MyFirstMCP",
+          updatedAt: "2026-08-02T20:47:02.240Z"
+        }
+      ];
+      window.__allCopilotFrames = [];
+      window.__allCopilotOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__allCopilotFrames.push(frame);
+        if (frame.type === "listCopilotSessions") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "copilotSessions",
+            requestId: frame.requestId,
+            sessions,
+            message: ""
+          }), 0);
+        } else if (frame.type === "prepareCopilotSessionContext") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "copilotSessionContext",
+            requestId: frame.requestId,
+            contextPath: "C:\\Temp\\MultiTerm\\CopilotContexts\\vscode-context.md",
+            cwd: "C:\\src\\Yagu",
+            id: sessions[1].id,
+            name: sessions[1].name,
+            source: "vscode"
+          }), 0);
+        } else {
+          window.__allCopilotOriginalSend.call(this, payload);
+        }
+      };
+    });
+
+    await page.locator("#copilotSessionsToggle").click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await expect(page.locator(".copilot-session-card")).toHaveCount(3);
+    await expect(page.locator(".copilot-session-source")).toHaveText(["Copilot CLI", "VS Code", "Visual Studio"]);
+    await page.locator(".copilot-session-card", { hasText: "VS Code history" }).click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
+    await expect(page.locator(".terminal-pane").last().locator(".pane-title")).toHaveValue(/VS Code history/);
+    await expect.poll(() => page.evaluate(() => window.__allCopilotFrames
+      .filter((frame) => frame.type === "input")
+      .map((frame) => frame.data)
+      .join(""))).toContain("vscode-context.md");
+
+    const frames = await page.evaluate(() => {
+      state.socket.send = window.__allCopilotOriginalSend;
+      delete window.__allCopilotOriginalSend;
+      const sent = window.__allCopilotFrames;
+      delete window.__allCopilotFrames;
+      return sent;
+    });
+    expect(frames).toContainEqual(expect.objectContaining({
+      type: "prepareCopilotSessionContext",
+      key: "vscode:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:62d43a25-c209-4933-af9a-24d9bff3789c",
+      maxContextKb: 64
+    }));
+    expect(frames.some((frame) => frame.type === "input" && frame.data.includes("copilot --yolo -i"))).toBe(true);
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()].at(-1);
+      removeTerminal(terminal.id);
+    });
   });
 
   test("quit and close bridge closes terminal sessions with the window", async () => {

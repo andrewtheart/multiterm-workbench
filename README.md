@@ -83,7 +83,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🧹 Copy and prepare selected text</h3>
-      Open copied terminal text in a syntax-aware editor with line numbers and word wrap, clean Copilot TUI borders, save it as a script or snippet, or insert the prepared text into another live terminal without pressing Enter.
+      Open selected or clipboard text in a syntax-aware editor with line numbers and word wrap, clean Copilot TUI borders, save it as a script or snippet, or paste the prepared text into a live terminal without pressing Enter.
     </td>
   </tr>
   <tr>
@@ -93,7 +93,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🖱️ Deep right-click context menu</h3>
-      Copy, paste, paste and execute, prepare selected text in a syntax-aware editor, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch or searchable local-session resume, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions or whole sections, rename, add, or remove sections, and hide actions you do not use.
+      Copy, paste, prepare and paste, paste and execute, prepare selected text in a syntax-aware editor, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch or searchable local-session resume, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions or whole sections, rename, add, or remove sections, and hide actions you do not use.
     </td>
     <td align="center" width="33%">
       <h3>🔔 Activity and input alerts</h3>

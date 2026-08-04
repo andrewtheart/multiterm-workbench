@@ -53,7 +53,11 @@ When at least one action is hidden, **Show hidden items** appears at the bottom-
 
 Choose **Run Copilot CLI (YOLO)** from a terminal or blank-workspace right-click menu to send `copilot --yolo` followed by Enter to the focused terminal. If no terminal has keyboard focus, MultiTerm opens one on the current page and runs the command after its shell is ready.
 
-Choose **Resume Copilot CLI session...** to search sessions discovered from Copilot CLI's local session metadata. Each result shows its summary, repository or working directory, branch, session ID, and last-updated time when available. Refresh the list to include sessions created while the picker is open. Selecting **Resume session** sends `copilot --resume=<session-id> --yolo` to the terminal whose context menu opened the picker; YOLO mode grants Copilot CLI unrestricted permissions in that session.
+**New terminal here** uses the selected shell and current terminal folder, but assigns a fresh standard title such as **PowerShell 4** or **Command Prompt 4**. It does not copy a custom title from the terminal whose menu you opened.
+
+The terminal menu's **Copilot CWD** field remembers the last submitted value separately for each terminal. Beneath the field, up to ten subdued recent values from all terminals can be selected to fill the textbox without executing it; press Enter to submit the chosen value. Per-terminal recall and the shared recent-value list persist across app restarts.
+
+Choose **Resume Copilot CLI session...** in a terminal menu to search native CLI history and continue it in that terminal with `copilot --resume=<session-id> --yolo`. The history button in the main toolbar searches Copilot CLI, VS Code, and Visual Studio sessions together and always opens the selection in a new MultiTerm terminal. CLI sessions use native resume. VS Code and Visual Studio histories are continued in Copilot CLI using a private temporary context file containing the most recent conversation text. Configure **Imported Copilot context (KB)** under Session to control how much editor history is carried forward. Results show their source, title, working directory, ID, and last-updated time; search filters the complete catalog, and **Load more** pages through large result sets.
 
 Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to **All terminals**; choose **This terminal** for a per-terminal layout, or select **Always take this action (don't ask me again)** to remember the scope. Change **Header drag scope** under **Terminal** to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.
 
@@ -114,6 +118,8 @@ Open **Settings** and choose a layout under **Layout**:
 | Manual canvas | Free positioning and resizing |
 
 In **Manual canvas**, drag a pane's title bar to move it. Drag any edge or corner to resize it like a normal unsnapped window; the pane's position and size persist across launches.
+
+Click blank workspace background to move keyboard focus away from every terminal. While the background is focused, scroll up/down or pinch in/out on a trackpad to change **Workspace zoom** in 5% steps. Zooming out gives the layout more logical room, so more panes can fit in the viewport; zooming in makes panes larger. The **Workspace zoom** slider under **Layout** covers 50–150%, and the selected value persists across launches and saved workspaces.
 
 Use **Fit all terminals** after resizing the window or changing layouts. **Reset layout** clears layout-specific adjustments. <kbd>Ctrl+Shift+X</kbd> temporarily maximizes the active pane.
 
@@ -248,6 +254,8 @@ MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</k
 
 Choose **Paste and execute** directly below **Paste** in a terminal's right-click menu to paste clipboard text using terminal paste semantics and then press Enter. The blank-workspace right-click menu offers the same action. If no terminal has keyboard focus, MultiTerm opens one on the current page and runs the clipboard text after its shell is ready.
 
+Choose **Prepare and paste...** to put clipboard text into the same preparation editor described below. Edit or validate it, then choose **Paste** to insert the result back into the terminal whose menu you opened. It uses terminal paste semantics and does not append Enter. Clipboard reading begins only after you choose the action, so opening the right-click menu stays on its fast synchronous path.
+
 ### Copy and prepare selected text
 
 Select terminal output, right-click it, and choose **Copy and prepare...** to open the selected text in an editor before it reaches a file, the clipboard, or another terminal.
@@ -262,7 +270,7 @@ After editing, choose one of these actions:
 
 - **Save file** or <kbd>Ctrl+S</kbd> opens Save As with a suggested script extension for the selected language.
 - **Save snippet** stores a single prepared command under the name you enter.
-- **Send to terminal** inserts the text into a chosen live terminal using terminal paste semantics without appending Enter, or opens a new terminal on the current page and inserts it when the shell is ready.
+- **Send to terminal** inserts the text into a chosen live terminal using terminal paste semantics without appending Enter, or opens a new terminal on the current page and inserts it when the shell is ready. In the destination list, Up/Down wraps through results, Home/End jumps to the edges, and Page Up/Page Down moves five results at a time.
 - **Copy** places the prepared text on the clipboard.
 
 ![Cleaned PowerShell text with successful syntax validation, a script file name, and live terminal destinations](public/help-images/copy-prepare-save-send.png)

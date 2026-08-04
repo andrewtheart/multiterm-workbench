@@ -84,6 +84,16 @@ test.describe("Settings panel verification", () => {
   });
 
   test("layout range settings", async () => {
+    await set("#workspaceZoom", "80", "input");
+    expect(await setting("workspaceZoom")).toBe(80);
+    expect(await page.evaluate(() => ({
+      height: elements.host.style.height,
+      width: elements.host.style.width,
+      zoom: elements.host.style.zoom
+    }))).toEqual({ height: "", width: "", zoom: "0.8" });
+    await expect(page.locator("#workspaceZoomValue")).toHaveText("80%");
+    await set("#workspaceZoom", "100", "input");
+
     await set("#fontSize", "18", "input");
     expect(await setting("fontSize")).toBe(18);
     expect(await firstTermOption("fontSize")).toBe(18);
@@ -222,6 +232,14 @@ test.describe("Settings panel verification", () => {
     await set("#startupCommand", "echo hi", "change");
     expect(await setting("startupCommand")).toBe("echo hi");
     await set("#startupCommand", "", "change");
+
+    await set("#copilotImportContextKb", "128", "change");
+    expect(await setting("copilotImportContextKb")).toBe(128);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).copilotImportContextKb)).toBe(128);
+    await set("#copilotImportContextKb", "9999", "change");
+    expect(await setting("copilotImportContextKb")).toBe(1024);
+    expect(await page.locator("#copilotImportContextKb").inputValue()).toBe("1024");
+    await set("#copilotImportContextKb", "64", "change");
 
     await page.evaluate(() => {
       window.__settingsOriginalUpdateRequest = requestLatestRelease;

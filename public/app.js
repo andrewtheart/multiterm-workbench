@@ -17,6 +17,7 @@
  */
 
 const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
+const WORKSPACE_ZOOM_BOUNDS = { min: 50, max: 150, step: 5, fallback: 100 };
 
 const defaultSettings = {
   appTheme: "dark",
@@ -25,6 +26,7 @@ const defaultSettings = {
   closeAction: "ask",
   columns: 2,
   compactChrome: false,
+  copilotImportContextKb: 64,
   copyOnSelect: false,
   ctrlVPaste: true,
   cursorBlink: true,
@@ -70,7 +72,8 @@ const defaultSettings = {
   syncInput: false,
   terminalInboxCapacity: 500,
   terminalMessageMaxKb: 64,
-  theme: "ember"
+  theme: "ember",
+  workspaceZoom: WORKSPACE_ZOOM_BOUNDS.fallback
 };
 
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
@@ -84,6 +87,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   cursorBlink: "caret flashing flash pulse animation animate",
   layoutMode: "arrangement arrange tiling tile panes splits split grid mosaic stack strip rail master carousel spotlight bento canvas automatic",
   pagerPlacement: "pages page tabs tab tabbar tab-bar navigation navigator pagebar page-bar pager position placement location dock docking top bottom left right side sidebar",
+  workspaceZoom: "workspace canvas stage zoom scale magnify shrink density overview wheel scroll pinch trackpad terminals panes tiles more fewer",
   minWidth: "minimum pane terminal tile width size horizontal narrow responsive compact",
   columnCount: "number columns grid across horizontal panes tiles count",
   rowCount: "number rows grid down vertical panes tiles count",
@@ -93,6 +97,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   fontSize: "text size type scale zoom terminal typography larger smaller",
   terminalTheme: "terminal console colors colours color scheme palette background foreground contrast appearance",
   compactChrome: "dense compact chrome ui toolbar header controls small spacing slim",
+  copilotImportContextKb: "copilot session import context transcript history vscode visual studio cli size kilobytes kb continuation",
   syncInput: "broadcast keyboard keys keystrokes mirror mirrored linked simultaneous type typing all terminals panes",
   ctrlVPaste: "clipboard paste keyboard shortcut control ctrl v insert",
   cleanCopilotClipboard: "copilot clipboard copy borders pipes ascii formatting cleanup clean markdown table",
@@ -317,12 +322,15 @@ const elements = {
   commandQueueInput: document.querySelector("#commandQueueInput"),
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
+  copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
   copilotResumeClose: document.querySelector("#copilotResumeClose"),
+  copilotResumeDescription: document.querySelector("#copilotResumeDescription"),
   copilotResumeList: document.querySelector("#copilotResumeList"),
   copilotResumeOverlay: document.querySelector("#copilotResumeOverlay"),
   copilotResumeRefresh: document.querySelector("#copilotResumeRefresh"),
   copilotResumeSearch: document.querySelector("#copilotResumeSearch"),
   copilotResumeStatus: document.querySelector("#copilotResumeStatus"),
+  copilotSessionsToggle: document.querySelector("#copilotSessionsToggle"),
   contextMenu: document.querySelector("#contextMenu"),
   contextSubmenu: document.querySelector("#contextSubmenu"),
   controlPanel: document.querySelector(".control-panel"),
@@ -427,6 +435,7 @@ const elements = {
   prepareSnippetName: document.querySelector("#prepareSnippetName"),
   prepareSource: document.querySelector("#prepareSource"),
   prepareStatus: document.querySelector("#prepareStatus"),
+  prepareTitle: document.querySelector("#prepareTitle"),
   prepareTerminalFlyout: document.querySelector("#prepareTerminalFlyout"),
   prepareTerminalList: document.querySelector("#prepareTerminalList"),
   prepareText: document.querySelector("#prepareText"),
@@ -495,6 +504,8 @@ const elements = {
   statusShellText: document.querySelector("#statusShellText"),
   statusZoomIn: document.querySelector("#statusZoomIn"),
   statusZoomOut: document.querySelector("#statusZoomOut"),
+  statusWorkspaceZoom: document.querySelector("#statusWorkspaceZoom"),
+  statusWorkspaceZoomValue: document.querySelector("#statusWorkspaceZoomValue"),
   statisticsBody: document.querySelector("#statisticsBody"),
   statisticsClose: document.querySelector("#statisticsClose"),
   statisticsOverlay: document.querySelector("#statisticsOverlay"),
@@ -559,6 +570,9 @@ const elements = {
   workspaceRestore: document.querySelector("#workspaceRestore"),
   workspaceSave: document.querySelector("#workspaceSave"),
   workspaceSelect: document.querySelector("#workspaceSelect"),
+  workspaceZoom: document.querySelector("#workspaceZoom"),
+  workspaceZoomIndicator: document.querySelector("#workspaceZoomIndicator"),
+  workspaceZoomValue: document.querySelector("#workspaceZoomValue"),
   workbench: document.querySelector(".workbench")
 };
 
@@ -574,6 +588,39 @@ const fullscreenFocus = {
 let draggedHeaderAction = null;
 let pendingHeaderActionMove = null;
 
+const COPILOT_CWD_HISTORY_STORAGE_KEY = "multiterm.copilotCwdHistory";
+const COPILOT_CWD_HISTORY_LIMIT = 10;
+
+function normalizeCopilotCwdEntry(value) {
+  const entry = String(value ?? "")
+    .replace(/\s*[\u0000-\u001f\u007f-\u009f\u2028\u2029]+\s*/g, " ")
+    .trim();
+  return entry && entry.length <= 8192 ? entry : "";
+}
+
+function normalizeCopilotCwdHistory(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const history = [];
+  for (const candidate of value) {
+    const entry = normalizeCopilotCwdEntry(candidate);
+    const key = entry.toLocaleLowerCase();
+    if (!entry || seen.has(key)) continue;
+    seen.add(key);
+    history.push(entry);
+    if (history.length === COPILOT_CWD_HISTORY_LIMIT) break;
+  }
+  return history;
+}
+
+function loadCopilotCwdHistory() {
+  try {
+    return normalizeCopilotCwdHistory(JSON.parse(localStorage.getItem(COPILOT_CWD_HISTORY_STORAGE_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
 const state = {
   activeId: null,
   activePageId: null,
@@ -582,8 +629,9 @@ const state = {
   bridgeClosingDown: false,
   closeDisposition: "",
   closeRequestSource: "window",
+  copilotCwdHistory: loadCopilotCwdHistory(),
   pendingPageClose: null,
-  prepareEditor: { closeTimer: 0, lineNumbersFrame: 0, resizeObserver: null, returnFocus: null, sourceTerminalId: null, validating: false, wordWrap: true },
+  prepareEditor: { closeTimer: 0, lineNumbersFrame: 0, mode: "copy", resizeObserver: null, returnFocus: null, sourceTerminalId: null, validating: false, wordWrap: true },
   findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false },
   appElevated: false,
   broadcastScope: "all",
@@ -704,6 +752,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindTerminalArtifactsHub();
   bindTerminalMessages();
   bindMemStatus();
+  bindWorkspaceBackgroundZoom();
   bindGlobalShortcuts();
   bindFullscreenEvents();
   bindFindAll();
@@ -751,6 +800,8 @@ function bindControls() {
   elements.paneHeight.value = state.settings.paneHeight;
   elements.focusWidth.value = state.settings.focusWidth;
   elements.paneGap.value = state.settings.gap;
+  elements.workspaceZoom.value = state.settings.workspaceZoom;
+  elements.statusWorkspaceZoom.value = state.settings.workspaceZoom;
   elements.fontSize.value = state.settings.fontSize;
   elements.titleFontScale.value = state.settings.titleFontScale;
   elements.terminalTheme.value = state.settings.theme;
@@ -763,6 +814,10 @@ function bindControls() {
   elements.syncInput.checked = state.settings.syncInput;
   elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
   elements.cleanCopilotClipboard.checked = state.settings.cleanCopilotClipboard;
+  state.settings.copilotImportContextKb = clampCopilotImportContextKb(
+    state.settings.copilotImportContextKb,
+    elements.copilotImportContextKb
+  );
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
@@ -793,6 +848,7 @@ function bindControls() {
     terminal.term.focus();
   });
   elements.attachTmux.addEventListener("click", openTmuxAttach);
+  elements.copilotSessionsToggle.addEventListener("click", () => openCopilotResume(null, { newTerminal: true }));
   elements.tmuxAttachClose.addEventListener("click", closeTmuxAttach);
   elements.tmuxAttachRefresh.addEventListener("click", refreshTmuxSessions);
   elements.tmuxAttachOverlay.addEventListener("pointerdown", (event) => {
@@ -831,6 +887,11 @@ function bindControls() {
   elements.closeAllTerminals.addEventListener("click", closeAllTerminals);
   elements.statusZoomOut.addEventListener("click", () => fontZoom(-1));
   elements.statusZoomIn.addEventListener("click", () => fontZoom(1));
+  elements.statusWorkspaceZoom.addEventListener("focus", clearTerminalFocus);
+  elements.statusWorkspaceZoom.addEventListener("input", () => {
+    clearTerminalFocus();
+    setWorkspaceZoom(elements.statusWorkspaceZoom.value, { announce: true });
+  });
   elements.fitAll.addEventListener("click", fitAllTerminals);
   elements.resetLayout.addEventListener("click", resetLayout);
   elements.commandPalette.addEventListener("click", openPalette);
@@ -906,6 +967,7 @@ function bindControls() {
   bindSetting(elements.paneHeight, "paneHeight", "input", Number);
   bindSetting(elements.focusWidth, "focusWidth", "input", Number);
   bindSetting(elements.paneGap, "gap", "input", Number);
+  bindSetting(elements.workspaceZoom, "workspaceZoom", "input", normalizeWorkspaceZoom);
   bindSetting(elements.fontSize, "fontSize", "input", Number);
   bindSetting(elements.titleFontScale, "titleFontScale", "input", normalizeTitleFontScale);
   bindSetting(elements.terminalTheme, "theme", "change", (value) => value);
@@ -918,6 +980,7 @@ function bindControls() {
   bindSetting(elements.syncInput, "syncInput", "change", (_, element) => element.checked);
   bindSetting(elements.ctrlVPaste, "ctrlVPaste", "change", (_, element) => element.checked);
   bindSetting(elements.cleanCopilotClipboard, "cleanCopilotClipboard", "change", (_, element) => element.checked);
+  bindSetting(elements.copilotImportContextKb, "copilotImportContextKb", "change", clampCopilotImportContextKb);
   bindSetting(elements.keepSessionsOnClose, "keepSessionsOnClose", "change", (_, element) => element.checked);
   bindSetting(elements.restoreSession, "restoreSession", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
@@ -1046,6 +1109,7 @@ const OUTPUT_COALESCE_MS_BOUNDS = { min: 0, max: 100, fallback: 8 };
 const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
 const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
 const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 };
+const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
 const INSTALLER_SIZE_MB_FALLBACK = 256;
 
 function clampSettingNumber(value, element, bounds) {
@@ -1071,6 +1135,10 @@ function clampTerminalMessageMaxKb(value, element) {
 
 function clampTerminalInboxCapacity(value, element) {
   return clampSettingNumber(value, element, TERMINAL_INBOX_CAPACITY_BOUNDS);
+}
+
+function clampCopilotImportContextKb(value, element) {
+  return clampSettingNumber(value, element, COPILOT_IMPORT_CONTEXT_KB_BOUNDS);
 }
 
 function normalizeInstallerSizeMb(value, element) {
@@ -1238,7 +1306,7 @@ function handleBridgeMessage(message) {
     return;
   }
 
-  if (message.type === "copilotSessions") {
+  if (message.type === "copilotSessions" || message.type === "copilotSessionContext") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -1293,6 +1361,7 @@ function handleBridgeMessage(message) {
               title: meta.title,
               shell: meta.shell,
               cwd: meta.cwd,
+              copilotCwd: meta.copilotCwd,
               color: meta.color,
               fontSizeOverride: meta.fontSizeOverride,
               headerActionOverrides: meta.headerActionOverrides,
@@ -1597,6 +1666,7 @@ function addTerminal(options = {}) {
   const pane = elements.paneTemplate.content.firstElementChild.cloneNode(true);
   const screen = pane.querySelector(".terminal-screen");
   const titleInput = pane.querySelector(".pane-title");
+  const titleDisplay = pane.querySelector(".pane-title-display");
   const status = pane.querySelector(".pane-status");
   const term = new Terminal({
     allowProposedApi: true,
@@ -1624,6 +1694,7 @@ function addTerminal(options = {}) {
   }
 
   titleInput.value = title;
+  titleDisplay.textContent = title;
   pane.dataset.id = id;
   const elevated = Boolean(options.elevated || session.elevated);
   if (elevated) {
@@ -1641,6 +1712,7 @@ function addTerminal(options = {}) {
 
   const terminal = {
     color: savedMeta?.color || options.color || session.color || null,
+    copilotCwd: normalizeCopilotCwdEntry(savedMeta?.copilotCwd ?? options.copilotCwd),
     contextSelection: "",
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
@@ -1695,6 +1767,7 @@ function addTerminal(options = {}) {
     status: options.reattach ? "live" : "starting",
     statusElement: status,
     term,
+    titleDisplay,
     titleInput,
     tmux: options.tmux || session.tmux || null
   };
@@ -1892,6 +1965,74 @@ function bindTerminalFontZoom(terminal) {
 
     zoomTerminalFont(terminal.id, terminal.fontZoomWheelDelta < 0 ? 1 : -1);
     terminal.fontZoomWheelDelta = 0;
+  }, { capture: true, passive: false });
+}
+
+let workspaceZoomWheelDelta = 0;
+let workspaceZoomIndicatorTimer = 0;
+
+function workspaceZoomScale() {
+  return normalizeWorkspaceZoom(state.settings.workspaceZoom) / 100;
+}
+
+function clearTerminalFocus() {
+  if (!state.activeId && !elements.host.querySelector(".terminal-pane.is-active")) return;
+  state.activeId = null;
+  for (const terminal of state.terminals.values()) terminal.pane.classList.remove("is-active");
+  endTerminalAnalyticsFocus();
+  updateTerminalActions();
+}
+
+function focusWorkspaceBackground() {
+  elements.stage.focus({ preventScroll: true });
+  clearTerminalFocus();
+}
+
+function showWorkspaceZoomIndicator() {
+  const indicator = elements.workspaceZoomIndicator;
+  if (!indicator) return;
+  window.clearTimeout(workspaceZoomIndicatorTimer);
+  indicator.textContent = `${state.settings.workspaceZoom}%`;
+  indicator.classList.add("is-visible");
+  workspaceZoomIndicatorTimer = window.setTimeout(() => {
+    indicator.classList.remove("is-visible");
+    workspaceZoomIndicatorTimer = 0;
+  }, 1100);
+}
+
+function setWorkspaceZoom(value, { announce = false } = {}) {
+  state.settings.workspaceZoom = normalizeWorkspaceZoom(value);
+  elements.workspaceZoom.value = state.settings.workspaceZoom;
+  applySettings();
+  saveSettings();
+  if (announce) showWorkspaceZoomIndicator();
+}
+
+function bindWorkspaceBackgroundZoom() {
+  const focusBackgroundFromPointer = (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest(".terminal-pane, .find-all-bar, .terminal-connector-action, .terminal-connector-hit")) return;
+    event.preventDefault();
+    focusWorkspaceBackground();
+  };
+  elements.stage.addEventListener("focus", clearTerminalFocus);
+  elements.stage.addEventListener("pointerdown", focusBackgroundFromPointer);
+  elements.stage.addEventListener("click", focusBackgroundFromPointer);
+
+  elements.stage.addEventListener("wheel", (event) => {
+    if (document.activeElement !== elements.stage || event.deltaY === 0) return;
+    if (event.altKey || event.metaKey || event.shiftKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const deltaScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 40
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 120 : 1;
+    workspaceZoomWheelDelta += event.deltaY * deltaScale;
+    if (Math.abs(workspaceZoomWheelDelta) < 80) return;
+    const direction = workspaceZoomWheelDelta < 0 ? 1 : -1;
+    workspaceZoomWheelDelta = 0;
+    setWorkspaceZoom(state.settings.workspaceZoom + direction * WORKSPACE_ZOOM_BOUNDS.step, { announce: true });
   }, { capture: true, passive: false });
 }
 
@@ -2258,6 +2399,7 @@ function runHeaderAction(terminal, action) {
       reveal: true,
       runStartup: true,
       title: `${terminal.titleInput.value} copy`,
+      copilotCwd: terminal.copilotCwd,
       fontSizeOverride: terminal.fontSizeOverride,
       headerActionOverrides: { ...terminal.headerActionOverrides }
     });
@@ -2347,6 +2489,7 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   if (!terminal) return;
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : terminalShellTitle(terminal.shell);
   terminal.titleInput.value = title;
+  terminal.titleDisplay.textContent = title;
   const analytics = state.analytics.terminals[terminal.id];
   if (analytics) {
     analytics.title = title;
@@ -2399,8 +2542,9 @@ function bindPaneDrag(terminal) {
     if (state.settings.layout === "manual") {
       if (!drag.edge) {
         const layout = ensureManualLayout(terminal.id);
-        layout.x = Math.max(0, drag.x + deltaX);
-        layout.y = Math.max(0, drag.y + deltaY);
+        const zoom = workspaceZoomScale();
+        layout.x = Math.max(0, drag.x + deltaX / zoom);
+        layout.y = Math.max(0, drag.y + deltaY / zoom);
         applyManualLayout(terminal, layout);
       }
       return;
@@ -2495,8 +2639,9 @@ function bindPaneResize(terminal) {
 
   const onMove = (event) => {
     if (!resize || resize.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - resize.startX;
-    const deltaY = event.clientY - resize.startY;
+    const zoom = workspaceZoomScale();
+    const deltaX = (event.clientX - resize.startX) / zoom;
+    const deltaY = (event.clientY - resize.startY) / zoom;
     const next = {
       x: resize.x,
       y: resize.y,
@@ -2546,15 +2691,16 @@ function bindPaneResize(terminal) {
       const layout = ensureManualLayout(terminal.id);
       const rect = terminal.pane.getBoundingClientRect();
       const style = getComputedStyle(terminal.pane);
+      const zoom = workspaceZoomScale();
       resize = {
         direction: handle.dataset.resize || "se",
-        h: rect.height,
+        h: rect.height / zoom,
         minHeight: Number.parseFloat(style.minHeight) || 180,
         minWidth: Number.parseFloat(style.minWidth) || 260,
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
-        w: rect.width,
+        w: rect.width / zoom,
         x: Number(layout.x) || 0,
         y: Number(layout.y) || 0
       };
@@ -2599,8 +2745,9 @@ function finishPaneDrag(terminal, drag) {
 // grab point under the cursor even after a reorder moves the pane's home slot.
 function liftPane(pane, drag, x, y) {
   const rect = pane.getBoundingClientRect();
-  drag.tx += x - (rect.left + drag.grabX);
-  drag.ty += y - (rect.top + drag.grabY);
+  const zoom = workspaceZoomScale();
+  drag.tx += (x - (rect.left + drag.grabX)) / zoom;
+  drag.ty += (y - (rect.top + drag.grabY)) / zoom;
   pane.style.transform = `translate(${drag.tx}px, ${drag.ty}px)`;
   scheduleTerminalConnections();
 }
@@ -2632,9 +2779,10 @@ function reorderPaneDuringDrag(pane, drag, x, y) {
 
   const targetRect = target.getBoundingClientRect();
   const paneRect = pane.getBoundingClientRect();
+  const zoom = workspaceZoomScale();
   const horizontal =
-    Math.abs(targetRect.left - (paneRect.left - drag.tx)) >=
-    Math.abs(targetRect.top - (paneRect.top - drag.ty));
+    Math.abs(targetRect.left - (paneRect.left - drag.tx * zoom)) >=
+    Math.abs(targetRect.top - (paneRect.top - drag.ty * zoom));
   const pointer = horizontal ? x : y;
   const midpoint = horizontal
     ? targetRect.left + targetRect.width / 2
@@ -4189,6 +4337,11 @@ function applySettings() {
   elements.host.dataset.layout = state.settings.layout;
   elements.controlPanel.dataset.mode = state.settings.layout;
   elements.host.classList.toggle("compact", state.settings.compactChrome);
+  state.settings.workspaceZoom = normalizeWorkspaceZoom(state.settings.workspaceZoom);
+  const workspaceZoom = workspaceZoomScale();
+  elements.host.style.zoom = String(workspaceZoom);
+  elements.host.style.removeProperty("width");
+  elements.host.style.removeProperty("height");
   elements.host.style.setProperty("--min-pane-width", `${state.settings.minWidth}px`);
   elements.host.style.setProperty("--fixed-columns", state.settings.columns);
   elements.host.style.setProperty("--fixed-rows", state.settings.rows);
@@ -4204,6 +4357,9 @@ function applySettings() {
   elements.paneHeightValue.textContent = `${state.settings.paneHeight}px`;
   elements.focusWidthValue.textContent = `${state.settings.focusWidth}%`;
   elements.paneGapValue.textContent = `${state.settings.gap}px`;
+  elements.workspaceZoomValue.textContent = `${state.settings.workspaceZoom}%`;
+  elements.statusWorkspaceZoom.value = state.settings.workspaceZoom;
+  elements.statusWorkspaceZoomValue.textContent = `${state.settings.workspaceZoom}%`;
   elements.fontSizeValue.textContent = `${state.settings.fontSize}px`;
   elements.titleFontScaleValue.textContent = `${state.settings.titleFontScale}%`;
   updateChromeToggles();
@@ -4416,6 +4572,8 @@ function resetLayout() {
     elements.paneHeight.value = state.settings.paneHeight;
     elements.focusWidth.value = state.settings.focusWidth;
     elements.paneGap.value = state.settings.gap;
+    elements.workspaceZoom.value = state.settings.workspaceZoom;
+    elements.statusWorkspaceZoom.value = state.settings.workspaceZoom;
     elements.fontSize.value = state.settings.fontSize;
     elements.titleFontScale.value = state.settings.titleFontScale;
     elements.compactChrome.checked = state.settings.compactChrome;
@@ -4468,8 +4626,9 @@ function syncManualLayout(terminal) {
 
   const layout = ensureManualLayout(terminal.id);
   const rect = terminal.pane.getBoundingClientRect();
-  layout.w = Math.round(rect.width);
-  layout.h = Math.round(rect.height);
+  const zoom = workspaceZoomScale();
+  layout.w = Math.round(rect.width / zoom);
+  layout.h = Math.round(rect.height / zoom);
   saveManualLayouts();
   scheduleFit(terminal);
 }
@@ -4613,6 +4772,7 @@ function loadSettings() {
     settings.headerActionsInMenu = normalizeHeaderActionsInMenu(settings.headerActionsInMenu);
     settings.pageCloseAction = normalizePageCloseAction(settings.pageCloseAction);
     settings.titleFontScale = normalizeTitleFontScale(settings.titleFontScale);
+    settings.workspaceZoom = normalizeWorkspaceZoom(settings.workspaceZoom);
     return settings;
   } catch {
     return { ...defaultSettings };
@@ -5367,7 +5527,20 @@ function prepareEditorFocusableElements() {
   )].filter((element) => !element.hidden && element.offsetParent !== null);
 }
 
-function openPrepareEditor(text, sourceTerminalId = null) {
+function setPrepareEditorMode(mode) {
+  const isPaste = mode === "paste";
+  state.prepareEditor.mode = isPaste ? "paste" : "copy";
+  elements.prepareTitle.textContent = isPaste ? "Prepare and paste" : "Copy and prepare";
+  elements.prepareCopy.textContent = "";
+  const icon = document.createElement("i");
+  icon.dataset.lucide = isPaste ? "clipboard-paste" : "clipboard-copy";
+  const label = document.createElement("span");
+  label.textContent = isPaste ? "Paste" : "Copy";
+  elements.prepareCopy.append(icon, label);
+  refreshIcons(elements.prepareCopy);
+}
+
+function openPrepareEditor(text, sourceTerminalId = null, mode = "copy") {
   if (!elements.prepareOverlay || typeof text !== "string" || !text) return;
   window.clearTimeout(state.prepareEditor.closeTimer);
   state.prepareEditor.closeTimer = 0;
@@ -5377,15 +5550,18 @@ function openPrepareEditor(text, sourceTerminalId = null) {
   state.prepareEditor.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   state.prepareEditor.sourceTerminalId = source?.id || null;
   state.prepareEditor.validating = false;
+  setPrepareEditorMode(mode);
   const language = prepareLanguageForTerminal(source, text);
   elements.prepareText.value = text;
   setPrepareWordWrap(true);
   elements.prepareLanguage.value = language;
   elements.prepareFileName.value = PREPARE_FILE_NAMES[language];
   elements.prepareSnippetName.value = "";
-  elements.prepareSource.textContent = source
-    ? `Selected from ${source.titleInput.value || "Terminal"}. Changes stay here until you choose an action.`
-    : "Edit selected terminal text before using it.";
+  elements.prepareSource.textContent = state.prepareEditor.mode === "paste"
+    ? `Clipboard text will paste into ${source?.titleInput.value || "the focused terminal"} without Enter after editing.`
+    : source
+      ? `Selected from ${source.titleInput.value || "Terminal"}. Changes stay here until you choose an action.`
+      : "Edit selected terminal text before using it.";
   elements.prepareFind.value = "";
   elements.prepareReplace.value = "";
   elements.prepareFindBar.hidden = true;
@@ -5652,6 +5828,35 @@ async function copyPreparedText() {
   }
 }
 
+async function runPreparePrimaryAction() {
+  if (state.prepareEditor.mode !== "paste") {
+    await copyPreparedText();
+    return;
+  }
+  const terminal = state.terminals.get(state.prepareEditor.sourceTerminalId);
+  if (!terminal || terminal.status !== "live") {
+    toast("The focused terminal is no longer available", "error", 2200);
+    return;
+  }
+  if (!sendPreparedTextToTerminal(terminal.id)) return;
+  closePrepareEditor({ restoreFocus: false });
+  window.requestAnimationFrame(() => terminal.term.focus());
+}
+
+async function openPrepareAndPaste(terminal) {
+  if (!terminal || !state.terminals.has(terminal.id)) return;
+  try {
+    const text = normalizeClipboardText(await readClipboardText());
+    if (!text) {
+      toast("Clipboard has no text to prepare", "info", 1800);
+      return;
+    }
+    openPrepareEditor(text, terminal.id, "paste");
+  } catch {
+    toast("Clipboard unavailable", "error");
+  }
+}
+
 function savePreparedSnippet() {
   const text = elements.prepareText.value;
   if (/\r|\n/.test(text)) {
@@ -5720,6 +5925,24 @@ function togglePrepareTerminalFlyout(force) {
   elements.prepareTerminalFlyout.hidden = !open;
   elements.prepareSend.setAttribute("aria-expanded", String(open));
   if (open) elements.prepareTerminalList.querySelector("button")?.focus();
+}
+
+function navigatePrepareTerminalFlyout(event) {
+  const keys = new Set(["ArrowDown", "ArrowUp", "End", "Home", "PageDown", "PageUp"]);
+  if (!keys.has(event.key)) return;
+  const options = [...elements.prepareTerminalList.querySelectorAll("button:not([disabled])")];
+  if (options.length === 0) return;
+  event.preventDefault();
+  const current = Math.max(0, options.indexOf(document.activeElement));
+  let next = current;
+  if (event.key === "ArrowDown") next = (current + 1) % options.length;
+  else if (event.key === "ArrowUp") next = (current - 1 + options.length) % options.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = options.length - 1;
+  else if (event.key === "PageDown") next = Math.min(options.length - 1, current + 5);
+  else if (event.key === "PageUp") next = Math.max(0, current - 5);
+  options[next].focus({ preventScroll: true });
+  options[next].scrollIntoView({ block: "nearest" });
 }
 
 function sendPreparedTextToTerminal(id) {
@@ -5808,10 +6031,11 @@ function bindPrepareEditor() {
   elements.prepareReplaceOne.addEventListener("click", replacePreparedText);
   elements.prepareReplaceAll.addEventListener("click", replaceAllPreparedText);
   elements.prepareValidate.addEventListener("click", validatePreparedText);
-  elements.prepareCopy.addEventListener("click", copyPreparedText);
+  elements.prepareCopy.addEventListener("click", runPreparePrimaryAction);
   elements.prepareSaveSnippet.addEventListener("click", savePreparedSnippet);
   elements.prepareSaveFile.addEventListener("click", savePreparedFile);
   elements.prepareSend.addEventListener("click", () => togglePrepareTerminalFlyout());
+  elements.prepareTerminalList.addEventListener("keydown", navigatePrepareTerminalFlyout);
   state.prepareEditor.resizeObserver = createPrepareResizeObserver();
   elements.prepareOverlay.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
@@ -6251,17 +6475,30 @@ function attachTmuxSession(candidate) {
   });
 }
 
-/* ---------------- Copilot CLI session resume --------------- */
+/* ---------------- Copilot session resume --------------- */
 
-const copilotResume = { closeTimer: 0, generation: 0, sessions: [], terminalId: null };
+const COPILOT_SESSION_PAGE_SIZE = 80;
+const COPILOT_SESSION_SOURCES = new Set(["cli", "vscode", "visualstudio"]);
+const copilotResume = {
+  closeTimer: 0,
+  generation: 0,
+  newTerminal: false,
+  sessions: [],
+  terminalId: null,
+  visibleLimit: COPILOT_SESSION_PAGE_SIZE
+};
 
-function openCopilotResume(terminal) {
-  if (!terminal) return;
-  copilotResume.terminalId = terminal.id;
+function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
+  copilotResume.terminalId = terminal?.id || null;
+  copilotResume.newTerminal = Boolean(newTerminal);
   copilotResume.sessions = [];
+  copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
   copilotResume.generation += 1;
   window.clearTimeout(copilotResume.closeTimer);
   copilotResume.closeTimer = 0;
+  elements.copilotResumeDescription.textContent = copilotResume.newTerminal
+    ? "Choose local CLI or editor history to continue in a new MultiTerm terminal."
+    : `Choose a local Copilot CLI session to continue in ${terminal?.titleInput.value || "this terminal"}.`;
   elements.copilotResumeSearch.value = "";
   elements.copilotResumeOverlay.hidden = false;
   window.requestAnimationFrame(() => {
@@ -6285,8 +6522,13 @@ function closeCopilotResume() {
 
 function normalizeCopilotSession(candidate) {
   if (!candidate || !COPILOT_RESUME_ID_PATTERN.test(String(candidate.id || ""))) return null;
+  const source = COPILOT_SESSION_SOURCES.has(candidate.source) ? candidate.source : "cli";
+  const key = String(candidate.key || (source === "cli" ? `cli:${candidate.id}` : ""));
+  if (!key || key.length > 256 || /[\x00-\x1f\x7f]/.test(key)) return null;
   return {
     id: String(candidate.id).toLowerCase(),
+    key,
+    source,
     name: String(candidate.name || "").trim(),
     cwd: String(candidate.cwd || "").trim(),
     repository: String(candidate.repository || "").trim(),
@@ -6299,7 +6541,7 @@ function normalizeCopilotSession(candidate) {
 async function refreshCopilotSessions() {
   const generation = ++copilotResume.generation;
   elements.copilotResumeRefresh.disabled = true;
-  elements.copilotResumeStatus.textContent = "Looking for local Copilot CLI sessions\u2026";
+  elements.copilotResumeStatus.textContent = "Looking for local Copilot CLI, VS Code, and Visual Studio sessions\u2026";
   elements.copilotResumeList.innerHTML = '<div class="copilot-resume-empty">Reading session metadata\u2026</div>';
   const response = await requestBridge({ type: "listCopilotSessions" }, { timeout: 20000 });
   if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
@@ -6310,7 +6552,7 @@ async function refreshCopilotSessions() {
     .filter(Boolean);
   renderCopilotSessions();
   if (copilotResume.sessions.length === 0) {
-    elements.copilotResumeStatus.textContent = response?.message || "The local bridge did not return any Copilot CLI sessions.";
+    elements.copilotResumeStatus.textContent = response?.message || "The local bridge did not return any Copilot sessions.";
   }
   refreshIcons(elements.copilotResumeOverlay);
 }
@@ -6322,29 +6564,36 @@ function copilotSessionTitle(session) {
   return pathParts[pathParts.length - 1] || "Untitled Copilot session";
 }
 
+function copilotSourceLabel(source) {
+  if (source === "vscode") return "VS Code";
+  if (source === "visualstudio") return "Visual Studio";
+  return "Copilot CLI";
+}
+
 function renderCopilotSessions() {
   const query = normalizeSearchText(elements.copilotResumeSearch.value);
   const queryTokens = query.split(/\s+/).filter(Boolean);
   const filtered = query
     ? copilotResume.sessions.filter((session) => {
       const corpus = normalizeSearchText([
-        session.name, session.repository, session.branch, session.cwd, session.id
+        copilotSourceLabel(session.source), session.name, session.repository, session.branch, session.cwd, session.id
       ].join(" "));
       return queryTokens.every((token) => corpus.includes(token));
     })
     : copilotResume.sessions;
+  const shown = filtered.slice(0, copilotResume.visibleLimit);
   elements.copilotResumeList.textContent = "";
 
   if (filtered.length === 0) {
     const empty = document.createElement("div");
     empty.className = "copilot-resume-empty";
     empty.textContent = copilotResume.sessions.length === 0
-      ? "No resumable Copilot CLI sessions found."
+      ? "No resumable Copilot sessions found."
       : "No sessions match this search.";
     elements.copilotResumeList.append(empty);
   }
 
-  for (const session of filtered) {
+  for (const session of shown) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "copilot-session-card";
@@ -6358,6 +6607,10 @@ function renderCopilotSessions() {
     title.textContent = copilotSessionTitle(session);
     const context = document.createElement("span");
     context.className = "copilot-session-context";
+    const source = document.createElement("span");
+    source.className = "copilot-session-source";
+    source.textContent = copilotSourceLabel(session.source);
+    context.append(source);
     if (session.repository) {
       const repository = document.createElement("span");
       repository.className = "copilot-session-repository";
@@ -6387,19 +6640,69 @@ function renderCopilotSessions() {
     elements.copilotResumeList.append(button);
   }
 
+  if (shown.length < filtered.length) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "secondary-action copilot-resume-more";
+    more.textContent = `Load ${Math.min(COPILOT_SESSION_PAGE_SIZE, filtered.length - shown.length)} more`;
+    more.addEventListener("click", () => {
+      copilotResume.visibleLimit += COPILOT_SESSION_PAGE_SIZE;
+      renderCopilotSessions();
+    });
+    elements.copilotResumeList.append(more);
+  }
+
   if (copilotResume.sessions.length > 0) {
     elements.copilotResumeStatus.textContent = query
-      ? `${filtered.length} of ${copilotResume.sessions.length} sessions`
-      : `${copilotResume.sessions.length} resumable session${copilotResume.sessions.length === 1 ? "" : "s"}`;
+      ? `${shown.length} shown, ${filtered.length} matching, ${copilotResume.sessions.length} total`
+      : `${shown.length} of ${copilotResume.sessions.length} resumable session${copilotResume.sessions.length === 1 ? "" : "s"}`;
   }
 }
 
-function resumeCopilotSession(session) {
+function powerShellLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function openCopilotSessionTerminal(session, command, cwd = session.cwd) {
+  return addTerminal({
+    reveal: true,
+    runStartup: true,
+    shell: "pwsh",
+    cwd: cwd || undefined,
+    title: `Copilot \u00b7 ${copilotSessionTitle(session)}`,
+    pendingCommand: command
+  });
+}
+
+async function resumeCopilotSession(session) {
   const id = String(session?.id || "");
   const terminal = state.terminals.get(copilotResume.terminalId);
-  if (!COPILOT_RESUME_ID_PATTERN.test(id) || !terminal) {
+  if (!COPILOT_RESUME_ID_PATTERN.test(id) || (!copilotResume.newTerminal && !terminal)) {
     toast("That terminal or Copilot session is no longer available", "warn", 2400);
     return false;
+  }
+  if (copilotResume.newTerminal && session.source === "cli") {
+    closeCopilotResume();
+    openCopilotSessionTerminal(session, `copilot --resume=${id} --yolo`);
+    return true;
+  }
+  if (copilotResume.newTerminal) {
+    const generation = copilotResume.generation;
+    const response = await requestBridge({
+      type: "prepareCopilotSessionContext",
+      key: session.key,
+      maxContextKb: Number(state.settings.copilotImportContextKb)
+    }, { timeout: 120000 });
+    if (generation !== copilotResume.generation) return false;
+    if (!response?.contextPath || response.error) {
+      toast(response?.error || "Could not import that Copilot session", "error", 3200);
+      return false;
+    }
+    const source = copilotSourceLabel(session.source);
+    const prompt = `Continue the imported ${source} Copilot session. Read the context file at ${response.contextPath} first, continue from where it stopped, and ask what to do next if the final task is unclear.`;
+    closeCopilotResume();
+    openCopilotSessionTerminal(session, `copilot --yolo -i ${powerShellLiteral(prompt)}`, response.cwd || session.cwd);
+    return true;
   }
   closeCopilotResume();
   setAwaitingInput(terminal, false);
@@ -6976,6 +7279,7 @@ function restartSession(id) {
     title: terminal.titleInput.value,
     shell: terminal.shell,
     cwd: terminal.cwd,
+    copilotCwd: terminal.copilotCwd,
     color: terminal.color,
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
@@ -6991,6 +7295,7 @@ function restartSession(id) {
     title: meta.title,
     shell: meta.shell,
     cwd: meta.cwd,
+    copilotCwd: meta.copilotCwd,
     color: meta.color,
     fontSizeOverride: meta.fontSizeOverride,
     headerActionOverrides: meta.headerActionOverrides,
@@ -8779,6 +9084,7 @@ function saveWorkspace(rawName) {
       title: terminal.titleInput.value,
       shell: terminal.shell,
       cwd: terminal.cwd,
+      copilotCwd: terminal.copilotCwd,
       color: terminal.color,
       fontSizeOverride: terminal.fontSizeOverride,
       headerActionOverrides: { ...terminal.headerActionOverrides },
@@ -8804,6 +9110,7 @@ function restoreWorkspace(name) {
   state.settings.headerActionsInMenu = normalizeHeaderActionsInMenu(state.settings.headerActionsInMenu);
   state.settings.pageCloseAction = normalizePageCloseAction(state.settings.pageCloseAction);
   state.settings.titleFontScale = normalizeTitleFontScale(state.settings.titleFontScale);
+  state.settings.workspaceZoom = normalizeWorkspaceZoom(state.settings.workspaceZoom);
   syncControlsFromSettings();
   clearSnapLayout(false);
   applySettings();
@@ -8840,6 +9147,7 @@ function restoreWorkspace(name) {
         title: meta.title,
         shell: meta.shell,
         cwd: meta.cwd,
+        copilotCwd: meta.copilotCwd,
         color: meta.color,
         fontSizeOverride: meta.fontSizeOverride,
         headerActionOverrides: meta.headerActionOverrides,
@@ -8875,6 +9183,8 @@ function syncControlsFromSettings() {
   elements.paneHeight.value = state.settings.paneHeight;
   elements.focusWidth.value = state.settings.focusWidth;
   elements.paneGap.value = state.settings.gap;
+  elements.workspaceZoom.value = state.settings.workspaceZoom;
+  elements.statusWorkspaceZoom.value = state.settings.workspaceZoom;
   elements.fontSize.value = state.settings.fontSize;
   elements.titleFontScale.value = state.settings.titleFontScale;
   elements.terminalTheme.value = state.settings.theme;
@@ -8887,6 +9197,10 @@ function syncControlsFromSettings() {
   elements.syncInput.checked = state.settings.syncInput;
   elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
   elements.cleanCopilotClipboard.checked = state.settings.cleanCopilotClipboard;
+  state.settings.copilotImportContextKb = clampCopilotImportContextKb(
+    state.settings.copilotImportContextKb,
+    elements.copilotImportContextKb
+  );
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
@@ -8956,6 +9270,7 @@ function saveSessionSnapshot() {
     title: terminal.titleInput.value,
     shell: terminal.shell,
     cwd: terminal.cwd,
+    copilotCwd: terminal.copilotCwd,
     color: terminal.color,
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
@@ -10728,6 +11043,7 @@ const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.command-queue": "Command queue",
   "terminal.copy": "Copy",
   "terminal.copy-prepare": "Copy and prepare",
+  "terminal.prepare-paste": "Prepare and paste",
   "terminal.copy-all": "Copy all output",
   "terminal.paste": "Paste",
   "terminal.paste-execute": "Paste and execute",
@@ -11844,6 +12160,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Copy and prepare\u2026", icon: "notebook-pen", shortcutId: "terminal.copy-prepare", disabled: !hasSelection, run: () => openPrepareEditor(selection, terminal.id) },
     { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { forgetTerminalSelection(terminal); copyTerminalOutput(terminal.id); } },
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
+    { label: "Prepare and paste\u2026", icon: "clipboard-pen", shortcutId: "terminal.prepare-paste", run: () => openPrepareAndPaste(terminal) },
     {
       label: "Paste and execute",
       icon: "clipboard-check",
@@ -11863,7 +12180,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     buildCommandQueueMenuItem(terminal),
     { group: "Tools & automation", groupId: "tools-automation" },
     { label: "Open folder", icon: "folder-open", shortcutId: "terminal.open-folder", run: () => revealTerminalCwd(terminal) },
-    { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
+    { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd }) },
     {
       label: "Run Copilot CLI (YOLO)",
       icon: "bot",
@@ -11892,8 +12209,9 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       icon: "folder-input",
       customizationId: "terminal.copilot-cwd",
       placeholder: terminal.cwd || "path",
-      value: terminal.cwd || "",
-      run: (value) => sendTerminalSlashCommand(terminal, "cwd", value)
+      value: terminal.copilotCwd || terminal.cwd || "",
+      suggestions: state.copilotCwdHistory,
+      run: (value) => sendCopilotCwd(terminal, value)
     },
     { label: "New Administrator terminal", icon: "shield", shortcutId: "terminal.new-admin", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
     { label: "Run script\u2026", icon: "file-code", shortcutId: "terminal.run-script", run: () => browseAndRunScript(terminal.id) },
@@ -11908,6 +12226,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         reveal: true,
         runStartup: true,
         title: `${terminal.titleInput.value} copy`,
+        copilotCwd: terminal.copilotCwd,
         fontSizeOverride: terminal.fontSizeOverride,
         headerActionOverrides: { ...terminal.headerActionOverrides }
       })
@@ -11931,8 +12250,22 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
 // command early and run whatever followed it as a shell command.
 function sendTerminalSlashCommand(terminal, command, rawValue) {
   const value = safeTerminalCommand(rawValue);
-  if (!terminal || !value) return;
-  sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
+  if (!terminal || !value) return false;
+  return sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
+}
+
+function rememberCopilotCwd(value) {
+  state.copilotCwdHistory = normalizeCopilotCwdHistory([value, ...state.copilotCwdHistory]);
+  localStorage.setItem(COPILOT_CWD_HISTORY_STORAGE_KEY, JSON.stringify(state.copilotCwdHistory));
+}
+
+function sendCopilotCwd(terminal, rawValue) {
+  const value = safeTerminalCommand(rawValue);
+  if (!terminal || !value) return false;
+  terminal.copilotCwd = value;
+  rememberCopilotCwd(value);
+  saveSessionSnapshot();
+  return sendTerminalSlashCommand(terminal, "cwd", value);
 }
 
 function invokeCopilotCli(terminal) {
@@ -13152,6 +13485,27 @@ function renderContextMenu(items, {
         }
       });
       field.append(caption, input);
+      const suggestions = Array.isArray(item.suggestions) ? item.suggestions.slice(0, COPILOT_CWD_HISTORY_LIMIT) : [];
+      if (suggestions.length > 0) {
+        const history = document.createElement("div");
+        history.className = "ctx-command-suggestions";
+        history.setAttribute("aria-label", `${item.label} recent values`);
+        for (const suggestion of suggestions) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "ctx-command-suggestion";
+          button.textContent = suggestion;
+          button.title = suggestion;
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            input.value = suggestion;
+            input.focus();
+          });
+          history.append(button);
+        }
+        field.append(history);
+      }
       el.append(field);
       itemContainer.append(el);
       continue;
@@ -13549,7 +13903,7 @@ function moveContextFocus(delta) {
 function onContextMenuKeydown(event) {
   if (elements.contextMenu.hidden) return;
   if (event.target instanceof Element
-    && event.target.closest(".ctx-command-input, .ctx-customization-control, .ctx-group-title.is-editable")) return;
+    && event.target.closest(".ctx-command-input, .ctx-command-suggestion, .ctx-customization-control, .ctx-group-title.is-editable")) return;
   const key = event.key;
   const stop = () => {
     event.preventDefault();
@@ -13952,6 +14306,16 @@ function createLayoutModeGlyph(layout) {
   return glyph;
 }
 
+function createComboboxOptionIcon(option) {
+  const iconName = option?.dataset.icon;
+  if (!iconName) return null;
+  const icon = document.createElement("i");
+  icon.className = "combobox-option-icon";
+  icon.dataset.lucide = iconName;
+  icon.setAttribute("aria-hidden", "true");
+  return icon;
+}
+
 function enhanceComboboxes() {
   const targets = [
     elements.shellSelect,
@@ -13987,7 +14351,9 @@ function enhanceSelect(select) {
   const wrap = document.createElement("div");
   wrap.className = "combobox";
   const showsLayoutGlyph = select === elements.layoutMode;
+  const showsOptionIcon = [...select.options].some((option) => option.dataset.icon);
   if (showsLayoutGlyph) wrap.classList.add("layout-mode-combobox");
+  if (showsOptionIcon) wrap.classList.add("option-icon-combobox");
   select.parentNode.insertBefore(wrap, select);
   wrap.append(select);
   select.classList.add("combobox-native");
@@ -14012,13 +14378,16 @@ function enhanceSelect(select) {
   list.hidden = true;
   document.body.append(list);
 
-  let selectedLayoutGlyph = null;
+  let selectedGlyph = null;
   if (showsLayoutGlyph) {
-    selectedLayoutGlyph = createLayoutModeGlyph(select.value);
-    selectedLayoutGlyph.classList.add("layout-mode-glyph-selected");
+    selectedGlyph = createLayoutModeGlyph(select.value);
+    selectedGlyph.classList.add("combobox-selected-glyph", "layout-mode-glyph-selected");
+  } else if (showsOptionIcon) {
+    selectedGlyph = createComboboxOptionIcon(select.options[select.selectedIndex]);
+    selectedGlyph?.classList.add("combobox-selected-glyph");
   }
   wrap.append(input);
-  if (selectedLayoutGlyph) wrap.append(selectedLayoutGlyph);
+  if (selectedGlyph) wrap.append(selectedGlyph);
   wrap.append(chevron);
 
   const box = { open: false, index: 0, items: [] };
@@ -14060,6 +14429,10 @@ function enhanceSelect(select) {
       const li = document.createElement("li");
       li.className = `combobox-option${i === box.index ? " is-active" : ""}`;
       if (showsLayoutGlyph) li.append(createLayoutModeGlyph(o.value));
+      else if (showsOptionIcon) {
+        const optionIcon = createComboboxOptionIcon(o);
+        if (optionIcon) li.append(optionIcon);
+      }
       const label = document.createElement("span");
       label.className = "combobox-option-label";
       label.textContent = o.textContent;
@@ -14072,6 +14445,7 @@ function enhanceSelect(select) {
       });
       list.append(li);
     });
+    if (showsOptionIcon) refreshIcons(list);
     if (box.open) positionList();
   };
 
@@ -14120,11 +14494,20 @@ function enhanceSelect(select) {
   const sync = () => {
     if (!box.open) {
       input.value = currentLabel();
-      if (selectedLayoutGlyph) {
-        const replacement = createLayoutModeGlyph(select.value);
-        replacement.classList.add("layout-mode-glyph-selected");
-        selectedLayoutGlyph.replaceWith(replacement);
-        selectedLayoutGlyph = replacement;
+      if (showsLayoutGlyph || showsOptionIcon) {
+        const replacement = showsLayoutGlyph
+          ? createLayoutModeGlyph(select.value)
+          : createComboboxOptionIcon(select.options[select.selectedIndex]);
+        const currentGlyph = wrap.querySelector(".combobox-selected-glyph");
+        if (replacement) {
+          replacement.classList.add("combobox-selected-glyph");
+          if (showsLayoutGlyph) replacement.classList.add("layout-mode-glyph-selected");
+          if (currentGlyph) currentGlyph.replaceWith(replacement);
+          else input.insertAdjacentElement("afterend", replacement);
+          if (showsOptionIcon) refreshIcons(wrap);
+        } else {
+          currentGlyph?.remove();
+        }
       }
     }
   };
@@ -14275,7 +14658,7 @@ function applySettingsFilter() {
       empty = document.createElement("p");
       empty.className = "settings-filter-empty";
       empty.textContent = "No matching settings.";
-      elements.settingsShowAll.closest(".settings-panel-toolbar").insertAdjacentElement("afterend", empty);
+      elements.settingsShowAll.closest(".settings-panel-sticky").insertAdjacentElement("afterend", empty);
     }
   } else {
     empty?.remove();
@@ -14350,4 +14733,17 @@ function initializeSettingsPanel() {
   });
   elements.settingsShowAll.addEventListener("click", toggleAllSettingsGroups);
   updateSettingsShowAllButton();
+}
+
+function normalizeWorkspaceZoom(value) {
+  const requested = Number(value);
+  return Number.isFinite(requested)
+    ? Math.min(
+        WORKSPACE_ZOOM_BOUNDS.max,
+        Math.max(
+          WORKSPACE_ZOOM_BOUNDS.min,
+          Math.round(requested / WORKSPACE_ZOOM_BOUNDS.step) * WORKSPACE_ZOOM_BOUNDS.step
+        )
+      )
+    : WORKSPACE_ZOOM_BOUNDS.fallback;
 }

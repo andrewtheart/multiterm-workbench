@@ -102,6 +102,9 @@
               <i data-lucide="messages-square"></i>
               <span id="terminalMessagesBadge" class="message-toggle-badge" hidden>0</span>
             </button>
+            <button id="copilotSessionsToggle" class="icon-button" type="button" title="Resume a Copilot session" aria-label="Resume a Copilot session">
+              <i data-lucide="history"></i>
+            </button>
             <button id="themeToggle" class="icon-button" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
               <i data-lucide="moon"></i>
             </button>
@@ -135,13 +138,15 @@
 
       <div class="workbench">
         <aside class="control-panel" aria-label="Terminal layout controls">
-          <div class="settings-panel-heading">Settings</div>
-          <div class="settings-panel-toolbar">
-            <label class="settings-search">
-              <i data-lucide="search" aria-hidden="true"></i>
-              <input id="settingsSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search settings or related terms" aria-label="Search settings or related terms">
-            </label>
-            <button id="settingsShowAll" type="button" aria-pressed="false">Show all</button>
+          <div class="settings-panel-sticky">
+            <div class="settings-panel-heading">Settings</div>
+            <div class="settings-panel-toolbar">
+              <label class="settings-search">
+                <i data-lucide="search" aria-hidden="true"></i>
+                <input id="settingsSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search settings or related terms" aria-label="Search settings or related terms">
+              </label>
+              <button id="settingsShowAll" type="button" aria-pressed="false">Show all</button>
+            </div>
           </div>
 
           <section class="control-section">
@@ -211,11 +216,17 @@
             <label class="control-row">
               <span>Pages location</span>
               <select id="pagerPlacement">
-                <option value="top">Top</option>
-                <option value="bottom">Bottom</option>
-                <option value="left">Left</option>
-                <option value="right">Right</option>
+                <option value="top" data-icon="panel-top">Top</option>
+                <option value="bottom" data-icon="panel-bottom">Bottom</option>
+                <option value="left" data-icon="panel-left">Left</option>
+                <option value="right" data-icon="panel-right">Right</option>
               </select>
+            </label>
+
+            <label class="control-row range-row">
+              <span>Workspace zoom</span>
+              <input id="workspaceZoom" type="range" min="50" max="150" step="5">
+              <output id="workspaceZoomValue"></output>
             </label>
 
             <label class="control-row range-row" data-control="minWidth">
@@ -377,6 +388,10 @@
               <span>Update interval (h)</span>
               <input id="updateCheckIntervalHours" type="number" min="1" max="168" step="1" inputmode="numeric">
             </label>
+            <label class="control-row">
+              <span title="Maximum recent user and assistant transcript copied into a temporary context file when continuing a VS Code or Visual Studio Copilot session in the CLI.">Imported Copilot context (KB)</span>
+              <input id="copilotImportContextKb" type="number" min="8" max="1024" step="8" inputmode="numeric">
+            </label>
             <label class="toggle-row">
               <input id="bellNotify" type="checkbox">
               <span>Bell notifications</span>
@@ -508,7 +523,7 @@
           </div>
         </aside>
 
-        <main class="stage" aria-label="Terminal workbench">
+        <main class="stage" aria-label="Terminal workbench" tabindex="-1">
           <div id="findAllBar" class="find-all-bar" hidden role="search" aria-label="Find in all terminals">
             <i data-lucide="search"></i>
             <input id="findAllInput" class="pane-find-input find-all-input" type="text" spellcheck="false" autocomplete="off" placeholder="Find in all terminals" aria-label="Find in all terminals">
@@ -524,6 +539,7 @@
             </button>
           </div>
           <div id="terminalHost" class="terminal-host" data-layout="auto"></div>
+          <div id="workspaceZoomIndicator" class="workspace-zoom-indicator" role="status" aria-live="polite"></div>
           <svg id="terminalConnectionsOverlay" class="terminal-connections-overlay" aria-label="Terminal connections">
             <defs>
               <marker id="workspaceLinkStart" class="connector-marker-link" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="10" markerHeight="10" orient="auto">
@@ -590,6 +606,11 @@
         </span>
         <div id="minimizedDock" class="minimized-dock" aria-label="Minimized terminals" hidden></div>
         <span class="status-spacer"></span>
+        <label class="status-workspace-zoom" title="Workspace zoom: drag to resize every pane">
+          <i data-lucide="scan" aria-hidden="true"></i>
+          <input id="statusWorkspaceZoom" type="range" min="50" max="150" step="5" aria-label="Workspace zoom">
+          <output id="statusWorkspaceZoomValue">100%</output>
+        </label>
         <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>T</kbd> new</span>
         <div class="status-zoom" role="group" aria-label="Font zoom controls">
           <button id="statusZoomOut" class="status-btn status-icon-btn" type="button" title="Decrease default terminal font size (Ctrl+-)" aria-label="Decrease default terminal font size">
@@ -685,8 +706,8 @@
           <div class="copilot-resume-heading">
             <span class="copilot-resume-mark" aria-hidden="true"><i data-lucide="history"></i></span>
             <div>
-              <h2 id="copilotResumeTitle">Resume Copilot CLI session</h2>
-              <p>Choose local session history to continue in this terminal.</p>
+              <h2 id="copilotResumeTitle">Resume Copilot session</h2>
+              <p id="copilotResumeDescription">Choose local CLI or editor history to continue in a new MultiTerm terminal.</p>
             </div>
           </div>
           <button id="copilotResumeClose" class="icon-button" type="button" title="Close" aria-label="Close Copilot session selector">
@@ -696,7 +717,7 @@
         <div class="copilot-resume-toolbar">
           <label class="copilot-resume-search">
             <i data-lucide="search" aria-hidden="true"></i>
-            <input id="copilotResumeSearch" type="search" placeholder="Search title, repository, folder, branch, or ID" autocomplete="off" spellcheck="false" aria-label="Search Copilot sessions">
+            <input id="copilotResumeSearch" type="search" placeholder="Search source, title, repository, folder, branch, or ID" autocomplete="off" spellcheck="false" aria-label="Search Copilot sessions">
           </label>
           <button id="copilotResumeRefresh" class="secondary-action" type="button">
             <i data-lucide="refresh-cw"></i>
@@ -704,8 +725,8 @@
           </button>
         </div>
         <div class="copilot-resume-summary">
-          <span id="copilotResumeStatus" role="status">Looking for local Copilot CLI sessions&hellip;</span>
-          <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>YOLO permissions</span>
+          <span id="copilotResumeStatus" role="status">Looking for local Copilot sessions&hellip;</span>
+          <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>Continue in Copilot CLI</span>
         </div>
         <div id="copilotResumeList" class="copilot-resume-list" role="list"></div>
       </div>
@@ -1210,7 +1231,10 @@
               <i data-lucide="shield"></i>
               <span>ADMIN</span>
             </span>
-            <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
+            <span class="pane-title-region">
+              <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
+              <span class="pane-title-display" aria-hidden="true"></span>
+            </span>
           </div>
           <div class="pane-actions">
             <button type="button" data-action="move-left" title="Move left" aria-label="Move left">

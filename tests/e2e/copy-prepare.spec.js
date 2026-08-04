@@ -74,6 +74,56 @@ test.describe("Copy and prepare editor", () => {
     await expect(page.locator("#prepareOverlay")).toBeHidden();
   });
 
+  test("prepares clipboard text and pastes the edited result into the invoking terminal", async () => {
+    await page.evaluate(async () => {
+      await navigator.clipboard.writeText("Write-Host clipboard");
+      window.__prepareClipboardReads = 0;
+      window.__prepareReadClipboardText = window.readClipboardText;
+      window.readClipboardText = async () => {
+        window.__prepareClipboardReads += 1;
+        return window.__prepareReadClipboardText();
+      };
+      const terminal = [...state.terminals.values()][0];
+      showContextMenu(30, 30, terminal, "");
+    });
+    const action = page.locator("#contextMenu .ctx-item", { hasText: "Prepare and paste" }).first();
+    await expect(action).toBeVisible();
+    expect(await page.evaluate(() => window.__prepareClipboardReads)).toBe(0);
+    await action.click();
+
+    await expect(page.locator("#prepareOverlay")).toBeVisible();
+    await expect(page.locator("#prepareTitle")).toHaveText("Prepare and paste");
+    await expect(page.locator("#prepareSource")).toContainText("Prepare target");
+    await expect(page.locator("#prepareText")).toHaveValue("Write-Host clipboard");
+    await expect(page.locator("#prepareCopy")).toContainText("Paste");
+    expect(await page.evaluate(() => window.__prepareClipboardReads)).toBe(1);
+
+    await page.locator("#prepareText").fill("Write-Host edited");
+    await page.evaluate(() => {
+      window.__prepareFrames = [];
+      window.__prepareOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__prepareFrames.push(JSON.parse(payload));
+    });
+    await page.locator("#prepareCopy").click();
+    await expect(page.locator("#prepareOverlay")).toBeHidden();
+
+    const result = await page.evaluate(() => {
+      state.socket.send = window.__prepareOriginalSend;
+      window.readClipboardText = window.__prepareReadClipboardText;
+      const terminal = [...state.terminals.values()][0];
+      const input = window.__prepareFrames
+        .filter((frame) => frame.type === "input" && frame.id === terminal.id)
+        .map((frame) => frame.data);
+      delete window.__prepareFrames;
+      delete window.__prepareOriginalSend;
+      delete window.__prepareReadClipboardText;
+      delete window.__prepareClipboardReads;
+      return input;
+    });
+    expect(result).toContain("Write-Host edited");
+    expect(result.some((value) => value.endsWith("\r"))).toBe(false);
+  });
+
   test("defaults ambiguous shell-neutral commands to plain text", async () => {
     const inferred = await page.evaluate(() => {
       const terminal = [...state.terminals.values()][0];
@@ -225,6 +275,35 @@ test.describe("Copy and prepare editor", () => {
     expect(data).toContain("Get-Date");
     expect(data.some((value) => value.endsWith("\r"))).toBe(false);
     await page.locator("#prepareClose").click();
+  });
+
+  test("wraps and pages through send-to-terminal options with arrow keys", async () => {
+    await page.evaluate(() => {
+      for (let index = 2; index <= 8; index += 1) addTerminal({ title: `Picker target ${index}` });
+    });
+    await expect(page.locator(".pane-status.is-live")).toHaveCount(8);
+    await openEditor("Get-Date");
+    await page.locator("#prepareSend").click();
+    const options = page.locator("#prepareTerminalList button");
+    await expect(options).toHaveCount(9);
+    await expect(options.first()).toBeFocused();
+
+    await options.first().press("ArrowUp");
+    await expect(options.last()).toBeFocused();
+    await options.last().press("ArrowUp");
+    await expect(options.nth(7)).toBeFocused();
+    await options.nth(7).press("PageUp");
+    await expect(options.nth(2)).toBeFocused();
+    await options.nth(2).press("PageDown");
+    await expect(options.nth(7)).toBeFocused();
+    await options.nth(7).press("ArrowDown");
+    await expect(options.last()).toBeFocused();
+
+    await page.locator("#prepareClose").click();
+    await page.evaluate(() => {
+      [...state.terminals.values()].slice(1).forEach((terminal) => removeTerminal(terminal.id));
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
   });
 
   test("opens a new terminal on the current page and inserts without Enter", async () => {

@@ -231,10 +231,14 @@ test.describe("MultiTerm Workbench UI", () => {
     const panel = page.locator(".control-panel");
     await panel.evaluate((element) => { element.scrollTop = element.scrollHeight; });
     const sticky = await page.evaluate(() => ({
+      headingTop: document.querySelector(".settings-panel-heading").getBoundingClientRect().top,
       panelTop: document.querySelector(".control-panel").getBoundingClientRect().top,
+      stickyTop: document.querySelector(".settings-panel-sticky").getBoundingClientRect().top,
       toolbarTop: document.querySelector(".settings-panel-toolbar").getBoundingClientRect().top
     }));
-    expect(Math.abs(sticky.toolbarTop - sticky.panelTop)).toBeLessThan(1);
+    expect(Math.abs(sticky.stickyTop - sticky.panelTop)).toBeLessThan(1);
+    expect(sticky.headingTop).toBeGreaterThanOrEqual(sticky.stickyTop);
+    expect(sticky.toolbarTop).toBeGreaterThan(sticky.headingTop);
 
     await page.locator("#settingsSearch").fill("startup");
     await expect(page.locator("#settings-group-session")).toBeVisible();
@@ -508,6 +512,112 @@ test.describe("MultiTerm Workbench UI", () => {
       }));
     }, ids[0]);
     expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(14);
+  });
+
+  test("defocuses terminals and zooms the workspace from background wheel and pinch", async () => {
+    const originalViewport = page.viewportSize();
+    await page.setViewportSize({ width: 1400, height: 900 });
+    const setup = await page.evaluate(() => {
+      state.settings.layout = "auto";
+      state.settings.workspaceZoom = 100;
+      state.settings.minWidth = 420;
+      applySettings();
+      saveSettings();
+      const existingIds = [...state.terminals.keys()];
+      while (state.terminals.size < 4) addTerminal();
+      const terminal = [...state.terminals.values()][0];
+      terminal.term.focus();
+      return { existingIds, focusedId: terminal.id };
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(4);
+    await expect.poll(() => page.evaluate(() => state.activeId)).toBe(setup.focusedId);
+
+    const firstRowCount = () => page.locator(".terminal-pane:not(.is-page-hidden):not(.is-minimized)").evaluateAll((panes) => {
+      const tops = panes.map((pane) => Math.round(pane.getBoundingClientRect().top));
+      return tops.filter((top) => Math.abs(top - tops[0]) <= 2).length;
+    });
+    const workspaceSizeGaps = () => page.evaluate(() => {
+      const scale = workspaceZoomScale();
+      const stage = elements.stage.getBoundingClientRect();
+      const host = getComputedStyle(elements.host);
+      return {
+        height: Math.abs(stage.height - Number.parseFloat(host.height) * scale),
+        width: Math.abs(stage.width - Number.parseFloat(host.width) * scale)
+      };
+    });
+    const panesBefore = await firstRowCount();
+
+    await page.evaluate(() => {
+      elements.stage.addEventListener("pointerdown", (event) => {
+        window.__workspaceBackgroundTestTarget = {
+          id: event.target.id,
+          isPane: Boolean(event.target.closest(".terminal-pane"))
+        };
+      }, { capture: true, once: true });
+    });
+    await page.locator("#terminalHost").click({ position: { x: 2, y: 2 } });
+    expect(await page.evaluate(() => ({
+      activeId: state.activeId,
+      activeElement: document.activeElement === elements.stage,
+      activePanes: elements.host.querySelectorAll(".terminal-pane.is-active").length,
+      target: window.__workspaceBackgroundTestTarget
+    }))).toEqual({
+      activeId: null,
+      activeElement: true,
+      activePanes: 0,
+      target: { id: "terminalHost", isPane: false }
+    });
+
+    for (let index = 0; index < 4; index += 1) await page.mouse.wheel(0, 120);
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(80);
+    await expect(page.locator("#workspaceZoomValue")).toHaveText("80%");
+    await expect(page.locator("#workspaceZoomIndicator")).toHaveText("80%");
+    expect(await firstRowCount()).toBeGreaterThan(panesBefore);
+    await expect.poll(async () => Math.max(...Object.values(await workspaceSizeGaps()))).toBeLessThan(1);
+
+    await page.evaluate(() => {
+      elements.host.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        deltaY: -120
+      }));
+    });
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(85);
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").workspaceZoom)).toBe(85);
+
+    const statusZoom = page.locator("#statusWorkspaceZoom");
+    await statusZoom.focus();
+    await statusZoom.evaluate((slider) => {
+      slider.value = "140";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(140);
+    await expect(page.locator("#statusWorkspaceZoomValue")).toHaveText("140%");
+    await expect.poll(async () => Math.max(...Object.values(await workspaceSizeGaps()))).toBeLessThan(1);
+
+    await statusZoom.evaluate((slider) => {
+      slider.value = "75";
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(75);
+    await expect(page.locator("#statusWorkspaceZoomValue")).toHaveText("75%");
+    await expect(page.locator("#workspaceZoom")).toHaveValue("75");
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").workspaceZoom)).toBe(75);
+    expect(await page.evaluate(() => ({
+      activeId: state.activeId,
+      sliderFocused: document.activeElement === elements.statusWorkspaceZoom
+    }))).toEqual({ activeId: null, sliderFocused: true });
+
+    await page.evaluate(({ existingIds }) => {
+      for (const terminal of [...state.terminals.values()]) {
+        if (!existingIds.includes(terminal.id)) removeTerminal(terminal.id);
+      }
+      setWorkspaceZoom(100);
+      [...state.terminals.values()][0]?.term.focus();
+    }, setup);
+    await page.setViewportSize(originalViewport);
+    await expect.poll(() => page.evaluate(() => state.activeId)).not.toBeNull();
   });
 
   test("status-bar memory readout stays collapsed until the chip is hovered", async () => {
@@ -883,18 +993,32 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(panes.last()).toHaveClass(/is-active/);
   });
 
-  test("keeps the editable terminal title compact", async () => {
+  test("shows a long terminal title without enlarging its edit target", async () => {
     const pane = page.locator(".terminal-pane").first();
+    const paneId = await pane.getAttribute("data-id");
     const title = pane.locator(".pane-title");
+    await page.evaluate((id) => {
+      state.zoomedId = id;
+      applyZoom();
+    }, paneId);
+    await title.fill("Development server with a deliberately long descriptive terminal title");
+    await title.press("Enter");
     await expect(title).toHaveCSS("max-width", "180px");
 
     const measurements = await title.evaluate((input) => {
       const bar = input.closest(".pane-bar");
+      const display = bar.querySelector(".pane-title-display");
+      const region = bar.querySelector(".pane-title-region");
       const button = bar.querySelector('.pane-actions button[data-action="close"]');
       const barStyle = getComputedStyle(bar);
       return {
         input: input.getBoundingClientRect().width,
-        wrapper: input.parentElement.getBoundingClientRect().width,
+        inputRight: input.getBoundingClientRect().right,
+        display: display.getBoundingClientRect().width,
+        displayRight: display.getBoundingClientRect().right,
+        displayPointerEvents: getComputedStyle(display).pointerEvents,
+        region: region.getBoundingClientRect().width,
+        titleCenterY: input.getBoundingClientRect().top + (input.getBoundingClientRect().height / 2),
         barHeight: bar.getBoundingClientRect().height,
         buttonHeight: button.getBoundingClientRect().height,
         paddingTop: barStyle.paddingTop,
@@ -902,11 +1026,26 @@ test.describe("MultiTerm Workbench UI", () => {
       };
     });
     expect(measurements.input).toBeLessThanOrEqual(180);
-    expect(measurements.wrapper - measurements.input).toBeGreaterThan(8);
+    expect(measurements.display).toBeGreaterThan(measurements.input);
+    expect(measurements.display / measurements.region).toBeCloseTo(0.8, 1);
+    expect(measurements.displayPointerEvents).toBe("none");
     expect(measurements.barHeight).toBe(33);
     expect(measurements.buttonHeight).toBe(30);
     expect(measurements.paddingTop).toBe("1px");
     expect(measurements.paddingBottom).toBe("1px");
+
+    await page.mouse.click(
+      measurements.inputRight + ((measurements.displayRight - measurements.inputRight) / 2),
+      measurements.titleCenterY
+    );
+    await expect(title).not.toBeFocused();
+    await title.click();
+    await expect(title).toBeFocused();
+    await pane.locator(".terminal-screen").click();
+    await page.evaluate(() => {
+      state.zoomedId = null;
+      applyZoom();
+    });
   });
 
   test("makes terminal titles 10% larger by default and supports an override", async () => {

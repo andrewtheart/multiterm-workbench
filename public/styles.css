@@ -697,17 +697,20 @@ body.sidecar-hidden .control-panel {
   flex: 0 0 auto;
 }
 
-.settings-panel-toolbar {
-  align-items: center;
+.settings-panel-sticky {
   background: var(--surface);
-  display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(0, 1fr) auto;
   margin: 0 -2px;
-  padding: 12px 2px 10px;
   position: sticky;
   top: 0;
   z-index: 42;
+}
+
+.settings-panel-toolbar {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px 2px 10px;
 }
 
 .settings-panel-heading {
@@ -823,7 +826,7 @@ body.sidecar-hidden .control-panel {
 }
 
 .analytics-section .settings-group-toggle {
-  scroll-margin-top: 58px;
+  scroll-margin-top: 98px;
 }
 
 .analytics-metric {
@@ -1260,6 +1263,32 @@ body.pager-panel-collapsed[data-pager-placement="right"] #togglePager {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   opacity: 0.85;
+}
+
+.status-workspace-zoom {
+  align-items: center;
+  color: var(--muted);
+  display: inline-grid;
+  flex: 0 0 auto;
+  gap: 6px;
+  grid-template-columns: 14px 76px 34px;
+}
+
+.status-workspace-zoom > svg {
+  height: 14px;
+  width: 14px;
+}
+
+.status-workspace-zoom input {
+  cursor: ew-resize;
+  width: 76px;
+}
+
+.status-workspace-zoom output {
+  color: var(--text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .status-zoom {
@@ -2252,6 +2281,16 @@ body.header-hidden .status-hint kbd,
   color: var(--accent);
 }
 
+.copilot-session-source {
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-soft);
+  font-size: 9.5px;
+  font-weight: 650;
+  padding: 1px 5px;
+}
+
 .copilot-session-cwd {
   color: var(--muted);
   font-family: var(--mono);
@@ -2290,6 +2329,11 @@ body.header-hidden .status-hint kbd,
   margin: auto;
   padding: 32px 20px;
   text-align: center;
+}
+
+.copilot-resume-more {
+  justify-self: center;
+  margin: 4px auto;
 }
 
 @media (max-width: 600px) {
@@ -2649,6 +2693,56 @@ body[data-pager-placement="right"] .pager-add {
 .pager-add svg {
   height: 14px;
   width: 14px;
+}
+
+@media (max-width: 900px) {
+  .status-bar {
+    gap: 8px;
+    padding-inline: 8px;
+  }
+
+  .status-hint {
+    display: none;
+  }
+
+  .status-workspace-zoom {
+    grid-template-columns: 14px 64px 34px;
+  }
+
+  .status-workspace-zoom input {
+    width: 64px;
+  }
+}
+
+@media (max-width: 640px) {
+  #statusSessions,
+  #statusShell {
+    display: none;
+  }
+
+  .status-workspace-zoom {
+    grid-template-columns: 14px 56px;
+  }
+
+  .status-workspace-zoom input {
+    width: 56px;
+  }
+
+  .status-workspace-zoom output {
+    display: none;
+  }
+
+  #closeAllTerminals,
+  #logToggle {
+    min-width: 24px;
+    padding-inline: 0;
+    width: 24px;
+  }
+
+  #closeAllTerminals > span,
+  #logToggle > span:not(.log-toggle-dot) {
+    display: none;
+  }
 }
 
 /* ---------------- Terminal quick switcher --------------- */
@@ -5181,6 +5275,38 @@ body[data-pager-placement="right"] .pager-add {
   outline: 1px solid var(--primary);
 }
 
+.ctx-command-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  grid-column: 2;
+  max-width: 100%;
+}
+
+.ctx-command-suggestion {
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--muted);
+  display: block;
+  font-size: 9.5px;
+  font-weight: 450;
+  line-height: 1.3;
+  max-width: 150px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1px 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-command-suggestion:hover,
+.ctx-command-suggestion:focus-visible {
+  background: var(--state-hover);
+  color: var(--text-soft);
+  outline: none;
+}
+
 .ctx-parts {
   min-width: 0;
   white-space: nowrap;
@@ -5285,7 +5411,8 @@ body[data-pager-placement="right"] .pager-add {
   width: 100%;
 }
 
-.layout-mode-combobox .combobox-input {
+.layout-mode-combobox .combobox-input,
+.option-icon-combobox .combobox-input {
   padding-left: 40px;
 }
 
@@ -5309,12 +5436,19 @@ body[data-pager-placement="right"] .pager-add {
   stroke-width: 0.7;
 }
 
-.layout-mode-glyph-selected {
+.combobox-selected-glyph {
   left: 10px;
   pointer-events: none;
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
+}
+
+.combobox-option-icon {
+  color: var(--muted);
+  flex: 0 0 17px;
+  height: 17px;
+  width: 17px;
 }
 
 .combobox-chevron {
@@ -5380,6 +5514,10 @@ body[data-pager-placement="right"] .pager-add {
   color: var(--primary);
 }
 
+.combobox-option[aria-selected="true"] .combobox-option-icon {
+  color: var(--primary);
+}
+
 .combobox-empty {
   color: var(--muted);
   font-size: 12px;
@@ -5392,8 +5530,37 @@ body[data-pager-placement="right"] .pager-add {
 .stage {
   grid-area: stage;
   min-height: 0;
+  outline: none;
   overflow: hidden;
   position: relative;
+}
+
+.stage:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.workspace-zoom-indicator {
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: var(--elev-3);
+  color: var(--text);
+  font: 650 12px/1 var(--ui-font);
+  opacity: 0;
+  padding: 7px 10px;
+  pointer-events: none;
+  position: absolute;
+  right: 18px;
+  top: 18px;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 25;
+}
+
+.workspace-zoom-indicator.is-visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .terminal-connections-overlay {
@@ -6027,6 +6194,12 @@ body.is-pane-resizing {
   flex: 0 0 auto;
 }
 
+.pane-title-region {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+}
+
 .pane-activity {
   background: var(--warn);
   border-radius: 50%;
@@ -6227,8 +6400,9 @@ body.is-pane-resizing {
   background: transparent;
   border: 0;
   border-radius: var(--radius-xs);
+  box-sizing: border-box;
   color: var(--text);
-  flex: 0 1 180px;
+  display: block;
   font-size: var(--title-font-scale);
   font-weight: 550;
   max-width: 180px;
@@ -6237,10 +6411,38 @@ body.is-pane-resizing {
   overflow: hidden;
   padding: 0 6px;
   text-overflow: ellipsis;
+  width: min(180px, 100%);
 }
 
 .pane-title:hover {
   background: var(--state-hover);
+}
+
+.pane-title:not(:focus) {
+  caret-color: transparent;
+  color: transparent;
+}
+
+.pane-title-display {
+  box-sizing: border-box;
+  color: var(--text);
+  font-size: var(--title-font-scale);
+  font-weight: 550;
+  height: 100%;
+  left: 0;
+  line-height: 28px;
+  overflow: hidden;
+  padding: 0 6px;
+  pointer-events: none;
+  position: absolute;
+  text-overflow: ellipsis;
+  top: 0;
+  white-space: nowrap;
+  width: 80%;
+}
+
+.pane-title:focus + .pane-title-display {
+  visibility: hidden;
 }
 
 /* The session/PID pill floats over the bottom-right of the terminal instead of
@@ -6548,7 +6750,8 @@ body.is-pane-resizing {
 
 @media (min-width: 1271px) and (max-width: 1300px) {
   .top-actions {
-    grid-template-columns: minmax(120px, 170px) minmax(160px, 300px) minmax(140px, 260px) auto;
+    gap: 8px;
+    grid-template-columns: minmax(100px, 160px) minmax(140px, 280px) minmax(120px, 240px) auto;
     min-width: 0;
   }
 }
@@ -6575,7 +6778,8 @@ body.is-pane-resizing {
   }
 
   .top-actions {
-    grid-template-columns: minmax(105px, 150px) minmax(130px, 220px) minmax(120px, 180px) auto;
+    gap: 6px;
+    grid-template-columns: minmax(90px, 140px) minmax(110px, 200px) minmax(100px, 160px) auto;
     min-width: 0;
   }
 

@@ -344,6 +344,58 @@ test.describe("pane drag to rearrange", () => {
     await page.waitForTimeout(600);
   });
 
+  test("manual drag and resize stay pointer-accurate at workspace zoom", async () => {
+    await setLayout("manual");
+    await page.evaluate(() => setWorkspaceZoom(80));
+    await page.waitForTimeout(400);
+    const terminalId = await page.locator(".terminal-pane").last().getAttribute("data-id");
+    const pane = page.locator(`.terminal-pane[data-id="${terminalId}"]`);
+
+    await page.evaluate((id) => {
+      state.manualLayouts[id] = { x: 100, y: 100, w: 420, h: 280 };
+      applyManualLayout(state.terminals.get(id), state.manualLayouts[id]);
+      const bar = state.terminals.get(id).pane.querySelector(".pane-bar");
+      bar.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true, button: 0, clientX: 100, clientY: 100, pointerId: 91
+      }));
+      window.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true, button: 0, clientX: 180, clientY: 140, pointerId: 91
+      }));
+      window.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true, button: 0, clientX: 180, clientY: 140, pointerId: 91
+      }));
+    }, terminalId);
+    await expect.poll(() => page.evaluate((id) => ({ ...state.manualLayouts[id] }), terminalId)).toEqual({
+      x: 200,
+      y: 150,
+      w: 420,
+      h: 280
+    });
+
+    await page.evaluate((id) => {
+      const handle = state.terminals.get(id).pane.querySelector('[data-resize="e"]');
+      handle.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true, button: 0, clientX: 200, clientY: 200, pointerId: 92
+      }));
+      window.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true, button: 0, clientX: 280, clientY: 200, pointerId: 92
+      }));
+      window.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true, button: 0, clientX: 280, clientY: 200, pointerId: 92
+      }));
+    }, terminalId);
+    await expect.poll(() => page.evaluate((id) => ({ ...state.manualLayouts[id] }), terminalId)).toEqual({
+      x: 200,
+      y: 150,
+      w: 520,
+      h: 280
+    });
+
+    await page.evaluate(() => setWorkspaceZoom(100));
+    await setLayout("auto");
+    await page.waitForTimeout(400);
+  });
+
   test("the pid pill only brightens on direct hover", async () => {
     const pill = page.locator(".terminal-pane .pane-status").first();
     const opacity = () => pill.evaluate((el) => getComputedStyle(el).opacity);

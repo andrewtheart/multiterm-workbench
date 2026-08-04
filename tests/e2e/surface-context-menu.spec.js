@@ -441,6 +441,7 @@ test.describe("Surface context menu", () => {
       "terminal.copy-prepare",
       "terminal.copy-all",
       "terminal.paste",
+      "terminal.prepare-paste",
       "terminal.paste-execute"
     ]);
 
@@ -738,6 +739,7 @@ test.describe("Surface context menu", () => {
             "terminal.copy-prepare",
             "terminal.copy-all",
             "terminal.paste",
+            "terminal.prepare-paste",
             "terminal.paste-execute",
             "terminal.select-all"
           ]),
@@ -762,7 +764,7 @@ test.describe("Surface context menu", () => {
     });
 
     expect(mergedItems.afterPredecessor[0].items).toEqual([
-      "terminal.copy", "terminal.copy-prepare", "terminal.copy-all", "terminal.paste", "terminal.paste-execute", "terminal.select-all"
+      "terminal.copy", "terminal.copy-prepare", "terminal.copy-all", "terminal.paste", "terminal.prepare-paste", "terminal.paste-execute", "terminal.select-all"
     ]);
     expect(mergedItems.beforeFollowing[0].items).toEqual(["action.a", "action.b", "action.c", "action.d"]);
     expect(mergedItems.afterEarlierPredecessor).toEqual([
@@ -1046,6 +1048,8 @@ test.describe("Surface context menu", () => {
 
     const result = await page.evaluate(() => {
       const terminal = state.terminals.values().next().value;
+      const savedCwdHistory = state.copilotCwdHistory;
+      state.copilotCwdHistory = Array.from({ length: 10 }, (_, index) => `D:\\recent-${index}`);
       const outsideIcon = document.createElement("i");
       outsideIcon.id = "context-menu-icon-scope-probe";
       outsideIcon.dataset.lucide = "activity";
@@ -1069,6 +1073,7 @@ test.describe("Surface context menu", () => {
       };
       hideContextMenu();
       outsideIcon.remove();
+      state.copilotCwdHistory = savedCwdHistory;
       return snapshot;
     });
 

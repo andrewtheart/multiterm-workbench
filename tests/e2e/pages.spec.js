@@ -413,14 +413,25 @@ test.describe("Pages and the quick switcher", () => {
     await reset(1);
     await page.locator("#settings-group-layout").click();
     const placementInput = page.locator("#pagerPlacement").locator("xpath=..").locator(".combobox-input");
+    const placementCombo = page.locator("#pagerPlacement").locator("xpath=..");
     await expect(placementInput).toBeVisible();
     await expect(placementInput).toHaveValue("Bottom");
+    await expect(placementCombo.locator(".combobox-selected-glyph")).toHaveAttribute("data-lucide", "panel-bottom");
     await placementInput.click();
+    const optionIcons = await page.locator(".combobox-list:visible .combobox-option .combobox-option-icon")
+      .evaluateAll((icons) => icons.map((icon) => icon.dataset.lucide));
+    expect(optionIcons).toEqual([
+      "panel-top",
+      "panel-bottom",
+      "panel-left",
+      "panel-right"
+    ]);
     await page.locator(".combobox-list:visible .combobox-option", { hasText: "Left" }).click();
 
     await expect(page.locator("body")).toHaveAttribute("data-pager-placement", "left");
     await expect(page.locator("#pagerPlacement")).toHaveValue("left");
     await expect(placementInput).toHaveValue("Left");
+    await expect(placementCombo.locator(".combobox-selected-glyph")).toHaveAttribute("data-lucide", "panel-left");
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").pagerPlacement)).toBe("left");
 
     await page.reload();
@@ -432,6 +443,7 @@ test.describe("Pages and the quick switcher", () => {
     });
     await expect(page.locator("#pagerPlacement")).toHaveValue("top");
     await expect(page.locator("#pagerPlacement").locator("xpath=..").locator(".combobox-input")).toHaveValue("Top");
+    await expect(page.locator("#pagerPlacement").locator("xpath=..").locator(".combobox-selected-glyph")).toHaveAttribute("data-lucide", "panel-top");
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").pagerPlacement)).toBe("top");
   });
 
