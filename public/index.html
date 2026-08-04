@@ -679,6 +679,38 @@
       </div>
     </div>
 
+    <div id="copilotResumeOverlay" class="palette-overlay" hidden>
+      <div class="palette copilot-resume" role="dialog" aria-modal="true" aria-labelledby="copilotResumeTitle" aria-describedby="copilotResumeStatus">
+        <div class="copilot-resume-head">
+          <div class="copilot-resume-heading">
+            <span class="copilot-resume-mark" aria-hidden="true"><i data-lucide="history"></i></span>
+            <div>
+              <h2 id="copilotResumeTitle">Resume Copilot CLI session</h2>
+              <p>Choose local session history to continue in this terminal.</p>
+            </div>
+          </div>
+          <button id="copilotResumeClose" class="icon-button" type="button" title="Close" aria-label="Close Copilot session selector">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="copilot-resume-toolbar">
+          <label class="copilot-resume-search">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="copilotResumeSearch" type="search" placeholder="Search title, repository, folder, branch, or ID" autocomplete="off" spellcheck="false" aria-label="Search Copilot sessions">
+          </label>
+          <button id="copilotResumeRefresh" class="secondary-action" type="button">
+            <i data-lucide="refresh-cw"></i>
+            <span>Refresh</span>
+          </button>
+        </div>
+        <div class="copilot-resume-summary">
+          <span id="copilotResumeStatus" role="status">Looking for local Copilot CLI sessions&hellip;</span>
+          <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>YOLO permissions</span>
+        </div>
+        <div id="copilotResumeList" class="copilot-resume-list" role="list"></div>
+      </div>
+    </div>
+
     <div id="shortcutsOverlay" class="palette-overlay" hidden>
       <div class="palette shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
         <div class="shortcuts-head">
@@ -866,6 +898,9 @@
             <button id="prepareFindToggle" class="icon-button" type="button" title="Find and replace (Ctrl+F)" aria-label="Find and replace">
               <i data-lucide="search"></i>
             </button>
+            <button id="prepareWrap" class="icon-button prepare-wrap" type="button" title="Disable word wrap" aria-label="Word wrap" aria-pressed="true">
+              <i data-lucide="wrap-text"></i>
+            </button>
             <button id="prepareCleanCopilot" class="icon-button" type="button" title="Remove trailing Copilot TUI | borders" aria-label="Remove trailing Copilot TUI pipe borders">
               <i data-lucide="eraser"></i>
             </button>
@@ -885,7 +920,11 @@
           <button id="prepareReplaceAll" class="secondary-action" type="button">All</button>
         </div>
 
-        <textarea id="prepareText" class="prepare-text" spellcheck="false" wrap="off" aria-label="Text to prepare"></textarea>
+        <div id="prepareEditSurface" class="prepare-edit-surface is-wrapped">
+          <div id="prepareLineNumbers" class="prepare-line-numbers" aria-hidden="true"></div>
+          <textarea id="prepareText" class="prepare-text" spellcheck="false" wrap="soft" aria-label="Text to prepare"></textarea>
+          <div id="prepareLineMeasure" class="prepare-line-measure" aria-hidden="true"></div>
+        </div>
         <div class="prepare-statusbar">
           <span id="prepareStatus">Ln 1, Col 1</span>
           <span id="prepareValidation" role="status">Not checked</span>
@@ -1223,7 +1262,21 @@
             </button>
           </div>
         </header>
-        <div class="terminal-screen"></div>
+        <div class="terminal-screen">
+          <button class="pane-queue-add" type="button" title="Queue a command for when this terminal is ready" aria-label="Queue a command" aria-expanded="false">
+            <i data-lucide="plus"></i>
+            <span class="pane-queue-add-badge" hidden>0</span>
+          </button>
+          <form class="pane-quick-queue" hidden>
+            <input class="pane-quick-queue-input" type="text" maxlength="8192" spellcheck="false" autocomplete="off" placeholder="Command or Copilot prompt" aria-label="Command or Copilot prompt to queue">
+            <button type="submit" title="Queue for the next ready prompt" aria-label="Queue command">
+              <i data-lucide="send"></i>
+            </button>
+            <button type="button" data-quick-queue-cancel title="Cancel" aria-label="Cancel queued command entry">
+              <i data-lucide="x"></i>
+            </button>
+          </form>
+        </div>
         <span class="pane-status">starting</span>
         <div class="pane-find" hidden>
           <i data-lucide="search"></i>
@@ -1239,6 +1292,14 @@
             <i data-lucide="x"></i>
           </button>
         </div>
+        <span class="pane-resize-handle" data-resize="n" aria-hidden="true"></span>
+        <span class="pane-resize-handle" data-resize="ne" aria-hidden="true"></span>
+        <span class="pane-resize-handle" data-resize="e" aria-hidden="true"></span>
+        <span class="pane-resize-handle" data-resize="se" aria-hidden="true"></span>
+        <span class="pane-resize-handle" data-resize="s" aria-hidden="true"></span>
+        <span class="pane-resize-handle" data-resize="sw" aria-hidden="true"></span>
+        <span class="pane-resize-handle" data-resize="w" aria-hidden="true"></span>
+        <span class="pane-resize-handle" data-resize="nw" aria-hidden="true"></span>
       </article>
     </template>
   </body>

@@ -47,7 +47,7 @@ layouts from auto-fit grids to a free-form canvas.
   <tr>
     <td align="center" width="33%">
       <h3>📝 PID-bound notes and command queues</h3>
-      Keep context beside each terminal process and stage commands or long prompts, then quick-dequeue them without pressing Enter. When a process exits, its notes move to Recovered notes and its queued commands remain reusable.
+      Keep context beside each terminal process, stage commands for manual insertion, or use a pane's translucent plus button to run queued shell commands and Copilot prompts automatically after a confirmed ready state. When a process exits, its notes move to Recovered notes and its queued commands remain reusable.
     </td>
     <td align="center" width="33%">
       <h3>⌨️ Command palette + quick switch</h3>
@@ -83,7 +83,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🧹 Copy and prepare selected text</h3>
-      Open copied terminal text in a syntax-aware editor, clean Copilot TUI borders, save it as a script or snippet, or insert the prepared text into another live terminal without pressing Enter.
+      Open copied terminal text in a syntax-aware editor with line numbers and word wrap, clean Copilot TUI borders, save it as a script or snippet, or insert the prepared text into another live terminal without pressing Enter.
     </td>
   </tr>
   <tr>
@@ -93,7 +93,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🖱️ Deep right-click context menu</h3>
-      Copy, paste, prepare selected text in a syntax-aware editor, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions or whole sections, rename, add, or remove sections, and hide actions you do not use.
+      Copy, paste, paste and execute, prepare selected text in a syntax-aware editor, find, maximize, terminal statistics, notes, a command-queue submenu that inserts a staged command on click, Copilot CLI launch or searchable local-session resume, run scripts, log to file, Git status, top processes, custom commands, split/duplicate, restart, cycle colour, and move to a new page — all one right-click away. Drag actions or whole sections, rename, add, or remove sections, and hide actions you do not use.
     </td>
     <td align="center" width="33%">
       <h3>🔔 Activity and input alerts</h3>
@@ -783,7 +783,7 @@ point the checker at a fork.
 - The bottom-left workspace buttons hide or restore the top header and layout sidecar for more terminal space.
 - The bottom-left trash button closes every terminal pane and tells the bridge to kill all running shell sessions.
 - Drag a terminal by its header to the top, bottom, left, or right edge of the workbench to snap it there; the other terminals reflow into the remaining space.
-- Manual canvas panes can be dragged by their header and resized from the lower-right corner.
+- Manual canvas panes can be dragged by their header and resized from any edge or corner.
 - Any pane can be minimized to a chip in the status bar with its header's minimize (−) button; click the chip to restore the pane in place.
 - Each pane header has a **maximize** button that overlays the pane across the whole terminal workspace (and turns into restore); `Ctrl+Shift+X` does the same for the active pane.
 - The **focus** button next to it promotes the pane in the focus-rail layout rather than maximizing it.
@@ -791,7 +791,7 @@ point the checker at a fork.
 - Hold Ctrl and use the mouse wheel over a pane to zoom only that terminal; Ctrl+Alt+= / - / 0 controls or resets the active terminal. The status bar − / + controls and Ctrl+- / Ctrl+= change the default inherited by terminals without an individual override.
 - Hover (or keyboard-focus) the **memory chip** at the far left of the status bar to expand a live reading of how much RAM MultiTerm and its terminals are using, alongside system totals. It refreshes about every 4 seconds while open and stops as soon as you move away, so the (fairly expensive) Windows process probe only runs when you are actually looking. The reading is Windows-only; elsewhere the chip reports `unavailable`. Set `MEMSTATS=1` on the bridge to restore the old always-on 10-second broadcast instead.
 - Right-click inside a terminal and choose **Terminal statistics…** to inspect its cumulative input/output character units, UTF-8 payload bytes transferred through the bridge, and current CPU/memory for the shell's full process tree. Right-click blank workspace and choose **All terminal statistics…** for aggregate totals plus a per-terminal table. CPU is a point-in-time sample; use **Refresh** to sample it again.
-- Open notes and the command queue from the notebook button in the header, or split into **Notes…** and **Command queue** on a pane's right-click menu. Notes stay attached to that specific terminal process and move to **Recovered notes** when it exits. Each process also has a persistent queue for staging commands or long prompts. Hover **Command queue** in the context menu to pick a staged command (most recent first) and dequeue it in one click, use the pane's queue icon or `Ctrl+Shift+Q` to dequeue the next item immediately, or open the full manager to choose any item; every path inserts without pressing Enter. Queues from ended processes move to the reusable **Unparented queue**, where you can choose any live terminal as the destination.
+- Open notes and the command queue from the notebook button in the header, or split into **Notes…** and **Command queue** on a pane's right-click menu. Notes stay attached to that specific terminal process and move to **Recovered notes** when it exits. Each process also has a persistent queue for staging commands or long prompts. Hover **Command queue** in the context menu to pick a staged command (most recent first), use the pane's header queue icon or `Ctrl+Shift+Q` to insert the next item without Enter, or open the full manager. The translucent **+** inside the terminal content opens a separate automatic composer: plus-added items run FIFO after a shell prompt is confirmed, or after Copilot CLI finishes responding and returns to its empty prompt. Automatic arming is runtime-only; reloads and ended terminals leave remaining text staged for manual review. Queues from ended processes move to the reusable **Unparented queue**, where you can choose any live terminal as the destination.
 - Use the header **Terminal messages** inbox or a pane's **Send to terminal…** context action to hand commands, summaries, paths, status, tasks, or results to another live terminal in the same instance. Messages stay bridge-owned until the receiver explicitly inserts them without Enter or dismisses them; nothing runs automatically. Pending routes appear as dashed amber circle-to-arrow workspace connectors. Create persistent directional GUI links from the same source/target controls; those render as solid cyan diamond-to-arrow connectors, survive reloads while both sessions live, and can be removed from the dialog topology. Insert rejects terminal controls at the final PTY boundary, target exit expires stale handoffs, and the shared store is capped at 500 records or 4 MiB. Message size and per-terminal capacity are configurable under **Communication**.
 - The chevron in the bottom-right corner opens a live **log console** that tails everything the app and bridge do (connections, session start/exit, broadcasts, workspace changes, and errors). Logs can be filtered by level, copied, or cleared; a badge on the chevron flags new errors while it is closed. The bridge also prints these events to its console window.
 - **Selecting text inside a full-screen TUI** (Copilot CLI, vim, htop, lazygit) works the same as in a plain shell. Those programs turn on mouse tracking, which normally hands every gesture to the application and leaves nothing for the terminal to copy; MultiTerm keeps drags for itself so a highlight can be copied with `Ctrl+Shift+C` or the right-click **Copy**. Plain clicks are still delivered to the program, so its buttons and menus behave as usual. Hold **Alt** while dragging to give the whole gesture to the program instead (for its own selection or drag handles), or **Shift** to use xterm's native selection.

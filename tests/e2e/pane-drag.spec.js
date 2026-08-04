@@ -277,6 +277,71 @@ test.describe("pane drag to rearrange", () => {
 
     await setLayout("auto");
     await page.waitForTimeout(600);
+    await expect(page.locator(".pane-resize-handle:visible")).toHaveCount(0);
+  });
+
+  test("manual layout resizes and persists from every edge and corner", async () => {
+    await setLayout("manual");
+    await page.waitForTimeout(500);
+    const terminalId = await page.locator(".terminal-pane").last().getAttribute("data-id");
+    const pane = page.locator(`.terminal-pane[data-id="${terminalId}"]`);
+    const base = { x: 300, y: 220, w: 420, h: 280 };
+    const cases = [
+      { direction: "n", dx: 0, dy: -50, expected: { x: 300, y: 170, w: 420, h: 330 } },
+      { direction: "nw", dx: -70, dy: -50, expected: { x: 230, y: 170, w: 490, h: 330 } },
+      { direction: "ne", dx: 70, dy: -50, expected: { x: 300, y: 170, w: 490, h: 330 } },
+      { direction: "e", dx: 70, dy: 0, expected: { x: 300, y: 220, w: 490, h: 280 } },
+      { direction: "se", dx: 70, dy: 50, expected: { x: 300, y: 220, w: 490, h: 330 } },
+      { direction: "s", dx: 0, dy: 50, expected: { x: 300, y: 220, w: 420, h: 330 } },
+      { direction: "sw", dx: -70, dy: 50, expected: { x: 230, y: 220, w: 490, h: 330 } },
+      { direction: "w", dx: -70, dy: 0, expected: { x: 230, y: 220, w: 490, h: 280 } },
+      { direction: "nw", dx: 400, dy: 300, expected: { x: 460, y: 320, w: 260, h: 180 } }
+    ];
+
+    await expect(pane.locator(".pane-resize-handle")).toHaveCount(8);
+    for (const resizeCase of cases) {
+      await page.evaluate(({ id, layout }) => {
+        elements.host.scrollTo(0, 0);
+        state.manualLayouts[id] = { ...layout };
+        applyManualLayout(state.terminals.get(id), state.manualLayouts[id]);
+      }, { id: terminalId, layout: base });
+      await page.waitForTimeout(100);
+
+      const handle = pane.locator(`.pane-resize-handle[data-resize="${resizeCase.direction}"]`);
+      const hitTarget = await handle.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const target = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return { className: target?.className || "", resize: target?.dataset?.resize || null };
+      });
+      expect(hitTarget).toEqual({ className: "pane-resize-handle", resize: resizeCase.direction });
+      await handle.hover();
+      const box = await handle.boundingBox();
+      await page.mouse.down();
+      await expect(pane).toHaveClass(/is-resizing/);
+      await page.mouse.move(
+        box.x + box.width / 2 + resizeCase.dx,
+        box.y + box.height / 2 + resizeCase.dy,
+        { steps: 8 }
+      );
+      await expect.poll(() => page.evaluate((id) => ({ ...state.manualLayouts[id] }), terminalId))
+        .toEqual(resizeCase.expected);
+      await page.mouse.up();
+      await page.waitForTimeout(180);
+
+      const result = await page.evaluate((id) => ({
+        bodyResizing: document.body.classList.contains("is-pane-resizing"),
+        layout: { ...state.manualLayouts[id] },
+        paneResizing: state.terminals.get(id).pane.classList.contains("is-resizing"),
+        stored: JSON.parse(localStorage.getItem("multiterm.manualLayouts"))[id]
+      }), terminalId);
+      expect(result.layout).toEqual(resizeCase.expected);
+      expect(result.stored).toEqual(resizeCase.expected);
+      expect(result.bodyResizing).toBe(false);
+      expect(result.paneResizing).toBe(false);
+    }
+
+    await setLayout("auto");
+    await page.waitForTimeout(600);
   });
 
   test("the pid pill only brightens on direct hover", async () => {

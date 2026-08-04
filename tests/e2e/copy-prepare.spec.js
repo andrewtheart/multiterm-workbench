@@ -118,6 +118,45 @@ test.describe("Copy and prepare editor", () => {
     await page.locator("#prepareClose").click();
   });
 
+  test("shows synchronized line numbers and wraps by default", async () => {
+    const longLine = "Write-Host wrapped ".repeat(80);
+    await openEditor(`${longLine}\n\nsecond line\nthird line`);
+    const editor = page.locator("#prepareText");
+    const wrap = page.locator("#prepareWrap");
+    const numbers = page.locator("#prepareLineNumbers .prepare-line-number");
+
+    await expect(wrap).toHaveAttribute("aria-pressed", "true");
+    await expect(editor).toHaveAttribute("wrap", "soft");
+    await expect(numbers).toHaveCount(4);
+    await expect(numbers).toHaveText(["1", "2", "3", "4"]);
+    const wrappedHeights = await numbers.evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
+    expect(wrappedHeights[0]).toBeGreaterThan(wrappedHeights[1] * 2);
+
+    await wrap.click();
+    await expect(wrap).toHaveAttribute("aria-pressed", "false");
+    await expect(editor).toHaveAttribute("wrap", "off");
+    await expect.poll(() => numbers.evaluateAll((rows) => {
+      const heights = rows.map((row) => row.getBoundingClientRect().height);
+      return Math.abs(heights[0] - heights[1]);
+    })).toBeLessThan(1);
+
+    await editor.fill(Array.from({ length: 80 }, (_, index) => `line ${index + 1}`).join("\n"));
+    await expect(numbers).toHaveCount(80);
+    await editor.evaluate((element) => {
+      element.scrollTop = 500;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    expect(await page.locator("#prepareLineNumbers").evaluate((element) => element.scrollTop)).toBe(
+      await editor.evaluate((element) => element.scrollTop)
+    );
+    await page.locator("#prepareClose").click();
+
+    await openEditor("wrap resets on reopen");
+    await expect(wrap).toHaveAttribute("aria-pressed", "true");
+    await expect(editor).toHaveAttribute("wrap", "soft");
+    await page.locator("#prepareClose").click();
+  });
+
   test("removes every trailing Copilot TUI pipe border", async () => {
     await openEditor("first value   |\nplain line\nthird value|   \ncommand | value");
     await page.locator("#prepareCleanCopilot").click();
@@ -173,8 +212,8 @@ test.describe("Copy and prepare editor", () => {
     });
     await page.locator("#prepareSend").click();
     await expect(page.locator("#prepareTerminalFlyout")).toBeVisible();
-    await expect(page.locator("#prepareTerminalList button")).toHaveCount(1);
-    await page.locator("#prepareTerminalList button").click();
+    await expect(page.locator("#prepareTerminalList button")).toHaveCount(2);
+    await page.locator("#prepareTerminalList button:not(.prepare-terminal-new)").click();
 
     const data = await page.evaluate(() => {
       state.socket.send = window.__prepareOriginalSend;
@@ -186,6 +225,61 @@ test.describe("Copy and prepare editor", () => {
     expect(data).toContain("Get-Date");
     expect(data.some((value) => value.endsWith("\r"))).toBe(false);
     await page.locator("#prepareClose").click();
+  });
+
+  test("opens a new terminal on the current page and inserts without Enter", async () => {
+    const currentPageId = await page.evaluate(() => addPage({ name: "Prepared page" }));
+    await openEditor("Write-Output first\nWrite-Output second");
+    await page.evaluate(() => {
+      window.__prepareFrames = [];
+      window.__prepareOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__prepareFrames.push(frame);
+        if (frame.type !== "input") window.__prepareOriginalSend.call(this, payload);
+      };
+    });
+
+    await page.locator("#prepareSend").click();
+    const create = page.locator("#prepareTerminalList .prepare-terminal-new");
+    await expect(create).toContainText("New terminal");
+    await expect(create).toContainText("Prepared page");
+    await create.click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => window.__prepareFrames
+      .filter((frame) => frame.type === "input")
+      .map((frame) => frame.data)
+      .join(""))).toContain("Write-Output second");
+
+    const result = await page.evaluate((expectedPageId) => {
+      state.socket.send = window.__prepareOriginalSend;
+      delete window.__prepareOriginalSend;
+      const createdFrame = window.__prepareFrames.find((frame) => frame.type === "create");
+      const terminal = state.terminals.get(createdFrame.id);
+      const input = window.__prepareFrames
+        .filter((frame) => frame.type === "input" && frame.id === createdFrame.id)
+        .map((frame) => frame.data)
+        .join("");
+      delete window.__prepareFrames;
+      return {
+        currentPageId: state.activePageId,
+        input,
+        terminalId: terminal.id,
+        terminalPageId: terminal.pageId,
+        expectedPageId
+      };
+    }, currentPageId);
+    expect(result.currentPageId).toBe(currentPageId);
+    expect(result.terminalPageId).toBe(currentPageId);
+    expect(result.input).toContain("Write-Output first");
+    expect(result.input).toContain("Write-Output second");
+    expect(result.input.endsWith("\r")).toBe(false);
+
+    await page.locator("#prepareClose").click();
+    await page.evaluate(({ terminalId, pageId }) => {
+      removeTerminal(terminalId);
+      removePage(pageId);
+    }, { terminalId: result.terminalId, pageId: currentPageId });
   });
 
   test("stays usable in a narrow window", async () => {
@@ -200,7 +294,35 @@ test.describe("Copy and prepare editor", () => {
     expect(geometry.top).toBeGreaterThanOrEqual(0);
     expect(geometry.bottom).toBeLessThanOrEqual(720);
     expect(geometry.height).toBeGreaterThan(500);
+    await page.locator("#prepareSend").click();
+    const flyout = await page.locator("#prepareTerminalFlyout").evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right };
+    });
+    expect(flyout.left).toBeGreaterThanOrEqual(0);
+    expect(flyout.right).toBeLessThanOrEqual(390);
     await page.locator("#prepareClose").click();
     await page.setViewportSize({ width: 1280, height: 720 });
+  });
+
+  test("keeps line numbers usable when browser metrics are unavailable", async () => {
+    await openEditor("fallback metrics");
+    const result = await page.evaluate(() => {
+      const realGetComputedStyle = window.getComputedStyle;
+      window.getComputedStyle = (element) => element === elements.prepareText
+        ? { lineHeight: "normal", paddingLeft: "auto", paddingRight: "auto" }
+        : realGetComputedStyle(element);
+      try {
+        updatePrepareLineNumbers();
+        return {
+          lineHeight: elements.prepareLineNumbers.firstElementChild.getBoundingClientRect().height,
+          observerWithoutApi: createPrepareResizeObserver(null)
+        };
+      } finally {
+        window.getComputedStyle = realGetComputedStyle;
+      }
+    });
+    expect(result).toEqual({ lineHeight: 20, observerWithoutApi: null });
+    await page.locator("#prepareClose").click();
   });
 });

@@ -166,6 +166,7 @@ const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 const COPILOT_YOLO_COMMAND = "copilot --yolo";
+const COPILOT_RESUME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const terminalMessaging = window.TerminalMessaging;
 
 // xterm reports focus changes back to the shell as data when the application
@@ -316,6 +317,12 @@ const elements = {
   commandQueueInput: document.querySelector("#commandQueueInput"),
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
+  copilotResumeClose: document.querySelector("#copilotResumeClose"),
+  copilotResumeList: document.querySelector("#copilotResumeList"),
+  copilotResumeOverlay: document.querySelector("#copilotResumeOverlay"),
+  copilotResumeRefresh: document.querySelector("#copilotResumeRefresh"),
+  copilotResumeSearch: document.querySelector("#copilotResumeSearch"),
+  copilotResumeStatus: document.querySelector("#copilotResumeStatus"),
   contextMenu: document.querySelector("#contextMenu"),
   contextSubmenu: document.querySelector("#contextSubmenu"),
   controlPanel: document.querySelector(".control-panel"),
@@ -398,6 +405,7 @@ const elements = {
   prepareCleanCopilot: document.querySelector("#prepareCleanCopilot"),
   prepareClose: document.querySelector("#prepareClose"),
   prepareCopy: document.querySelector("#prepareCopy"),
+  prepareEditSurface: document.querySelector("#prepareEditSurface"),
   prepareFileName: document.querySelector("#prepareFileName"),
   prepareFind: document.querySelector("#prepareFind"),
   prepareFindBar: document.querySelector("#prepareFindBar"),
@@ -406,6 +414,8 @@ const elements = {
   prepareFindToggle: document.querySelector("#prepareFindToggle"),
   prepareIssues: document.querySelector("#prepareIssues"),
   prepareLanguage: document.querySelector("#prepareLanguage"),
+  prepareLineMeasure: document.querySelector("#prepareLineMeasure"),
+  prepareLineNumbers: document.querySelector("#prepareLineNumbers"),
   prepareOverlay: document.querySelector("#prepareOverlay"),
   prepareRedo: document.querySelector("#prepareRedo"),
   prepareReplace: document.querySelector("#prepareReplace"),
@@ -423,6 +433,7 @@ const elements = {
   prepareUndo: document.querySelector("#prepareUndo"),
   prepareValidate: document.querySelector("#prepareValidate"),
   prepareValidation: document.querySelector("#prepareValidation"),
+  prepareWrap: document.querySelector("#prepareWrap"),
   tmuxAttachClose: document.querySelector("#tmuxAttachClose"),
   tmuxAttachList: document.querySelector("#tmuxAttachList"),
   tmuxAttachOverlay: document.querySelector("#tmuxAttachOverlay"),
@@ -572,7 +583,7 @@ const state = {
   closeDisposition: "",
   closeRequestSource: "window",
   pendingPageClose: null,
-  prepareEditor: { closeTimer: 0, returnFocus: null, sourceTerminalId: null, validating: false },
+  prepareEditor: { closeTimer: 0, lineNumbersFrame: 0, resizeObserver: null, returnFocus: null, sourceTerminalId: null, validating: false, wordWrap: true },
   findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false },
   appElevated: false,
   broadcastScope: "all",
@@ -791,6 +802,30 @@ function bindControls() {
     if (event.key === "Escape") {
       event.preventDefault();
       closeTmuxAttach();
+    }
+  });
+  elements.copilotResumeClose.addEventListener("click", closeCopilotResume);
+  elements.copilotResumeRefresh.addEventListener("click", refreshCopilotSessions);
+  elements.copilotResumeSearch.addEventListener("input", renderCopilotSessions);
+  elements.copilotResumeSearch.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      elements.copilotResumeList.querySelector(".copilot-session-card")?.focus();
+    } else if (event.key === "Enter") {
+      const first = elements.copilotResumeList.querySelector(".copilot-session-card");
+      if (first) {
+        event.preventDefault();
+        first.click();
+      }
+    }
+  });
+  elements.copilotResumeOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.copilotResumeOverlay) closeCopilotResume();
+  });
+  elements.copilotResumeOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeCopilotResume();
     }
   });
   elements.closeAllTerminals.addEventListener("click", closeAllTerminals);
@@ -1203,6 +1238,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "copilotSessions") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
   if (message.type === "openFolder") {
     openFolderInNewTerminal(message.path);
     return;
@@ -1327,6 +1367,27 @@ function handleBridgeMessage(message) {
         window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${pending}${withEnter ? "\r" : ""}` }), 500);
       }
     }
+    if (terminal.pendingPaste) {
+      const pending = terminal.pendingPaste;
+      const withEnter = terminal.pendingPasteEnter;
+      terminal.pendingPaste = null;
+      terminal.pendingPasteEnter = false;
+      window.setTimeout(() => {
+        const liveTerminal = state.terminals.get(terminal.id);
+        if (liveTerminal?.status === "live") {
+          pasteIntoSpecificTerminal(liveTerminal, pending);
+          if (withEnter) scheduleTerminalEnter(liveTerminal);
+        }
+      }, 500);
+    }
+    if (terminal.pendingCopilotYolo) {
+      terminal.pendingCopilotYolo = false;
+      window.setTimeout(() => {
+        const liveTerminal = state.terminals.get(terminal.id);
+        if (liveTerminal?.status === "live") invokeCopilotCli(liveTerminal);
+      }, 500);
+    }
+    scheduleAutomaticQueueCheck(terminal, 150);
     return;
   }
 
@@ -1584,6 +1645,12 @@ function addTerminal(options = {}) {
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
     awaitingInput: false,
+    autoQueueCompletionMarker: "",
+    autoQueueDispatching: false,
+    autoQueueOutputEvidence: "",
+    autoQueueRequiredRevision: 0,
+    autoQueueTimer: 0,
+    copilotTuiDetected: false,
     elevated,
     fitAddon,
     fontSizeOverride,
@@ -1597,12 +1664,16 @@ function addTerminal(options = {}) {
     minimized: false,
     observer: null,
     pane,
+    pendingCopilotYolo: Boolean(options.pendingCopilotYolo),
     pendingCommand: typeof options.pendingCommand === "string" ? options.pendingCommand : null,
     pendingCommandEnter: options.pendingCommandEnter !== false,
+    pendingPaste: typeof options.pendingPaste === "string" ? options.pendingPaste : null,
+    pendingPasteEnter: Boolean(options.pendingPasteEnter),
     pendingOutput: [],
     pendingOutputBytes: 0,
     outputFlushHandle: 0,
     outputFlushTimer: 0,
+    outputRevision: 0,
     fitScheduled: false,
     lastSentCols: 0,
     lastSentRows: 0,
@@ -1643,6 +1714,8 @@ function addTerminal(options = {}) {
   bindPaneControls(terminal);
   applyHeaderActionPlacement(terminal);
   bindPaneDrag(terminal);
+  bindPaneResize(terminal);
+  bindPaneQuickQueue(terminal);
   bindPaneFind(terminal);
   applyPaneColor(terminal);
   if (terminal.elevated) pane.classList.add("is-admin");
@@ -1666,7 +1739,11 @@ function addTerminal(options = {}) {
     // clear its awaiting flag, erasing the indicator meant to call you back.
     const isUserInput = !FOCUS_REPORT_SEQUENCE.test(data);
     const clearsSelection = isUserInput && !MOUSE_REPORT_SEQUENCE.test(data);
-    const targets = state.settings.syncInput ? [...state.terminals.keys()] : [id];
+    const targets = terminal.targetedPaste
+      ? [id]
+      : state.settings.syncInput
+        ? [...state.terminals.keys()]
+        : [id];
     for (const targetId of targets) {
       const target = state.terminals.get(targetId);
       if (target && isUserInput) {
@@ -1758,6 +1835,7 @@ function addTerminal(options = {}) {
   applySettings();
   revealTerminal(terminal);
   scheduleFit(terminal);
+  if (terminal.status === "live") scheduleAutomaticQueueCheck(terminal, 150);
   saveSessionSnapshot();
   return terminal;
 }
@@ -2403,6 +2481,96 @@ function bindPaneDrag(terminal) {
   });
 }
 
+let paneResizeActive = false;
+
+function bindPaneResize(terminal) {
+  const handles = terminal.pane.querySelectorAll(".pane-resize-handle");
+  let resize = null;
+
+  const stopTracking = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onEnd);
+    window.removeEventListener("pointercancel", onEnd);
+  };
+
+  const onMove = (event) => {
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - resize.startX;
+    const deltaY = event.clientY - resize.startY;
+    const next = {
+      x: resize.x,
+      y: resize.y,
+      w: resize.w,
+      h: resize.h
+    };
+
+    if (resize.direction.includes("e")) {
+      next.w = Math.max(resize.minWidth, resize.w + deltaX);
+    } else if (resize.direction.includes("w")) {
+      const right = resize.x + resize.w;
+      next.x = Math.max(0, Math.min(resize.x + deltaX, right - resize.minWidth));
+      next.w = right - next.x;
+    }
+    if (resize.direction.includes("s")) {
+      next.h = Math.max(resize.minHeight, resize.h + deltaY);
+    } else if (resize.direction.includes("n")) {
+      const bottom = resize.y + resize.h;
+      next.y = Math.max(0, Math.min(resize.y + deltaY, bottom - resize.minHeight));
+      next.h = bottom - next.y;
+    }
+
+    const layout = ensureManualLayout(terminal.id);
+    layout.x = Math.round(next.x);
+    layout.y = Math.round(next.y);
+    layout.w = Math.round(next.w);
+    layout.h = Math.round(next.h);
+    applyManualLayout(terminal, layout);
+  };
+
+  const onEnd = (event) => {
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    stopTracking();
+    resize = null;
+    paneResizeActive = false;
+    terminal.pane.classList.remove("is-resizing");
+    document.body.classList.remove("is-pane-resizing");
+    document.body.style.removeProperty("cursor");
+    syncManualLayout(terminal);
+  };
+
+  for (const handle of handles) {
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || state.settings.layout !== "manual") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const layout = ensureManualLayout(terminal.id);
+      const rect = terminal.pane.getBoundingClientRect();
+      const style = getComputedStyle(terminal.pane);
+      resize = {
+        direction: handle.dataset.resize || "se",
+        h: rect.height,
+        minHeight: Number.parseFloat(style.minHeight) || 180,
+        minWidth: Number.parseFloat(style.minWidth) || 260,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        w: rect.width,
+        x: Number(layout.x) || 0,
+        y: Number(layout.y) || 0
+      };
+      paneResizeActive = true;
+      setActiveTerminal(terminal.id);
+      terminal.pane.classList.add("is-resizing");
+      document.body.classList.add("is-pane-resizing");
+      document.body.style.cursor = getComputedStyle(handle).cursor;
+      stopTracking();
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onEnd);
+      window.addEventListener("pointercancel", onEnd);
+    });
+  }
+}
+
 function finishPaneDrag(terminal, drag) {
   if (drag.started && drag.pageId) {
     if (drag.reordered) restorePaneOrder(drag.originalOrder);
@@ -2782,6 +2950,8 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
+  window.clearTimeout(terminal.autoQueueTimer);
+  terminal.autoQueueTimer = 0;
   window.clearTimeout(terminal.fontZoomIndicatorTimer);
   window.clearTimeout(terminal.webglRecoveryHandle);
   terminal.webglRecoveryHandle = 0;
@@ -3351,11 +3521,16 @@ function flushAllTerminalOutput() {
 // frame via flushTerminalOutput; status/banner lines (writelnTerminal) call it too.
 function writeTerminal(terminal, data) {
   terminal.term.write(data);
+  terminal.outputRevision += 1;
+  if (terminal.autoQueueCompletionMarker) {
+    terminal.autoQueueOutputEvidence = `${terminal.autoQueueOutputEvidence}${stripTerminalControlCodes(data)}`.slice(-32768);
+  }
   appendTerminalSearchText(terminal, data);
   updateTerminalSearchVisibility(terminal);
   markActivity(terminal);
   handleOutputNotifications(terminal);
   scheduleInputPromptCheck(terminal);
+  scheduleAutomaticQueueCheck(terminal);
   if (state.settings.scrollOnOutput) terminal.term.scrollToBottom();
 }
 
@@ -3432,8 +3607,172 @@ function effectiveScrollback() {
 // (input-detection.js) so they can be unit-tested in isolation. The renderer's
 // job here is only to decide *which* line to inspect and pass the caret context.
 const promptDetector = (typeof window !== "undefined" && window.InputPromptDetector) || {
+  isCopilotPromptReady: () => false,
+  isCopilotTui: () => false,
+  isShellPrompt: () => false,
   looksLikeInputPrompt: () => false
 };
+
+const AUTO_QUEUE_SETTLE_MS = 550;
+const TERMINAL_PASTE_SETTLE_MS = 80;
+const COPILOT_TUI_ENTER = "\x1b[13u";
+
+function activeBufferLines(terminal) {
+  const buffer = terminal?.term?.buffer?.active;
+  if (!buffer) return [];
+  const lines = [];
+  const first = buffer.type === "alternate" ? 0 : Math.max(0, buffer.length - terminal.term.rows - 4);
+  for (let row = first; row < buffer.length; row += 1) {
+    lines.push(readBufferLine(buffer, row));
+  }
+  return lines;
+}
+
+function readLogicalCursorLine(buffer, cursorRow) {
+  let first = cursorRow;
+  while (first > 0 && buffer.getLine(first)?.isWrapped) first -= 1;
+  let text = "";
+  for (let row = first; row <= cursorRow; row += 1) {
+    text += buffer.getLine(row)?.translateToString(true) || "";
+  }
+  return text.replace(/\s+$/, "");
+}
+
+function terminalExecutionReadiness(terminal) {
+  const buffer = terminal?.term?.buffer?.active;
+  if (!buffer || terminal.status !== "live") return { mode: "none", ready: false };
+  const lines = activeBufferLines(terminal);
+  if (promptDetector.isCopilotTui(lines) || promptDetector.isCopilotPromptReady(lines, true)) {
+    terminal.copilotTuiDetected = true;
+  }
+
+  const cursorRow = buffer.baseY + buffer.cursorY;
+  const physicalLine = readBufferLine(buffer, cursorRow);
+  const logicalLine = readLogicalCursorLine(buffer, cursorRow);
+  const shellReady = buffer.type !== "alternate"
+    && Boolean(logicalLine)
+    && buffer.cursorX >= physicalLine.length
+    && promptDetector.isShellPrompt(logicalLine);
+  if (terminal.copilotTuiDetected) {
+    if (shellReady) {
+      terminal.copilotTuiDetected = false;
+    } else {
+      return {
+        mode: "copilot",
+        ready: promptDetector.isCopilotPromptReady(lines, true)
+      };
+    }
+  }
+  if (buffer.type === "alternate") return { mode: "alternate", ready: false };
+  return {
+    mode: "shell",
+    ready: shellReady
+  };
+}
+
+function terminalEnterSequence(terminal) {
+  const lines = activeBufferLines(terminal);
+  return terminal?.copilotTuiDetected
+    || promptDetector.isCopilotTui(lines)
+    || promptDetector.isCopilotPromptReady(lines, true)
+    ? COPILOT_TUI_ENTER
+    : "\r";
+}
+
+function pasteIntoSpecificTerminal(terminal, text) {
+  if (!terminal || !text || !state.socketReady) return false;
+  terminal.targetedPaste = true;
+  try {
+    terminal.term.paste(text);
+    return true;
+  } finally {
+    terminal.targetedPaste = false;
+  }
+}
+
+function scheduleTerminalEnter(terminal, { sequence = null, onComplete = null } = {}) {
+  const terminalId = terminal?.id;
+  window.setTimeout(() => {
+    const liveTerminal = state.terminals.get(terminalId);
+    const sent = Boolean(liveTerminal)
+      && sendBridge({ type: "input", id: terminalId, data: sequence || terminalEnterSequence(liveTerminal) });
+    if (typeof onComplete === "function") onComplete(sent, liveTerminal || null);
+  }, TERMINAL_PASTE_SETTLE_MS);
+}
+
+function automaticQueueItem(terminal) {
+  const queue = state.terminalArtifacts.terminals[terminal.id]?.queue || [];
+  return queue.find((item) => item.runWhenReady === true) || null;
+}
+
+function normalizeAutomaticQueueEvidence(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+}
+
+function scheduleAutomaticQueueCheck(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
+  window.clearTimeout(terminal?.autoQueueTimer);
+  if (!terminal || terminal.status !== "live" || !automaticQueueItem(terminal)) return;
+  terminal.autoQueueTimer = window.setTimeout(() => {
+    terminal.autoQueueTimer = 0;
+    dispatchAutomaticQueueItem(terminal);
+  }, delay);
+}
+
+function dispatchAutomaticQueueItem(terminal) {
+  if (!terminal || terminal.autoQueueDispatching || terminal.status !== "live") return false;
+  if (terminal.outputRevision < terminal.autoQueueRequiredRevision) return false;
+  if (terminal.autoQueueCompletionMarker) {
+    const evidence = normalizeAutomaticQueueEvidence(terminal.autoQueueOutputEvidence);
+    if (!evidence.includes(terminal.autoQueueCompletionMarker)) return false;
+  }
+  const readiness = terminalExecutionReadiness(terminal);
+  if (!readiness.ready) return false;
+
+  const record = state.terminalArtifacts.terminals[terminal.id];
+  const item = automaticQueueItem(terminal);
+  if (!record || !item) return false;
+  const command = safeTerminalCommand(item.command);
+  if (!command) {
+    record.queue.splice(record.queue.indexOf(item), 1);
+    saveTerminalArtifacts();
+    scheduleAutomaticQueueCheck(terminal, 0);
+    return false;
+  }
+  if (!state.socketReady) return false;
+
+  terminal.autoQueueDispatching = true;
+  terminal.autoQueueRequiredRevision = terminal.outputRevision + 1;
+  terminal.autoQueueCompletionMarker = normalizeAutomaticQueueEvidence(command).slice(0, 160);
+  terminal.autoQueueOutputEvidence = "";
+  const enterSequence = readiness.mode === "copilot" ? COPILOT_TUI_ENTER : "\r";
+  if (!pasteIntoSpecificTerminal(terminal, command)) {
+    terminal.autoQueueDispatching = false;
+    terminal.autoQueueRequiredRevision = 0;
+    terminal.autoQueueCompletionMarker = "";
+    terminal.autoQueueOutputEvidence = "";
+    return false;
+  }
+
+  scheduleTerminalEnter(terminal, {
+    sequence: enterSequence,
+    onComplete: (sent, liveTerminal) => {
+      terminal.autoQueueDispatching = false;
+      if (!sent || !liveTerminal) {
+        terminal.autoQueueRequiredRevision = 0;
+        terminal.autoQueueCompletionMarker = "";
+        terminal.autoQueueOutputEvidence = "";
+        toast("Bridge unavailable; the queued command was not executed.", "error", 2600);
+        return;
+      }
+      const liveRecord = state.terminalArtifacts.terminals[terminal.id];
+      const index = liveRecord?.queue.findIndex((entry) => entry.id === item.id) ?? -1;
+      if (index >= 0) liveRecord.queue.splice(index, 1);
+      saveTerminalArtifacts();
+      log.info("queue", `Executed queued command in ${terminal.titleInput.value || "terminal"}`, { id: terminal.id });
+    }
+  });
+  return true;
+}
 
 // Heuristic: after output settles, inspect the line the cursor is parked on.
 // A program blocked on input leaves its prompt there; an idle shell leaves its
@@ -4040,7 +4379,7 @@ function scheduleFit(terminal) {
 // drag the size is forwarded immediately; during a drag it is suppressed and
 // endWindowResizeDrag() forwards the settled size once motion stops.
 function queueResize(terminal, cols, rows) {
-  if (resizeDragActive) return;
+  if (resizeDragActive || paneResizeActive) return;
   sendResize(terminal, cols, rows);
 }
 
@@ -4972,6 +5311,56 @@ function updatePrepareStatus() {
   elements.prepareStatus.textContent = `Ln ${line}, Col ${column}  \u00b7  ${totalLines} lines  \u00b7  ${editor.value.length} chars`;
 }
 
+function updatePrepareLineNumbers() {
+  if (elements.prepareOverlay.hidden) return;
+  const editorStyle = window.getComputedStyle(elements.prepareText);
+  const lineHeight = Number.parseFloat(editorStyle.lineHeight) || 20;
+  const horizontalPadding = (Number.parseFloat(editorStyle.paddingLeft) || 0)
+    + (Number.parseFloat(editorStyle.paddingRight) || 0);
+  const contentWidth = Math.max(1, elements.prepareText.clientWidth - horizontalPadding);
+  const wrapped = state.prepareEditor.wordWrap;
+  elements.prepareLineMeasure.style.width = `${contentWidth}px`;
+  elements.prepareLineMeasure.style.whiteSpace = wrapped ? "pre-wrap" : "pre";
+  elements.prepareLineMeasure.style.overflowWrap = wrapped ? "break-word" : "normal";
+
+  const fragment = document.createDocumentFragment();
+  const lines = elements.prepareText.value.replace(/\r\n?/g, "\n").split("\n");
+  lines.forEach((line, index) => {
+    elements.prepareLineMeasure.textContent = line || "\u200b";
+    const number = document.createElement("div");
+    number.className = "prepare-line-number";
+    number.textContent = String(index + 1);
+    number.style.height = `${wrapped ? Math.max(lineHeight, elements.prepareLineMeasure.scrollHeight) : lineHeight}px`;
+    fragment.append(number);
+  });
+  elements.prepareLineNumbers.replaceChildren(fragment);
+  elements.prepareLineNumbers.scrollTop = elements.prepareText.scrollTop;
+}
+
+function schedulePrepareLineNumbers() {
+  if (state.prepareEditor.lineNumbersFrame) window.cancelAnimationFrame(state.prepareEditor.lineNumbersFrame);
+  state.prepareEditor.lineNumbersFrame = window.requestAnimationFrame(() => {
+    state.prepareEditor.lineNumbersFrame = 0;
+    updatePrepareLineNumbers();
+  });
+}
+
+function setPrepareWordWrap(enabled) {
+  state.prepareEditor.wordWrap = Boolean(enabled);
+  elements.prepareEditSurface.classList.toggle("is-wrapped", state.prepareEditor.wordWrap);
+  elements.prepareText.wrap = state.prepareEditor.wordWrap ? "soft" : "off";
+  elements.prepareWrap.setAttribute("aria-pressed", String(state.prepareEditor.wordWrap));
+  elements.prepareWrap.title = state.prepareEditor.wordWrap ? "Disable word wrap" : "Enable word wrap";
+  schedulePrepareLineNumbers();
+}
+
+function createPrepareResizeObserver(Observer = globalThis.ResizeObserver) {
+  if (typeof Observer !== "function") return null;
+  const observer = new Observer(schedulePrepareLineNumbers);
+  observer.observe(elements.prepareEditSurface);
+  return observer;
+}
+
 function prepareEditorFocusableElements() {
   return [...elements.prepareOverlay.querySelectorAll(
     'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -4990,6 +5379,7 @@ function openPrepareEditor(text, sourceTerminalId = null) {
   state.prepareEditor.validating = false;
   const language = prepareLanguageForTerminal(source, text);
   elements.prepareText.value = text;
+  setPrepareWordWrap(true);
   elements.prepareLanguage.value = language;
   elements.prepareFileName.value = PREPARE_FILE_NAMES[language];
   elements.prepareSnippetName.value = "";
@@ -5008,7 +5398,10 @@ function openPrepareEditor(text, sourceTerminalId = null) {
   updatePrepareStatus();
   document.querySelector(".app-shell").inert = true;
   elements.prepareOverlay.hidden = false;
-  window.requestAnimationFrame(() => elements.prepareOverlay.classList.add("is-open"));
+  window.requestAnimationFrame(() => {
+    elements.prepareOverlay.classList.add("is-open");
+    schedulePrepareLineNumbers();
+  });
   elements.prepareText.focus();
 }
 
@@ -5131,6 +5524,7 @@ function preparedTextChanged() {
   elements.prepareIssues.hidden = true;
   elements.prepareIssues.textContent = "";
   updatePrepareStatus();
+  schedulePrepareLineNumbers();
 }
 
 function prepareLineOffset(text, line, column) {
@@ -5286,10 +5680,22 @@ async function savePreparedFile() {
 function renderPrepareTerminalFlyout() {
   const terminals = [...state.terminals.values()].filter((terminal) => terminal.status === "live");
   elements.prepareTerminalList.textContent = "";
+  const createButton = document.createElement("button");
+  createButton.type = "button";
+  createButton.role = "menuitem";
+  createButton.className = "prepare-terminal-new";
+  const createName = document.createElement("span");
+  createName.textContent = "New terminal";
+  const createMeta = document.createElement("span");
+  createMeta.className = "prepare-terminal-meta";
+  createMeta.textContent = pageName(state.activePageId) || "Current page";
+  createButton.append(createName, createMeta);
+  createButton.addEventListener("click", sendPreparedTextToNewTerminal);
+  elements.prepareTerminalList.append(createButton);
   if (terminals.length === 0) {
     const empty = document.createElement("p");
     empty.className = "prepare-terminal-empty";
-    empty.textContent = "No live terminals";
+    empty.textContent = "No other live terminals";
     elements.prepareTerminalList.append(empty);
     return;
   }
@@ -5334,6 +5740,24 @@ function sendPreparedTextToTerminal(id) {
   return true;
 }
 
+function sendPreparedTextToNewTerminal() {
+  const text = elements.prepareText.value;
+  if (!text) {
+    toast("There is no text to send", "info", 1600);
+    return false;
+  }
+  const currentPageId = state.activePageId;
+  const terminal = addTerminal({
+    reveal: true,
+    runStartup: true,
+    pageId: currentPageId,
+    pendingPaste: text
+  });
+  togglePrepareTerminalFlyout(false);
+  toast(`Opening ${terminal.titleInput.value || "a new terminal"} on ${pageName(currentPageId) || "the current page"}`, "success", 2200);
+  return true;
+}
+
 function bindPrepareEditor() {
   if (!elements.prepareOverlay) return;
   elements.prepareClose.addEventListener("click", () => closePrepareEditor());
@@ -5342,6 +5766,9 @@ function bindPrepareEditor() {
     if (!event.target.closest(".prepare-send-wrap")) togglePrepareTerminalFlyout(false);
   });
   elements.prepareText.addEventListener("input", preparedTextChanged);
+  elements.prepareText.addEventListener("scroll", () => {
+    elements.prepareLineNumbers.scrollTop = elements.prepareText.scrollTop;
+  });
   elements.prepareText.addEventListener("click", updatePrepareStatus);
   elements.prepareText.addEventListener("keyup", updatePrepareStatus);
   elements.prepareText.addEventListener("keydown", (event) => {
@@ -5365,6 +5792,7 @@ function bindPrepareEditor() {
   elements.prepareUndo.addEventListener("click", () => { elements.prepareText.focus(); document.execCommand("undo"); preparedTextChanged(); });
   elements.prepareRedo.addEventListener("click", () => { elements.prepareText.focus(); document.execCommand("redo"); preparedTextChanged(); });
   elements.prepareFindToggle.addEventListener("click", () => togglePrepareFind());
+  elements.prepareWrap.addEventListener("click", () => setPrepareWordWrap(!state.prepareEditor.wordWrap));
   elements.prepareCleanCopilot.addEventListener("click", cleanPreparedCopilotBorders);
   elements.prepareFind.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -5384,6 +5812,7 @@ function bindPrepareEditor() {
   elements.prepareSaveSnippet.addEventListener("click", savePreparedSnippet);
   elements.prepareSaveFile.addEventListener("click", savePreparedFile);
   elements.prepareSend.addEventListener("click", () => togglePrepareTerminalFlyout());
+  state.prepareEditor.resizeObserver = createPrepareResizeObserver();
   elements.prepareOverlay.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -5820,6 +6249,163 @@ function attachTmuxSession(candidate) {
     title: `${candidate.session} · ${candidate.distro}`,
     tmux: { distro: candidate.distro, session: candidate.session }
   });
+}
+
+/* ---------------- Copilot CLI session resume --------------- */
+
+const copilotResume = { closeTimer: 0, generation: 0, sessions: [], terminalId: null };
+
+function openCopilotResume(terminal) {
+  if (!terminal) return;
+  copilotResume.terminalId = terminal.id;
+  copilotResume.sessions = [];
+  copilotResume.generation += 1;
+  window.clearTimeout(copilotResume.closeTimer);
+  copilotResume.closeTimer = 0;
+  elements.copilotResumeSearch.value = "";
+  elements.copilotResumeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.copilotResumeOverlay.classList.add("is-open");
+    elements.copilotResumeSearch.focus();
+  });
+  refreshCopilotSessions();
+}
+
+function closeCopilotResume() {
+  copilotResume.generation += 1;
+  window.clearTimeout(copilotResume.closeTimer);
+  elements.copilotResumeOverlay.classList.remove("is-open");
+  copilotResume.closeTimer = window.setTimeout(() => {
+    copilotResume.closeTimer = 0;
+    elements.copilotResumeOverlay.hidden = true;
+  }, 150);
+  const terminal = state.terminals.get(copilotResume.terminalId);
+  if (terminal) terminal.term.focus();
+}
+
+function normalizeCopilotSession(candidate) {
+  if (!candidate || !COPILOT_RESUME_ID_PATTERN.test(String(candidate.id || ""))) return null;
+  return {
+    id: String(candidate.id).toLowerCase(),
+    name: String(candidate.name || "").trim(),
+    cwd: String(candidate.cwd || "").trim(),
+    repository: String(candidate.repository || "").trim(),
+    branch: String(candidate.branch || "").trim(),
+    createdAt: String(candidate.createdAt || ""),
+    updatedAt: String(candidate.updatedAt || "")
+  };
+}
+
+async function refreshCopilotSessions() {
+  const generation = ++copilotResume.generation;
+  elements.copilotResumeRefresh.disabled = true;
+  elements.copilotResumeStatus.textContent = "Looking for local Copilot CLI sessions\u2026";
+  elements.copilotResumeList.innerHTML = '<div class="copilot-resume-empty">Reading session metadata\u2026</div>';
+  const response = await requestBridge({ type: "listCopilotSessions" }, { timeout: 20000 });
+  if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
+
+  elements.copilotResumeRefresh.disabled = false;
+  copilotResume.sessions = (Array.isArray(response?.sessions) ? response.sessions : [])
+    .map(normalizeCopilotSession)
+    .filter(Boolean);
+  renderCopilotSessions();
+  if (copilotResume.sessions.length === 0) {
+    elements.copilotResumeStatus.textContent = response?.message || "The local bridge did not return any Copilot CLI sessions.";
+  }
+  refreshIcons(elements.copilotResumeOverlay);
+}
+
+function copilotSessionTitle(session) {
+  if (session.name) return session.name;
+  if (session.repository) return session.repository;
+  const pathParts = session.cwd.split(/[\\/]/).filter(Boolean);
+  return pathParts[pathParts.length - 1] || "Untitled Copilot session";
+}
+
+function renderCopilotSessions() {
+  const query = normalizeSearchText(elements.copilotResumeSearch.value);
+  const queryTokens = query.split(/\s+/).filter(Boolean);
+  const filtered = query
+    ? copilotResume.sessions.filter((session) => {
+      const corpus = normalizeSearchText([
+        session.name, session.repository, session.branch, session.cwd, session.id
+      ].join(" "));
+      return queryTokens.every((token) => corpus.includes(token));
+    })
+    : copilotResume.sessions;
+  elements.copilotResumeList.textContent = "";
+
+  if (filtered.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "copilot-resume-empty";
+    empty.textContent = copilotResume.sessions.length === 0
+      ? "No resumable Copilot CLI sessions found."
+      : "No sessions match this search.";
+    elements.copilotResumeList.append(empty);
+  }
+
+  for (const session of filtered) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "copilot-session-card";
+    button.setAttribute("role", "listitem");
+    button.setAttribute("aria-label", `Resume ${copilotSessionTitle(session)}`);
+
+    const main = document.createElement("span");
+    main.className = "copilot-session-main";
+    const title = document.createElement("span");
+    title.className = "copilot-session-title";
+    title.textContent = copilotSessionTitle(session);
+    const context = document.createElement("span");
+    context.className = "copilot-session-context";
+    if (session.repository) {
+      const repository = document.createElement("span");
+      repository.className = "copilot-session-repository";
+      repository.textContent = session.repository;
+      context.append(repository);
+    }
+    if (session.branch) {
+      const branch = document.createElement("span");
+      branch.textContent = session.branch;
+      context.append(branch);
+    }
+    const cwd = document.createElement("span");
+    cwd.className = "copilot-session-cwd";
+    cwd.textContent = session.cwd || "Working directory unavailable";
+    main.append(title, context, cwd);
+
+    const aside = document.createElement("span");
+    aside.className = "copilot-session-aside";
+    const time = document.createElement("time");
+    time.dateTime = session.updatedAt;
+    time.textContent = artifactTimeLabel(session.updatedAt) || "Time unavailable";
+    const id = document.createElement("code");
+    id.textContent = session.id.slice(0, 8);
+    aside.append(time, id);
+    button.append(main, aside);
+    button.addEventListener("click", () => resumeCopilotSession(session));
+    elements.copilotResumeList.append(button);
+  }
+
+  if (copilotResume.sessions.length > 0) {
+    elements.copilotResumeStatus.textContent = query
+      ? `${filtered.length} of ${copilotResume.sessions.length} sessions`
+      : `${copilotResume.sessions.length} resumable session${copilotResume.sessions.length === 1 ? "" : "s"}`;
+  }
+}
+
+function resumeCopilotSession(session) {
+  const id = String(session?.id || "");
+  const terminal = state.terminals.get(copilotResume.terminalId);
+  if (!COPILOT_RESUME_ID_PATTERN.test(id) || !terminal) {
+    toast("That terminal or Copilot session is no longer available", "warn", 2400);
+    return false;
+  }
+  closeCopilotResume();
+  setAwaitingInput(terminal, false);
+  sendBridge({ type: "input", id: terminal.id, data: `copilot --resume=${id} --yolo\r` });
+  window.requestAnimationFrame(() => terminal.term.focus());
+  return true;
 }
 
 /* ---------------- Terminal quick switcher (Alt+Q) --------------- */
@@ -7218,6 +7804,52 @@ async function pasteIntoTerminal(id) {
   }
 }
 
+function keyboardFocusedTerminal() {
+  return [...state.terminals.values()].find((terminal) => (
+    terminal.term.element?.contains(document.activeElement)
+  )) || null;
+}
+
+async function pasteAndExecute() {
+  const focused = keyboardFocusedTerminal();
+  let text;
+  try {
+    text = normalizeClipboardText(await readClipboardText());
+  } catch {
+    toast("Clipboard unavailable", "error");
+    return false;
+  }
+  if (!text) {
+    toast("The clipboard does not contain text", "info", 1800);
+    return false;
+  }
+
+  if (focused?.status === "live") {
+    const enterSequence = terminalEnterSequence(focused);
+    if (!pasteIntoSpecificTerminal(focused, text)) return false;
+    scheduleTerminalEnter(focused, { sequence: enterSequence });
+    window.requestAnimationFrame(() => focused.term.focus());
+    return true;
+  }
+  if (focused?.status === "starting") {
+    focused.pendingPaste = text;
+    focused.pendingPasteEnter = true;
+    toast(`Clipboard text will run when ${focused.titleInput.value || "the terminal"} is ready`, "info", 2200);
+    return true;
+  }
+
+  const currentPageId = state.activePageId;
+  const terminal = addTerminal({
+    reveal: true,
+    runStartup: true,
+    pageId: currentPageId,
+    pendingPaste: text,
+    pendingPasteEnter: true
+  });
+  toast(`Opening ${terminal.titleInput.value || "a new terminal"} on ${pageName(currentPageId) || "the current page"}`, "success", 2200);
+  return true;
+}
+
 function pasteIntoActive() {
   if (state.activeId) pasteIntoTerminal(state.activeId);
 }
@@ -7248,8 +7880,10 @@ async function performRightClickPaste(id, execute) {
   try {
     const text = normalizeClipboardText(await readClipboardText());
     if (!text) return;
-    state.terminals.get(id).term.paste(text);
-    if (execute) sendBridge({ type: "input", id, data: "\r" });
+    const terminal = state.terminals.get(id);
+    const enterSequence = terminalEnterSequence(terminal);
+    if (!pasteIntoSpecificTerminal(terminal, text)) return;
+    if (execute) scheduleTerminalEnter(terminal, { sequence: enterSequence });
   } catch {
     toast("Clipboard unavailable", "error");
   }
@@ -8399,7 +9033,10 @@ function normalizeQueueItem(item, index, prefix) {
     ...item,
     id: typeof item.id === "string" && item.id ? item.id : `${prefix}-${index}-${Date.now()}`,
     command,
-    createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString()
+    createdAt: typeof item.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+    // Automatic execution is intentionally runtime-only. Persisted profile data
+    // is untrusted and must never arm a command after reload without a fresh click.
+    runWhenReady: false
   };
 }
 
@@ -8479,6 +9116,84 @@ function ensureTerminalArtifact(terminal) {
   return record;
 }
 
+function setPaneQuickQueueOpen(terminal, open) {
+  const button = terminal.pane.querySelector(".pane-queue-add");
+  const form = terminal.pane.querySelector(".pane-quick-queue");
+  const input = form?.querySelector(".pane-quick-queue-input");
+  if (!button || !form || !input) return;
+  const next = Boolean(open);
+  form.hidden = !next;
+  button.classList.toggle("is-open", next);
+  button.setAttribute("aria-expanded", String(next));
+  if (next) {
+    input.focus({ preventScroll: true });
+    input.select();
+  } else {
+    input.value = "";
+  }
+}
+
+function bindPaneQuickQueue(terminal) {
+  const button = terminal.pane.querySelector(".pane-queue-add");
+  const form = terminal.pane.querySelector(".pane-quick-queue");
+  const input = form?.querySelector(".pane-quick-queue-input");
+  const cancel = form?.querySelector("[data-quick-queue-cancel]");
+  if (!button || !form || !input || !cancel) return;
+
+  button.addEventListener("click", () => {
+    setActiveTerminal(terminal.id);
+    setPaneQuickQueueOpen(terminal, form.hidden);
+  });
+  form.addEventListener("pointerdown", (event) => event.stopPropagation());
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (queueAutomaticTerminalCommand(terminal, input.value)) {
+      setPaneQuickQueueOpen(terminal, false);
+      terminal.term.focus();
+    }
+  });
+  cancel.addEventListener("click", () => {
+    setPaneQuickQueueOpen(terminal, false);
+    terminal.term.focus();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    setPaneQuickQueueOpen(terminal, false);
+    terminal.term.focus();
+  });
+}
+
+function queueAutomaticTerminalCommand(terminal, rawCommand) {
+  if (!artifactTerminalIsAvailable(terminal)) {
+    toast("That terminal is no longer available.", "error", 2200);
+    return false;
+  }
+  const command = safeTerminalCommand(rawCommand);
+  if (!command) {
+    toast(
+      sanitizeTerminalCommand(rawCommand)
+        ? `Commands are limited to ${MAX_TERMINAL_COMMAND_LENGTH} characters.`
+        : "Enter a command or Copilot prompt to queue.",
+      "info",
+      2000
+    );
+    return false;
+  }
+
+  ensureTerminalArtifact(terminal).queue.push({
+    id: createId(),
+    command,
+    createdAt: new Date().toISOString(),
+    runWhenReady: true
+  });
+  saveTerminalArtifacts();
+  scheduleAutomaticQueueCheck(terminal, 150);
+  toast(`Queued for ${terminal.titleInput.value || "terminal"}`, "success", 1600);
+  return true;
+}
+
 function archiveArtifactRecord(record, reason) {
   if (!record) return false;
   const recoveredAt = new Date().toISOString();
@@ -8506,7 +9221,7 @@ function archiveArtifactRecord(record, reason) {
 
   if (Array.isArray(record.queue) && record.queue.length > 0) {
     state.terminalArtifacts.unparentedQueue.push(
-      ...record.queue.map((item) => ({ ...item, ...source, unparentedAt: recoveredAt }))
+      ...record.queue.map((item) => ({ ...item, runWhenReady: false, ...source, unparentedAt: recoveredAt }))
     );
     changed = true;
   }
@@ -8605,11 +9320,14 @@ function updateTerminalArtifactIndicators() {
   for (const terminal of state.terminals.values()) {
     const record = state.terminalArtifacts.terminals[terminal.id];
     const queueCount = record?.queue.length || 0;
+    const autoQueueCount = record?.queue.filter((item) => item.runWhenReady).length || 0;
     const hasNotes = Boolean(record?.notes.trim());
     const button = terminal.pane.querySelector('[data-action="artifacts"]');
     const badge = button?.querySelector(".pane-artifacts-badge");
     const dequeueButton = terminal.pane.querySelector('[data-action="dequeue"]');
     const dequeueBadge = dequeueButton?.querySelector(".pane-dequeue-badge");
+    const quickQueueButton = terminal.pane.querySelector(".pane-queue-add");
+    const quickQueueBadge = quickQueueButton?.querySelector(".pane-queue-add-badge");
     if (!button || !badge) continue;
     badge.hidden = queueCount === 0;
     badge.textContent = queueCount > 9 ? "9+" : String(queueCount);
@@ -8620,6 +9338,7 @@ function updateTerminalArtifactIndicators() {
     if (dequeueButton && dequeueBadge) {
       const nextCommand = record?.queue[0]?.command || "";
       dequeueButton.hidden = queueCount === 0;
+      if (queueCount > 0) refreshIcons(dequeueButton);
       dequeueBadge.textContent = queueCount > 9 ? "9+" : String(queueCount);
       const dequeueLabel = queueCount
         ? `Insert next queued command without pressing Enter (${queueCount} queued): ${nextCommand}`
@@ -8628,6 +9347,16 @@ function updateTerminalArtifactIndicators() {
         ? `Insert next queued command without pressing Enter (Ctrl+Shift+Q)\n${nextCommand}`
         : dequeueLabel;
       dequeueButton.setAttribute("aria-label", dequeueLabel);
+    }
+    if (quickQueueButton && quickQueueBadge) {
+      quickQueueBadge.hidden = autoQueueCount === 0;
+      quickQueueBadge.textContent = autoQueueCount > 9 ? "9+" : String(autoQueueCount);
+      quickQueueButton.classList.toggle("has-auto-queue", autoQueueCount > 0);
+      const quickQueueLabel = autoQueueCount
+        ? `Queue a command; ${autoQueueCount} waiting to run automatically`
+        : "Queue a command for when this terminal is ready";
+      quickQueueButton.title = quickQueueLabel;
+      quickQueueButton.setAttribute("aria-label", quickQueueLabel);
     }
   }
 }
@@ -8701,13 +9430,15 @@ function renderCommandQueue(items, source) {
 
   for (const item of items) {
     const card = document.createElement("article");
-    card.className = `command-queue-item${source === "unparented" ? " is-unparented" : ""}`;
+    card.className = `command-queue-item${source === "unparented" ? " is-unparented" : ""}${item.runWhenReady ? " is-auto" : ""}`;
 
     const send = document.createElement("button");
     send.type = "button";
     send.className = "command-queue-send";
     send.dataset.queueSend = item.id;
-    send.title = "Insert into terminal without pressing Enter";
+    send.title = item.runWhenReady
+      ? "Insert now without pressing Enter"
+      : "Insert into terminal without pressing Enter";
 
     const command = document.createElement("span");
     command.className = "command-queue-command";
@@ -8715,7 +9446,7 @@ function renderCommandQueue(items, source) {
     const meta = document.createElement("span");
     meta.className = "command-queue-meta";
     const sourcePid = source === "unparented" && item.pid ? `From PID ${item.pid} \u00b7 ` : "";
-    meta.textContent = `${sourcePid}${artifactTimeLabel(item.createdAt)} \u00b7 Insert without Enter`;
+    meta.textContent = `${sourcePid}${artifactTimeLabel(item.createdAt)} \u00b7 ${item.runWhenReady ? "Runs automatically when ready" : "Insert without Enter"}`;
     send.append(command, meta);
 
     const remove = document.createElement("button");
@@ -9999,6 +10730,7 @@ const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.copy-prepare": "Copy and prepare",
   "terminal.copy-all": "Copy all output",
   "terminal.paste": "Paste",
+  "terminal.paste-execute": "Paste and execute",
   "terminal.select-all": "Select all",
   "terminal.find": "Find",
   "terminal.find-all": "Find in all terminals",
@@ -10009,7 +10741,8 @@ const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.send-message": "Send to terminal",
   "terminal.open-folder": "Open folder",
   "terminal.new-here": "New terminal here",
-  "terminal.copilot-yolo": "Launch Copilot CLI (YOLO)",
+  "terminal.copilot-yolo": "Run Copilot CLI (YOLO)",
+  "terminal.copilot-resume": "Resume Copilot CLI session",
   "terminal.new-admin": "New Administrator terminal",
   "terminal.run-script": "Run script",
   "terminal.logging.toggle": "Toggle logging",
@@ -11111,6 +11844,13 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Copy and prepare\u2026", icon: "notebook-pen", shortcutId: "terminal.copy-prepare", disabled: !hasSelection, run: () => openPrepareEditor(selection, terminal.id) },
     { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { forgetTerminalSelection(terminal); copyTerminalOutput(terminal.id); } },
     { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
+    {
+      label: "Paste and execute",
+      icon: "clipboard-check",
+      shortcutId: "terminal.paste-execute",
+      title: "Pastes clipboard text and immediately presses Enter",
+      run: pasteAndExecute
+    },
     { label: "Select all", hint: "Ctrl+A", icon: "text-select", shortcutId: "terminal.select-all", run: () => terminal.term.selectAll() },
     { group: "Find & context", groupId: "find-context" },
     { label: "Find\u2026", hint: "Ctrl+F", icon: "search", shortcutId: "terminal.find", run: () => openFind(terminal) },
@@ -11125,11 +11865,18 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Open folder", icon: "folder-open", shortcutId: "terminal.open-folder", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd, title: terminal.titleInput.value }) },
     {
-      label: "Launch Copilot CLI (YOLO)",
+      label: "Run Copilot CLI (YOLO)",
       icon: "bot",
       shortcutId: "terminal.copilot-yolo",
-      title: "Starts the interactive Copilot CLI with all tool, path, and URL permissions",
-      run: () => launchCopilotCli(terminal)
+      title: "Runs Copilot with YOLO permissions in the focused terminal, or opens one on this page",
+      run: launchCopilotCli
+    },
+    {
+      label: "Resume Copilot CLI session\u2026",
+      icon: "history",
+      shortcutId: "terminal.copilot-resume",
+      title: "Choose a local Copilot CLI session and resume it with YOLO permissions",
+      run: () => openCopilotResume(terminal)
     },
     {
       input: true,
@@ -11188,11 +11935,32 @@ function sendTerminalSlashCommand(terminal, command, rawValue) {
   sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
 }
 
-function launchCopilotCli(terminal) {
-  if (!terminal) return;
+function invokeCopilotCli(terminal) {
   setAwaitingInput(terminal, false);
-  sendBridge({ type: "input", id: terminal.id, data: `${COPILOT_YOLO_COMMAND}\r` });
+  if (!sendBridge({ type: "input", id: terminal.id, data: COPILOT_YOLO_COMMAND })) return false;
+  sendBridge({ type: "input", id: terminal.id, data: "\r" });
   window.requestAnimationFrame(() => terminal.term.focus());
+  return true;
+}
+
+function launchCopilotCli() {
+  const focused = keyboardFocusedTerminal();
+  if (focused) {
+    if (focused.status === "live") return invokeCopilotCli(focused);
+    focused.pendingCopilotYolo = true;
+    toast(`Copilot will start when ${focused.titleInput.value || "the terminal"} is ready`, "info", 2200);
+    return true;
+  }
+
+  const currentPageId = state.activePageId;
+  const terminal = addTerminal({
+    reveal: true,
+    runStartup: true,
+    pageId: currentPageId,
+    pendingCopilotYolo: true
+  });
+  toast(`Opening ${terminal.titleInput.value || "a new terminal"} on ${pageName(currentPageId) || "the current page"}`, "success", 2200);
+  return true;
 }
 
 // "Here" on the blank surface means the folder you were last working in, which
@@ -11215,9 +11983,16 @@ function buildSurfaceContextMenu() {
   renderContextMenu([
     { label: "New terminal", hint: "Ctrl+T", icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
     { label: "New terminal here", icon: "folder-plus", title: here || undefined, disabled: !here, run: () => newTerminal({ cwd: here }) },
+    { label: "Paste and execute", icon: "clipboard-check", title: "Pastes clipboard text and immediately presses Enter", run: pasteAndExecute },
     { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ cwd: here || undefined, runStartup: true }) },
     { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here }) },
     { label: "Run script as Administrator\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here, elevated: true }) },
+    {
+      label: "Run Copilot CLI (YOLO)",
+      icon: "bot",
+      title: "Runs Copilot with YOLO permissions in the focused terminal, or opens one on this page",
+      run: launchCopilotCli
+    },
     { separator: true },
     { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", title: "PowerShell 7", cwd: here || undefined }) },
     { label: "New Windows PowerShell terminal", icon: "terminal", run: () => newTerminal({ shell: "powershell", title: "Windows PowerShell", cwd: here || undefined }) },
@@ -12591,8 +13366,8 @@ function filterContextMenu(value) {
     group.hidden = query ? groupRows === 0 : !ctxRenderOptions.customizable && groupRows === 0;
     visibleRows += groupRows;
   }
-  ctxFocusables = ctxAllFocusables.filter((row) => !row.hidden && !row.closest(".ctx-group")?.hidden);
   setContextFocus(-1);
+  ctxFocusables = ctxAllFocusables.filter((row) => !row.hidden && !row.closest(".ctx-group")?.hidden);
   const empty = elements.contextMenu.querySelector(".ctx-search-empty");
   if (empty) empty.hidden = !query || visibleRows > 0;
 }

@@ -88,6 +88,108 @@ test.describe("Enhancement milestone", () => {
     expect(await page.evaluate(() => normalizeClipboardText("one |\ntwo\nthree"))).toBe("one |\ntwo\nthree");
   });
 
+  test("Paste and execute targets the focused terminal after xterm paste", async () => {
+    const terminalId = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      await new Promise((resolve) => terminal.term.write("\x1b[?2004h", resolve));
+      window.__pasteExecuteFrames = [];
+      window.__pasteExecuteOriginalSend = state.socket.send;
+      window.__pasteExecuteOriginalBridge = window.multiterm;
+      state.socket.send = (payload) => window.__pasteExecuteFrames.push(JSON.parse(payload));
+      window.multiterm = { readClipboardText: async () => "Write-Host focused" };
+      showContextMenu(20, 20, terminal, "");
+      return terminal.id;
+    });
+
+    const action = page.locator('[data-customization-id="terminal.paste-execute"]');
+    await expect(action).toBeVisible();
+    await expect(action.locator("xpath=preceding-sibling::*[contains(@class, 'ctx-item')][1]"))
+      .toHaveAttribute("data-customization-id", "terminal.paste");
+    await action.click();
+    await expect.poll(() => page.evaluate(() => window.__pasteExecuteFrames
+      .filter((frame) => frame.type === "input"
+        && (frame.data.includes("Write-Host focused") || frame.data === "\r"))
+      .map((frame) => frame.data))).toEqual([
+      "\x1b[200~Write-Host focused\x1b[201~",
+      "\r"
+    ]);
+
+    const result = await page.evaluate(async (id) => {
+      state.socket.send = window.__pasteExecuteOriginalSend;
+      window.multiterm = window.__pasteExecuteOriginalBridge;
+      delete window.__pasteExecuteOriginalSend;
+      delete window.__pasteExecuteOriginalBridge;
+      const frames = window.__pasteExecuteFrames
+        .filter((frame) => frame.type === "input"
+          && frame.id === id
+          && (frame.data.includes("Write-Host focused") || frame.data === "\r"));
+      delete window.__pasteExecuteFrames;
+      await new Promise((resolve) => state.terminals.get(id).term.write("\x1b[?2004l", resolve));
+      return frames;
+    }, terminalId);
+    expect(result).toEqual([
+      { type: "input", id: terminalId, data: "\x1b[200~Write-Host focused\x1b[201~" },
+      { type: "input", id: terminalId, data: "\r" }
+    ]);
+  });
+
+  test("Paste and execute opens a terminal on the current page when none is focused", async () => {
+    const setup = await page.evaluate(() => {
+      closeAllTerminals();
+      const pageId = addPage({ name: "Paste page" });
+      const existing = addTerminal({ title: "Existing terminal", pageId });
+      return { existingId: existing.id, pageId };
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await expect(page.locator(".pane-status")).toHaveClass(/is-live/);
+    await page.evaluate(() => {
+      window.__pasteExecuteFrames = [];
+      window.__pasteExecuteOriginalSend = state.socket.send;
+      window.__pasteExecuteOriginalBridge = window.multiterm;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__pasteExecuteFrames.push(frame);
+        if (frame.type !== "input") window.__pasteExecuteOriginalSend.call(this, payload);
+      };
+      window.multiterm = { readClipboardText: async () => "Write-Host new-terminal" };
+      elements.addTerminal.focus();
+      showSurfaceContextMenu(20, 20);
+    });
+
+    await page.locator("#contextMenu .ctx-item", { hasText: "Paste and execute" }).click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => window.__pasteExecuteFrames
+      .filter((frame) => frame.type === "input"
+        && (frame.data === "Write-Host new-terminal" || frame.data === "\r"))
+      .map((frame) => frame.data))).toEqual(["Write-Host new-terminal", "\r"]);
+
+    const result = await page.evaluate((expectedPageId) => {
+      state.socket.send = window.__pasteExecuteOriginalSend;
+      window.multiterm = window.__pasteExecuteOriginalBridge;
+      delete window.__pasteExecuteOriginalSend;
+      delete window.__pasteExecuteOriginalBridge;
+      const create = window.__pasteExecuteFrames.find((frame) => frame.type === "create");
+      const input = window.__pasteExecuteFrames
+        .filter((frame) => frame.type === "input"
+          && frame.id === create.id
+          && (frame.data === "Write-Host new-terminal" || frame.data === "\r"))
+        .map((frame) => frame.data);
+      delete window.__pasteExecuteFrames;
+      const terminal = state.terminals.get(create.id);
+      return { input, terminalId: terminal.id, terminalPageId: terminal.pageId, expectedPageId };
+    }, setup.pageId);
+    expect(result.terminalPageId).toBe(setup.pageId);
+    expect(result.input).toEqual(["Write-Host new-terminal", "\r"]);
+
+    await page.evaluate(({ existingId, terminalId, pageId }) => {
+      removeTerminal(terminalId);
+      removeTerminal(existingId);
+      removePage(pageId);
+      addTerminal({ title: "Enhancement test" });
+    }, { existingId: setup.existingId, terminalId: result.terminalId, pageId: setup.pageId });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+  });
+
   test("Copilot context fields target the selected terminal", async () => {
     const frames = await page.evaluate(async () => {
       const terminal = [...state.terminals.values()][0];
@@ -116,7 +218,7 @@ test.describe("Enhancement milestone", () => {
       .toEqual(["/model gpt-test\r", "/cwd D:\\work tree\r"]);
   });
 
-  test("Copilot YOLO context action launches the interactive CLI", async () => {
+  test("Copilot YOLO context action sends the command followed by Enter", async () => {
     const result = await page.evaluate(async () => {
       const terminal = [...state.terminals.values()][0];
       const sent = [];
@@ -128,7 +230,7 @@ test.describe("Enhancement milestone", () => {
 
       showContextMenu(20, 20, terminal, "");
       const item = [...document.querySelectorAll("#contextMenu .ctx-item")]
-        .find((row) => row.textContent.includes("Launch Copilot CLI (YOLO)"));
+        .find((row) => row.textContent.includes("Run Copilot CLI (YOLO)"));
       const title = item?.title || "";
       item?.click();
       await new Promise((resolve) => requestAnimationFrame(resolve));
@@ -146,12 +248,144 @@ test.describe("Enhancement milestone", () => {
     expect({ ...result, frames: undefined }).toEqual({
       focused: true,
       hidden: true,
-      title: "Starts the interactive Copilot CLI with all tool, path, and URL permissions",
+      title: "Runs Copilot with YOLO permissions in the focused terminal, or opens one on this page",
       frames: undefined
     });
-    expect(result.frames.filter((frame) => frame.data === "copilot --yolo\r")).toEqual([
-      { type: "input", id: expect.any(String), data: "copilot --yolo\r" }
+    const commandIndex = result.frames.findIndex((frame) => frame.data === "copilot --yolo");
+    expect(commandIndex).toBeGreaterThanOrEqual(0);
+    expect(result.frames.slice(commandIndex, commandIndex + 2)).toEqual([
+      { type: "input", id: result.frames[commandIndex].id, data: "copilot --yolo" },
+      { type: "input", id: result.frames[commandIndex].id, data: "\r" }
     ]);
+  });
+
+  test("Copilot YOLO surface action opens a terminal on the current page when none is focused", async () => {
+    const setup = await page.evaluate(() => {
+      closeAllTerminals();
+      const pageId = addPage({ name: "Copilot page" });
+      const existing = addTerminal({ title: "Existing terminal", pageId });
+      return { existingId: existing.id, pageId };
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await expect(page.locator(".pane-status")).toHaveClass(/is-live/);
+    await page.evaluate(() => {
+      window.__copilotLaunchFrames = [];
+      window.__copilotLaunchOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__copilotLaunchFrames.push(frame);
+        if (frame.type !== "input") window.__copilotLaunchOriginalSend.call(this, payload);
+      };
+      elements.addTerminal.focus();
+      showSurfaceContextMenu(20, 20);
+    });
+
+    await page.locator("#contextMenu .ctx-item", { hasText: "Run Copilot CLI (YOLO)" }).click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => window.__copilotLaunchFrames
+      .filter((frame) => frame.type === "input" && (frame.data === "copilot --yolo" || frame.data === "\r"))
+      .map((frame) => frame.data))).toEqual(["copilot --yolo", "\r"]);
+
+    const result = await page.evaluate((expectedPageId) => {
+      state.socket.send = window.__copilotLaunchOriginalSend;
+      delete window.__copilotLaunchOriginalSend;
+      const create = window.__copilotLaunchFrames.find((frame) => frame.type === "create");
+      const input = window.__copilotLaunchFrames
+        .filter((frame) => frame.type === "input"
+          && frame.id === create.id
+          && (frame.data === "copilot --yolo" || frame.data === "\r"))
+        .map((frame) => frame.data);
+      delete window.__copilotLaunchFrames;
+      const terminal = state.terminals.get(create.id);
+      return {
+        expectedPageId,
+        input,
+        terminalId: terminal.id,
+        terminalPageId: terminal.pageId
+      };
+    }, setup.pageId);
+    expect(result.terminalPageId).toBe(setup.pageId);
+    expect(result.input).toEqual(["copilot --yolo", "\r"]);
+
+    await page.evaluate(({ existingId, terminalId, pageId }) => {
+      removeTerminal(terminalId);
+      removeTerminal(existingId);
+      removePage(pageId);
+    }, { existingId: setup.existingId, terminalId: result.terminalId, pageId: setup.pageId });
+  });
+
+  test("selects and resumes a local Copilot CLI session in the invoking terminal", async () => {
+    const firstId = await page.evaluate(() => {
+      closeAllTerminals();
+      return addTerminal({ title: "Copilot resume target" }).id;
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    const secondId = await page.evaluate(() => addTerminal({ title: "Other terminal" }).id);
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await page.evaluate(({ firstId }) => {
+      const sessions = [
+        {
+          id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+          name: "Build the Copilot resume session picker",
+          cwd: "D:\\multiTerm",
+          repository: "andrewtheart/multiterm-workbench",
+          branch: "main",
+          updatedAt: "2026-08-04T00:18:07.329Z"
+        },
+        {
+          id: "62d43a25-c209-4933-af9a-24d9bff3789c",
+          name: "Diagnose continuous indexing",
+          cwd: "C:\\src\\Yagu",
+          repository: "andrewtheart/yagu-search",
+          branch: "main",
+          updatedAt: "2026-08-03T20:47:02.240Z"
+        },
+        { id: "unsafe", name: "Ignored invalid record" }
+      ];
+      window.__copilotResumeFrames = [];
+      window.__copilotOriginalSend = state.socket.send;
+      state.socket.send = (payload) => {
+        const frame = JSON.parse(payload);
+        window.__copilotResumeFrames.push(frame);
+        if (frame.type === "listCopilotSessions") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "copilotSessions",
+            requestId: frame.requestId,
+            sessions,
+            message: ""
+          }), 0);
+        }
+      };
+      const terminal = state.terminals.get(firstId);
+      showContextMenu(20, 20, terminal, "");
+    }, { firstId });
+
+    await page.locator("#contextMenu .ctx-item", { hasText: "Resume Copilot CLI session" }).click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await expect(page.locator("#copilotResumeSearch")).toBeFocused();
+    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
+    await page.locator("#copilotResumeSearch").fill("yagu indexing");
+    await expect(page.locator(".copilot-session-card")).toHaveCount(1);
+    await expect(page.locator(".copilot-session-card")).toContainText("Diagnose continuous indexing");
+    await expect(page.locator(".copilot-session-card")).toContainText("andrewtheart/yagu-search");
+
+    await page.evaluate((id) => setActiveTerminal(id), secondId);
+    await page.locator(".copilot-session-card").click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+
+    const frames = await page.evaluate(() => {
+      state.socket.send = window.__copilotOriginalSend;
+      delete window.__copilotOriginalSend;
+      const sent = window.__copilotResumeFrames;
+      delete window.__copilotResumeFrames;
+      return sent;
+    });
+    expect(frames.filter((frame) => frame.type === "input" && frame.data.startsWith("copilot --resume="))).toEqual([{
+      type: "input",
+      id: firstId,
+      data: "copilot --resume=62d43a25-c209-4933-af9a-24d9bff3789c --yolo\r"
+    }]);
+    await page.evaluate((id) => removeTerminal(id), secondId);
   });
 
   test("quit and close bridge closes terminal sessions with the window", async () => {

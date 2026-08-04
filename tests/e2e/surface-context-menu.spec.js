@@ -165,8 +165,10 @@ test.describe("Surface context menu", () => {
     for (const label of [
       "New terminal",
       "New terminal here",
+      "Paste and execute",
       "New Administrator terminal",
       "Run script\u2026",
+      "Run Copilot CLI (YOLO)",
       "New Command Prompt terminal",
       "Find in all terminals\u2026",
       "Broadcast command\u2026",
@@ -181,9 +183,10 @@ test.describe("Surface context menu", () => {
 
     // Anything that only means something for one terminal must not appear: there
     // is no terminal under the pointer to copy from, clear, restart or close.
-    for (const label of ["Copy all output", "Paste", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to", "Launch Copilot CLI (YOLO)"]) {
+    for (const label of ["Copy all output", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to", "Resume Copilot CLI session\u2026"]) {
       await expect(menu.locator(".ctx-item", { hasText: label })).toHaveCount(0);
     }
+    await expect(menu.locator('[data-customization-id="terminal.paste"]')).toHaveCount(0);
 
     // It is the same menu widget the panes use, so it inherits their styling.
     await expect(menu.locator(".ctx-sep").first()).toBeVisible();
@@ -437,7 +440,8 @@ test.describe("Surface context menu", () => {
       "terminal.copy",
       "terminal.copy-prepare",
       "terminal.copy-all",
-      "terminal.paste"
+      "terminal.paste",
+      "terminal.paste-execute"
     ]);
 
     await menu.locator('[data-customization-id="terminal.paste"]').dragTo(
@@ -451,9 +455,15 @@ test.describe("Surface context menu", () => {
     const sessionIds = await itemIds("session");
     expect(sessionIds.indexOf("terminal.paste")).toBeLessThan(sessionIds.indexOf("terminal.restart"));
 
-    await menu.locator('[data-customization-id="terminal.notes"]').dragTo(
-      favorites.locator(".ctx-group-body")
-    );
+    await page.evaluate((sectionId) => {
+      const source = elements.contextMenu.querySelector('[data-customization-id="terminal.notes"]');
+      const body = elements.contextMenu.querySelector(`.ctx-group[data-section-id="${sectionId}"] .ctx-group-body`);
+      const transfer = new DataTransfer();
+      source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      body.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      body.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }));
+    }, favoritesId);
     await expect(favorites.locator(".ctx-item")).toHaveCount(1);
     await expect(favorites.locator(".ctx-item")).toHaveAttribute("data-customization-id", "terminal.notes");
 
@@ -728,6 +738,7 @@ test.describe("Surface context menu", () => {
             "terminal.copy-prepare",
             "terminal.copy-all",
             "terminal.paste",
+            "terminal.paste-execute",
             "terminal.select-all"
           ]),
           beforeFollowing: merge([{
@@ -751,7 +762,7 @@ test.describe("Surface context menu", () => {
     });
 
     expect(mergedItems.afterPredecessor[0].items).toEqual([
-      "terminal.copy", "terminal.copy-prepare", "terminal.copy-all", "terminal.paste", "terminal.select-all"
+      "terminal.copy", "terminal.copy-prepare", "terminal.copy-all", "terminal.paste", "terminal.paste-execute", "terminal.select-all"
     ]);
     expect(mergedItems.beforeFollowing[0].items).toEqual(["action.a", "action.b", "action.c", "action.d"]);
     expect(mergedItems.afterEarlierPredecessor).toEqual([

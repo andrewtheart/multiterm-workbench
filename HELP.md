@@ -30,7 +30,7 @@ Right-click a pane or its title bar to:
 - open the current folder in File Explorer;
 - create another terminal in the same folder;
 - split by duplicating the shell and working directory;
-- launch GitHub Copilot CLI;
+- launch GitHub Copilot CLI or resume a local Copilot CLI session;
 - run a script, optionally in an Administrator terminal;
 - start or stop logging;
 - inspect statistics;
@@ -50,6 +50,10 @@ Customize that menu directly:
 - right-click an action and choose **Hide item**.
 
 When at least one action is hidden, **Show hidden items** appears at the bottom-right. Revealed hidden actions remain disabled so they cannot run accidentally; right-click one and choose **Show item** to restore it. Section names, custom sections, action order, placement, and hidden actions are stored in the current browser profile and merge with newly added application actions after an upgrade.
+
+Choose **Run Copilot CLI (YOLO)** from a terminal or blank-workspace right-click menu to send `copilot --yolo` followed by Enter to the focused terminal. If no terminal has keyboard focus, MultiTerm opens one on the current page and runs the command after its shell is ready.
+
+Choose **Resume Copilot CLI session...** to search sessions discovered from Copilot CLI's local session metadata. Each result shows its summary, repository or working directory, branch, session ID, and last-updated time when available. Refresh the list to include sessions created while the picker is open. Selecting **Resume session** sends `copilot --resume=<session-id> --yolo` to the terminal whose context menu opened the picker; YOLO mode grants Copilot CLI unrestricted permissions in that session.
 
 Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to **All terminals**; choose **This terminal** for a per-terminal layout, or select **Always take this action (don't ask me again)** to remember the scope. Change **Header drag scope** under **Terminal** to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.
 
@@ -109,6 +113,8 @@ Open **Settings** and choose a layout under **Layout**:
 | Bento grid | Mixed pane sizes in a dashboard-like grid |
 | Manual canvas | Free positioning and resizing |
 
+In **Manual canvas**, drag a pane's title bar to move it. Drag any edge or corner to resize it like a normal unsnapped window; the pane's position and size persist across launches.
+
 Use **Fit all terminals** after resizing the window or changing layouts. **Reset layout** clears layout-specific adjustments. <kbd>Ctrl+Shift+X</kbd> temporarily maximizes the active pane.
 
 ## Notes and command queues
@@ -122,6 +128,14 @@ When a shell exits, its notes are retained in **Recovered notes** instead of bei
 ### Command queues
 
 Build a list of commands or prompts without sending them immediately. Each live terminal has its own queue.
+
+Use the nearly transparent **+** button at the top-right of a terminal's content area to add an automatic queue item. The button becomes fully colored on hover or keyboard focus. Enter a command or Copilot prompt and select Queue, or press Enter. MultiTerm then waits for a confirmed ready state before pasting the oldest automatic item and invoking it:
+
+- a regular terminal is ready only when its shell prompt has returned with the caret at the end;
+- Copilot CLI is ready only when its empty prompt composer and `/ commands · ? help` footer are visible; startup, a partially typed prompt, and `Working` remain blocked; and
+- automatic items run FIFO, with fresh echoed-command output and another confirmed prompt required before the next item can run.
+
+Copilot CLI uses its own kitty-keyboard Enter sequence, which MultiTerm sends after placing the queued text in Copilot's prompt box. Automatic execution is armed only in the current renderer session. After a reload or terminal exit, remaining text stays in the normal staged/unparented queue for manual review instead of running automatically from persisted profile data.
 
 - Select a queued item to insert it into that terminal.
 - Inserting a queued item does **not** send Enter, so you can review or edit it first.
@@ -232,11 +246,13 @@ Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several termin
 
 MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.
 
+Choose **Paste and execute** directly below **Paste** in a terminal's right-click menu to paste clipboard text using terminal paste semantics and then press Enter. The blank-workspace right-click menu offers the same action. If no terminal has keyboard focus, MultiTerm opens one on the current page and runs the clipboard text after its shell is ready.
+
 ### Copy and prepare selected text
 
 Select terminal output, right-click it, and choose **Copy and prepare...** to open the selected text in an editor before it reaches a file, the clipboard, or another terminal.
 
-Use the eraser action to remove trailing Copilot TUI `|` borders from every affected line while preserving pipes inside commands. The editor also supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, and undo/redo.
+The editor opens with word wrap enabled and shows synchronized line numbers in its left gutter. Use the wrap toolbar button to keep long lines on screen or switch to horizontal scrolling. Use the eraser action to remove trailing Copilot TUI `|` borders from every affected line while preserving pipes inside commands. The editor also supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, and undo/redo.
 
 ![Copied PowerShell output in Copy and prepare with trailing Copilot TUI pipe borders ready for cleanup](public/help-images/copy-prepare-cleanup.png)
 
@@ -246,7 +262,7 @@ After editing, choose one of these actions:
 
 - **Save file** or <kbd>Ctrl+S</kbd> opens Save As with a suggested script extension for the selected language.
 - **Save snippet** stores a single prepared command under the name you enter.
-- **Send to terminal** inserts the text into a chosen live terminal using terminal paste semantics without appending Enter.
+- **Send to terminal** inserts the text into a chosen live terminal using terminal paste semantics without appending Enter, or opens a new terminal on the current page and inserts it when the shell is ready.
 - **Copy** places the prepared text on the clipboard.
 
 ![Cleaned PowerShell text with successful syntax validation, a script file name, and live terminal destinations](public/help-images/copy-prepare-save-send.png)
