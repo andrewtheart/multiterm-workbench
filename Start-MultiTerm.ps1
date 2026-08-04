@@ -427,6 +427,29 @@ namespace MultiTerm.PowerShellBridge
         public DateTime Time;
     }
 
+    internal sealed class CopilotSessionMetadata
+    {
+        public string Id;
+        public string Name;
+        public string Cwd;
+        public string Repository;
+        public string Branch;
+        public string CreatedAt;
+        public string UpdatedAt;
+        public DateTime UpdatedUtc;
+
+        public string ToJson()
+        {
+            return "{\"id\":" + Json.Quote(this.Id)
+                + ",\"name\":" + Json.Quote(this.Name)
+                + ",\"cwd\":" + Json.Quote(this.Cwd)
+                + ",\"repository\":" + Json.Quote(this.Repository)
+                + ",\"branch\":" + Json.Quote(this.Branch)
+                + ",\"createdAt\":" + Json.Quote(this.CreatedAt)
+                + ",\"updatedAt\":" + Json.Quote(this.UpdatedAt) + "}";
+        }
+    }
+
     internal sealed class DashboardLogVisualLine
     {
         public string Timestamp;
@@ -2792,6 +2815,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.ValidatePreparedText(client, message);
             }
+            else if (type == "listCopilotSessions")
+            {
+                this.ListCopilotSessions(client, message);
+            }
             else if (type == "elevate")
             {
                 this.ElevateSession(client, message);
@@ -3647,6 +3674,151 @@ namespace MultiTerm.PowerShellBridge
             dialogThread.IsBackground = true;
             dialogThread.SetApartmentState(ApartmentState.STA);
             dialogThread.Start();
+        }
+
+        private static string ParseCopilotYamlScalar(string value)
+        {
+            string scalar = (value ?? String.Empty).Trim();
+            if (scalar.Length >= 2 && scalar[0] == '"' && scalar[scalar.Length - 1] == '"')
+            {
+                try
+                {
+                    return Json.Get(Json.ParseFlatObject("{\"value\":" + scalar + "}"), "value");
+                }
+                catch
+                {
+                    return scalar.Substring(1, scalar.Length - 2);
+                }
+            }
+            if (scalar.Length >= 2 && scalar[0] == '\'' && scalar[scalar.Length - 1] == '\'')
+            {
+                return scalar.Substring(1, scalar.Length - 2).Replace("''", "'");
+            }
+            if (scalar == "~" || String.Equals(scalar, "null", StringComparison.OrdinalIgnoreCase))
+            {
+                return String.Empty;
+            }
+            return scalar;
+        }
+
+        private static CopilotSessionMetadata ReadCopilotSession(string directory)
+        {
+            string id = Path.GetFileName(directory);
+            Guid parsedId;
+            if (!Guid.TryParse(id, out parsedId)
+                || !String.Equals(parsedId.ToString("D"), id, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            string workspacePath = Path.Combine(directory, "workspace.yaml");
+            if (!File.Exists(workspacePath))
+            {
+                return null;
+            }
+
+            Dictionary<string, string> fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string line in File.ReadAllLines(workspacePath, Encoding.UTF8))
+            {
+                Match match = Regex.Match(line, "^([a-z_]+):\\s*(.*)$", RegexOptions.IgnoreCase);
+                if (!match.Success)
+                {
+                    continue;
+                }
+                string key = match.Groups[1].Value;
+                if (key == "cwd" || key == "repository" || key == "branch" || key == "name"
+                    || key == "created_at" || key == "updated_at")
+                {
+                    fields[key] = ParseCopilotYamlScalar(match.Groups[2].Value);
+                }
+            }
+
+            Func<string, string> get = delegate(string key)
+            {
+                string field;
+                return fields.TryGetValue(key, out field) ? field : String.Empty;
+            };
+            DateTime updatedUtc;
+            string updatedAt = get("updated_at");
+            if (!DateTime.TryParse(updatedAt, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out updatedUtc))
+            {
+                updatedUtc = File.GetLastWriteTimeUtc(workspacePath);
+                updatedAt = updatedUtc.ToString("o", CultureInfo.InvariantCulture);
+            }
+
+            return new CopilotSessionMetadata()
+            {
+                Id = id.ToLowerInvariant(),
+                Name = get("name"),
+                Cwd = get("cwd"),
+                Repository = get("repository"),
+                Branch = get("branch"),
+                CreatedAt = get("created_at"),
+                UpdatedAt = updatedAt,
+                UpdatedUtc = updatedUtc
+            };
+        }
+
+        private static List<CopilotSessionMetadata> ReadCopilotSessions()
+        {
+            List<CopilotSessionMetadata> sessions = new List<CopilotSessionMetadata>();
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            string root = Path.Combine(profile, ".copilot", "session-state");
+            if (!Directory.Exists(root))
+            {
+                return sessions;
+            }
+            foreach (string directory in Directory.GetDirectories(root))
+            {
+                try
+                {
+                    CopilotSessionMetadata session = ReadCopilotSession(directory);
+                    if (session != null)
+                    {
+                        sessions.Add(session);
+                    }
+                }
+                catch
+                {
+                    // One incomplete session directory must not hide the other resumable sessions.
+                }
+            }
+            sessions.Sort(delegate(CopilotSessionMetadata left, CopilotSessionMetadata right)
+            {
+                return right.UpdatedUtc.CompareTo(left.UpdatedUtc);
+            });
+            return sessions;
+        }
+
+        private void ListCopilotSessions(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            ThreadPool.QueueUserWorkItem(delegate(object ignored)
+            {
+                try
+                {
+                    List<CopilotSessionMetadata> sessions = ReadCopilotSessions();
+                    StringBuilder payload = new StringBuilder("[");
+                    for (int index = 0; index < sessions.Count; index++)
+                    {
+                        if (index > 0) payload.Append(',');
+                        payload.Append(sessions[index].ToJson());
+                    }
+                    payload.Append(']');
+                    string status = sessions.Count == 0
+                        ? "No resumable Copilot CLI sessions were found in this Windows account."
+                        : String.Empty;
+                    client.Send("{\"type\":\"copilotSessions\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"sessions\":" + payload + ",\"message\":" + Json.Quote(status) + "}");
+                }
+                catch (Exception error)
+                {
+                    this.Log("warn", "Could not list Copilot sessions: " + error.Message);
+                    client.Send("{\"type\":\"copilotSessions\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"sessions\":[],\"message\":\"Could not read Copilot CLI sessions from this Windows account.\"}");
+                }
+            });
         }
 
         private static string PreparedFileName(string value)

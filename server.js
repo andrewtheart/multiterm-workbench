@@ -49,6 +49,7 @@ let instanceFilePath = null;
 let terminalMessageMaxBytes = 64 * 1024;
 let terminalInboxCapacity = 500;
 let watchdogSuppressed = false;
+const copilotSessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function getInstanceDirectory() {
   const localAppData = process.env.LOCALAPPDATA;
@@ -909,6 +910,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "listTmux":
       listWslTmuxSessions(client, message.requestId);
+      break;
+    case "listCopilotSessions":
+      sendCopilotSessions(client, message.requestId);
       break;
     case "input":
       writeSession(message.id, message.data);
@@ -2710,6 +2714,90 @@ function listWslTmuxSessions(client, requestId) {
   }
 }
 
+function parseCopilotYamlScalar(value) {
+  const scalar = String(value || "").trim();
+  if (scalar.startsWith("\"") && scalar.endsWith("\"")) {
+    try {
+      return JSON.parse(scalar);
+    } catch {
+      return scalar.slice(1, -1);
+    }
+  }
+  if (scalar.startsWith("'") && scalar.endsWith("'")) {
+    return scalar.slice(1, -1).replace(/''/g, "'");
+  }
+  if (scalar === "~" || scalar.toLowerCase() === "null") return "";
+  return scalar;
+}
+
+function parseCopilotWorkspaceMetadata(contents) {
+  const wanted = new Set(["cwd", "repository", "branch", "name", "created_at", "updated_at"]);
+  const metadata = {};
+  for (const line of String(contents || "").split(/\r?\n/)) {
+    const match = /^([a-z_]+):\s*(.*)$/i.exec(line);
+    if (!match || !wanted.has(match[1])) continue;
+    metadata[match[1]] = parseCopilotYamlScalar(match[2]);
+  }
+  return metadata;
+}
+
+async function listCopilotSessions(sessionRoot = path.join(os.homedir(), ".copilot", "session-state")) {
+  let directories;
+  try {
+    directories = await fs.promises.readdir(sessionRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error && error.code === "ENOENT") return [];
+    throw error;
+  }
+
+  const discovered = [];
+  for (const directory of directories) {
+    if (!directory.isDirectory() || !copilotSessionIdPattern.test(directory.name)) continue;
+    const workspacePath = path.join(sessionRoot, directory.name, "workspace.yaml");
+    try {
+      const [contents, details] = await Promise.all([
+        fs.promises.readFile(workspacePath, "utf8"),
+        fs.promises.stat(workspacePath)
+      ]);
+      const metadata = parseCopilotWorkspaceMetadata(contents);
+      const updated = Date.parse(metadata.updated_at) ? metadata.updated_at : details.mtime.toISOString();
+      discovered.push({
+        id: directory.name.toLowerCase(),
+        name: metadata.name || "",
+        cwd: metadata.cwd || "",
+        repository: metadata.repository || "",
+        branch: metadata.branch || "",
+        createdAt: Date.parse(metadata.created_at) ? metadata.created_at : "",
+        updatedAt: updated
+      });
+    } catch (error) {
+      if (!error || error.code !== "ENOENT") {
+        console.warn(`[bridge] Could not read Copilot session ${directory.name}: ${error.message}`);
+      }
+    }
+  }
+  discovered.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+  return discovered;
+}
+
+async function sendCopilotSessions(client, requestId, sessionRoot) {
+  try {
+    const discovered = await listCopilotSessions(sessionRoot);
+    const message = discovered.length === 0
+      ? "No resumable Copilot CLI sessions were found in this Windows account."
+      : "";
+    client.send({ type: "copilotSessions", requestId, sessions: discovered, message });
+  } catch (error) {
+    console.warn(`[bridge] Could not list Copilot sessions: ${error.message}`);
+    client.send({
+      type: "copilotSessions",
+      requestId,
+      sessions: [],
+      message: "Could not read Copilot CLI sessions from this Windows account."
+    });
+  }
+}
+
 function getWorkingDirectory(value) {
   if (typeof value !== "string" || !value.trim()) {
     return process.cwd();
@@ -2807,6 +2895,10 @@ module.exports = {
     normalizeWslOutput,
     parseTmuxSessions,
     listWslTmuxSessions,
+    parseCopilotYamlScalar,
+    parseCopilotWorkspaceMetadata,
+    listCopilotSessions,
+    sendCopilotSessions,
     getWorkingDirectory,
     isLocalAddress,
     isLoopbackBindHost,
