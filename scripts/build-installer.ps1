@@ -1100,6 +1100,13 @@ if ($WhatIfPreference) {
     return
 }
 
+# A running Electron bridge loads this repository's conpty.node. Native npm
+# rebuilds replace that file, so stop only the identified MultiTerm processes
+# before any help generation, git commit, version bump, or installer build.
+$NativeModuleGuardPath = Join-Path $RepoRoot 'scripts\confirm-native-module-unlocked.ps1'
+Write-Step "Checking for running MultiTerm native module users..."
+& $NativeModuleGuardPath -RepositoryRoot $RepoRoot
+
 # --- Locate ISCC.exe ------------------------------------------------------------
 if (-not $IsccPath) {
     $candidates = @(

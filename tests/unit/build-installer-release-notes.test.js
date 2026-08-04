@@ -11,6 +11,13 @@ const path = require("node:path");
 const repoRoot = path.resolve(__dirname, "..", "..");
 const scriptPath = path.join(repoRoot, "scripts", "build-installer.ps1");
 const script = fs.readFileSync(scriptPath, "utf8");
+const nativeGuard = fs.readFileSync(path.join(repoRoot, "scripts", "confirm-native-module-unlocked.ps1"), "utf8");
+const nativeRebuild = fs.readFileSync(path.join(repoRoot, "scripts", "rebuild-native.ps1"), "utf8");
+const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+const nativeInstruction = fs.readFileSync(
+  path.join(repoRoot, ".github", "instructions", "native-rebuild.instructions.md"),
+  "utf8"
+);
 
 function runPowerShellFunctions(names, commands) {
   const loadFunctions = names.map((name) => [
@@ -63,6 +70,25 @@ function runDeterministicNotesFormatter() {
 }
 
 describe("installer release notes", () => {
+  it("guards native rebuilds before installer side effects and avoids broad process kills", () => {
+    const guardCall = '& $NativeModuleGuardPath -RepositoryRoot $RepoRoot';
+    expect(script).toContain(guardCall);
+    expect(script.indexOf(guardCall)).toBeLessThan(script.indexOf('Write-Step "Generating in-app help..."'));
+    expect(script.indexOf(guardCall)).toBeLessThan(script.indexOf('Set-VersionInFile -Path $PackageJsonPath'));
+
+    expect(packageJson.scripts["rebuild:native"]).toContain("scripts\\rebuild-native.ps1");
+    expect(packageJson.scripts.preinstall).toContain("confirm-native-module-unlocked.ps1 -NonInteractive");
+    expect(nativeRebuild).toContain("& $guardPath -RepositoryRoot $repositoryRoot");
+    expect(nativeRebuild).toContain("rebuild '@homebridge/node-pty-prebuilt-multiarch' --foreground-scripts");
+
+    expect(nativeGuard).toContain("conpty.node lock holder");
+    expect(nativeGuard).toContain("Stop-Process -Id $blockingProcess.Id -Force");
+    expect(nativeGuard).not.toMatch(/Stop-Process\s+-Name/);
+    expect(nativeGuard).not.toMatch(/taskkill[^\r\n]*\/IM/i);
+    expect(nativeInstruction).toContain("npm run rebuild:native");
+    expect(nativeInstruction).toContain("Stop only the PIDs returned by the repo-specific guard");
+  });
+
   it("appends one compare link and skips releases without a comparison base", () => {
     const result = runCompareLinkFormatter();
 

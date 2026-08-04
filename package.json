@@ -7,6 +7,8 @@
   "type": "commonjs",
   "main": "main.js",
   "scripts": {
+    "preinstall": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\\confirm-native-module-unlocked.ps1 -NonInteractive",
+    "rebuild:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\rebuild-native.ps1",
     "build:help": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\build-help.ps1",
     "prestart": "npm run build:help",
     "start": "electron .",
