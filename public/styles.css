@@ -2589,6 +2589,31 @@ body[data-pager-placement="right"] .pager-name {
   text-align: left;
 }
 
+.pager-edit {
+  align-items: center;
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 16px;
+  justify-content: center;
+  opacity: 0.58;
+  transition: opacity var(--dur) var(--ease-standard), background var(--dur) var(--ease-standard), color var(--dur) var(--ease-standard);
+  width: 16px;
+}
+
+.pager-edit svg {
+  height: 11px;
+  width: 11px;
+}
+
+.pager-edit:hover {
+  background: rgb(255 255 255 / 0.12);
+  color: var(--text);
+  opacity: 1;
+}
+
 .pager-count {
   background: rgb(255 255 255 / 0.09);
   border-radius: 999px;

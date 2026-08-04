@@ -8831,6 +8831,15 @@ function renderPager() {
     label.textContent = page.name;
     chip.append(label);
 
+    const edit = document.createElement("span");
+    edit.className = "pager-edit";
+    edit.dataset.pageEdit = page.id;
+    edit.setAttribute("role", "button");
+    edit.setAttribute("aria-label", `Rename ${page.name}`);
+    edit.title = "Rename page";
+    edit.innerHTML = '<i data-lucide="pencil"></i>';
+    chip.append(edit);
+
     const badge = document.createElement("span");
     badge.className = "pager-count";
     badge.textContent = String(count);
@@ -8906,6 +8915,12 @@ function bindPager() {
   list.addEventListener("click", (event) => {
     if (suppressPageClick) {
       event.preventDefault();
+      return;
+    }
+    const edit = event.target.closest("[data-page-edit]");
+    if (edit) {
+      event.stopPropagation();
+      startPageRename(edit.closest(".pager-chip"));
       return;
     }
     const close = event.target.closest("[data-page-close]");

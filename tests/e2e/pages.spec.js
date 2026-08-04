@@ -115,6 +115,32 @@ test.describe("Pages and the quick switcher", () => {
     await expect(chips.nth(1).locator(".pager-count")).toHaveText("0");
     await expect(chips.nth(0)).toHaveClass(/is-active/);
     await expect(chips.nth(1)).not.toHaveClass(/is-active/);
+
+    const edit = chips.nth(1).locator(".pager-edit");
+    await expect(edit).toBeVisible();
+    await expect(edit).toHaveAttribute("role", "button");
+    await expect(edit).toHaveAttribute("aria-label", "Rename Builds");
+    expect(await chips.nth(1).evaluate((tab) => (
+      tab.querySelector(".pager-name").nextElementSibling === tab.querySelector(".pager-edit")
+    ))).toBe(true);
+
+    await edit.click();
+    await expect(chips.nth(0)).toHaveClass(/is-active/);
+    await expect(chips.nth(1)).not.toHaveClass(/is-active/);
+    const rename = chips.nth(1).locator(".pager-rename");
+    await expect(rename).toBeFocused();
+    await rename.fill("Release builds");
+    await rename.press("Enter");
+    await expect(chips.nth(1).locator(".pager-name")).toHaveText("Release builds");
+    await expect.poll(() => page.evaluate(() => pageName("page-2"))).toBe("Release builds");
+
+    await page.evaluate(() => setPagerPlacement("left"));
+    await expect(chips.nth(1).locator(".pager-edit")).toBeVisible();
+    expect(await chips.nth(1).evaluate((tab) => {
+      const name = tab.querySelector(".pager-name").getBoundingClientRect();
+      const editBox = tab.querySelector(".pager-edit").getBoundingClientRect();
+      return editBox.left >= name.right;
+    })).toBe(true);
   });
 
   test("opens a new page with quick key 1 and shows close controls on proper tabs", async () => {
