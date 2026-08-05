@@ -1272,7 +1272,7 @@ if ($NoGitCommit) {
 if ($BumpVersion) {
     if ($PSCmdlet.ShouldProcess($RepoRoot, "Commit release version $Tag")) {
         Write-Step "Committing release version $Tag..."
-        Invoke-Native { git --no-pager -C $RepoRoot add -- package.json package-lock.json installer/MultiTerm.iss public/app.js } "git add release files failed"
+        Invoke-Native { git --no-pager -C $RepoRoot add -- package.json package-lock.json installer/MultiTerm.iss public/app.js integrations/visualstudio/source.extension.vsixmanifest } "git add release files failed"
         Invoke-Native { git --no-pager -C $RepoRoot commit -m "chore(release): $Tag" } "git commit failed"
     }
     else {

@@ -113,6 +113,12 @@ describe("installer release notes", () => {
     );
   });
 
+  it("commits every synchronized release-version file", () => {
+    expect(script).toContain(
+      "git --no-pager -C $RepoRoot add -- package.json package-lock.json installer/MultiTerm.iss public/app.js integrations/visualstudio/source.extension.vsixmanifest"
+    );
+  });
+
   it("adds deterministic asset and validation sections before appending one full changelog link", () => {
     const result = runDeterministicNotesFormatter();
 
