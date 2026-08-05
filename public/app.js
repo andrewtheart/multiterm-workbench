@@ -5116,9 +5116,23 @@ function applySettings() {
   elements.host.classList.toggle("compact", state.settings.compactChrome);
   state.settings.workspaceZoom = normalizeWorkspaceZoom(state.settings.workspaceZoom);
   const workspaceZoom = workspaceZoomScale();
-  elements.host.style.zoom = String(workspaceZoom);
-  elements.host.style.removeProperty("width");
-  elements.host.style.removeProperty("height");
+  // Chromium can resize an xterm WebGL canvas's DOM box for CSS zoom without
+  // scaling its compositor layer, leaving terminal pixels stranded at the old
+  // width. Give the grid inverse logical dimensions and transform the complete
+  // host instead so DOM, canvas, pointer, and scrollbar geometry scale together.
+  elements.host.style.removeProperty("zoom");
+  if (workspaceZoom === 1) {
+    elements.host.style.removeProperty("width");
+    elements.host.style.removeProperty("height");
+    elements.host.style.removeProperty("transform");
+    elements.host.style.removeProperty("transform-origin");
+  } else {
+    const inverseWorkspaceZoom = 100 / workspaceZoom;
+    elements.host.style.width = `${inverseWorkspaceZoom}%`;
+    elements.host.style.height = `${inverseWorkspaceZoom}%`;
+    elements.host.style.transform = `scale(${workspaceZoom})`;
+    elements.host.style.transformOrigin = "top left";
+  }
   elements.host.style.setProperty("--min-pane-width", `${state.settings.minWidth}px`);
   elements.host.style.setProperty("--fixed-columns", state.settings.columns);
   elements.host.style.setProperty("--fixed-rows", state.settings.rows);

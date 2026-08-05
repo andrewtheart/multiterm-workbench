@@ -88,11 +88,26 @@ test.describe("Settings panel verification", () => {
     expect(await setting("workspaceZoom")).toBe(80);
     expect(await page.evaluate(() => ({
       height: elements.host.style.height,
+      transform: elements.host.style.transform,
+      transformOrigin: elements.host.style.transformOrigin,
       width: elements.host.style.width,
       zoom: elements.host.style.zoom
-    }))).toEqual({ height: "", width: "", zoom: "0.8" });
+    }))).toEqual({
+      height: "125%",
+      transform: "scale(0.8)",
+      transformOrigin: "left top",
+      width: "125%",
+      zoom: ""
+    });
     await expect(page.locator("#workspaceZoomValue")).toHaveText("80%");
     await set("#workspaceZoom", "100", "input");
+    expect(await page.evaluate(() => ({
+      height: elements.host.style.height,
+      transform: elements.host.style.transform,
+      transformOrigin: elements.host.style.transformOrigin,
+      width: elements.host.style.width,
+      zoom: elements.host.style.zoom
+    }))).toEqual({ height: "", transform: "", transformOrigin: "", width: "", zoom: "" });
 
     await set("#fontSize", "18", "input");
     expect(await setting("fontSize")).toBe(18);
