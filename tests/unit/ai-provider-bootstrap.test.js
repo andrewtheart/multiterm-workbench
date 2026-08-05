@@ -80,7 +80,8 @@ describe("AI provider installer bootstrap", () => {
     expect(installer).toContain("Claude Code CLI (detected)");
     expect(installer).toContain("AiProviderPage.Add('Disabled')");
     expect(installer).toContain("After launch, MultiTerm verifies sign-in");
-    expect(installer).toMatch(/\(CurStep = ssPostInstall\) and \(not WizardSilent\)/);
+    expect(installer).toContain("if CurStep = ssPostInstall then");
+    expect(installer).toMatch(/if not WizardSilent then\s+WriteAiProviderBootstrap;/);
     expect(installer).toContain("ai-provider-bootstrap.json");
   });
 

@@ -49,6 +49,7 @@ describe("Visual Studio integration", () => {
     expect(buildScript).toContain("multiterm-workbench-visualstudio-$Version.vsix");
     expect(installScript).toContain("VSIXInstaller.exe");
     expect(installScript).toContain("/quiet");
+    expect(installScript).not.toContain("/shutdownprocesses");
     expect(installScript).toContain('"/uninstall:$extensionId"');
     expect(installScript).toContain("-Wait -PassThru");
     expect(installScript).toContain("$process.ExitCode");
@@ -57,9 +58,15 @@ describe("Visual Studio integration", () => {
     expect(installer).toContain('Name: "visualstudioextension"');
     expect(installer).toMatch(/Name: "visualstudioextension";[^\r\n]*Flags: unchecked/);
     expect(installer).toContain("Install-VisualStudioIntegration.ps1");
-    expect(installer).toContain("ShouldRemoveVisualStudioIntegration");
+    expect(installer).toContain("VisualStudioIntegrationStateExists");
     expect(installer).toContain("RemoveMultiTermVisualStudioIntegration");
+    expect(installer).toContain("VisualStudioIsRunning");
+    expect(installer).toContain("GetProcessesByName(''devenv'')");
+    expect(installer).toContain("Setup will not force-close the IDE");
+    expect(installer).toContain("will load the next time Visual Studio starts");
+    expect(installer).not.toContain("/shutdownprocesses");
     expect(installer).toContain("{localappdata}\\MultiTerm\\Integrations\\VisualStudioIntegrationInstalled.json");
+    expect(installer).toContain("{app}\\VisualStudio\\VisualStudioIntegrationInstalled.json");
     expect(releaseBuild).toContain("integrations\\visualstudio\\build.ps1");
     expect(releaseBuild).toContain("VisualStudioManifestPath");
   });

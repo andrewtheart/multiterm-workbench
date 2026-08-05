@@ -8,7 +8,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$AppPath,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [Parameter(DontShow = $true)]
+    [string]$EditorProcessName = "Code"
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,6 +35,7 @@ $code = Find-VSCodeCommand
 if (-not $code) {
     throw "Visual Studio Code was not found. Install VS Code or add code.cmd to PATH, then retry."
 }
+$editorWasRunning = $null -ne (Get-Process -Name $EditorProcessName -ErrorAction SilentlyContinue | Select-Object -First 1)
 
 if ($Uninstall.IsPresent) {
     if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf) -and
@@ -60,6 +63,7 @@ if ($LASTEXITCODE -ne 0) {
 New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
 @{
     extensionId = $extensionId
+    editorWasRunning = $editorWasRunning
     installedAt = [DateTimeOffset]::UtcNow.ToString("o")
     package = $packages[0].Name
 } | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8

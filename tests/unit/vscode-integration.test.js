@@ -99,5 +99,23 @@ describe("VS Code integration", () => {
     expect(installScript).toContain("--install-extension");
     expect(installScript).toContain("--uninstall-extension");
     expect(installScript).toContain("andrewtheart.multiterm-workbench");
+    expect(installScript).toContain('[string]$EditorProcessName = "Code"');
+    expect(installScript).toContain("Get-Process -Name $EditorProcessName");
+    expect(installScript).toContain("editorWasRunning = $editorWasRunning");
+    expect(installer).toContain("VSCodeWasRunningDuringInstall");
+    expect(installer).toContain("Restart Extensions");
+    expect(installer).toContain("Developer: Reload Window");
+    expect(installer).toContain("ExecAsOriginalUser");
+    expect(installer).toContain("if ResultCode <> 0 then");
+  });
+
+  it("reads current VS Code state and records whether a reload is needed", () => {
+    expect(installer).toContain("function VSCodeIntegrationStateExists: Boolean;");
+    expect(installer).toContain("{localappdata}\\MultiTerm\\Integrations\\VSCodeIntegrationInstalled.json");
+    expect(installer).toContain("{app}\\VSCode\\VSCodeIntegrationInstalled.json");
+    expect(installer).toContain("function VSCodeWasRunningDuringInstall: Boolean;");
+    expect(installer).toContain("LoadStringFromFile(");
+    expect(installer).toContain("Marker := Pos('\"editorWasRunning\"', Content);");
+    expect(installer).toContain("Pos('true', Lowercase(Copy(Content, Marker, 80))) > 0");
   });
 });

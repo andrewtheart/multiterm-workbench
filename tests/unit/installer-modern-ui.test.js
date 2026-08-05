@@ -12,6 +12,14 @@ const installer = fs.readFileSync(path.join(root, "installer", "MultiTerm.iss"),
 const artScript = fs.readFileSync(path.join(root, "scripts", "gen-installer-art.ps1"), "utf8");
 const releaseBuild = fs.readFileSync(path.join(root, "scripts", "build-installer.ps1"), "utf8");
 
+function installerSection(startMarker, endMarker) {
+  const start = installer.indexOf(startMarker);
+  const end = installer.indexOf(endMarker, start + startMarker.length);
+  expect(start, `missing installer marker: ${startMarker}`).toBeGreaterThanOrEqual(0);
+  expect(end, `missing installer marker: ${endMarker}`).toBeGreaterThan(start);
+  return installer.slice(start, end);
+}
+
 describe("modern installer UI", () => {
   it("uses a forced dark high-DPI wizard and branded raster artwork", () => {
     expect(installer).toContain("WizardStyle=modern dark includetitlebar hidebevels");
@@ -27,6 +35,61 @@ describe("modern installer UI", () => {
     expect(installer).toMatch(/Name: "vscodeextension";[^\r\n]*Flags: unchecked/);
     expect(installer).toMatch(/Name: "visualstudioextension";[^\r\n]*Flags: unchecked/);
     expect(installer).toContain("choose either, both, or neither");
+  });
+
+  it("checks both editor helper start and exit failures as the original user", () => {
+    const runner = installerSection("procedure RunEditorIntegration(", "procedure UpdateEditorIntegrations;");
+    expect(runner).toContain("ExecAsOriginalUser(");
+    expect(runner).toContain("if not ExecAsOriginalUser(");
+    expect(runner).toContain("Setup could not start the ' + EditorName + ' integration helper.");
+    expect(runner).toContain("if ResultCode <> 0 then");
+    expect(runner).toContain("integration helper failed with exit code");
+  });
+
+  it("installs selected editor integrations and removes recorded deselected integrations", () => {
+    const update = installerSection("procedure UpdateEditorIntegrations;", "procedure CurStepChanged(");
+    expect(update).toContain("if WizardIsTaskSelected('vscodeextension') then");
+    expect(update).toContain("VSCodeReloadNotice := VSCodeWasRunningDuringInstall;");
+    expect(update).toContain("else if VSCodeIntegrationStateExists then");
+    expect(update).toMatch(/VSCode\\Install-VSCodeIntegration\.ps1'[\s\S]*?' -Uninstall'/);
+    expect(update).toContain("if WizardIsTaskSelected('visualstudioextension') then");
+    expect(update).toContain("VisualStudioRestartNotice := True;");
+    expect(update).toContain("else if VisualStudioIntegrationStateExists then");
+    expect(update).toMatch(/VisualStudio\\Install-VisualStudioIntegration\.ps1'[\s\S]*?' -Uninstall'/);
+  });
+
+  it("runs editor updates for post-install and keeps AI bootstrap interactive-only", () => {
+    const postInstall = installerSection("procedure CurStepChanged(", "function VisualStudioIsRunning:");
+    expect(postInstall).toContain("if CurStep = ssPostInstall then");
+    expect(postInstall).toContain("UpdateEditorIntegrations;");
+    expect(postInstall).toContain("if not WizardSilent then");
+    expect(postInstall).toContain("WriteAiProviderBootstrap;");
+    expect(postInstall.indexOf("UpdateEditorIntegrations;")).toBeLessThan(
+      postInstall.indexOf("WriteAiProviderBootstrap;")
+    );
+  });
+
+  it("blocks selected Visual Studio changes on a running IDE or failed safety probe", () => {
+    const processCheck = installerSection("function VisualStudioIsRunning:", "function PrepareToInstall(");
+    const preflight = installerSection("function PrepareToInstall(", "function SystemPathIntegrationStateExists:");
+    expect(processCheck).toContain("GetProcessesByName(''devenv'')");
+    expect(processCheck).toContain("if not Exec(");
+    expect(processCheck).toContain("Result := True;");
+    expect(processCheck).toContain("Result := ResultCode <> 0;");
+    expect(preflight).toContain("WizardIsTaskSelected('visualstudioextension') and VisualStudioIsRunning");
+    expect(preflight).toContain("Setup will not force-close the IDE");
+    expect(preflight.indexOf("VisualStudioIsRunning")).toBeLessThan(preflight.indexOf("ExtractTemporaryFile"));
+    expect(installer).not.toContain("/shutdownprocesses");
+  });
+
+  it("shows only the completion guidance required by recorded editor state", () => {
+    const completion = installerSection("procedure CurPageChanged(", "procedure InitializeUninstallProgressForm;");
+    expect(completion).toContain("else if CurPageID = wpFinished then");
+    expect(completion).toContain("if VSCodeReloadNotice then");
+    expect(completion).toContain("Restart Extensions");
+    expect(completion).toContain("Developer: Reload Window");
+    expect(completion).toContain("if VisualStudioRestartNotice then");
+    expect(completion).toContain("will load the next time Visual Studio starts");
   });
 
   it("preserves Windows Installed Apps registration and a styled uninstaller", () => {

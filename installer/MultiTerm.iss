@@ -144,10 +144,6 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext'); StatusMsg: "Removing MultiTerm from File Explorer..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; StatusMsg: "Removing the MultiTerm Explorer package certificate..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext')
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"""; Flags: waituntilterminated runasoriginaluser; Tasks: vscodeextension; StatusMsg: "Adding MultiTerm to Visual Studio Code..."
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated runasoriginaluser; Check: ShouldRemoveVSCodeIntegration; StatusMsg: "Removing MultiTerm from Visual Studio Code..."
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VisualStudio\Install-VisualStudioIntegration.ps1"" -AppPath ""{app}"""; Flags: waituntilterminated runasoriginaluser; Tasks: visualstudioextension; StatusMsg: "Adding MultiTerm to Visual Studio..."
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VisualStudio\Install-VisualStudioIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated runasoriginaluser; Check: ShouldRemoveVisualStudioIntegration; StatusMsg: "Removing MultiTerm from Visual Studio..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -164,6 +160,8 @@ var
   AiProviderPage: TInputOptionWizardPage;
   CopilotCliDetected: Boolean;
   ClaudeCliDetected: Boolean;
+  VSCodeReloadNotice: Boolean;
+  VisualStudioRestartNotice: Boolean;
 
 function PreferArm64PromptLibraryFiles: Boolean;
 begin
@@ -246,6 +244,15 @@ begin
     WizardForm.PageNameLabel.Caption := 'Ready to install';
     WizardForm.PageDescriptionLabel.Caption :=
       'Review your choices. MultiTerm will be registered in Windows Installed Apps with its own uninstaller.';
+  end
+  else if CurPageID = wpFinished then
+  begin
+    if VSCodeReloadNotice then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 + #13#10 +
+        'Visual Studio Code was running while its extension was updated. Use the Restart Extensions prompt, or run Developer: Reload Window in each window where you want the new version.';
+    if VisualStudioRestartNotice then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 + #13#10 +
+        'The Visual Studio extension is installed and will load the next time Visual Studio starts.';
   end;
 end;
 
@@ -299,10 +306,130 @@ begin
   end;
 end;
 
+function VSCodeIntegrationStateExists: Boolean;
+begin
+  Result :=
+    FileExists(ExpandConstant('{localappdata}\MultiTerm\Integrations\VSCodeIntegrationInstalled.json')) or
+    FileExists(ExpandConstant('{app}\VSCode\VSCodeIntegrationInstalled.json'));
+end;
+
+function VisualStudioIntegrationStateExists: Boolean;
+begin
+  Result :=
+    FileExists(ExpandConstant('{localappdata}\MultiTerm\Integrations\VisualStudioIntegrationInstalled.json')) or
+    FileExists(ExpandConstant('{app}\VisualStudio\VisualStudioIntegrationInstalled.json'));
+end;
+
+function VSCodeWasRunningDuringInstall: Boolean;
+var
+  Content: AnsiString;
+  Marker: Integer;
+begin
+  Result := False;
+  if not LoadStringFromFile(
+    ExpandConstant('{localappdata}\MultiTerm\Integrations\VSCodeIntegrationInstalled.json'),
+    Content
+  ) then
+    Exit;
+  Marker := Pos('"editorWasRunning"', Content);
+  Result := (Marker > 0) and
+    (Pos('true', Lowercase(Copy(Content, Marker, 80))) > 0);
+end;
+
+procedure RunEditorIntegration(
+  const EditorName: String;
+  const ScriptRelativePath: String;
+  const ExtraArguments: String
+);
+var
+  ResultCode: Integer;
+  ScriptPath: String;
+  Arguments: String;
+begin
+  ScriptPath := ExpandConstant('{app}\' + ScriptRelativePath);
+  Arguments :=
+    '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+    ScriptPath + '" -AppPath "' + ExpandConstant('{app}') + '"' + ExtraArguments;
+  WizardForm.StatusLabel.Caption := 'Updating the ' + EditorName + ' integration...';
+  if not ExecAsOriginalUser(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    Arguments,
+    ExpandConstant('{app}'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then
+    RaiseException('Setup could not start the ' + EditorName + ' integration helper.');
+  if ResultCode <> 0 then
+    RaiseException(
+      'The ' + EditorName + ' integration helper failed with exit code ' +
+      IntToStr(ResultCode) + '.'
+    );
+end;
+
+procedure UpdateEditorIntegrations;
+begin
+  if WizardIsTaskSelected('vscodeextension') then
+  begin
+    RunEditorIntegration(
+      'Visual Studio Code',
+      'VSCode\Install-VSCodeIntegration.ps1',
+      ''
+    );
+    VSCodeReloadNotice := VSCodeWasRunningDuringInstall;
+  end
+  else if VSCodeIntegrationStateExists then
+    RunEditorIntegration(
+      'Visual Studio Code',
+      'VSCode\Install-VSCodeIntegration.ps1',
+      ' -Uninstall'
+    );
+
+  if WizardIsTaskSelected('visualstudioextension') then
+  begin
+    RunEditorIntegration(
+      'Visual Studio',
+      'VisualStudio\Install-VisualStudioIntegration.ps1',
+      ''
+    );
+    VisualStudioRestartNotice := True;
+  end
+  else if VisualStudioIntegrationStateExists then
+    RunEditorIntegration(
+      'Visual Studio',
+      'VisualStudio\Install-VisualStudioIntegration.ps1',
+      ' -Uninstall'
+    );
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep = ssPostInstall) and (not WizardSilent) then
-    WriteAiProviderBootstrap;
+  if CurStep = ssPostInstall then
+  begin
+    UpdateEditorIntegrations;
+    if not WizardSilent then
+      WriteAiProviderBootstrap;
+  end;
+end;
+
+function VisualStudioIsRunning: Boolean;
+var
+  ResultCode: Integer;
+begin
+  if not Exec(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoLogo -NoProfile -NonInteractive -Command "if ([Diagnostics.Process]::GetProcessesByName(''devenv'').Length -gt 0) { exit 10 }"',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then
+  begin
+    Log('Could not check whether Visual Studio is running; blocking the integration change to protect open work.');
+    Result := True;
+  end
+  else
+    Result := ResultCode <> 0;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -312,6 +439,14 @@ var
   StopArguments: String;
 begin
   Result := '';
+  if WizardIsTaskSelected('visualstudioextension') and VisualStudioIsRunning then
+  begin
+    Result :=
+      'Visual Studio is running. Save your work and close every Visual Studio window, then retry Setup. ' +
+      'Setup will not force-close the IDE because doing so could lose unsaved work.';
+    Log(Result);
+    Exit;
+  end;
   ExtractTemporaryFile('{#MyScriptFile}');
   StopScript := ExpandConstant('{tmp}\{#MyScriptFile}');
   StopArguments :=
@@ -381,34 +516,6 @@ begin
     HKCU,
     'Software\MultiTerm Workbench\ExplorerIntegration',
     'CertificateThumbprint');
-end;
-
-function VSCodeIntegrationStateExists: Boolean;
-begin
-  Result :=
-    FileExists(ExpandConstant('{localappdata}\MultiTerm\Integrations\VSCodeIntegrationInstalled.json')) or
-    FileExists(ExpandConstant('{app}\VSCode\VSCodeIntegrationInstalled.json'));
-end;
-
-function ShouldRemoveVSCodeIntegration: Boolean;
-begin
-  Result :=
-    VSCodeIntegrationStateExists and
-    (not WizardIsTaskSelected('vscodeextension'));
-end;
-
-function VisualStudioIntegrationStateExists: Boolean;
-begin
-  Result :=
-    FileExists(ExpandConstant('{localappdata}\MultiTerm\Integrations\VisualStudioIntegrationInstalled.json')) or
-    FileExists(ExpandConstant('{app}\VisualStudio\VisualStudioIntegrationInstalled.json'));
-end;
-
-function ShouldRemoveVisualStudioIntegration: Boolean;
-begin
-  Result :=
-    VisualStudioIntegrationStateExists and
-    (not WizardIsTaskSelected('visualstudioextension'));
 end;
 
 function ShouldRollbackExplorerCertificate: Boolean;
