@@ -10,7 +10,7 @@ layouts from auto-fit grids to a free-form canvas.
 **⬇️ [Download the latest MultiTerm Workbench installer](https://github.com/andrewtheart/multiterm-workbench/releases/latest)** — or browse all [releases](https://github.com/andrewtheart/multiterm-workbench/releases).
 
 <p align="center">
-  <img src="docs/images/workbench-grid.png" alt="MultiTerm Workbench showing six live PowerShell terminals in an auto-fit grid" width="1200">
+  <img src="docs/images/workbench-grid.png" alt="MultiTerm Workbench showing three titled PowerShell tasks and three titled Copilot sessions in a six-pane auto-fit grid" width="1200">
 </p>
 
 ## Why MultiTerm?
@@ -100,6 +100,20 @@ layouts from auto-fit grids to a free-form canvas.
       Highlight terminals waiting for input and optionally notify when background panes become active, fall silent, or ring the terminal bell, so long-running work does not need constant watching.
     </td>
   </tr>
+  <tr>
+    <td align="center" width="33%">
+      <h3>↔️ Terminal messaging and routes</h3>
+      Hand commands, summaries, paths, tasks, and results to another live terminal through a bridge-owned inbox. Receivers explicitly insert or dismiss each item, while persistent directional links and workspace connectors keep recurring workflows visible.
+    </td>
+    <td align="center" width="33%">
+      <h3>⏱️ Automation Studio</h3>
+      Build interval, daily, or weekday schedules with ordered actions that run or stage only after the target shell, Copilot, or Claude prompt is confirmed ready. Review history, pause globally, and route completed assistant handoffs to connected terminals.
+    </td>
+    <td align="center" width="33%">
+      <h3>🧩 Explorer and editor integrations</h3>
+      Opt into Windows 11 File Explorer, Visual Studio Code, or Visual Studio 2022/2026 integrations during setup. Open selected folders, files, projects, and solutions directly in a live MultiTerm instance, with clean upgrade and uninstall ownership.
+    </td>
+  </tr>
 </table>
 
 ### Attaching an existing terminal
@@ -147,8 +161,8 @@ file-selection prompts on an interactive Windows desktop.
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/workbench-grid.png" alt="MultiTerm in auto-fit grid mode with six active terminals">
-      <br><strong>Grid workbench:</strong> multiple live shells and controls in one view.
+      <img src="docs/images/workbench-grid.png" alt="MultiTerm in auto-fit grid mode with three titled shell tasks and three completed Copilot prompts">
+      <br><strong>Grid workbench:</strong> titled shell tasks and completed Copilot sessions in one six-pane view.
     </td>
     <td align="center" width="50%">
       <img src="docs/images/maximized-pane.png" alt="A single terminal maximized to fill the workspace">
@@ -197,8 +211,8 @@ file-selection prompts on an interactive Windows desktop.
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/context-menu.png" alt="Right-click context menu showing copy, find, maximize, Copilot CLI, scripts, Git status, and more">
-      <br><strong>Deep context menu:</strong> terminal actions, scripts, statistics, logging, and process-aware tools in one place.
+      <img src="docs/images/context-menu.png" alt="Searchable two-column glass context menu grouping clipboard, find, automation, snippet, and session actions">
+      <br><strong>Deep context menu:</strong> searchable, customizable action groups on a translucent terminal-aware surface.
     </td>
     <td align="center" width="50%">
       <img src="docs/images/notes-command-queue.png" alt="Terminal notes and command queue dialog showing PID-bound notes and three staged commands">
@@ -790,7 +804,7 @@ point the checker at a fork.
 - Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell, Command Prompt, or WSL. Existing WSL tmux sessions can be discovered and attached from the header or command palette.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.
 - Pages keep related terminals in separate visual groups while their shell processes stay alive. Compact page tabs expose a persistent right-edge **x** and reorder by dragging along the active axis; dragging a terminal title bar onto a page tab moves that terminal there. `Ctrl+P` creates a page. Right-click a page for **Close page** or **Close all**; populated-page closes use the remembered move-or-close policy from Session settings. Right-click blank pager space for **Open new page** as quick key **1** and the placement actions. **Pages location** under **Layout** and those context actions move the tabs to the top, bottom, left, or right; both paths update one persisted setting and stay synchronized. Side panels are collapsible. Saved workspaces preserve pages, terminals, directories, shell choices, titles, and layout settings.
-- The top-right **?** opens generated in-app help. The keyboard icon or `Ctrl+/` opens a categorized catalog of terminal-menu, page-menu, app-wide, and customized shortcuts; `Ctrl+Shift+P` or F1 opens the searchable command palette.
+- The top-right **?** or `F1` opens generated in-app help. The keyboard icon or `Ctrl+/` opens a categorized catalog of terminal-menu, page-menu, app-wide, and customized shortcuts; `Ctrl+Shift+P` opens the searchable command palette.
 - The top search box runs the same buffer search as `Ctrl+Shift+F` — every match is highlighted in place and a counter shows the running total — and additionally hides panes with nothing to show. Panes reappear (already highlighted) the moment your evolving query matches them again, or when matching output arrives. Enter/Shift+Enter walk the matches, Escape clears the filter. A pane also survives the filter when its title, working directory, shell, or status matches. `Ctrl+Shift+E` focuses the box.
 - Layout modes include auto fit, fixed rows/columns, strips, carousels, balanced/priority/compact grids, four master edges, spotlight, bento, focus rail, and manual canvas.
 - Settings groups start collapsed to keep the side panel compact. Its sticky search uses a cached related-term index as well as visible labels, so searches such as **tabs**, **macros**, or **projects** find Pages, Snippets, or Workspaces without rescanning every control on each keystroke. It temporarily expands matching groups; clearing restores the previous group state. **Show all** clears the filter and expands every group, then changes to **Collapse all**.
