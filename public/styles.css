@@ -59,6 +59,7 @@
   --surface-raised: #23272e;
   --surface-high: #2b3038;
   --surface-translucent: rgba(24, 27, 32, 0.72);
+  --context-menu-glass: rgba(31, 35, 42, 0.80);
   --border: #363b44;
   --border-strong: #454b56;
   --text: #e6e8ec;
@@ -104,6 +105,7 @@
   --surface-raised: #ffffff;
   --surface-high: #eaeef4;
   --surface-translucent: rgba(248, 249, 252, 0.78);
+  --context-menu-glass: rgba(246, 248, 252, 0.82);
   --border: #d4d9e1;
   --border-strong: #bcc3ce;
   --text: #1a1d22;
@@ -4996,9 +4998,8 @@ body[data-pager-placement="right"] .pager-add {
 
 /* ---------------- Context menu --------------- */
 
-/* This surface is created on the right-click critical path. A large backdrop
-  blur made warm opens miss a frame on pane-heavy workspaces; the opaque raised
-  surface preserves contrast without forcing Chromium to re-composite the stage. */
+/* Compact menus stay opaque on the right-click critical path. The large grouped
+  terminal menus opt into a scoped glass surface below. */
 .context-menu {
   background: var(--surface-high);
   border: 1px solid var(--border-strong);
@@ -5021,6 +5022,9 @@ body[data-pager-placement="right"] .pager-add {
 }
 
 .context-menu.is-grouped {
+  -webkit-backdrop-filter: blur(12px) saturate(135%);
+  backdrop-filter: blur(12px) saturate(135%);
+  background: var(--context-menu-glass);
   max-width: calc(100vw - 16px);
   overflow: hidden;
   padding: 8px;
@@ -7502,6 +7506,11 @@ body.is-pane-resizing {
 
 .terminal-screen .xterm {
   height: 100%;
+  padding-right: var(--terminal-scrollbar-reserve, 0px);
+}
+
+.terminal-screen .xterm-viewport {
+  scrollbar-gutter: stable;
 }
 
 .terminal-host.compact .terminal-pane {

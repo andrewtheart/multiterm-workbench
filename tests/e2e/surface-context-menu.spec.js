@@ -1042,7 +1042,7 @@ test.describe("Surface context menu", () => {
     expect(searchChrome.wrapperBoxShadow).not.toBe("none");
   });
 
-  test("opens the warm terminal menu without a full-page icon scan or backdrop blur", async ({ page }) => {
+  test("opens the warm terminal menu with scoped glass and no full-page icon scan", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
 
@@ -1067,10 +1067,17 @@ test.describe("Surface context menu", () => {
       const style = getComputedStyle(elements.contextMenu);
       const snapshot = {
         backdropFilter: style.backdropFilter,
+        backgroundColor: style.backgroundColor,
         menuIcons: elements.contextMenu.querySelectorAll("svg[data-lucide]").length,
         outsideIconUnresolved: outsideIcon.tagName === "I" && outsideIcon.isConnected,
         p95: timings[Math.floor(timings.length * 0.95)]
       };
+      const previousTheme = document.documentElement.dataset.appTheme;
+      document.documentElement.dataset.appTheme = "light";
+      snapshot.lightBackgroundColor = getComputedStyle(elements.contextMenu).backgroundColor;
+      document.documentElement.dataset.appTheme = previousTheme;
+      elements.contextMenu.classList.remove("is-grouped");
+      snapshot.compactBackdropFilter = getComputedStyle(elements.contextMenu).backdropFilter;
       hideContextMenu();
       outsideIcon.remove();
       state.copilotCwdHistory = savedCwdHistory;
@@ -1079,7 +1086,10 @@ test.describe("Surface context menu", () => {
 
     expect(result.menuIcons).toBeGreaterThan(20);
     expect(result.outsideIconUnresolved).toBe(true);
-    expect(result.backdropFilter).toBe("none");
+    expect(result.backdropFilter).toContain("blur(12px)");
+    expect(result.backgroundColor).toBe("rgba(31, 35, 42, 0.8)");
+    expect(result.lightBackgroundColor).toBe("rgba(246, 248, 252, 0.82)");
+    expect(result.compactBackdropFilter).toBe("none");
     expect(result.p95).toBeLessThan(20);
   });
 

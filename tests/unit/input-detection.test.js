@@ -101,13 +101,35 @@ describe("input-detection: Copilot CLI TUI readiness", () => {
   it("recognises the ready footer after a known reattached Copilot header scrolls away", () => {
     expect(isCopilotPromptReady([
       " ● Previous response",
+      "❯",
       " / commands · ? help · tab next tab"
     ], true)).toBe(true);
+  });
+
+  it("recovers Copilot identity from a reattached empty composer", () => {
+    const screen = [
+      " C:\\work                                                   Session: 360 AIC used",
+      "────────────────────────────────────────────────────────────────────────",
+      "❯",
+      "────────────────────────────────────────────────────────────────────────",
+      " / commands · ? help · tab next tab                    Claude Opus 5 · 1M context"
+    ];
+    expect(aiAssistantTuiProvider(screen)).toBe("copilot");
+    expect(isCopilotPromptReady(screen)).toBe(true);
+  });
+
+  it("does not treat a footer without an empty composer as ready", () => {
+    expect(isCopilotPromptReady([
+      header,
+      "Review this unfinished prompt",
+      " / commands · ? help · tab next tab"
+    ])).toBe(false);
   });
 
   it("handles ANSI-coloured Copilot screen text", () => {
     expect(isCopilotPromptReady([
       "\u001b[36mCopilot v1.0.78 uses AI.\u001b[0m",
+      "\u001b[32m❯\u001b[0m",
       "\u001b[2m / commands · ? help · tab next tab\u001b[0m"
     ])).toBe(true);
   });

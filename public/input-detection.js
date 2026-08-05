@@ -287,9 +287,18 @@
     return values.map((line) => normalize(line));
   }
 
+  const COPILOT_FOOTER_PATTERN = /^\s*\/\s*commands\s*[·•]\s*\?\s*help\b/i;
+  const COPILOT_EMPTY_COMPOSER_PATTERN = /^\s*(?:❯|┃)\s*$/;
+
+  function hasCopilotEmptyComposer(screen) {
+    return screen.some((line) => COPILOT_FOOTER_PATTERN.test(line))
+      && screen.some((line) => COPILOT_EMPTY_COMPOSER_PATTERN.test(line));
+  }
+
   function aiAssistantTuiProvider(lines) {
-    const screen = aiAssistantScreenLines(lines).join(" ");
-    if (/\bCopilot\s+v[\d.]+\s+uses\s+AI\b/i.test(screen)) return "copilot";
+    const linesOnScreen = aiAssistantScreenLines(lines);
+    const screen = linesOnScreen.join(" ");
+    if (/\bCopilot\s+v[\d.]+\s+uses\s+AI\b/i.test(screen) || hasCopilotEmptyComposer(linesOnScreen)) return "copilot";
     if (/\bClaude Code\b(?:\s+v[\w.-]+)?/i.test(screen)) return "claude";
     return "";
   }
@@ -304,7 +313,7 @@
       ? knownProvider
       : aiAssistantTuiProvider(screen);
     if (provider === "copilot") {
-      return screen.some((line) => /^\s*\/\s*commands\s*·\s*\?\s*help\b/i.test(line));
+      return hasCopilotEmptyComposer(screen);
     }
     if (provider === "claude") {
       return screen.some((line) => /^\s*❯\s*$/.test(line));

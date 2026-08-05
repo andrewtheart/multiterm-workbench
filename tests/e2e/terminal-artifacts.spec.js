@@ -312,6 +312,50 @@ test.describe("Terminal notes and command queue", () => {
     });
   });
 
+  test("runs a queued prompt in a reattached idle Copilot composer", async ({ page }) => {
+    await reset(page);
+    const readiness = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      terminal.aiAssistantTuiProvider = "";
+      terminal.term.reset();
+      await new Promise((resolve) => terminal.term.write([
+        " C:\\work                                      Session: 360 AIC used",
+        "────────────────────────────────────────────────────────────",
+        "❯",
+        "────────────────────────────────────────────────────────────",
+        " / commands · ? help · tab next tab       Claude Opus 5 · 1M context"
+      ].join("\r\n"), resolve));
+
+      window.__reattachedQueueFrames = [];
+      window.__reattachedQueueOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__reattachedQueueFrames.push(JSON.parse(payload));
+      const result = terminalExecutionReadiness(terminal);
+      queueAutomaticTerminalCommand(terminal, "Continue from the completed response");
+      scheduleAutomaticQueueCheck(terminal, 0);
+      return result;
+    });
+
+    expect(readiness).toEqual({ mode: "copilot", ready: true });
+    await expect.poll(() => page.evaluate(() => window.__reattachedQueueFrames
+      .filter((frame) => frame.type === "input" && (
+        frame.data === "Continue from the completed response"
+        || frame.data === "\x1b[13u"
+      ))
+      .map((frame) => frame.data))).toEqual([
+      "Continue from the completed response",
+      "\x1b[13u"
+    ]);
+
+    const queued = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      state.socket.send = window.__reattachedQueueOriginalSend;
+      delete window.__reattachedQueueOriginalSend;
+      delete window.__reattachedQueueFrames;
+      return state.terminalArtifacts.terminals[terminal.id].queue.length;
+    });
+    expect(queued).toBe(0);
+  });
+
   test("waits for Claude to finish and submits with standard Enter", async ({ page }) => {
     await reset(page);
     await page.evaluate(() => {

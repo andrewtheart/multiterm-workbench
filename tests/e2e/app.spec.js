@@ -393,6 +393,40 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
   });
 
+  test("keeps overlay scrollbars out of the terminal text area", async () => {
+    const geometry = await page.evaluate(async () => {
+      const terminal = state.terminals.values().next().value;
+      const viewport = terminal.term.element.querySelector(".xterm-viewport");
+      const xterm = terminal.term.element;
+      const originalClientWidth = Object.getOwnPropertyDescriptor(viewport, "clientWidth");
+      Object.defineProperty(viewport, "clientWidth", {
+        configurable: true,
+        get: () => viewport.offsetWidth
+      });
+      reserveTerminalScrollbarGutter(terminal.term);
+      terminal.fitAddon.fit();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      const screenRect = xterm.querySelector(".xterm-screen").getBoundingClientRect();
+      const xtermRect = xterm.getBoundingClientRect();
+      const result = {
+        gutter: getComputedStyle(viewport).scrollbarGutter,
+        paddingRight: Number.parseFloat(getComputedStyle(xterm).paddingRight),
+        reservedRight: xtermRect.right - screenRect.right
+      };
+
+      if (originalClientWidth) Object.defineProperty(viewport, "clientWidth", originalClientWidth);
+      else delete viewport.clientWidth;
+      reserveTerminalScrollbarGutter(terminal.term);
+      terminal.fitAddon.fit();
+      return result;
+    });
+
+    expect(geometry.gutter).toContain("stable");
+    expect(geometry.paddingRight).toBe(10);
+    expect(geometry.reservedRight).toBeGreaterThanOrEqual(9);
+  });
+
   test("applies layout and appearance settings", async () => {
     await setNative("#layoutMode", "columns", "change");
     await setNative("#columnCount", "3", "input");

@@ -2053,6 +2053,18 @@ function nextTerminalTitle(shell) {
   return nextTitleForLabel(terminalShellTitle(shell));
 }
 
+const TERMINAL_SCROLLBAR_GUTTER_PX = 10;
+
+function reserveTerminalScrollbarGutter(term) {
+  const element = term?.element;
+  const viewport = element?.querySelector(".xterm-viewport");
+  if (!element || !viewport) return 0;
+  const measuredWidth = Math.max(0, viewport.offsetWidth - viewport.clientWidth);
+  const reserve = Math.max(0, TERMINAL_SCROLLBAR_GUTTER_PX - measuredWidth);
+  element.style.setProperty("--terminal-scrollbar-reserve", `${reserve}px`);
+  return reserve;
+}
+
 function addTerminal(options = {}) {
   if (options.reveal) {
     clearTerminalSearch();
@@ -2117,6 +2129,7 @@ function addTerminal(options = {}) {
   }
   elements.host.append(pane);
   term.open(screen);
+  reserveTerminalScrollbarGutter(term);
 
   const fontZoomIndicator = document.createElement("span");
   fontZoomIndicator.className = "terminal-zoom-indicator";
@@ -4565,12 +4578,19 @@ function terminalExecutionReadiness(terminal) {
     && buffer.cursorX >= physicalLine.length
     && promptDetector.isShellPrompt(logicalLine);
   if (terminal.aiAssistantTuiProvider) {
+    const assistantReady = promptDetector.isAiAssistantPromptReady(lines, terminal.aiAssistantTuiProvider);
+    if (assistantReady) {
+      return {
+        mode: terminal.aiAssistantTuiProvider,
+        ready: true
+      };
+    }
     if (shellReady) {
       terminal.aiAssistantTuiProvider = "";
     } else {
       return {
         mode: terminal.aiAssistantTuiProvider,
-        ready: promptDetector.isAiAssistantPromptReady(lines, terminal.aiAssistantTuiProvider)
+        ready: false
       };
     }
   }
@@ -5318,6 +5338,7 @@ function scheduleFit(terminal) {
     // it when the page comes back.
     if (terminal.pane.classList.contains("is-page-hidden")) return;
     try {
+      reserveTerminalScrollbarGutter(terminal.term);
       terminal.fitAddon.fit();
     } catch {
       return;
