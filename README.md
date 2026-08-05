@@ -596,6 +596,8 @@ PowerShell bridge (no Node.js runtime required) into a Windows installer. It
 installs `Start-MultiTerm.ps1`, the `public/` assets, and Start Menu / optional
 desktop shortcuts that launch the bridge and open it in your browser. The
 license and third-party notices are both shown before installation begins.
+Setup and Uninstall use a dark branded interface, while Inno Setup continues
+to provide Windows Installed Apps registration, upgrades, and removal.
 Before replacing files during an install or upgrade, Setup gracefully stops
 the current user's running MultiTerm instances and waits for them to exit. If
 an instance cannot stop within 15 seconds, Setup asks you to close it and retry
@@ -661,13 +663,22 @@ certificate used by the modern menu extension; the app itself remains per-user.
 The Explorer integration remains per-user even with a machine-wide app install
 because its AppX registration belongs to one Windows user profile.
 
-Setup also offers an optional **Visual Studio Code integration**. It adds
-file, folder, and workspace commands to VS Code's Explorer and packages as
-`andrewtheart.multiterm-workbench`. A selected file opens its containing folder;
-a selected folder or blank-workspace command opens that folder directly. The
-extension delegates to `Start-MultiTerm.ps1 -OpenFolder`, so it forwards to a
-live instance or starts MultiTerm when needed. Its source and repeatable VSIX
-build live under `integrations/vscode/`.
+Setup presents separate, unchecked choices for **Visual Studio Code
+integration** and **Visual Studio integration**, so neither editor is modified
+without explicit consent. The VS Code extension adds file, folder, and workspace
+commands to Explorer and packages as `andrewtheart.multiterm-workbench`. A
+selected file opens its containing folder; a selected folder or blank-workspace
+command opens that folder directly. Its source and repeatable VSIX build live
+under `integrations/vscode/`.
+
+The Visual Studio extension supports 64-bit Visual Studio 2022 and 2026. It adds
+**Open in MultiTerm Workbench** to the Tools menu and to Solution Explorer for
+solutions, projects, folders, and selected files. Both editor extensions delegate
+to `Start-MultiTerm.ps1 -OpenFolder`, so they forward to a live instance or start
+MultiTerm when needed. Setup installs each selected extension per user and removes
+only the integrations it installed when they are disabled during an upgrade or
+when MultiTerm is uninstalled. The Visual Studio source and VSIX build live under
+`integrations/visualstudio/`.
 
 ### Download
 

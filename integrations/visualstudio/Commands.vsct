@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommandTable xmlns="http://schemas.microsoft.com/VisualStudio/2005-10-18/CommandTable">
+  <Extern href="stdidcmd.h" />
+  <Extern href="vsshlids.h" />
+
+  <Commands package="guidMultiTermPackage">
+    <Groups>
+      <Group guid="guidMultiTermCommandSet" id="groupTools" priority="0x0900">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_MENU_TOOLS" />
+      </Group>
+      <Group guid="guidMultiTermCommandSet" id="groupSolution" priority="0x0800">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_SOLNNODE" />
+      </Group>
+      <Group guid="guidMultiTermCommandSet" id="groupProject" priority="0x0800">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_PROJNODE" />
+      </Group>
+      <Group guid="guidMultiTermCommandSet" id="groupItem" priority="0x0800">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_ITEMNODE" />
+      </Group>
+      <Group guid="guidMultiTermCommandSet" id="groupFolder" priority="0x0800">
+        <Parent guid="guidSHLMainMenu" id="IDM_VS_CTXT_FOLDERNODE" />
+      </Group>
+    </Groups>
+
+    <Buttons>
+      <Button guid="guidMultiTermCommandSet" id="commandTools" priority="0x0100" type="Button">
+        <Parent guid="guidMultiTermCommandSet" id="groupTools" />
+        <Strings><ButtonText>Open in MultiTerm</ButtonText></Strings>
+      </Button>
+      <Button guid="guidMultiTermCommandSet" id="commandSolution" priority="0x0100" type="Button">
+        <Parent guid="guidMultiTermCommandSet" id="groupSolution" />
+        <Strings><ButtonText>Open in MultiTerm</ButtonText></Strings>
+      </Button>
+      <Button guid="guidMultiTermCommandSet" id="commandProject" priority="0x0100" type="Button">
+        <Parent guid="guidMultiTermCommandSet" id="groupProject" />
+        <Strings><ButtonText>Open in MultiTerm</ButtonText></Strings>
+      </Button>
+      <Button guid="guidMultiTermCommandSet" id="commandItem" priority="0x0100" type="Button">
+        <Parent guid="guidMultiTermCommandSet" id="groupItem" />
+        <Strings><ButtonText>Open containing folder in MultiTerm</ButtonText></Strings>
+      </Button>
+      <Button guid="guidMultiTermCommandSet" id="commandFolder" priority="0x0100" type="Button">
+        <Parent guid="guidMultiTermCommandSet" id="groupFolder" />
+        <Strings><ButtonText>Open in MultiTerm</ButtonText></Strings>
+      </Button>
+    </Buttons>
+  </Commands>
+
+  <Symbols>
+    <GuidSymbol name="guidMultiTermPackage" value="{0AD40EF7-92BC-47CD-969E-8909D619150E}" />
+    <GuidSymbol name="guidMultiTermCommandSet" value="{B88D5C48-729E-4CEF-AAD9-22C550662965}">
+      <IDSymbol name="groupTools" value="0x1000" />
+      <IDSymbol name="groupSolution" value="0x1001" />
+      <IDSymbol name="groupProject" value="0x1002" />
+      <IDSymbol name="groupItem" value="0x1003" />
+      <IDSymbol name="groupFolder" value="0x1004" />
+      <IDSymbol name="commandTools" value="0x0100" />
+      <IDSymbol name="commandSolution" value="0x0101" />
+      <IDSymbol name="commandProject" value="0x0102" />
+      <IDSymbol name="commandItem" value="0x0103" />
+      <IDSymbol name="commandFolder" value="0x0104" />
+    </GuidSymbol>
+  </Symbols>
+</CommandTable>

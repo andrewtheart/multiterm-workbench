@@ -14,7 +14,9 @@ param(
 $ErrorActionPreference = "Stop"
 $extensionId = "andrewtheart.multiterm-workbench"
 $integrationDirectory = Join-Path $AppPath "VSCode"
-$stateFile = Join-Path $integrationDirectory "VSCodeIntegrationInstalled.json"
+$stateDirectory = Join-Path $env:LOCALAPPDATA "MultiTerm\Integrations"
+$stateFile = Join-Path $stateDirectory "VSCodeIntegrationInstalled.json"
+$legacyStateFile = Join-Path $integrationDirectory "VSCodeIntegrationInstalled.json"
 
 function Find-VSCodeCommand {
     $fromPath = Get-Command code.cmd -ErrorAction SilentlyContinue
@@ -33,14 +35,15 @@ if (-not $code) {
 }
 
 if ($Uninstall.IsPresent) {
-    if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf) -and
+        -not (Test-Path -LiteralPath $legacyStateFile -PathType Leaf)) {
         return
     }
     & $code --uninstall-extension $extensionId
     if ($LASTEXITCODE -ne 0) {
         throw "VS Code could not uninstall $extensionId (exit code $LASTEXITCODE)."
     }
-    Remove-Item -LiteralPath $stateFile -Force
+    Remove-Item -LiteralPath $stateFile, $legacyStateFile -Force -ErrorAction SilentlyContinue
     return
 }
 
@@ -54,8 +57,10 @@ if ($LASTEXITCODE -ne 0) {
     throw "VS Code could not install $($packages[0].Name) (exit code $LASTEXITCODE)."
 }
 
+New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
 @{
     extensionId = $extensionId
     installedAt = [DateTimeOffset]::UtcNow.ToString("o")
     package = $packages[0].Name
 } | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding UTF8
+Remove-Item -LiteralPath $legacyStateFile -Force -ErrorAction SilentlyContinue

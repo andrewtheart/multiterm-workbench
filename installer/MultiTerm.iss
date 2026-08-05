@@ -45,7 +45,10 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
+DisableWelcomePage=no
+DisableReadyPage=no
 UninstallDisplayIcon={app}\MultiTerm.ico
+UninstallDisplayName={#MyAppName}
 ; Per-user install by default (no UAC); user may elect a machine-wide install.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
@@ -61,7 +64,11 @@ OutputBaseFilename=MultiTerm-Setup-{#MyAppVersion}
 SetupIconFile=MultiTerm.ico
 Compression=lzma2
 SolidCompression=yes
-WizardStyle=modern
+WizardStyle=modern dark includetitlebar hidebevels
+WizardSizePercent=125
+WizardKeepAspectRatio=yes
+WizardImageFile=assets\wizard-dark.png
+WizardSmallImageFile=assets\wizard-small-dark.png
 LicenseFile={#RepoRoot}\LICENSE
 InfoBeforeFile={#RepoRoot}\THIRD-PARTY-NOTICES.txt
 ; Windows 10 version 1809 (build 17763) is the minimum: MultiTerm's pseudo-terminals
@@ -75,7 +82,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "watchdog"; Description: "Install the MultiTerm watchdog (recommended; monitors bridges and asks before closing orphaned terminal sessions)"; GroupDescription: "Background monitoring:"
 Name: "explorercontext"; Description: "Add 'Open in MultiTerm' to File Explorer folder context menus (optional; Windows 11 requires administrator approval)"; GroupDescription: "File Explorer integration (select to enable):"; Flags: unchecked
-Name: "vscodeextension"; Description: "Add 'Open in MultiTerm' to Visual Studio Code Explorer menus"; GroupDescription: "Editor integration (select to enable):"; Flags: unchecked
+Name: "vscodeextension"; Description: "Visual Studio Code extension (.vsix) - add 'Open in MultiTerm' to Explorer menus"; GroupDescription: "Editor extensions (choose either, both, or neither):"; Flags: unchecked
+Name: "visualstudioextension"; Description: "Visual Studio extension (.vsix) - add 'Open in MultiTerm' to Solution Explorer and Tools"; GroupDescription: "Editor extensions (choose either, both, or neither):"; Flags: unchecked
 Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 'multiterm' command)"; GroupDescription: "Command-line integration (machine-wide Program Files installs only):"; Flags: unchecked; Check: IsProtectedSystemPathInstall
 
 [Files]
@@ -114,6 +122,8 @@ Source: "explorer-integration\generated\bin\arm64\*.dll"; DestDir: "{app}\Explor
 Source: "explorer-integration\generated\bin\arm64\*.exe"; DestDir: "{app}\Explorer\arm64"; Flags: ignoreversion
 Source: "vscode-integration\Install-VSCodeIntegration.ps1"; DestDir: "{app}\VSCode"; Flags: ignoreversion
 Source: "vscode-integration\generated\*.vsix"; DestDir: "{app}\VSCode"; Flags: ignoreversion
+Source: "visualstudio-integration\Install-VisualStudioIntegration.ps1"; DestDir: "{app}\VisualStudio"; Flags: ignoreversion
+Source: "visualstudio-integration\generated\*.vsix"; DestDir: "{app}\VisualStudio"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; IconFilename: "{app}\MultiTerm.ico"; AppUserModelID: "{#MyAppAUMID}"; Comment: "Start a new MultiTerm instance with its compact bridge control console"
@@ -136,6 +146,8 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext')
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"""; Flags: waituntilterminated runasoriginaluser; Tasks: vscodeextension; StatusMsg: "Adding MultiTerm to Visual Studio Code..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated runasoriginaluser; Check: ShouldRemoveVSCodeIntegration; StatusMsg: "Removing MultiTerm from Visual Studio Code..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VisualStudio\Install-VisualStudioIntegration.ps1"" -AppPath ""{app}"""; Flags: waituntilterminated runasoriginaluser; Tasks: visualstudioextension; StatusMsg: "Adding MultiTerm to Visual Studio..."
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VisualStudio\Install-VisualStudioIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated runasoriginaluser; Check: ShouldRemoveVisualStudioIntegration; StatusMsg: "Removing MultiTerm from Visual Studio..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyScriptFile}"" -ConsoleDashboard -NewInstance"; WorkingDir: "{app}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -145,6 +157,7 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; RunOnceId: "RemoveMultiTermExplorerCertificate"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated; RunOnceId: "FinalizeMultiTermExplorerIntegration"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated; RunOnceId: "RemoveMultiTermVSCodeIntegration"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VisualStudio\Install-VisualStudioIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated; RunOnceId: "RemoveMultiTermVisualStudioIntegration"
 
 [Code]
 var
@@ -186,6 +199,12 @@ begin
   CopilotCliDetected := CommandIsAvailable('copilot');
   ClaudeCliDetected := CommandIsAvailable('claude');
 
+  WizardForm.Caption := 'Install MultiTerm Workbench';
+  WizardForm.WelcomeLabel1.Caption := 'MultiTerm Workbench';
+  WizardForm.WelcomeLabel2.Caption :=
+    'A focused terminal workspace for Windows.' + #13#10 + #13#10 +
+    'Setup keeps every integration optional and clearly shows what will change before installation.';
+
   AiProviderPage := CreateInputOptionPage(
     wpSelectTasks,
     'AI assistant defaults',
@@ -212,6 +231,30 @@ begin
     AiProviderPage.SelectedValueIndex := 1
   else
     AiProviderPage.SelectedValueIndex := 2;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpSelectTasks then
+  begin
+    WizardForm.PageNameLabel.Caption := 'Choose integrations';
+    WizardForm.PageDescriptionLabel.Caption :=
+      'Editor extensions and system integrations are optional and can be changed by running Setup again.';
+  end
+  else if CurPageID = wpReady then
+  begin
+    WizardForm.PageNameLabel.Caption := 'Ready to install';
+    WizardForm.PageDescriptionLabel.Caption :=
+      'Review your choices. MultiTerm will be registered in Windows Installed Apps with its own uninstaller.';
+  end;
+end;
+
+procedure InitializeUninstallProgressForm;
+begin
+  UninstallProgressForm.Caption := 'Remove MultiTerm Workbench';
+  UninstallProgressForm.PageNameLabel.Caption := 'Removing MultiTerm Workbench';
+  UninstallProgressForm.PageDescriptionLabel.Caption :=
+    'Setup will remove shortcuts, editor extensions, and registered integrations.';
 end;
 
 function SelectedAiProvider: String;
@@ -342,7 +385,9 @@ end;
 
 function VSCodeIntegrationStateExists: Boolean;
 begin
-  Result := FileExists(ExpandConstant('{app}\VSCode\VSCodeIntegrationInstalled.json'));
+  Result :=
+    FileExists(ExpandConstant('{localappdata}\MultiTerm\Integrations\VSCodeIntegrationInstalled.json')) or
+    FileExists(ExpandConstant('{app}\VSCode\VSCodeIntegrationInstalled.json'));
 end;
 
 function ShouldRemoveVSCodeIntegration: Boolean;
@@ -350,6 +395,20 @@ begin
   Result :=
     VSCodeIntegrationStateExists and
     (not WizardIsTaskSelected('vscodeextension'));
+end;
+
+function VisualStudioIntegrationStateExists: Boolean;
+begin
+  Result :=
+    FileExists(ExpandConstant('{localappdata}\MultiTerm\Integrations\VisualStudioIntegrationInstalled.json')) or
+    FileExists(ExpandConstant('{app}\VisualStudio\VisualStudioIntegrationInstalled.json'));
+end;
+
+function ShouldRemoveVisualStudioIntegration: Boolean;
+begin
+  Result :=
+    VisualStudioIntegrationStateExists and
+    (not WizardIsTaskSelected('visualstudioextension'));
 end;
 
 function ShouldRollbackExplorerCertificate: Boolean;

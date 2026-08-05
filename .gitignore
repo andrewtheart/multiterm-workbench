@@ -8,6 +8,8 @@ lib/prompt-library-host/obj/
 lib/prompt-library-host/publish/
 lib/sqlite3mc/bin/
 lib/sqlite3mc/build/
+integrations/visualstudio/bin/
+integrations/visualstudio/obj/
 
 # Logs
 *.log
@@ -21,6 +23,7 @@ Thumbs.db
 installer/Output/
 installer/explorer-integration/generated/
 installer/vscode-integration/generated/
+installer/visualstudio-integration/generated/
 *.exp
 *.lib
 *.obj

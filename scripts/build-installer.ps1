@@ -970,11 +970,13 @@ $PackageJsonPath = Join-Path $RepoRoot 'package.json'
 $PackageLockPath = Join-Path $RepoRoot 'package-lock.json'
 $IssPath = Join-Path $RepoRoot 'installer\MultiTerm.iss'
 $AppJsPath = Join-Path $RepoRoot 'public\app.js'
+$VisualStudioManifestPath = Join-Path $RepoRoot 'integrations\visualstudio\source.extension.vsixmanifest'
 
 if (-not (Test-Path -LiteralPath $PackageJsonPath)) { throw "Cannot find package.json at $PackageJsonPath" }
 if (-not (Test-Path -LiteralPath $PackageLockPath)) { throw "Cannot find package-lock.json at $PackageLockPath" }
 if (-not (Test-Path -LiteralPath $IssPath)) { throw "Cannot find installer script at $IssPath" }
 if (-not (Test-Path -LiteralPath $AppJsPath)) { throw "Cannot find renderer at $AppJsPath" }
+if (-not (Test-Path -LiteralPath $VisualStudioManifestPath)) { throw "Cannot find Visual Studio VSIX manifest at $VisualStudioManifestPath" }
 
 foreach ($option in $CompatibilityOptions) {
     switch ($option) {
@@ -1014,6 +1016,11 @@ $AppJsMatch = [regex]::Match($AppJsText, '(?m)^\s*const\s+APP_VERSION\s*=\s*"([^
 if (-not $AppJsMatch.Success) { throw "Could not find 'const APP_VERSION' in $AppJsPath" }
 $AppJsVersion = $AppJsMatch.Groups[1].Value
 
+$VisualStudioManifestText = [System.IO.File]::ReadAllText($VisualStudioManifestPath)
+$VisualStudioManifestMatch = [regex]::Match($VisualStudioManifestText, '<Identity\s+[^>]*Version="([^"]+)"')
+if (-not $VisualStudioManifestMatch.Success) { throw "Could not find the VSIX Identity version in $VisualStudioManifestPath" }
+$VisualStudioManifestVersion = $VisualStudioManifestMatch.Groups[1].Value
+
 # --- Decide the version to build ------------------------------------------------
 $BumpVersion = $Push -and -not $NoVersionBump
 if ($BumpVersion) {
@@ -1035,6 +1042,7 @@ else {
     if ($PackageLockRootVersion -ne $Version) { $mismatches += "package-lock.json root package=$PackageLockRootVersion" }
     if ($IssVersion -ne $Version) { $mismatches += "installer\MultiTerm.iss=$IssVersion" }
     if ($AppJsVersion -ne $Version) { $mismatches += "public\app.js=$AppJsVersion" }
+    if ($VisualStudioManifestVersion -ne $Version) { $mismatches += "integrations\visualstudio\source.extension.vsixmanifest=$VisualStudioManifestVersion" }
     if ($mismatches.Count -gt 0) {
         $msg = "Version mismatch: package.json=$Version but " + ($mismatches -join ', ') + "."
         if ($Force) {
@@ -1200,13 +1208,14 @@ if ($Push) {
 
 # --- Apply the version bump (gated) ---------------------------------------------
 if ($BumpVersion) {
-    $versionFiles = "package.json, package-lock.json, installer\MultiTerm.iss & public\app.js"
+    $versionFiles = "package.json, package-lock.json, installer\MultiTerm.iss, public\app.js & integrations\visualstudio\source.extension.vsixmanifest"
     if ($PSCmdlet.ShouldProcess($versionFiles, "Set version to $Version")) {
         Set-VersionInFile -Path $PackageJsonPath -Pattern '("version"\s*:\s*")([^"]+)(")' -NewVersion $Version
         Set-PackageLockVersion -Path $PackageLockPath -NewVersion $Version
         Set-VersionInFile -Path $IssPath -Pattern '(#define\s+MyAppVersion\s+")([^"]+)(")' -NewVersion $Version
         Set-VersionInFile -Path $AppJsPath -Pattern '(const\s+APP_VERSION\s*=\s*")([^"]+)(")' -NewVersion $Version
-        Write-Step "Version set to $Version in package.json, package-lock.json, installer\MultiTerm.iss, and public\app.js."
+        Set-VersionInFile -Path $VisualStudioManifestPath -Pattern '(<Identity\s+[^>]*Version=")([^"]+)(")' -NewVersion $Version
+        Write-Step "Version set to $Version in package.json, package-lock.json, installer\MultiTerm.iss, public\app.js, and the Visual Studio VSIX manifest."
     }
     else {
         if ($WhatIfPreference) {
@@ -1220,6 +1229,12 @@ if ($BumpVersion) {
 
 # --- Build ----------------------------------------------------------------------
 if ($PSCmdlet.ShouldProcess($IssPath, "Compile installer with ISCC")) {
+    Write-Step "Generating installer artwork..."
+    & (Join-Path $RepoRoot 'scripts\gen-installer-art.ps1')
+    Write-Step "Building Visual Studio Code extension..."
+    & (Join-Path $RepoRoot 'integrations\vscode\build.ps1') -Version $Version
+    Write-Step "Building Visual Studio extension..."
+    & (Join-Path $RepoRoot 'integrations\visualstudio\build.ps1') -Version $Version
     Write-Step "Building File Explorer integration..."
     & (Join-Path $RepoRoot 'installer\explorer-integration\build.ps1') -Version $Version
     Write-Step "Building installer..."
