@@ -57,7 +57,15 @@ async function openInMultiTerm(resource, forceWorkspace = false) {
   }
 
   try {
-    launchFolder(launcher, folder);
+    const child = launchFolder(launcher, folder);
+    child.once("error", (error) => {
+      vscode.window.showErrorMessage(`Could not start MultiTerm: ${error.message}`);
+    });
+    child.once("exit", (code) => {
+      if (typeof code === "number" && code !== 0) {
+        vscode.window.showErrorMessage(`MultiTerm could not open ${folder} (launcher exit code ${code}).`);
+      }
+    });
     vscode.window.setStatusBarMessage(`Opening ${folder} in MultiTerm…`, 3000);
   } catch (error) {
     vscode.window.showErrorMessage(`Could not open MultiTerm: ${error.message}`);

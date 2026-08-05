@@ -7,9 +7,11 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const childProcess = require("node:child_process");
 const {
   findLauncher,
   folderForResource,
+  launchFolder,
   launcherCandidates
 } = require("../../integrations/vscode/launcher");
 
@@ -34,6 +36,8 @@ describe("VS Code integration", () => {
     );
     expect(extensionSource).toContain("resource?.scheme === \"file\"");
     expect(extensionSource).toContain("chooseWorkspaceFolder()");
+    expect(extensionSource).toContain('child.once("error"');
+    expect(extensionSource).toContain('child.once("exit"');
   });
 
   it("resolves a selected file to its containing folder and preserves folders", () => {
@@ -59,6 +63,32 @@ describe("VS Code integration", () => {
       ]));
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("launches through a hidden unreferenced process without Windows detached mode", () => {
+    const child = { unref: vi.fn() };
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    try {
+      expect(launchFolder("C:\\MultiTerm\\Start-MultiTerm.ps1", "C:\\work repo")).toBe(child);
+      expect(spawn).toHaveBeenCalledWith(
+        "powershell.exe",
+        expect.arrayContaining([
+          "-WindowStyle",
+          "Hidden",
+          "-File",
+          "C:\\MultiTerm\\Start-MultiTerm.ps1",
+          "-OpenFolder",
+          "C:\\work repo"
+        ]),
+        {
+          stdio: "ignore",
+          windowsHide: true
+        }
+      );
+      expect(child.unref).toHaveBeenCalledOnce();
+    } finally {
+      spawn.mockRestore();
     }
   });
 

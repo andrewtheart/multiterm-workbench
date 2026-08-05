@@ -64,7 +64,6 @@ function launchFolder(launcherPath, folderPath) {
       folderPath
     ],
     {
-      detached: true,
       stdio: "ignore",
       windowsHide: true
     }
