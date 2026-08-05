@@ -6529,21 +6529,39 @@ function replaceAllPreparedText() {
   return count;
 }
 
-function cleanPreparedCopilotBorders() {
+function cleanCopilotTuiFrame(text) {
   let count = 0;
-  elements.prepareText.value = elements.prepareText.value.split("\n").map((line) => {
-    const cleaned = line.replace(/[ \t]*\|[ \t]*$/, "");
+  const verticalEdges = "|│┃║╎╏┆┇┊┋";
+  const leadingEdge = new RegExp(`^[ \\t]*[${verticalEdges}][ \\t]?`);
+  const trailingEdge = new RegExp(`[ \\t]*[${verticalEdges}][ \\t]*$`);
+  const verticalOnly = new RegExp(`^[${verticalEdges}]+$`);
+  const rows = String(text || "").split("\n").map((line) => {
+    const frameGlyphs = line.trim().replace(/\s/g, "");
+    if (/^[\u2500-\u257F]+$/.test(frameGlyphs) && !verticalOnly.test(frameGlyphs)) {
+      count += 1;
+      return null;
+    }
+    const cleaned = line.replace(leadingEdge, "").replace(trailingEdge, "");
     if (cleaned !== line) count += 1;
     return cleaned;
-  }).join("\n");
+  }).filter((line) => line !== null);
+  return {
+    count,
+    text: rows.join("\n").replace(/^(?:[ \t]*\n)+|(?:\n[ \t]*)+$/g, "")
+  };
+}
+
+function cleanPreparedCopilotBorders() {
+  const result = cleanCopilotTuiFrame(elements.prepareText.value);
+  elements.prepareText.value = result.text;
   preparedTextChanged();
   elements.prepareText.focus();
   toast(
-    count ? `Removed ${count} trailing Copilot border${count === 1 ? "" : "s"}` : "No trailing Copilot borders found",
-    count ? "success" : "info",
+    result.count ? `Cleaned ${result.count} Copilot frame row${result.count === 1 ? "" : "s"}` : "No Copilot frame borders found",
+    result.count ? "success" : "info",
     1800
   );
-  return count;
+  return result.count;
 }
 
 function indentPreparedText(outdent = false) {
@@ -7775,7 +7793,15 @@ function dismissUpdateDialogFromKey(event) {
   dismissUpdateDialog();
 }
 
+function handleHelpShortcut(event) {
+  if (event.key !== "F1" || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  openHelp();
+}
+
 function bindGlobalShortcuts() {
+  window.addEventListener("keydown", handleHelpShortcut, true);
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
 
@@ -7824,7 +7850,7 @@ function bindGlobalShortcuts() {
       return;
     }
 
-    if ((event.ctrlKey && event.shiftKey && key === "p") || event.key === "F1") {
+    if (event.ctrlKey && event.shiftKey && key === "p") {
       event.preventDefault();
       palette.open ? closePalette() : openPalette();
       return;
@@ -13061,7 +13087,8 @@ const SHORTCUT_SECTIONS = Object.freeze([
   {
     title: "App shortcuts (available at any time)",
     items: [
-      ["Ctrl+Shift+P / F1", "Command palette", "Opens or closes the searchable action palette."],
+      ["F1", "Help", "Opens the in-app help guide."],
+      ["Ctrl+Shift+P", "Command palette", "Opens or closes the searchable action palette."],
       ["Ctrl+P", "New page", "Creates and opens a new page instead of opening Print."],
       ["Alt+Q", "Switch terminal", "Opens the quick terminal switcher."],
       ["Alt+1…9 / Alt+A…Z", "Jump to terminal", "Chooses a terminal from the quick switcher."],

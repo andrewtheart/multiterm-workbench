@@ -896,7 +896,7 @@ test.describe("Renderer coverage completion", () => {
       elements.findAllBar.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
       const globalKeys = [
-        ["F1", {}], ["F1", {}], ["/", { ctrlKey: true }], ["Escape", {}],
+        ["F1", {}], ["Escape", {}], ["/", { ctrlKey: true }], ["Escape", {}],
         ["q", { altKey: true }], ["q", { altKey: true }],
         ["t", { ctrlKey: true }], ["e", { ctrlKey: true, shiftKey: true }],
         ["r", { ctrlKey: true, shiftKey: true }], ["b", { ctrlKey: true, shiftKey: true }],

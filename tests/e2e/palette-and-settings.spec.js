@@ -261,6 +261,27 @@ test.describe("Command palette — every option works", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator("#helpOverlay")).toBeHidden();
 
+    await page.locator(".xterm-helper-textarea").first().focus();
+    await page.waitForTimeout(50);
+    await page.evaluate(() => {
+      window.__f1Frames = [];
+      window.__f1OriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__f1Frames.push(JSON.parse(payload));
+    });
+    await page.keyboard.press("F1");
+    await expect(page.locator("#helpOverlay")).toBeVisible();
+    await expect(page.locator("#paletteOverlay")).toBeHidden();
+    await expect(page.frameLocator("#helpFrame").getByRole("heading", { name: "MultiTerm Workbench Help", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => {
+      const inputFrames = window.__f1Frames.filter((frame) => frame.type === "input");
+      state.socket.send = window.__f1OriginalSend;
+      delete window.__f1Frames;
+      delete window.__f1OriginalSend;
+      return inputFrames;
+    })).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#helpOverlay")).toBeHidden();
+
     await runCmd("Help");
     await expect(page.locator("#helpOverlay")).toBeVisible();
     await page.locator("#helpDocClose").click();

@@ -1632,11 +1632,13 @@ body.header-hidden .status-hint kbd,
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   background: var(--surface-high);
+  border-radius: 12px;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 42%), 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
   display: grid;
   grid-template-rows: [head] auto [toolbar] auto [find] auto [editor] minmax(180px, 1fr) [status] auto [issues] auto [footer] auto;
   max-height: min(820px, calc(100vh - 36px));
   overflow: visible;
-  width: min(920px, calc(100vw - 36px));
+  width: min(960px, calc(100vw - 36px));
 }
 
 .prepare-head,
@@ -1652,10 +1654,41 @@ body.header-hidden .status-hint kbd,
 }
 
 .prepare-head {
+  background: color-mix(in srgb, var(--surface-high) 82%, var(--surface-raised));
   border-bottom: 1px solid var(--border);
-  justify-content: space-between;
-  padding: 14px 16px 12px;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 14px 16px;
   grid-row: head;
+}
+
+.prepare-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.prepare-heading > div {
+  min-width: 0;
+}
+
+.prepare-head-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 8px;
+  color: var(--accent);
+  display: inline-flex;
+  flex: 0 0 36px;
+  height: 36px;
+  justify-content: center;
+}
+
+.prepare-head-icon svg {
+  height: 18px;
+  width: 18px;
 }
 
 .prepare-head h2 {
@@ -1665,16 +1698,21 @@ body.header-hidden .status-hint kbd,
 
 .prepare-head p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 11.5px;
   margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prepare-toolbar {
   background: var(--surface-raised);
   border-bottom: 1px solid var(--border);
+  display: grid;
   gap: 10px;
-  min-height: 46px;
-  padding: 6px 12px;
+  grid-template-columns: minmax(170px, 1fr) auto minmax(170px, 1fr);
+  min-height: 52px;
+  padding: 7px 14px;
   grid-row: toolbar;
 }
 
@@ -1682,6 +1720,7 @@ body.header-hidden .status-hint kbd,
   align-items: center;
   display: flex;
   gap: 7px;
+  justify-self: start;
 }
 
 .prepare-language span,
@@ -1703,13 +1742,22 @@ body.header-hidden .status-hint kbd,
 }
 
 .prepare-language select {
+  min-width: 138px;
   padding: 0 28px 0 8px;
 }
 
 .prepare-tool-buttons {
-  border-left: 1px solid var(--border);
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   gap: 2px;
-  padding-left: 8px;
+  justify-self: center;
+  padding: 3px;
+}
+
+.prepare-tool-buttons .icon-button {
+  min-height: 32px;
+  width: 32px;
 }
 
 .prepare-wrap[aria-pressed="true"] {
@@ -1719,7 +1767,10 @@ body.header-hidden .status-hint kbd,
 }
 
 .prepare-validate {
-  margin-left: auto;
+  justify-content: center;
+  justify-self: end;
+  margin-left: 0;
+  min-width: 132px;
 }
 
 .prepare-find {
@@ -1873,17 +1924,26 @@ body.header-hidden .status-hint kbd,
 }
 
 .prepare-footer {
-  background: var(--surface-high);
+  background: color-mix(in srgb, var(--surface-high) 86%, var(--surface));
   border-top: 1px solid var(--border);
+  display: grid;
   gap: 12px;
-  justify-content: space-between;
-  padding: 10px 12px;
+  padding: 12px 14px 14px;
   grid-row: footer;
 }
 
-.prepare-save-fields,
-.prepare-actions {
+.prepare-save-fields {
+  display: grid;
   gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+}
+
+.prepare-actions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
 }
 
 .prepare-save-fields label {
@@ -1893,15 +1953,23 @@ body.header-hidden .status-hint kbd,
 
 .prepare-save-fields input {
   padding: 5px 8px;
-  width: 155px;
+  width: 100%;
 }
 
 .prepare-actions button {
   align-items: center;
   display: inline-flex;
   gap: 6px;
+  justify-content: center;
   min-height: 34px;
   white-space: nowrap;
+  width: 100%;
+}
+
+.prepare-actions > button,
+.prepare-actions > .prepare-send-wrap {
+  min-width: 0;
+  width: 100%;
 }
 
 .prepare-actions button i,
@@ -1985,7 +2053,27 @@ body.header-hidden .status-hint kbd,
   .prepare-toolbar,
   .prepare-footer {
     align-items: stretch;
-    flex-wrap: wrap;
+  }
+
+  .prepare-toolbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .prepare-language {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+  }
+
+  .prepare-language select {
+    flex: 1 1 auto;
+  }
+
+  .prepare-tool-buttons {
+    justify-self: start;
+  }
+
+  .prepare-validate {
+    justify-self: end;
   }
 
   .prepare-footer,
@@ -2003,12 +2091,7 @@ body.header-hidden .status-hint kbd,
   }
 
   .prepare-actions {
-    flex-wrap: wrap;
-  }
-
-  .prepare-actions > button,
-  .prepare-actions > .prepare-send-wrap {
-    flex: 1 1 auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .prepare-send-wrap > button {
@@ -2023,6 +2106,16 @@ body.header-hidden .status-hint kbd,
   .prepare-find input {
     flex: 1 1 120px;
     width: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .prepare-save-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .prepare-head p {
+    white-space: normal;
   }
 }
 

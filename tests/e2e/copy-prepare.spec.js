@@ -74,6 +74,31 @@ test.describe("Copy and prepare editor", () => {
     await expect(page.locator("#prepareOverlay")).toBeHidden();
   });
 
+  test("uses a centered toolbar and symmetrical footer tracks", async () => {
+    await openEditor("Write-Host balanced");
+    const geometry = await page.locator(".prepare-editor").evaluate((dialog) => {
+      const rect = (selector) => dialog.querySelector(selector).getBoundingClientRect();
+      const toolbar = rect(".prepare-toolbar");
+      const tools = rect(".prepare-tool-buttons");
+      const fields = [...dialog.querySelectorAll(".prepare-save-fields label")].map((element) => element.getBoundingClientRect());
+      const actions = [...dialog.querySelectorAll(".prepare-actions > button, .prepare-actions > .prepare-send-wrap")]
+        .map((element) => element.getBoundingClientRect());
+      return {
+        actionTopSpread: Math.max(...actions.map((item) => item.top)) - Math.min(...actions.map((item) => item.top)),
+        actionWidthSpread: Math.max(...actions.map((item) => item.width)) - Math.min(...actions.map((item) => item.width)),
+        fieldWidthSpread: Math.max(...fields.map((item) => item.width)) - Math.min(...fields.map((item) => item.width)),
+        hasHeadingIcon: Boolean(dialog.querySelector(".prepare-head-icon svg")),
+        toolbarCenterDelta: Math.abs((tools.left + tools.width / 2) - (toolbar.left + toolbar.width / 2))
+      };
+    });
+    expect(geometry.hasHeadingIcon).toBe(true);
+    expect(geometry.toolbarCenterDelta).toBeLessThanOrEqual(1);
+    expect(geometry.fieldWidthSpread).toBeLessThanOrEqual(1);
+    expect(geometry.actionWidthSpread).toBeLessThanOrEqual(1);
+    expect(geometry.actionTopSpread).toBeLessThanOrEqual(1);
+    await page.locator("#prepareClose").click();
+  });
+
   test("prepares clipboard text and pastes the edited result into the invoking terminal", async () => {
     await page.evaluate(async () => {
       await navigator.clipboard.writeText("Write-Host clipboard");
@@ -207,13 +232,33 @@ test.describe("Copy and prepare editor", () => {
     await page.locator("#prepareClose").click();
   });
 
-  test("removes every trailing Copilot TUI pipe border", async () => {
-    await openEditor("first value   |\nplain line\nthird value|   \ncommand | value");
+  test("removes Copilot TUI frames while preserving interior pipes", async () => {
+    await openEditor([
+      "│                         │",
+      "└─────────────────────────┘",
+      "│",
+      "│ PageFile already exceeds RAM, and crashdmp.sys is present │",
+      "│ so the write path itself | was sound. │",
+      "│",
+      "│ The key finding",
+      "│",
+      "│ command | value",
+      "╰─────────────────────────╯",
+      "legacy trailing border   |"
+    ].join("\n"));
     await page.locator("#prepareCleanCopilot").click();
     await expect(page.locator("#prepareText")).toHaveValue(
-      "first value\nplain line\nthird value\ncommand | value"
+      [
+        "PageFile already exceeds RAM, and crashdmp.sys is present",
+        "so the write path itself | was sound.",
+        "",
+        "The key finding",
+        "",
+        "command | value",
+        "legacy trailing border"
+      ].join("\n")
     );
-    await expect(page.locator("#toastHost")).toContainText("Removed 2 trailing Copilot borders");
+    await expect(page.locator("#toastHost")).toContainText("Cleaned 11 Copilot frame rows");
     await page.locator("#prepareClose").click();
   });
 

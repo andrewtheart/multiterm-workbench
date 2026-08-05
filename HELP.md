@@ -9,7 +9,7 @@ MultiTerm Workbench is a Windows terminal workspace for running PowerShell 7, Wi
 3. Select **Add terminal** or press <kbd>Ctrl+T</kbd>.
 4. Click a pane to make it active, then type normally.
 
-Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>Ctrl+Shift+P</kbd> or <kbd>F1</kbd> to search the command palette.
+Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>F1</kbd> to open this in-app help guide, or <kbd>Ctrl+Shift+P</kbd> to search the command palette.
 
 ## Terminals
 
@@ -304,7 +304,7 @@ Choose **Prepare and paste...** to put clipboard text into the same preparation 
 
 Select terminal output, right-click it, and choose **Copy and prepare...** to open the selected text in an editor before it reaches a file, the clipboard, or another terminal.
 
-The editor opens with word wrap enabled and shows synchronized line numbers in its left gutter. Use the wrap toolbar button to keep long lines on screen or switch to horizontal scrolling. Use the eraser action to remove trailing Copilot TUI `|` borders from every affected line while preserving pipes inside commands. The editor also supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, and undo/redo.
+The editor opens with word wrap enabled and shows synchronized line numbers in its left gutter. Use the wrap toolbar button to keep long lines on screen or switch to horizontal scrolling. Use the eraser action to remove leading, trailing, and horizontal Copilot TUI frame characters (`|`, `│`, `┃`, and box-drawing rules) while preserving pipes inside commands. The editor also supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, and undo/redo.
 
 ![Copied PowerShell output in Copy and prepare with trailing Copilot TUI pipe borders ready for cleanup](public/help-images/copy-prepare-cleanup.png)
 
@@ -413,7 +413,8 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 | <kbd>Ctrl+Shift+W</kbd> | Close active terminal |
 | <kbd>Ctrl+Shift+R</kbd> | Restart active terminal |
 | <kbd>Ctrl+Shift+X</kbd> | Maximize or restore active pane |
-| <kbd>Ctrl+Shift+P</kbd> / <kbd>F1</kbd> | Command palette |
+| <kbd>F1</kbd> | In-app help |
+| <kbd>Ctrl+Shift+P</kbd> | Command palette |
 | <kbd>Ctrl+Shift+Q</kbd> | Dequeue next command |
 | <kbd>Alt+Q</kbd> | Quick terminal switcher |
 | <kbd>Ctrl+F</kbd> | Find in active terminal |

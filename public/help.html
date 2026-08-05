@@ -516,7 +516,7 @@
 <li>Select <strong>Add terminal</strong> or press <kbd>Ctrl+T</kbd>.</li>
 <li>Click a pane to make it active, then type normally.</li>
 </ol>
-<p>Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>Ctrl+Shift+P</kbd> or <kbd>F1</kbd> to search the command palette.</p>
+<p>Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>F1</kbd> to open this in-app help guide, or <kbd>Ctrl+Shift+P</kbd> to search the command palette.</p>
 <h2 id="terminals">Terminals</h2>
 <h3 id="supported-shells">Supported shells</h3>
 <ul>
@@ -751,7 +751,7 @@ Continue this investigation from the context below.</code></pre>
 <p>Choose <strong>Prepare and paste...</strong> to put clipboard text into the same preparation editor described below. Edit or validate it, then choose <strong>Paste</strong> to insert the result back into the terminal whose menu you opened. It uses terminal paste semantics and does not append Enter. Clipboard reading begins only after you choose the action, so opening the right-click menu stays on its fast synchronous path.</p>
 <h3 id="copy-and-prepare-selected-text">Copy and prepare selected text</h3>
 <p>Select terminal output, right-click it, and choose <strong>Copy and prepare...</strong> to open the selected text in an editor before it reaches a file, the clipboard, or another terminal.</p>
-<p>The editor opens with word wrap enabled and shows synchronized line numbers in its left gutter. Use the wrap toolbar button to keep long lines on screen or switch to horizontal scrolling. Use the eraser action to remove trailing Copilot TUI <code>|</code> borders from every affected line while preserving pipes inside commands. The editor also supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, and undo/redo.</p>
+<p>The editor opens with word wrap enabled and shows synchronized line numbers in its left gutter. Use the wrap toolbar button to keep long lines on screen or switch to horizontal scrolling. Use the eraser action to remove leading, trailing, and horizontal Copilot TUI frame characters (<code>|</code>, <code>│</code>, <code>┃</code>, and box-drawing rules) while preserving pipes inside commands. The editor also supports Tab/Shift+Tab indentation, find and replace, cursor and document statistics, and undo/redo.</p>
 <p><img src="help-images/copy-prepare-cleanup.png" alt="Copied PowerShell output in Copy and prepare with trailing Copilot TUI pipe borders ready for cleanup" /></p>
 <p>Choose PowerShell, Batch/cmd, C#, or plain text before selecting <strong>Check syntax</strong>. PowerShell uses the real PowerShell AST parser, C# uses the installed Windows C# compiler, and Batch performs non-executing structural checks for parentheses, quotes, and missing labels because <code>cmd.exe</code> has no safe parse-only mode. Select an issue location to move the editor cursor there.</p>
 <p>After editing, choose one of these actions:</p>
@@ -846,7 +846,11 @@ Continue this investigation from the context below.</code></pre>
 <td>Maximize or restore active pane</td>
 </tr>
 <tr>
-<td><kbd>Ctrl+Shift+P</kbd> / <kbd>F1</kbd></td>
+<td><kbd>F1</kbd></td>
+<td>In-app help</td>
+</tr>
+<tr>
+<td><kbd>Ctrl+Shift+P</kbd></td>
 <td>Command palette</td>
 </tr>
 <tr>

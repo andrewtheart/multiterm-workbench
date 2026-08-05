@@ -86,7 +86,7 @@
             <button id="helpToggle" class="icon-button" type="button" title="Keyboard shortcuts (Ctrl+/)" aria-label="Keyboard shortcuts">
               <i data-lucide="keyboard"></i>
             </button>
-            <button id="helpDocToggle" class="icon-button help-doc-toggle" type="button" title="Help" aria-label="Help">
+            <button id="helpDocToggle" class="icon-button help-doc-toggle" type="button" title="Help (F1)" aria-label="Help" aria-keyshortcuts="F1">
               <span class="help-doc-glyph" aria-hidden="true">?</span>
             </button>
             <button id="broadcastToggle" class="icon-button" type="button" title="Broadcast command (Ctrl+Shift+B)" aria-label="Broadcast command">
@@ -1020,9 +1020,12 @@
     <div id="prepareOverlay" class="palette-overlay prepare-overlay" hidden>
       <div class="palette prepare-editor" role="dialog" aria-modal="true" aria-labelledby="prepareTitle" aria-describedby="prepareSource">
         <header class="prepare-head">
-          <div>
-            <h2 id="prepareTitle">Copy and prepare</h2>
-            <p id="prepareSource">Edit selected terminal text before using it.</p>
+          <div class="prepare-heading">
+            <span class="prepare-head-icon" aria-hidden="true"><i data-lucide="notebook-pen"></i></span>
+            <div>
+              <h2 id="prepareTitle">Copy and prepare</h2>
+              <p id="prepareSource">Edit selected terminal text before using it.</p>
+            </div>
           </div>
           <button id="prepareClose" class="icon-button" type="button" title="Close" aria-label="Close preparation editor">
             <i data-lucide="x"></i>
@@ -1052,7 +1055,7 @@
             <button id="prepareWrap" class="icon-button prepare-wrap" type="button" title="Disable word wrap" aria-label="Word wrap" aria-pressed="true">
               <i data-lucide="wrap-text"></i>
             </button>
-            <button id="prepareCleanCopilot" class="icon-button" type="button" title="Remove trailing Copilot TUI | borders" aria-label="Remove trailing Copilot TUI pipe borders">
+            <button id="prepareCleanCopilot" class="icon-button" type="button" title="Remove Copilot TUI frame borders" aria-label="Remove Copilot TUI frame borders">
               <i data-lucide="eraser"></i>
             </button>
           </div>
