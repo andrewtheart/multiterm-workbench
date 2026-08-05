@@ -107,7 +107,7 @@
               <i data-lucide="workflow"></i>
               <span id="automationsBadge" class="message-toggle-badge" hidden>0</span>
             </button>
-            <button id="copilotSessionsToggle" class="icon-button" type="button" title="Resume a Copilot session" aria-label="Resume a Copilot session">
+            <button id="copilotSessionsToggle" class="icon-button" type="button" title="Resume an AI assistant session" aria-label="Resume an AI assistant session">
               <i data-lucide="history"></i>
             </button>
             <button id="themeToggle" class="icon-button" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">
@@ -348,6 +348,89 @@
             <label class="toggle-row">
               <input id="scrollOnOutput" type="checkbox">
               <span>Scroll on output</span>
+            </label>
+          </section>
+
+          <section class="control-section">
+            <h2>AI assistants</h2>
+            <label class="control-row">
+              <span>Interactive provider</span>
+              <select id="aiSessionProvider">
+                <option value="none">Disabled</option>
+                <option value="copilot">GitHub Copilot</option>
+                <option value="claude">Claude</option>
+              </select>
+            </label>
+            <p id="aiSessionProviderStatus" class="settings-note" role="status">Provider status has not been checked.</p>
+            <label class="control-row">
+              <span>Interactive model</span>
+              <select id="aiSessionModel">
+                <option value="">Provider default</option>
+              </select>
+            </label>
+            <label class="control-row">
+              <span>Interactive effort</span>
+              <select id="aiSessionEffort">
+                <option value="medium">Medium</option>
+              </select>
+            </label>
+            <label class="control-row">
+              <span>Interactive context</span>
+              <select id="aiSessionContext">
+                <option value="default">Provider default</option>
+              </select>
+            </label>
+            <h3 class="settings-subheading">Terminal titles</h3>
+            <label class="control-row">
+              <span>Provider</span>
+              <select id="aiTitleProvider">
+                <option value="none">Disabled</option>
+                <option value="copilot">GitHub Copilot</option>
+                <option value="claude">Claude</option>
+              </select>
+            </label>
+            <div class="ai-provider-status-row">
+              <p id="aiTitleProviderStatus" class="settings-note" role="status">Provider status has not been checked.</p>
+              <button id="aiProvidersRefresh" class="icon-button" type="button" title="Refresh AI providers" aria-label="Refresh AI providers">
+                <i data-lucide="refresh-cw"></i>
+              </button>
+            </div>
+            <label class="control-row">
+              <span>Model</span>
+              <select id="copilotTitleModel">
+                <option value="claude-opus-4.6">claude-opus-4.6</option>
+              </select>
+            </label>
+            <label class="control-row">
+              <span>Thinking effort</span>
+              <select id="copilotTitleEffort">
+                <option value="none">None</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra high</option>
+                <option value="max">Maximum</option>
+              </select>
+            </label>
+            <label class="control-row">
+              <span>Context window</span>
+              <select id="copilotTitleContext">
+                <option value="default">Default</option>
+                <option value="long_context">Long context</option>
+              </select>
+            </label>
+            <label class="control-row">
+              <span title="Maximum recent terminal text sent to the selected AI provider for one title suggestion.">Terminal text (KB)</span>
+              <input id="copilotTitleContextKb" type="number" min="4" max="24" step="4" inputmode="numeric">
+            </label>
+            <label class="control-row">
+              <span>Minimum words</span>
+              <input id="copilotTitleMinWords" type="number" min="1" max="20" step="1" inputmode="numeric">
+            </label>
+            <label class="control-row">
+              <span>Maximum words</span>
+              <input id="copilotTitleMaxWords" type="number" min="1" max="20" step="1" inputmode="numeric">
             </label>
           </section>
 
@@ -713,18 +796,18 @@
           <div class="copilot-resume-heading">
             <span class="copilot-resume-mark" aria-hidden="true"><i data-lucide="history"></i></span>
             <div>
-              <h2 id="copilotResumeTitle">Resume Copilot session</h2>
-              <p id="copilotResumeDescription">Choose local CLI or editor history to continue in a new MultiTerm terminal.</p>
+              <h2 id="copilotResumeTitle">Resume AI assistant session</h2>
+              <p id="copilotResumeDescription">Choose local assistant history to continue in a new MultiTerm terminal.</p>
             </div>
           </div>
-          <button id="copilotResumeClose" class="icon-button" type="button" title="Close" aria-label="Close Copilot session selector">
+          <button id="copilotResumeClose" class="icon-button" type="button" title="Close" aria-label="Close AI assistant session selector">
             <i data-lucide="x"></i>
           </button>
         </div>
         <div class="copilot-resume-toolbar">
           <label class="copilot-resume-search">
             <i data-lucide="search" aria-hidden="true"></i>
-            <input id="copilotResumeSearch" type="search" placeholder="Search source, title, repository, folder, branch, or ID" autocomplete="off" spellcheck="false" aria-label="Search Copilot sessions">
+            <input id="copilotResumeSearch" type="search" placeholder="Search source, title, repository, folder, branch, or ID" autocomplete="off" spellcheck="false" aria-label="Search AI assistant sessions">
           </label>
           <button id="copilotResumeRefresh" class="secondary-action" type="button">
             <i data-lucide="refresh-cw"></i>
@@ -732,8 +815,8 @@
           </button>
         </div>
         <div class="copilot-resume-summary">
-          <span id="copilotResumeStatus" role="status">Looking for local Copilot sessions&hellip;</span>
-          <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>Continue in Copilot CLI</span>
+          <span id="copilotResumeStatus" role="status">Looking for local AI assistant sessions&hellip;</span>
+          <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>Continue in the selected assistant</span>
         </div>
         <div id="copilotResumeList" class="copilot-resume-list" role="list"></div>
       </div>
@@ -844,6 +927,46 @@
           <button id="pageCloseCancel" type="button" class="confirm-cancel">Cancel</button>
           <button id="pageCloseMove" type="button" class="confirm-proceed">Move terminals</button>
           <button id="pageCloseTerminals" type="button" class="confirm-danger">Close terminals</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="aiSetupOverlay" class="palette-overlay" hidden>
+      <div class="palette ai-setup" role="dialog" aria-modal="true" aria-labelledby="aiSetupTitle" aria-describedby="aiSetupStatus">
+        <header class="ai-setup-head">
+          <i data-lucide="sparkles"></i>
+          <div>
+            <h2 id="aiSetupTitle">Choose AI defaults</h2>
+            <p>Set a provider for each operation. You can change these choices later in Settings.</p>
+          </div>
+        </header>
+        <p id="aiSetupStatus" class="ai-setup-status" role="status">Checking installed providers…</p>
+        <section class="ai-setup-operation" aria-labelledby="aiSetupTitleOperation">
+          <div class="ai-setup-operation-head">
+            <i data-lucide="text-cursor-input"></i>
+            <h3 id="aiSetupTitleOperation">Terminal title suggestions</h3>
+          </div>
+          <div class="ai-setup-fields">
+            <label><span>Provider</span><select id="aiSetupTitleProvider"><option value="none">Disabled</option></select></label>
+            <label><span>Model</span><select id="aiSetupTitleModel"><option value="">Provider default</option></select></label>
+            <label><span>Thinking effort</span><select id="aiSetupTitleEffort"><option value="none">Provider default</option></select></label>
+            <label><span>Context</span><select id="aiSetupTitleContext"><option value="default">Provider default</option></select></label>
+          </div>
+        </section>
+        <section class="ai-setup-operation" aria-labelledby="aiSetupSessionOperation">
+          <div class="ai-setup-operation-head">
+            <i data-lucide="messages-square"></i>
+            <h3 id="aiSetupSessionOperation">Interactive assistant sessions</h3>
+          </div>
+          <div class="ai-setup-fields">
+            <label><span>Provider</span><select id="aiSetupSessionProvider"><option value="none">Disabled</option></select></label>
+            <label><span>Model</span><select id="aiSetupSessionModel"><option value="">Provider default</option></select></label>
+            <label><span>Thinking effort</span><select id="aiSetupSessionEffort"><option value="none">Provider default</option></select></label>
+            <label><span>Context</span><select id="aiSetupSessionContext"><option value="default">Provider default</option></select></label>
+          </div>
+        </section>
+        <div class="confirm-actions ai-setup-actions">
+          <button id="aiSetupSave" type="button" class="confirm-proceed">Save and continue</button>
         </div>
       </div>
     </div>
@@ -1393,6 +1516,13 @@
               <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
               <span class="pane-title-display" aria-hidden="true"></span>
             </span>
+            <button type="button" class="pane-title-generate" title="Suggest a title with AI" aria-label="Suggest a terminal title with AI">
+              <i class="ai-title-glyph" data-lucide="sparkles"></i>
+            </button>
+            <span class="pane-title-review" hidden>
+              <button type="button" class="pane-title-accept" title="Use suggested title" aria-label="Use suggested terminal title"><i data-lucide="check"></i></button>
+              <button type="button" class="pane-title-reject" title="Discard suggested title" aria-label="Discard suggested terminal title"><i data-lucide="x"></i></button>
+            </span>
           </div>
           <div class="pane-actions">
             <button type="button" data-action="move-left" title="Move left" aria-label="Move left">
@@ -1459,7 +1589,7 @@
             <span class="pane-queue-add-badge" hidden>0</span>
           </button>
           <form class="pane-quick-queue" hidden>
-            <input class="pane-quick-queue-input" type="text" maxlength="8192" spellcheck="false" autocomplete="off" placeholder="Command or Copilot prompt" aria-label="Command or Copilot prompt to queue">
+            <input class="pane-quick-queue-input" type="text" maxlength="8192" spellcheck="false" autocomplete="off" placeholder="Command or AI assistant prompt" aria-label="Command or AI assistant prompt to queue">
             <button type="submit" title="Queue for the next ready prompt" aria-label="Queue command">
               <i data-lucide="send"></i>
             </button>

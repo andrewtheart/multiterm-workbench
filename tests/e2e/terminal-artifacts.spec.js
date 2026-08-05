@@ -312,6 +312,38 @@ test.describe("Terminal notes and command queue", () => {
     });
   });
 
+  test("waits for Claude to finish and submits with standard Enter", async ({ page }) => {
+    await reset(page);
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      window.__autoQueueOriginalReadiness = terminalExecutionReadiness;
+      terminalExecutionReadiness = () => ({ mode: "claude", ready: false });
+      window.__autoQueueFrames = [];
+      window.__autoQueueOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__autoQueueFrames.push(JSON.parse(payload));
+      queueAutomaticTerminalCommand(terminal, "Review the Claude test failure");
+      scheduleAutomaticQueueCheck(terminal, 0);
+    });
+    await page.waitForTimeout(700);
+    expect(await page.evaluate(() => window.__autoQueueFrames.filter((frame) => frame.type === "input").length)).toBe(0);
+
+    await page.evaluate(() => {
+      terminalExecutionReadiness = () => ({ mode: "claude", ready: true });
+      scheduleAutomaticQueueCheck([...state.terminals.values()][0], 0);
+    });
+    await expect.poll(() => page.evaluate(() => window.__autoQueueFrames
+      .filter((frame) => frame.type === "input" && (frame.data === "Review the Claude test failure" || frame.data === "\r"))
+      .map((frame) => frame.data))).toEqual(["Review the Claude test failure", "\r"]);
+
+    await page.evaluate(() => {
+      state.socket.send = window.__autoQueueOriginalSend;
+      terminalExecutionReadiness = window.__autoQueueOriginalReadiness;
+      delete window.__autoQueueOriginalSend;
+      delete window.__autoQueueOriginalReadiness;
+      delete window.__autoQueueFrames;
+    });
+  });
+
   test("recovers notes and makes queued commands unparented when a PID exits", async ({ page }) => {
     await reset(page, 2);
     const ids = await page.evaluate(() => [...state.terminals.keys()]);

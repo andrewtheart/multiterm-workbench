@@ -213,6 +213,219 @@ test.describe("Settings panel verification", () => {
     expect(await page.locator("#maxInstallerSizeMb").inputValue()).toBe("256");
   });
 
+  test("AI title settings", async () => {
+    await page.evaluate(() => {
+      state.aiProviders = [
+        {
+          id: "copilot",
+          name: "GitHub Copilot",
+          available: true,
+          models: [
+            { id: "claude-opus-4.6", name: "Claude Opus 4.6", efforts: ["medium", "high"], defaultEffort: "medium", maxPromptTokens: 64000, maxContextTokens: 128000 },
+            { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6", efforts: ["low", "high"], defaultEffort: "low", maxPromptTokens: 64000, maxContextTokens: 128000 }
+          ]
+        },
+        { id: "claude", name: "Claude", available: false, status: "Claude is not installed.", models: [] }
+      ];
+      state.settings.aiTitleProvider = "copilot";
+      syncAiTitleControls();
+    });
+    await set("#aiTitleProvider", "copilot", "change");
+    await set("#copilotTitleModel", "claude-sonnet-4.6", "change");
+    await set("#copilotTitleEffort", "high", "change");
+    await set("#copilotTitleContext", "long_context", "change");
+    await set("#copilotTitleContextKb", "20", "change");
+    await set("#copilotTitleMinWords", "5", "change");
+    await set("#copilotTitleMaxWords", "10", "change");
+
+    expect(await page.evaluate(() => ({
+      context: state.settings.copilotTitleContext,
+      contextKb: state.settings.copilotTitleContextKb,
+      effort: state.settings.copilotTitleEffort,
+      maxWords: state.settings.copilotTitleMaxWords,
+      minWords: state.settings.copilotTitleMinWords,
+      model: state.settings.copilotTitleModel,
+      provider: state.settings.aiTitleProvider
+    }))).toEqual({
+      context: "long_context",
+      contextKb: 20,
+      effort: "high",
+      maxWords: 10,
+      minWords: 5,
+      model: "claude-sonnet-4.6",
+      provider: "copilot"
+    });
+
+    await set("#copilotTitleContextKb", "999", "change");
+    expect(await setting("copilotTitleContextKb")).toBe(24);
+    expect(await page.locator("#copilotTitleContextKb").inputValue()).toBe("24");
+
+    await set("#copilotTitleMinWords", "12", "change");
+    expect(await setting("copilotTitleMaxWords")).toBe(12);
+    expect(await page.locator("#copilotTitleMaxWords").inputValue()).toBe("12");
+
+    await set("#copilotTitleMaxWords", "3", "change");
+    expect(await setting("copilotTitleMinWords")).toBe(3);
+    expect(await page.locator("#copilotTitleMinWords").inputValue()).toBe("3");
+
+    expect(await page.evaluate(() => {
+      const saved = JSON.parse(localStorage.getItem("multiterm.settings"));
+      return {
+        context: saved.copilotTitleContext,
+        contextKb: saved.copilotTitleContextKb,
+        effort: saved.copilotTitleEffort,
+        maxWords: saved.copilotTitleMaxWords,
+        minWords: saved.copilotTitleMinWords,
+        model: saved.copilotTitleModel,
+        provider: saved.aiTitleProvider
+      };
+    })).toEqual({
+      context: "long_context",
+      contextKb: 24,
+      effort: "high",
+      maxWords: 3,
+      minWords: 3,
+      model: "claude-sonnet-4.6",
+      provider: "copilot"
+    });
+    expect(await page.locator("#copilotTitleModel option").allTextContents()).toEqual([
+      "Claude Opus 4.6 - 128K tokens",
+      "Claude Sonnet 4.6 - 128K tokens"
+    ]);
+    expect(await page.locator("#copilotTitleEffort option").allTextContents()).toEqual(["Low", "High"]);
+    expect(await page.locator("#copilotTitleContext option").allTextContents()).toEqual([
+      "Provider default - 64K tokens",
+      "Extended - 128K tokens"
+    ]);
+    await expect(page.locator("#aiTitleProviderStatus")).toContainText("2 models");
+  });
+
+  test("first-run AI setup persists separate operation defaults", async () => {
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "webdriver", { configurable: true, value: false });
+      state.settings.aiSetupCompleted = false;
+      state.aiProviders = [
+        {
+          id: "copilot",
+          name: "GitHub Copilot",
+          available: true,
+          models: [
+            { id: "gpt-5.4", name: "GPT-5.4", efforts: ["medium", "high"], defaultEffort: "medium", maxPromptTokens: 64000, maxContextTokens: 128000 }
+          ]
+        },
+        {
+          id: "claude",
+          name: "Claude",
+          available: true,
+          models: [
+            { id: "claude-sonnet-4-6[1m]", name: "Claude Sonnet 4.6 (1M)", efforts: ["low", "high"], defaultEffort: "low", maxPromptTokens: 1000000, maxContextTokens: 1000000 }
+          ]
+        }
+      ];
+      acceptAiProviderBootstrap({ version: 1, provider: "claude" });
+      openAiSetup();
+    });
+
+    await expect(page.locator("#aiSetupOverlay")).toBeVisible();
+    await expect(page.locator("#aiSetupStatus")).toContainText("GitHub Copilot and Claude detected");
+    await expect(page.locator("#aiSetupTitleProvider")).toHaveValue("claude");
+    await expect(page.locator("#aiSetupSessionProvider")).toHaveValue("claude");
+    expect(await page.evaluate(() => state.aiProviderBootstrap)).toBeNull();
+    await set("#aiSetupTitleProvider", "claude", "change");
+    await set("#aiSetupTitleModel", "claude-sonnet-4-6[1m]", "change");
+    await set("#aiSetupTitleEffort", "high", "change");
+    await set("#aiSetupSessionProvider", "copilot", "change");
+    await set("#aiSetupSessionModel", "gpt-5.4", "change");
+    await set("#aiSetupSessionEffort", "medium", "change");
+    await set("#aiSetupSessionContext", "long_context", "change");
+    await page.locator("#aiSetupSave").click();
+    await expect(page.locator("#aiSetupOverlay")).toBeHidden();
+
+    expect(await page.evaluate(() => ({
+      inert: elements.appShell.inert,
+      saved: JSON.parse(localStorage.getItem("multiterm.settings")),
+      settings: state.settings
+    }))).toMatchObject({
+      inert: false,
+      saved: {
+        aiSessionContext: "long_context",
+        aiSessionEffort: "medium",
+        aiSessionModel: "gpt-5.4",
+        aiSessionProvider: "copilot",
+        aiSetupCompleted: true,
+        aiTitleProvider: "claude",
+        copilotTitleEffort: "high",
+        copilotTitleModel: "claude-sonnet-4-6[1m]"
+      },
+      settings: {
+        aiSessionContext: "long_context",
+        aiSessionProvider: "copilot",
+        aiSetupCompleted: true,
+        aiTitleProvider: "claude"
+      }
+    });
+    await page.evaluate(() => { delete navigator.webdriver; });
+  });
+
+  test("keeps SDK-backed Copilot titles available without offering a missing interactive CLI", async () => {
+    const result = await page.evaluate(() => {
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        available: true,
+        titleAvailable: true,
+        interactiveAvailable: false,
+        interactiveStatus: "GitHub Copilot CLI is not installed or is not on PATH.",
+        models: [{ id: "gpt-test", name: "GPT Test", efforts: [], maxPromptTokens: 64000, maxContextTokens: 64000 }]
+      }];
+      state.settings.aiTitleProvider = "copilot";
+      state.settings.aiSessionProvider = "copilot";
+      syncAiTitleControls();
+      syncAiSessionControls();
+      return {
+        assistantAvailable: aiAssistantAvailable(),
+        sessionDisabled: elements.aiSessionModel.disabled,
+        titleDisabled: elements.copilotTitleModel.disabled
+      };
+    });
+
+    expect(result).toEqual({ assistantAvailable: false, sessionDisabled: true, titleDisabled: false });
+    await expect(page.locator("#aiSessionProviderStatus")).toContainText("CLI is not installed");
+  });
+
+  test("consumes an installer hint without changing a completed AI profile", async () => {
+    const result = await page.evaluate(() => {
+      state.settings.aiSetupCompleted = true;
+      state.settings.aiTitleProvider = "claude";
+      state.settings.aiSessionProvider = "none";
+      acceptAiProviderBootstrap({ version: 1, provider: "copilot" });
+      return {
+        bootstrap: state.aiProviderBootstrap,
+        session: state.settings.aiSessionProvider,
+        title: state.settings.aiTitleProvider
+      };
+    });
+
+    expect(result).toEqual({ bootstrap: null, session: "none", title: "claude" });
+  });
+
+  test("keeps completed disabled AI profiles dormant until a manual refresh", async () => {
+    const result = await page.evaluate(() => {
+      state.settings.aiSetupCompleted = true;
+      state.settings.aiTitleProvider = "none";
+      state.settings.aiSessionProvider = "none";
+      const disabled = shouldAutomaticallyRefreshAiProviders();
+      state.settings.aiTitleProvider = "copilot";
+      const enabled = shouldAutomaticallyRefreshAiProviders();
+      state.settings.aiTitleProvider = "none";
+      state.settings.aiSetupCompleted = false;
+      const firstRun = shouldAutomaticallyRefreshAiProviders();
+      return { disabled, enabled, firstRun };
+    });
+
+    expect(result).toEqual({ disabled: false, enabled: true, firstRun: true });
+  });
+
   test("session settings", async () => {    for (const [sel, key] of [
       ["#restoreSession", "restoreSession"],
       ["#copyOnSelect", "copyOnSelect"],

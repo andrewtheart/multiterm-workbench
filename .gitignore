@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+lib/copilot-sdk-host/bin/
+lib/copilot-sdk-host/obj/
+lib/copilot-sdk-host/publish/
 
 # Logs
 *.log

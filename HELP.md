@@ -30,7 +30,7 @@ Right-click a pane or its title bar to:
 - open the current folder in File Explorer;
 - create another terminal in the same folder;
 - split by duplicating the shell and working directory;
-- launch GitHub Copilot CLI or resume a local Copilot CLI session;
+- launch the configured AI assistant or resume one of its local sessions;
 - run a script, optionally in an Administrator terminal;
 - start or stop logging;
 - inspect statistics;
@@ -51,13 +51,17 @@ Customize that menu directly:
 
 When at least one action is hidden, **Show hidden items** appears at the bottom-right. Revealed hidden actions remain disabled so they cannot run accidentally; right-click one and choose **Show item** to restore it. Section names, custom sections, action order, placement, and hidden actions are stored in the current browser profile and merge with newly added application actions after an upgrade.
 
-Choose **Run Copilot CLI (YOLO)** from a terminal or blank-workspace right-click menu to send `copilot --yolo` followed by Enter to the focused terminal. If no terminal has keyboard focus, MultiTerm opens one on the current page and runs the command after its shell is ready.
+Choose **Run GitHub Copilot** or **Run Claude** from a terminal or blank-workspace right-click menu to start the configured interactive assistant with its selected model, thinking effort, and context options. Copilot launches with `copilot --yolo`; Claude launches with `claude --dangerously-skip-permissions`. If no terminal has keyboard focus, MultiTerm opens one on the current page and runs the command after its shell is ready. The action is disabled when the selected provider is not installed and signed in.
 
 **New terminal here** uses the selected shell and current terminal folder, but assigns a fresh standard title such as **PowerShell 4** or **Command Prompt 4**. It does not copy a custom title from the terminal whose menu you opened.
 
-The terminal menu's **Copilot CWD** field remembers the last submitted value separately for each terminal. Beneath the field, up to ten subdued recent values from all terminals can be selected to fill the textbox without executing it; press Enter to submit the chosen value. Per-terminal recall and the shared recent-value list persist across app restarts.
+Select the sparkle immediately after a terminal title to suggest a new title from that terminal's recent output. MultiTerm uses the selected title provider and shows the suggestion in place without committing it. GitHub Copilot requests use the official Copilot SDK; Claude requests use the authenticated Claude CLI's structured output. Select the green check to apply and synchronize the title, or the red X to restore the original. Configure the provider, model, thinking effort, context window, terminal-text limit, and title word range under **AI assistants** in Settings.
 
-Choose **Resume Copilot CLI session...** in a terminal menu to search native CLI history and continue it in that terminal with `copilot --resume=<session-id> --yolo`. The history button in the main toolbar searches Copilot CLI, VS Code, and Visual Studio sessions together and always opens the selection in a new MultiTerm terminal. CLI sessions use native resume. VS Code and Visual Studio histories are continued in Copilot CLI using a private temporary context file containing the most recent conversation text. Configure **Imported Copilot context (KB)** under Session to control how much editor history is carried forward. Results show their source, title, working directory, ID, and last-updated time; search filters the complete catalog, and **Load more** pages through large result sets.
+During an interactive installation, Setup checks whether the GitHub Copilot and Claude Code CLIs are on `PATH` and offers those detected commands, plus **Disabled**, as a first-launch preference. Executable detection does not prove sign-in or model access. On first launch, MultiTerm checks GitHub Copilot and Claude separately and asks which provider to use for terminal titles and interactive sessions. Each operation has its own model, effort, and context profile populated from the capabilities reported by the signed-in account. Either operation can remain disabled, and normal terminal features never require an AI provider. When both operations are disabled after setup, MultiTerm leaves provider processes dormant until you select **Refresh AI providers** in Settings.
+
+The terminal menu's assistant directory field uses Copilot's `/cwd` command or Claude's `/add-dir` command. It remembers the last submitted value separately for each terminal. Beneath the field, up to ten subdued recent values from all terminals can be selected to fill the textbox without executing it; press Enter to submit the chosen value. Per-terminal recall and the shared recent-value list persist across app restarts. The field is disabled when no interactive provider is available.
+
+Choose **Resume GitHub Copilot session...** or **Resume Claude session...** in a terminal menu to search the selected provider's local history and continue it in that terminal. The history button in the main toolbar opens the selection in a new MultiTerm terminal. Copilot searches native CLI, VS Code, and Visual Studio sessions; native CLI sessions use `--resume`, while editor histories use a private temporary context file containing the most recent conversation text. Claude searches native Claude Code sessions and resumes them with Claude's `--resume` option. Configure **Imported Copilot context (KB)** under Session to control how much editor history is carried forward. Results show their source, title, working directory, ID, and last-updated time; search filters the complete catalog, and **Load more** pages through large result sets.
 
 Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to **All terminals**; choose **This terminal** for a per-terminal layout, or select **Always take this action (don't ask me again)** to remember the scope. Change **Header drag scope** under **Terminal** to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.
 
@@ -135,13 +139,14 @@ When a shell exits, its notes are retained in **Recovered notes** instead of bei
 
 Build a list of commands or prompts without sending them immediately. Each live terminal has its own queue.
 
-Use the nearly transparent **+** button at the top-right of a terminal's content area to add an automatic queue item. The button becomes fully colored on hover or keyboard focus. Enter a command or Copilot prompt and select Queue, or press Enter. MultiTerm then waits for a confirmed ready state before pasting the oldest automatic item and invoking it:
+Use the nearly transparent **+** button at the top-right of a terminal's content area to add an automatic queue item. The button becomes fully colored on hover or keyboard focus. Enter a command or AI assistant prompt and select Queue, or press Enter. MultiTerm then waits for a confirmed ready state before pasting the oldest automatic item and invoking it:
 
 - a regular terminal is ready only when its shell prompt has returned with the caret at the end;
-- Copilot CLI is ready only when its empty prompt composer and `/ commands · ? help` footer are visible; startup, a partially typed prompt, and `Working` remain blocked; and
+- Copilot CLI is ready only when its empty prompt composer and `/ commands · ? help` footer are visible;
+- Claude is ready only when its Claude Code banner and empty `❯` composer are visible; startup, partially typed prompts, and active responses remain blocked; and
 - automatic items run FIFO, with fresh echoed-command output and another confirmed prompt required before the next item can run.
 
-Copilot CLI uses its own kitty-keyboard Enter sequence, which MultiTerm sends after placing the queued text in Copilot's prompt box. Automatic execution is armed only in the current renderer session. After a reload or terminal exit, remaining text stays in the normal staged/unparented queue for manual review instead of running automatically from persisted profile data.
+Copilot CLI uses its own kitty-keyboard Enter sequence; Claude and regular shells use carriage return. Automatic execution is armed only in the current renderer session. After a reload or terminal exit, remaining text stays in the normal staged/unparented queue for manual review instead of running automatically from persisted profile data.
 
 - Select a queued item to insert it into that terminal.
 - Inserting a queued item does **not** send Enter, so you can review or edit it first.
@@ -161,7 +166,7 @@ Create an interval, daily, or selected-weekday schedule, then add one or more or
 
 Each action has an explicit delivery mode:
 
-- **Run when ready** uses the existing automatic command queue and presses Enter only after a regular shell prompt or empty Copilot prompt is confirmed.
+- **Run when ready** uses the existing automatic command queue and presses Enter only after a regular shell prompt or empty Copilot or Claude prompt is confirmed.
 - **Stage when ready** pastes the command or prompt without Enter, leaving it visible for review. Accepted staged actions survive a UI reload while their terminal session remains available.
 
 Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. **Run once after sleep or reconnect** catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.
@@ -172,23 +177,23 @@ Use the global **Pause** control to stop both scheduled delivery and automatic h
 
 Hover a terminal body to reveal its small side grips. Drag the producer's right output grip to the consumer's left input grip. Keyboard users can activate the producer grip and then the consumer grip. The resulting solid directional arrow reuses MultiTerm's existing terminal-link graph; creating a grip route upgrades an existing message-only link to allow handoffs. In **Handoff routes**, turn handoffs off temporarily without deleting the saved directional link.
 
-A connected Copilot CLI producer can request a handoff by ending a completed response with a marker and payload:
+A connected Copilot or Claude producer can request a handoff by ending a completed response with a marker and payload:
 
 ```text
 **HAND OFF** Tests
 Run the focused checkout tests. Report failures and changed files.
 ```
 
-The name on the marker must resolve to exactly one connected live consumer, case-insensitively. The payload is queued in the bridge until the consumer is ready, then pasted without Enter. A regular terminal is ready only when no command is active and its shell prompt has returned. Copilot CLI is ready only after it finishes responding and shows its empty prompt. Multiple UI windows cannot insert the same handoff: the bridge grants one expiring delivery claim and returns abandoned claims to the queue.
+The name on the marker must resolve to exactly one connected live consumer, case-insensitively. The payload is queued in the bridge until the consumer is ready, then pasted without Enter. A regular terminal is ready only when no command is active and its shell prompt has returned. Copilot and Claude are ready only after they finish responding and show an empty prompt. Multiple UI windows cannot insert the same handoff: the bridge grants one expiring delivery claim and returns abandoned claims to the queue.
 
-An unnamed marker creates a PowerShell terminal on the producer's current page and working directory, launches `copilot --yolo`, creates the route, waits specifically for the new Copilot prompt, and stages the payload without Enter:
+An unnamed marker creates a PowerShell terminal on the producer's current page and working directory, launches the configured available interactive provider, creates the route, waits specifically for that assistant's empty prompt, and stages the payload without Enter. If no interactive provider is available, the handoff is recorded as blocked instead of opening a terminal:
 
 ```text
 **HAND OFF**
 Continue this investigation from the context below.
 ```
 
-Markers are read only from completed Copilot output after its ready prompt returns. Duplicate marker rows are ignored. Missing or ambiguous named consumers are recorded as blocked instead of being guessed. Handoffs inherit the user-configured Communication message-size and per-terminal inbox limits.
+Markers are read only from completed Copilot or Claude output after its ready prompt returns. Duplicate marker rows are ignored. Missing or ambiguous named consumers are recorded as blocked instead of being guessed. Handoffs inherit the user-configured Communication message-size and per-terminal inbox limits.
 
 ## Terminal messaging
 

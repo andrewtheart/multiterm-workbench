@@ -45,6 +45,41 @@ function packMap(value) {
   ]);
 }
 
+function copilotSdkFixture({
+  authenticated = true,
+  models = [{
+    id: "claude-opus-4.6",
+    policy: { state: "enabled" },
+    supportedReasoningEfforts: ["low", "medium", "high"]
+  }],
+  output = "Title: Verify MultiTerm Test Suite\n"
+} = {}) {
+  const session = {
+    disconnect: vi.fn(async () => {}),
+    sendAndWait: vi.fn(async () => ({ data: { content: output } }))
+  };
+  const client = {
+    createSession: vi.fn(async () => session),
+    getAuthStatus: vi.fn(async () => ({ isAuthenticated: authenticated })),
+    listModels: vi.fn(async () => models),
+    start: vi.fn(async () => {}),
+    stop: vi.fn(async () => [])
+  };
+  return { client, createClient: vi.fn(() => client), session };
+}
+
+function claudeSdkFixture({ output = "Title: Review Claude Terminal Output" } = {}) {
+  const close = vi.fn();
+  const queryResult = {
+    close,
+    async *[Symbol.asyncIterator]() {
+      yield { type: "result", subtype: "success", result: output };
+    }
+  };
+  const query = vi.fn(() => queryResult);
+  return { close, loadSdk: vi.fn(async () => ({ query })), query };
+}
+
 describe("Copilot CLI session discovery", () => {
   it("parses the CLI's generated YAML scalar forms", () => {
     expect(server.parseCopilotYamlScalar('"Quoted \\"name\\"\\r\\nnext"')).toBe('Quoted "name"\r\nnext');
@@ -231,5 +266,333 @@ describe("Copilot CLI session discovery", () => {
     expect(server.clampCopilotImportContextKb("bad")).toBe(64);
     expect(server.clampCopilotImportContextKb(1)).toBe(8);
     expect(server.clampCopilotImportContextKb(5000)).toBe(1024);
+  });
+});
+
+describe("Claude session discovery", () => {
+  it("normalizes Agent SDK sessions and excludes programmatic history", async () => {
+    const listSessions = vi.fn(async () => [{
+      sessionId: "BDFB990D-4EE9-4B72-A41C-FCBF0C79A373",
+      summary: "Review provider routing",
+      customTitle: "Claude routing work",
+      firstPrompt: "Fallback prompt",
+      cwd: "D:\\multiTerm",
+      gitBranch: "main",
+      createdAt: Date.parse("2026-08-03T20:00:00.000Z"),
+      lastModified: Date.parse("2026-08-04T00:00:00.000Z")
+    }, {
+      sessionId: "not-a-session",
+      summary: "Ignored"
+    }]);
+
+    const sessions = await server.listClaudeSessions(async () => ({ listSessions }));
+
+    expect(listSessions).toHaveBeenCalledWith({ includeProgrammatic: false });
+    expect(sessions).toEqual([{
+      id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+      key: "claude:bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+      source: "claude",
+      name: "Claude routing work",
+      cwd: "D:\\multiTerm",
+      repository: "",
+      branch: "main",
+      createdAt: "2026-08-03T20:00:00.000Z",
+      updatedAt: "2026-08-04T00:00:00.000Z"
+    }]);
+  });
+
+  it("dispatches a correlated Claude session response through the bridge", async () => {
+    const client = { send: vi.fn() };
+    const listSessions = vi.fn(async () => []);
+
+    server.handleClientMessage(
+      client,
+      JSON.stringify({ type: "listClaudeSessions", requestId: "claude-dispatch" }),
+      { loadClaudeSdk: async () => ({ listSessions }) }
+    );
+
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "claudeSessions",
+      requestId: "claude-dispatch",
+      sessions: [],
+      message: "No Claude sessions were found in this Windows account."
+    }));
+  });
+});
+
+describe("Copilot terminal title generation", () => {
+  it("fails closed for disabled and unsupported title providers", async () => {
+    await expect(server.generateAiTerminalTitle({ provider: "none" })).rejects.toThrow("AI-generated terminal titles are disabled.");
+    await expect(server.generateAiTerminalTitle({ provider: "unexpected" })).rejects.toThrow("Unsupported AI provider.");
+    await expect(server.generateAiTerminalTitle({})).rejects.toThrow("Unsupported AI provider.");
+  });
+
+  it("runs Windows provider command shims through ComSpec", async () => {
+    const execFile = vi.fn((file, args, options, callback) => callback(null, "ok", ""));
+    const spawned = { stdin: {}, stdout: {}, stderr: {} };
+    const spawnProcess = vi.fn(() => spawned);
+    const originalComSpec = process.env.ComSpec;
+    process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+    let spawnResult;
+    try {
+      await expect(server.execFileText("C:\\Tools\\claude.cmd", ["auth", "status"], execFile)).resolves.toBe("ok");
+      spawnResult = server.spawnCommandProcess({
+        command: "C:\\Tools\\claude.cmd",
+        args: ["--output-format", "stream-json"],
+        cwd: "C:\\Work"
+      }, spawnProcess);
+    } finally {
+      if (originalComSpec === undefined) delete process.env.ComSpec;
+      else process.env.ComSpec = originalComSpec;
+    }
+
+    expect(execFile).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      ["/d", "/s", "/c", "call", "C:\\Tools\\claude.cmd", "auth", "status"],
+      expect.objectContaining({ windowsHide: true }),
+      expect.any(Function)
+    );
+    expect(spawnResult).toBe(spawned);
+    expect(spawnProcess).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\cmd.exe",
+      ["/d", "/s", "/c", "call", "C:\\Tools\\claude.cmd", "--output-format", "stream-json"],
+      expect.objectContaining({ cwd: "C:\\Work", stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
+    );
+  });
+
+  it("discovers optional providers independently and preserves their reported model capabilities", async () => {
+    const copilot = copilotSdkFixture({
+      models: [{
+        id: "gpt-test",
+        name: "GPT Test",
+        policy: { state: "enabled" },
+        supportedReasoningEfforts: ["low", "high"],
+        defaultReasoningEffort: "high",
+        capabilities: { limits: { max_prompt_tokens: 120000, max_context_window_tokens: 128000 } }
+      }]
+    });
+    const close = vi.fn();
+    const claudeQuery = {
+      close,
+      initializationResult: vi.fn(async () => ({
+        models: [{
+          value: "opus[1m]",
+          displayName: "Opus long context",
+          description: "One million token context",
+          supportedEffortLevels: ["medium", "high", "max"]
+        }]
+      }))
+    };
+    const execFile = vi.fn((file, args, options, callback) => {
+      callback(null, JSON.stringify({ loggedIn: true }), "");
+    });
+
+    const providers = await server.listAiProviderCapabilities({
+      createCopilotClient: copilot.createClient,
+      execFile,
+      findClaudeExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+      loadClaudeSdk: vi.fn(async () => ({ query: vi.fn(() => claudeQuery) }))
+    });
+
+    expect(providers).toEqual([
+      expect.objectContaining({
+        id: "copilot",
+        available: true,
+        models: [expect.objectContaining({ id: "gpt-test", efforts: ["low", "high"], maxContextTokens: 128000 })]
+      }),
+      expect.objectContaining({
+        id: "claude",
+        installed: true,
+        available: true,
+        models: [expect.objectContaining({ id: "opus[1m]", efforts: ["medium", "high", "max"], maxContextTokens: 1000000 })]
+      })
+    ]);
+    expect(execFile).toHaveBeenCalledWith("C:\\Tools\\claude.exe", ["auth", "status"], expect.any(Object), expect.any(Function));
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("reports signed-out Copilot and absent Claude without coupling either provider", async () => {
+    const copilot = copilotSdkFixture({ authenticated: false });
+    const providers = await server.listAiProviderCapabilities({
+      createCopilotClient: copilot.createClient,
+      findClaudeExecutable: vi.fn(async () => "")
+    });
+
+    expect(providers).toEqual([
+      expect.objectContaining({ id: "copilot", installed: true, authenticated: false, available: false }),
+      expect.objectContaining({ id: "claude", installed: false, authenticated: false, available: false })
+    ]);
+  });
+
+  it("returns provider discovery through a correlated bridge response", async () => {
+    const client = { send: vi.fn() };
+    const copilot = copilotSdkFixture({ authenticated: false });
+
+    server.handleClientMessage(client, JSON.stringify({ type: "listAiProviders", requestId: "providers" }), {
+      createCopilotClient: copilot.createClient,
+      findClaudeExecutable: vi.fn(async () => "")
+    });
+
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "aiProviders",
+      requestId: "providers",
+      providers: expect.arrayContaining([
+        expect.objectContaining({ id: "copilot" }),
+        expect.objectContaining({ id: "claude" })
+      ])
+    }));
+  });
+
+  it("normalizes model controls and keeps the latest configured terminal context", () => {
+    const request = server.normalizeTerminalTitleRequest({
+      context: "long_context",
+      contextKb: 4,
+      cwd: "D:\\multiTerm\nignored",
+      effort: "high",
+      maxWords: 6,
+      minWords: 3,
+      model: "custom/model:latest",
+      shell: "pwsh\rignored",
+      text: `${"x".repeat(5000)}LATEST`
+    });
+
+    expect(request).toMatchObject({
+      context: "long_context",
+      contextKb: 4,
+      cwd: "D:\\multiTerm ignored",
+      effort: "high",
+      maxWords: 6,
+      minWords: 3,
+      model: "custom/model:latest",
+      shell: "pwsh ignored"
+    });
+    expect(Buffer.byteLength(request.text)).toBeLessThanOrEqual(4 * 1024);
+    expect(request.text).toMatch(/LATEST$/);
+  });
+
+  it("runs Copilot through the SDK without tools and validates the generated title", async () => {
+    const fixture = copilotSdkFixture();
+
+    await expect(server.generateTerminalTitle({
+      context: "default",
+      contextKb: 64,
+      effort: "medium",
+      maxWords: 8,
+      minWords: 2,
+      model: "claude-opus-4.6",
+      text: "npm test\n699 tests passed"
+    }, fixture.createClient)).resolves.toEqual({ title: "Verify MultiTerm Test Suite" });
+    expect(fixture.client.start).toHaveBeenCalledOnce();
+    expect(fixture.client.getAuthStatus).toHaveBeenCalledOnce();
+    expect(fixture.client.listModels).toHaveBeenCalledOnce();
+    expect(fixture.client.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      availableTools: [],
+      contextTier: "default",
+      enableConfigDiscovery: false,
+      enableSessionStore: false,
+      excludedTools: ["builtin:*", "mcp:*", "custom:*"],
+      infiniteSessions: { enabled: false },
+      model: "claude-opus-4.6",
+      reasoningEffort: "medium",
+      remoteSession: "off",
+      skipCustomInstructions: true
+    }));
+    expect(fixture.session.sendAndWait.mock.calls[0][0].prompt).toContain("699 tests passed");
+    expect(fixture.session.sendAndWait).toHaveBeenCalledWith(expect.any(Object), 180000);
+    expect(fixture.session.disconnect).toHaveBeenCalledOnce();
+    expect(fixture.client.stop).toHaveBeenCalledOnce();
+  });
+
+  it("runs Claude through its SDK without tools or persisted sessions", async () => {
+    const fixture = claudeSdkFixture();
+    const findExecutable = vi.fn(async () => "C:\\Tools\\claude.exe");
+
+    await expect(server.generateClaudeTerminalTitle({
+      cwd: temporaryRoot,
+      effort: "high",
+      maxWords: 8,
+      minWords: 2,
+      model: "opus[1m]",
+      text: "npm test\n704 tests passed"
+    }, { findExecutable, loadSdk: fixture.loadSdk })).resolves.toEqual({ title: "Review Claude Terminal Output" });
+    expect(fixture.query).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining("704 tests passed"),
+      options: expect.objectContaining({
+        cwd: temporaryRoot,
+        disallowedTools: ["*"],
+        effort: "high",
+        maxTurns: 1,
+        model: "opus[1m]",
+        pathToClaudeCodeExecutable: "C:\\Tools\\claude.exe",
+        persistSession: false,
+        settingSources: [],
+        spawnClaudeCodeProcess: expect.any(Function),
+        strictMcpConfig: true,
+        tools: []
+      })
+    }));
+    expect(fixture.close).toHaveBeenCalled();
+  });
+
+  it("bounds model output and reports unavailable accounts, models, or invalid generations", async () => {
+    const bounded = copilotSdkFixture({ output: "Review Git Working Tree Changes" });
+    await expect(server.generateTerminalTitle({
+      maxWords: 3,
+      minWords: 2,
+      text: "git status"
+    }, bounded.createClient)).resolves.toEqual({ title: "Review Git Working" });
+
+    const invalid = copilotSdkFixture({ output: "One" });
+    await expect(server.generateTerminalTitle({ text: "git status" }, invalid.createClient))
+      .rejects.toThrow("outside the configured word range");
+
+    const signedOut = copilotSdkFixture({ authenticated: false });
+    await expect(server.generateTerminalTitle({ text: "git status" }, signedOut.createClient))
+      .rejects.toThrow("GitHub Copilot is not signed in");
+
+    const unavailable = copilotSdkFixture({ models: [] });
+    await expect(server.generateTerminalTitle({ text: "git status" }, unavailable.createClient))
+      .rejects.toThrow("model 'claude-opus-4.6' is not available");
+  });
+
+  it("returns a correlated protocol response for a failed generation", async () => {
+    const fixture = copilotSdkFixture({ authenticated: false });
+    const client = { send: vi.fn() };
+
+    server.handleClientMessage(client, JSON.stringify({
+      type: "generateTerminalTitle",
+      provider: "copilot",
+      requestId: "title-request",
+      text: "git status"
+    }), { createCopilotClient: fixture.createClient });
+
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "terminalTitleSuggestion",
+      requestId: "title-request",
+      error: "GitHub Copilot is not signed in for this Windows account."
+    }));
+  });
+
+  it("routes correlated title requests to Claude independently of Copilot", async () => {
+    const fixture = claudeSdkFixture({ output: "Inspect Claude Provider State" });
+    const client = { send: vi.fn() };
+
+    server.handleClientMessage(client, JSON.stringify({
+      type: "generateTerminalTitle",
+      provider: "claude",
+      requestId: "claude-title",
+      model: "opus[1m]",
+      text: "claude auth status"
+    }), {
+      createCopilotClient: vi.fn(() => { throw new Error("Copilot must not start"); }),
+      findClaudeExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+      loadClaudeSdk: fixture.loadSdk
+    });
+
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "terminalTitleSuggestion",
+      requestId: "claude-title",
+      title: "Inspect Claude Provider State"
+    }));
   });
 });

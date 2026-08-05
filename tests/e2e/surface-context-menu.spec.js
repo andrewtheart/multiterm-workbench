@@ -168,7 +168,7 @@ test.describe("Surface context menu", () => {
       "Paste and execute",
       "New Administrator terminal",
       "Run script\u2026",
-      "Run Copilot CLI (YOLO)",
+      "Run GitHub Copilot",
       "New Command Prompt terminal",
       "Find in all terminals\u2026",
       "Broadcast command\u2026",
@@ -183,7 +183,7 @@ test.describe("Surface context menu", () => {
 
     // Anything that only means something for one terminal must not appear: there
     // is no terminal under the pointer to copy from, clear, restart or close.
-    for (const label of ["Copy all output", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to", "Resume Copilot CLI session\u2026"]) {
+    for (const label of ["Copy all output", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to", "Resume GitHub Copilot session\u2026"]) {
       await expect(menu.locator(".ctx-item", { hasText: label })).toHaveCount(0);
     }
     await expect(menu.locator('[data-customization-id="terminal.paste"]')).toHaveCount(0);

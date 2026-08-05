@@ -243,7 +243,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("collapses, expands, and filters settings groups", async () => {
     const groups = page.locator(".settings-group-toggle");
-    await expect(groups).toHaveCount(10);
+    await expect(groups).toHaveCount(11);
     for (let index = 0; index < await groups.count(); index += 1) {
       await expect(groups.nth(index)).toHaveAttribute("aria-expanded", "false");
     }
@@ -300,12 +300,12 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#settingsSearch")).toHaveValue("");
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("title", "Collapse all settings");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(10);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(11);
 
     await page.locator("#settingsSearch").fill("startup");
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsSearch")).toHaveValue("");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(10);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(11);
 
     // The single glyph flips instead of swapping icons, so lucide never re-renders it.
     const chevronRotation = () => page.locator("#settingsShowAll svg").evaluate(
@@ -316,7 +316,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("aria-pressed", "false");
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("title", "Show all settings");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(10);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(11);
     await expect.poll(chevronRotation).toBe("none");
   });
 
@@ -1053,6 +1053,7 @@ test.describe("MultiTerm Workbench UI", () => {
     const measurements = await title.evaluate((input) => {
       const bar = input.closest(".pane-bar");
       const display = bar.querySelector(".pane-title-display");
+      const generate = bar.querySelector(".pane-title-generate");
       const region = bar.querySelector(".pane-title-region");
       const button = bar.querySelector('.pane-actions button[data-action="close"]');
       const barStyle = getComputedStyle(bar);
@@ -1062,6 +1063,7 @@ test.describe("MultiTerm Workbench UI", () => {
         display: display.getBoundingClientRect().width,
         displayRight: display.getBoundingClientRect().right,
         displayPointerEvents: getComputedStyle(display).pointerEvents,
+        generateLeft: generate.getBoundingClientRect().left,
         region: region.getBoundingClientRect().width,
         titleCenterY: input.getBoundingClientRect().top + (input.getBoundingClientRect().height / 2),
         barHeight: bar.getBoundingClientRect().height,
@@ -1072,7 +1074,8 @@ test.describe("MultiTerm Workbench UI", () => {
     });
     expect(measurements.input).toBeLessThanOrEqual(180);
     expect(measurements.display).toBeGreaterThan(measurements.input);
-    expect(measurements.display / measurements.region).toBeCloseTo(0.8, 1);
+    expect(measurements.display / measurements.region).toBeCloseTo(1, 1);
+    expect(measurements.generateLeft - measurements.displayRight).toBeCloseTo(8, 0);
     expect(measurements.displayPointerEvents).toBe("none");
     expect(measurements.barHeight).toBe(33);
     expect(measurements.buttonHeight).toBe(30);

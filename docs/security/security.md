@@ -71,6 +71,7 @@ flowchart LR
 
     bridge[Local bridge] --> sessions[Shared session registry]
     sessions --> shell[Normal ConPTY shells]
+    bridge -->|bounded title context| providers[Configured AI provider]
     bridge -->|UAC + one-time authenticated relay| helper[High-integrity helper]
     helper --> admin[Administrator shell]
     main -->|HTTPS release download| installer[Unsigned installer]
@@ -83,6 +84,7 @@ The significant trust transitions are:
 - bridge to normal shell process;
 - medium-integrity bridge to high-integrity helper;
 - application to filesystem, clipboard, native dialogs, Explorer, and updater;
+- bridge to the configured GitHub Copilot or Claude provider;
 - build system to npm packages, vendored browser assets, native binaries, and
   release artifacts.
 
@@ -96,6 +98,7 @@ The significant trust transitions are:
 - malformed or tampered WebSocket messages;
 - tampered `localStorage`, update preferences, or older persisted data;
 - clipboard content, script paths, terminal output, and release metadata;
+- terminal context sent to a configured external AI provider;
 - a native process running as the same Windows user;
 - a compromised GitHub release or dependency supply chain;
 - accidental or hostile resource exhaustion;
@@ -321,9 +324,9 @@ The initial terminal messaging feature is bridge-owned and same-instance only. B
 
 The renderer builds inbox rows with DOM/text APIs and creates body DOM only while the inbox is open. Review-mode messages keep explicit receiver **Insert** as their only PTY action. At that final PTY boundary, both bridges revalidate the stored text and reject C0/C1 controls, including CR/LF, tab, ESC, and DEL. The record is consumed only after the target confirms a write; a failed write leaves it pending. Target exit expires pending records and broadcasts their removal, preventing a later session that reuses the same ID from inheriting a stale handoff. **Dismiss** never writes to the shell.
 
-Readiness-mode handoffs are a separate, explicit delivery contract. The bridge owns the bounded pending record. One renderer atomically claims it for 15 seconds, verifies shell/Copilot readiness, and asks xterm to produce the correct raw or bracketed-paste frame without Enter. The renderer then submits that frame through the owner-only `deliver` action; the bridge validates its size and control-frame shape, writes it, and consumes the claim atomically. A lost acknowledgement cannot return an already-written payload to pending. Failed local paste generation releases the claim; abandoned claims expire back to pending when clients list or act on messages. This preserves xterm bracketed-paste behavior and prevents duplicate multi-window delivery without weakening the review-message final insertion boundary.
+Readiness-mode handoffs are a separate, explicit delivery contract. The bridge owns the bounded pending record. One renderer atomically claims it for 15 seconds, verifies shell or configured-assistant readiness, and asks xterm to produce the correct raw or bracketed-paste frame without Enter. The renderer then submits that frame through the owner-only `deliver` action; the bridge validates its size and control-frame shape, writes it, and consumes the claim atomically. A lost acknowledgement cannot return an already-written payload to pending. Failed local paste generation releases the claim; abandoned claims expire back to pending when clients list or act on messages. This preserves xterm bracketed-paste behavior and prevents duplicate multi-window delivery without weakening the review-message final insertion boundary.
 
-The source terminal is sender-selected context, not authenticated provenance. Copilot `**HAND OFF**` markers are parsed only after the producer reports an empty Copilot prompt; incomplete output chunks are not routed. Named targets must resolve to exactly one handoff-enabled outgoing link. Unnamed handoffs create a normal non-elevated PowerShell terminal, launch `copilot --yolo`, and require Copilot-mode readiness before staging. Target payloads never press Enter.
+The source terminal is sender-selected context, not authenticated provenance. Copilot and Claude `**HAND OFF**` markers are parsed only after the producer reports an empty assistant prompt; incomplete output chunks are not routed. Named targets must resolve to exactly one handoff-enabled outgoing link. Unnamed handoffs create a normal non-elevated PowerShell terminal, launch the configured available interactive provider, and require that provider's readiness mode before staging. With no available provider, the handoff is blocked without creating a terminal. Target payloads never press Enter.
 
 Per-pane elevated terminals use a relay whose current input protocol has no positive PTY-write acknowledgment. Both bridges therefore reject terminal messages targeting an elevated relay instead of consuming a record after an ambiguous socket write. Direct input keeps its existing relay behavior; enabling message Insert requires an acknowledged helper protocol in both implementations.
 
@@ -353,6 +356,31 @@ because an earlier build wrote it.
 
 This framing prevents hidden submissions and display-control tricks. It does not
 judge shell semantics or make a visible command safe.
+
+### AI providers and terminal-context egress
+
+AI providers are optional. First launch and manual refresh interrogate local
+provider authentication and account capabilities before presenting model,
+context, and thinking-effort choices. After setup is complete, selecting
+**Disabled** for both title suggestions and interactive sessions suppresses
+automatic provider discovery on reconnect; manual refresh remains available.
+Malformed or unknown persisted provider IDs fail closed to **Disabled**.
+
+Title generation sends the configured provider a bounded tail of terminal text
+plus the current title, shell name, and working directory. Treat all four values
+as potentially sensitive. The renderer exposes the terminal-text bound in
+Settings, and the prompt encloses the context as untrusted data with an explicit
+instruction not to follow commands found inside it. This reduces prompt-injection
+risk but does not make provider submission private or eliminate model risk.
+
+Programmatic GitHub Copilot requests use the official SDK in empty mode with no
+built-in, MCP, or custom tools. Claude requests disable tools and session
+persistence; the Node bridge uses the Claude Agent SDK, while the installed
+bridge uses Claude's structured CLI protocol. Interactive sessions are different:
+MultiTerm launches the provider's visible unrestricted TUI command in a terminal,
+so the provider can act with that user's normal account and filesystem authority.
+Provider authentication, subscription, and model availability are runtime facts;
+installer executable detection is only a first-launch preference hint.
 
 ### Argument and path handling lessons
 

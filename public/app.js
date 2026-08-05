@@ -20,6 +20,12 @@ const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
 const WORKSPACE_ZOOM_BOUNDS = { min: 50, max: 150, step: 5, fallback: 100 };
 
 const defaultSettings = {
+  aiSessionContext: "default",
+  aiSessionEffort: "medium",
+  aiSessionModel: "",
+  aiSessionProvider: "copilot",
+  aiSetupCompleted: false,
+  aiTitleProvider: "copilot",
   appTheme: "dark",
   automationHistoryLimit: 200,
   bellNotify: false,
@@ -28,6 +34,12 @@ const defaultSettings = {
   columns: 2,
   compactChrome: false,
   copilotImportContextKb: 64,
+  copilotTitleContext: "default",
+  copilotTitleContextKb: 16,
+  copilotTitleEffort: "medium",
+  copilotTitleMaxWords: 8,
+  copilotTitleMinWords: 2,
+  copilotTitleModel: "claude-opus-4.6",
   copyOnSelect: false,
   ctrlVPaste: true,
   cursorBlink: true,
@@ -85,6 +97,12 @@ const TERMINAL_NOTIFICATION_SETTINGS = Object.freeze({
 });
 
 const SETTINGS_SEARCH_ALIASES = Object.freeze({
+  aiSessionContext: "ai assistant session context window long default tokens interactive cli",
+  aiSessionEffort: "ai assistant session thinking reasoning effort interactive cli",
+  aiSessionModel: "ai assistant session model interactive cli github copilot claude",
+  aiSessionProvider: "ai assistant session provider interactive cli github copilot claude launch",
+  aiTitleProvider: "ai assistant provider github copilot claude terminal title suggestions",
+  aiProvidersRefresh: "ai assistant provider refresh rescan detect installed authentication models",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
   fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
@@ -104,6 +122,12 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   terminalTheme: "terminal console colors colours color scheme palette background foreground contrast appearance",
   compactChrome: "dense compact chrome ui toolbar header controls small spacing slim",
   copilotImportContextKb: "copilot session import context transcript history vscode visual studio cli size kilobytes kb continuation",
+  copilotTitleModel: "copilot ai generated automatic terminal title name model opus sonnet gpt",
+  copilotTitleEffort: "copilot title thinking reasoning effort medium high low",
+  copilotTitleContext: "copilot title context window long default tokens",
+  copilotTitleContextKb: "copilot title terminal text transcript output context size kilobytes kb limit",
+  copilotTitleMinWords: "copilot title minimum words length short concise",
+  copilotTitleMaxWords: "copilot title maximum words length short concise",
   syncInput: "broadcast keyboard keys keystrokes mirror mirrored linked simultaneous type typing all terminals panes",
   ctrlVPaste: "clipboard paste keyboard shortcut control ctrl v insert",
   cleanCopilotClipboard: "copilot clipboard copy borders pipes ascii formatting cleanup clean markdown table",
@@ -177,8 +201,9 @@ const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
-const COPILOT_YOLO_COMMAND = "copilot --yolo";
+const COPILOT_CLEAR_PROMPT = "\x15";
 const COPILOT_RESUME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const AI_MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+\-\[\]]{0,159}$/;
 const terminalMessaging = window.TerminalMessaging;
 const automationApi = window.MultiTermAutomations;
 
@@ -290,6 +315,25 @@ const themes = {
 
 const elements = {
   addTerminal: document.querySelector("#addTerminal"),
+  aiProvidersRefresh: document.querySelector("#aiProvidersRefresh"),
+  aiSetupOverlay: document.querySelector("#aiSetupOverlay"),
+  aiSetupSave: document.querySelector("#aiSetupSave"),
+  aiSetupSessionContext: document.querySelector("#aiSetupSessionContext"),
+  aiSetupSessionEffort: document.querySelector("#aiSetupSessionEffort"),
+  aiSetupSessionModel: document.querySelector("#aiSetupSessionModel"),
+  aiSetupSessionProvider: document.querySelector("#aiSetupSessionProvider"),
+  aiSetupStatus: document.querySelector("#aiSetupStatus"),
+  aiSetupTitleContext: document.querySelector("#aiSetupTitleContext"),
+  aiSetupTitleEffort: document.querySelector("#aiSetupTitleEffort"),
+  aiSetupTitleModel: document.querySelector("#aiSetupTitleModel"),
+  aiSetupTitleProvider: document.querySelector("#aiSetupTitleProvider"),
+  aiSessionContext: document.querySelector("#aiSessionContext"),
+  aiSessionEffort: document.querySelector("#aiSessionEffort"),
+  aiSessionModel: document.querySelector("#aiSessionModel"),
+  aiSessionProvider: document.querySelector("#aiSessionProvider"),
+  aiSessionProviderStatus: document.querySelector("#aiSessionProviderStatus"),
+  aiTitleProvider: document.querySelector("#aiTitleProvider"),
+  aiTitleProviderStatus: document.querySelector("#aiTitleProviderStatus"),
   appShell: document.querySelector(".app-shell"),
   chromeControls: document.querySelector(".chrome-controls"),
   attachTmux: document.querySelector("#attachTmux"),
@@ -366,6 +410,12 @@ const elements = {
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
+  copilotTitleContext: document.querySelector("#copilotTitleContext"),
+  copilotTitleContextKb: document.querySelector("#copilotTitleContextKb"),
+  copilotTitleEffort: document.querySelector("#copilotTitleEffort"),
+  copilotTitleMaxWords: document.querySelector("#copilotTitleMaxWords"),
+  copilotTitleMinWords: document.querySelector("#copilotTitleMinWords"),
+  copilotTitleModel: document.querySelector("#copilotTitleModel"),
   copilotResumeClose: document.querySelector("#copilotResumeClose"),
   copilotResumeDescription: document.querySelector("#copilotResumeDescription"),
   copilotResumeList: document.querySelector("#copilotResumeList"),
@@ -675,6 +725,10 @@ const initialSettings = loadSettings();
 const state = {
   activeId: null,
   activePageId: null,
+  aiProviderBootstrap: null,
+  aiProviderDiscovery: { generation: 0, initializeUpdatesAfterSetup: false, loading: false },
+  aiProviders: [],
+  aiSetup: { draft: null, returnFocus: null },
   analytics: loadTerminalAnalytics(),
   analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
   automations: loadAutomationStore(initialSettings.automationHistoryLimit),
@@ -784,6 +838,7 @@ window.addEventListener("DOMContentLoaded", () => {
   log.info("app", `MultiTerm ${APP_VERSION} starting`);
   initializeSettingsPanel();
   bindControls();
+  bindAiSetup();
   bindHeaderActionCustomization();
   bindTerminalNotificationFlyout();
   applyVersion();
@@ -826,7 +881,8 @@ window.addEventListener("DOMContentLoaded", () => {
   whenIdle(() => {
     attachRipples();
     bindLogConsole();
-    initializeAutomaticUpdateChecks();
+    if (state.settings.aiSetupCompleted || navigator.webdriver) initializeAutomaticUpdateChecks();
+    else state.aiProviderDiscovery.initializeUpdatesAfterSetup = true;
   });
   log.debug("app", "UI initialized", { theme: state.settings.appTheme, layout: state.settings.layout });
 });
@@ -848,6 +904,11 @@ window.addEventListener("beforeunload", () => {
 });
 
 function bindControls() {
+  elements.aiSessionContext.value = state.settings.aiSessionContext;
+  elements.aiSessionEffort.value = state.settings.aiSessionEffort;
+  elements.aiSessionModel.value = state.settings.aiSessionModel;
+  elements.aiSessionProvider.value = state.settings.aiSessionProvider;
+  elements.aiTitleProvider.value = state.settings.aiTitleProvider;
   elements.layoutMode.value = state.settings.layout;
   elements.pagerPlacement.value = normalizedPagerPlacement();
   elements.minWidth.value = state.settings.minWidth;
@@ -874,6 +935,8 @@ function bindControls() {
     state.settings.copilotImportContextKb,
     elements.copilotImportContextKb
   );
+  syncAiSessionSettings();
+  syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
@@ -968,6 +1031,7 @@ function bindControls() {
   elements.aboutOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.aboutOverlay) closeAbout();
   });
+  elements.aiProvidersRefresh.addEventListener("click", refreshAiProviders);
   elements.shortcutsClose.addEventListener("click", closeShortcuts);
   elements.shortcutsOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.shortcutsOverlay) closeShortcuts();
@@ -1039,6 +1103,17 @@ function bindControls() {
   bindSetting(elements.ctrlVPaste, "ctrlVPaste", "change", (_, element) => element.checked);
   bindSetting(elements.cleanCopilotClipboard, "cleanCopilotClipboard", "change", (_, element) => element.checked);
   bindSetting(elements.copilotImportContextKb, "copilotImportContextKb", "change", clampCopilotImportContextKb);
+  bindSetting(elements.aiSessionProvider, "aiSessionProvider", "change", normalizeAiProviderId);
+  bindSetting(elements.aiSessionModel, "aiSessionModel", "change", normalizeAiSessionModel);
+  bindSetting(elements.aiSessionEffort, "aiSessionEffort", "change", normalizeAiSessionEffort);
+  bindSetting(elements.aiSessionContext, "aiSessionContext", "change", normalizeAiSessionContext);
+  bindSetting(elements.aiTitleProvider, "aiTitleProvider", "change", normalizeAiProviderId);
+  bindSetting(elements.copilotTitleModel, "copilotTitleModel", "change", normalizeCopilotTitleModel);
+  bindSetting(elements.copilotTitleEffort, "copilotTitleEffort", "change", normalizeCopilotTitleEffort);
+  bindSetting(elements.copilotTitleContext, "copilotTitleContext", "change", normalizeCopilotTitleContext);
+  bindSetting(elements.copilotTitleContextKb, "copilotTitleContextKb", "change", clampCopilotTitleContextKb);
+  bindSetting(elements.copilotTitleMinWords, "copilotTitleMinWords", "change", clampCopilotTitleMinWords);
+  bindSetting(elements.copilotTitleMaxWords, "copilotTitleMaxWords", "change", clampCopilotTitleMaxWords);
   bindSetting(elements.keepSessionsOnClose, "keepSessionsOnClose", "change", (_, element) => element.checked);
   bindSetting(elements.restoreSession, "restoreSession", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
@@ -1133,6 +1208,11 @@ function toggleChrome(key) {
 function bindSetting(element, key, eventName, transform) {
   element.addEventListener(eventName, () => {
     state.settings[key] = transform(element.value, element);
+    if (key === "aiTitleProvider" || key === "copilotTitleModel") {
+      syncAiTitleControls();
+    } else if (key === "aiSessionProvider" || key === "aiSessionModel") {
+      syncAiSessionControls();
+    }
     if (key === "layout") {
       clearSnapLayout(false);
     }
@@ -1170,6 +1250,11 @@ const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
 const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
 const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 };
 const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
+const COPILOT_TITLE_CONTEXT_KB_BOUNDS = { min: 4, max: 24, fallback: 16 };
+const COPILOT_TITLE_WORD_BOUNDS = { min: 1, max: 20 };
+const COPILOT_TITLE_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const COPILOT_TITLE_CONTEXTS = new Set(["default", "long_context"]);
+const AI_PROVIDER_IDS = new Set(["none", "copilot", "claude"]);
 const INSTALLER_SIZE_MB_FALLBACK = 256;
 
 function clampSettingNumber(value, element, bounds) {
@@ -1199,6 +1284,225 @@ function clampTerminalInboxCapacity(value, element) {
 
 function clampCopilotImportContextKb(value, element) {
   return clampSettingNumber(value, element, COPILOT_IMPORT_CONTEXT_KB_BOUNDS);
+}
+
+function normalizeAiProviderId(value) {
+  return AI_PROVIDER_IDS.has(value) ? value : "none";
+}
+
+function normalizeAiSessionModel(value, element = elements.aiSessionModel) {
+  const model = String(value || "").trim();
+  const next = model.length <= 160 && !/[\u0000-\u001f\u007f-\u009f]/.test(model) ? model : "";
+  element.value = next;
+  return next;
+}
+
+function normalizeAiSessionEffort(value) {
+  return COPILOT_TITLE_EFFORTS.has(value) ? value : defaultSettings.aiSessionEffort;
+}
+
+function normalizeAiSessionContext(value) {
+  return COPILOT_TITLE_CONTEXTS.has(value) ? value : defaultSettings.aiSessionContext;
+}
+
+function normalizeCopilotTitleModel(value, element = elements.copilotTitleModel) {
+  const model = String(value || "").trim();
+  const next = model.length <= 160 && !/[\u0000-\u001f\u007f-\u009f]/.test(model)
+    ? model
+    : defaultSettings.copilotTitleModel;
+  element.value = next;
+  return next;
+}
+
+function normalizeCopilotTitleEffort(value) {
+  return COPILOT_TITLE_EFFORTS.has(value) ? value : defaultSettings.copilotTitleEffort;
+}
+
+function normalizeCopilotTitleContext(value) {
+  return COPILOT_TITLE_CONTEXTS.has(value) ? value : defaultSettings.copilotTitleContext;
+}
+
+function clampCopilotTitleContextKb(value, element = elements.copilotTitleContextKb) {
+  return clampSettingNumber(value, element, COPILOT_TITLE_CONTEXT_KB_BOUNDS);
+}
+
+function clampCopilotTitleMinWords(value, element = elements.copilotTitleMinWords) {
+  const minimum = clampSettingNumber(value, element, { ...COPILOT_TITLE_WORD_BOUNDS, fallback: 2 });
+  const maximum = Number(state.settings.copilotTitleMaxWords) || defaultSettings.copilotTitleMaxWords;
+  if (minimum > maximum) {
+    state.settings.copilotTitleMaxWords = minimum;
+    elements.copilotTitleMaxWords.value = minimum;
+  }
+  return minimum;
+}
+
+function clampCopilotTitleMaxWords(value, element = elements.copilotTitleMaxWords) {
+  const maximum = clampSettingNumber(value, element, { ...COPILOT_TITLE_WORD_BOUNDS, fallback: 8 });
+  const minimum = Number(state.settings.copilotTitleMinWords) || defaultSettings.copilotTitleMinWords;
+  if (maximum < minimum) {
+    state.settings.copilotTitleMinWords = maximum;
+    elements.copilotTitleMinWords.value = maximum;
+  }
+  return maximum;
+}
+
+function syncCopilotTitleSettings() {
+  state.settings.aiTitleProvider = normalizeAiProviderId(state.settings.aiTitleProvider);
+  state.settings.copilotTitleModel = normalizeCopilotTitleModel(state.settings.copilotTitleModel);
+  state.settings.copilotTitleEffort = normalizeCopilotTitleEffort(state.settings.copilotTitleEffort);
+  state.settings.copilotTitleContext = normalizeCopilotTitleContext(state.settings.copilotTitleContext);
+  state.settings.copilotTitleContextKb = clampCopilotTitleContextKb(state.settings.copilotTitleContextKb);
+  state.settings.copilotTitleMinWords = clampCopilotTitleMinWords(state.settings.copilotTitleMinWords);
+  state.settings.copilotTitleMaxWords = clampCopilotTitleMaxWords(state.settings.copilotTitleMaxWords);
+  elements.aiTitleProvider.value = state.settings.aiTitleProvider;
+  elements.copilotTitleEffort.value = state.settings.copilotTitleEffort;
+  elements.copilotTitleContext.value = state.settings.copilotTitleContext;
+  if (state.aiProviders.length > 0) syncAiTitleControls();
+}
+
+function syncAiSessionSettings() {
+  state.settings.aiSessionProvider = normalizeAiProviderId(state.settings.aiSessionProvider);
+  state.settings.aiSessionModel = normalizeAiSessionModel(state.settings.aiSessionModel);
+  state.settings.aiSessionEffort = normalizeAiSessionEffort(state.settings.aiSessionEffort);
+  state.settings.aiSessionContext = normalizeAiSessionContext(state.settings.aiSessionContext);
+  elements.aiSessionProvider.value = state.settings.aiSessionProvider;
+  elements.aiSessionModel.value = state.settings.aiSessionModel;
+  elements.aiSessionEffort.value = state.settings.aiSessionEffort;
+  elements.aiSessionContext.value = state.settings.aiSessionContext;
+  if (state.aiProviders.length > 0) syncAiSessionControls();
+}
+
+function aiProviderById(id) {
+  return state.aiProviders.find((provider) => provider?.id === id) || null;
+}
+
+function aiProviderAvailableFor(provider, kind) {
+  if (!provider) return false;
+  const field = kind === "session" ? "interactiveAvailable" : "titleAvailable";
+  return typeof provider[field] === "boolean" ? provider[field] : Boolean(provider.available);
+}
+
+function aiProviderStatusFor(provider, kind) {
+  if (!provider) return "This provider has not been detected as available.";
+  return kind === "session" && provider.interactiveStatus
+    ? provider.interactiveStatus
+    : provider.status || "This provider has not been detected as available.";
+}
+
+function aiTitleModel() {
+  const provider = aiProviderById(state.settings.aiTitleProvider);
+  return provider?.models?.find((model) => model?.id === state.settings.copilotTitleModel) || null;
+}
+
+function formatAiTokenCount(value) {
+  const tokens = Number(value) || 0;
+  if (tokens >= 1000000) return `${Math.round(tokens / 100000) / 10}M`;
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`;
+  return tokens > 0 ? String(tokens) : "";
+}
+
+function setAiSelectOptions(select, choices, selectedValue) {
+  select.replaceChildren(...choices.map((choice) => {
+    const option = document.createElement("option");
+    option.value = choice.value;
+    option.textContent = choice.label;
+    option.disabled = Boolean(choice.disabled);
+    return option;
+  }));
+  select.value = choices.some((choice) => choice.value === selectedValue)
+    ? selectedValue
+    : choices.find((choice) => !choice.disabled)?.value || choices[0]?.value || "";
+  select._combo?.sync();
+  return select.value;
+}
+
+function aiModelLabel(model) {
+  const limit = formatAiTokenCount(model.maxContextTokens || model.maxPromptTokens);
+  return `${model.name || model.id}${limit ? ` - ${limit} tokens` : ""}`;
+}
+
+function syncAiTitleControls() {
+  const previous = JSON.stringify({
+    context: state.settings.copilotTitleContext,
+    effort: state.settings.copilotTitleEffort,
+    model: state.settings.copilotTitleModel,
+    provider: state.settings.aiTitleProvider
+  });
+  const providerChoices = [{ value: "none", label: "Disabled" }];
+  for (const id of ["copilot", "claude"]) {
+    const provider = aiProviderById(id);
+    const name = id === "copilot" ? "GitHub Copilot" : "Claude";
+    const available = aiProviderAvailableFor(provider, "title");
+    providerChoices.push({
+      value: id,
+      label: available ? name : `${name} (unavailable)`,
+      disabled: !available && state.settings.aiTitleProvider !== id
+    });
+  }
+  state.settings.aiTitleProvider = setAiSelectOptions(
+    elements.aiTitleProvider,
+    providerChoices,
+    normalizeAiProviderId(state.settings.aiTitleProvider)
+  );
+
+  const provider = aiProviderById(state.settings.aiTitleProvider);
+  const available = aiProviderAvailableFor(provider, "title") && Array.isArray(provider.models) && provider.models.length > 0;
+  if (!available) {
+    const savedModel = state.settings.copilotTitleModel || defaultSettings.copilotTitleModel;
+    setAiSelectOptions(elements.copilotTitleModel, [{ value: savedModel, label: savedModel }], savedModel);
+    setAiSelectOptions(elements.copilotTitleEffort, [{ value: state.settings.copilotTitleEffort, label: "Provider default" }], state.settings.copilotTitleEffort);
+    setAiSelectOptions(elements.copilotTitleContext, [{ value: "default", label: "Provider default" }], "default");
+    elements.copilotTitleModel.disabled = true;
+    elements.copilotTitleEffort.disabled = true;
+    elements.copilotTitleContext.disabled = true;
+    elements.aiTitleProviderStatus.textContent = state.settings.aiTitleProvider === "none"
+      ? "AI-generated terminal titles are disabled."
+      : aiProviderStatusFor(provider, "title");
+    refreshComboboxes();
+    return;
+  }
+
+  elements.copilotTitleModel.disabled = false;
+  elements.copilotTitleEffort.disabled = false;
+  elements.copilotTitleContext.disabled = false;
+  state.settings.copilotTitleModel = setAiSelectOptions(
+    elements.copilotTitleModel,
+    provider.models.map((model) => ({ value: model.id, label: aiModelLabel(model) })),
+    state.settings.copilotTitleModel
+  );
+  const model = aiTitleModel();
+  const efforts = Array.isArray(model?.efforts) ? model.efforts.filter(Boolean) : [];
+  const effortChoices = efforts.length > 0
+    ? efforts.map((effort) => ({ value: effort, label: effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1) }))
+    : [{ value: "none", label: "Provider default" }];
+  const preferredEffort = efforts.includes(state.settings.copilotTitleEffort)
+    ? state.settings.copilotTitleEffort
+    : model?.defaultEffort || effortChoices[0].value;
+  state.settings.copilotTitleEffort = setAiSelectOptions(elements.copilotTitleEffort, effortChoices, preferredEffort);
+
+  const promptTokens = Number(model?.maxPromptTokens) || 0;
+  const contextTokens = Number(model?.maxContextTokens) || 0;
+  const defaultLimit = formatAiTokenCount(promptTokens || contextTokens);
+  const contextChoices = [{
+    value: "default",
+    label: `Provider default${defaultLimit ? ` - ${defaultLimit} tokens` : ""}`
+  }];
+  if (provider.id === "copilot" && promptTokens > 0 && contextTokens > promptTokens) {
+    contextChoices.push({ value: "long_context", label: `Extended - ${formatAiTokenCount(contextTokens)} tokens` });
+  }
+  state.settings.copilotTitleContext = setAiSelectOptions(
+    elements.copilotTitleContext,
+    contextChoices,
+    state.settings.copilotTitleContext
+  );
+  elements.aiTitleProviderStatus.textContent = `${provider.name || provider.id} is ready with ${provider.models.length} model${provider.models.length === 1 ? "" : "s"}.`;
+  refreshComboboxes();
+  if (JSON.stringify({
+    context: state.settings.copilotTitleContext,
+    effort: state.settings.copilotTitleEffort,
+    model: state.settings.copilotTitleModel,
+    provider: state.settings.aiTitleProvider
+  }) !== previous) saveSettings();
 }
 
 function normalizeInstallerSizeMb(value, element) {
@@ -1236,6 +1540,12 @@ function connectBridge(locationProtocol = window.location.protocol) {
     sendBridge({ type: "rendererPresence" });
     sendBridgeConfig();
     sendCommunicationConfig();
+    if (!navigator.webdriver && shouldAutomaticallyRefreshAiProviders()) {
+      refreshAiProviders();
+    } else if (!navigator.webdriver) {
+      syncAiSessionControls();
+      syncAiTitleControls();
+    }
     updateTerminalActions();
     for (const terminal of state.terminals.values()) {
       if (!terminal.remoteRequested && terminal.status !== "live") {
@@ -1367,7 +1677,12 @@ function handleBridgeMessage(message) {
     return;
   }
 
-  if (message.type === "copilotSessions" || message.type === "copilotSessionContext") {
+  if (message.type === "aiProviders") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "copilotSessions" || message.type === "claudeSessions" || message.type === "copilotSessionContext" || message.type === "terminalTitleSuggestion") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -1379,6 +1694,7 @@ function handleBridgeMessage(message) {
 
   if (message.type === "welcome") {
     log.info("bridge", "Received welcome", { cwd: message.cwd, sessions: Array.isArray(message.sessions) ? message.sessions.length : 0 });
+    acceptAiProviderBootstrap(message.aiProviderBootstrap);
     const known = new Set();
     const openFolders = Array.isArray(message.openFolders)
       ? message.openFolders.filter((folder) => typeof folder === "string" && folder.trim())
@@ -1511,11 +1827,11 @@ function handleBridgeMessage(message) {
         }
       }, 500);
     }
-    if (terminal.pendingCopilotYolo) {
-      terminal.pendingCopilotYolo = false;
+    if (terminal.pendingAiAssistant) {
+      terminal.pendingAiAssistant = false;
       window.setTimeout(() => {
         const liveTerminal = state.terminals.get(terminal.id);
-        if (liveTerminal?.status === "live") invokeCopilotCli(liveTerminal);
+        if (liveTerminal?.status === "live") invokeAiAssistant(liveTerminal);
       }, 500);
     }
     if (terminal.pendingHandoff) {
@@ -1762,6 +2078,8 @@ function addTerminal(options = {}) {
   const screen = pane.querySelector(".terminal-screen");
   const titleInput = pane.querySelector(".pane-title");
   const titleDisplay = pane.querySelector(".pane-title-display");
+  const titleGenerate = pane.querySelector(".pane-title-generate");
+  const titleReview = pane.querySelector(".pane-title-review");
   const status = pane.querySelector(".pane-status");
   const term = new Terminal({
     allowProposedApi: true,
@@ -1817,7 +2135,7 @@ function addTerminal(options = {}) {
     autoQueueOutputEvidence: "",
     autoQueueRequiredRevision: 0,
     autoQueueTimer: 0,
-    copilotTuiDetected: false,
+    aiAssistantTuiProvider: "",
     elevated,
     fitAddon,
     fontSizeOverride,
@@ -1828,7 +2146,7 @@ function addTerminal(options = {}) {
     id,
     handoffDispatching: false,
     handoffDeliveryTimer: 0,
-    handoffRequiresCopilot: options.pendingHandoff?.requireCopilot === true,
+    handoffRequiresAssistant: options.pendingHandoff?.requireAssistant === true,
     handoffScanTimer: 0,
     lastHandoffRow: -1,
     logging: false,
@@ -1838,7 +2156,7 @@ function addTerminal(options = {}) {
     notificationOverrides: normalizeNotificationOverrides(savedMeta?.notificationOverrides ?? options.notificationOverrides),
     observer: null,
     pane,
-    pendingCopilotYolo: Boolean(options.pendingCopilotYolo),
+    pendingAiAssistant: Boolean(options.pendingAiAssistant),
     pendingCommand: typeof options.pendingCommand === "string" ? options.pendingCommand : null,
     pendingCommandEnter: options.pendingCommandEnter !== false,
     pendingPaste: typeof options.pendingPaste === "string" ? options.pendingPaste : null,
@@ -1871,7 +2189,12 @@ function addTerminal(options = {}) {
     statusElement: status,
     term,
     titleDisplay,
+    titleGenerate,
+    titleGenerationToken: 0,
     titleInput,
+    titleOriginal: "",
+    titleReview,
+    titleSuggestion: "",
     tmux: options.tmux || session.tmux || null
   };
 
@@ -2730,6 +3053,10 @@ function bindPaneControls(terminal) {
     terminal.titleInput.blur();
   });
 
+  terminal.titleGenerate.addEventListener("click", () => generateTerminalTitle(terminal));
+  terminal.titleReview.querySelector(".pane-title-accept").addEventListener("click", () => acceptTerminalTitleSuggestion(terminal));
+  terminal.titleReview.querySelector(".pane-title-reject").addEventListener("click", () => rejectTerminalTitleSuggestion(terminal));
+
   const paneActions = terminal.pane.querySelector(".pane-actions");
   paneActions.addEventListener("click", (event) => {
     const button = event.target.closest("button");
@@ -2804,6 +3131,7 @@ function bindPaneControls(terminal) {
 
 function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   if (!terminal) return;
+  clearTerminalTitleSuggestion(terminal);
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : terminalShellTitle(terminal.shell);
   terminal.titleInput.value = title;
   terminal.titleDisplay.textContent = title;
@@ -2822,6 +3150,105 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   if (terminalNotificationFlyoutId === terminal.id) renderTerminalNotificationFlyout();
   saveSessionSnapshot();
   if (notifyBridge) sendBridge({ type: "title", id: terminal.id, title });
+}
+
+function terminalTitleContextText(terminal) {
+  const text = terminalBufferText(terminal.term).trim();
+  const maximumBytes = Number(state.settings.copilotTitleContextKb) * 1024;
+  const encoded = new TextEncoder().encode(text);
+  if (encoded.length <= maximumBytes) return text;
+  return new TextDecoder().decode(encoded.slice(-maximumBytes)).replace(/^\uFFFD/, "");
+}
+
+function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
+  if (!terminal) return;
+  terminal.titleGenerationToken += 1;
+  terminal.titleGenerate.disabled = false;
+  terminal.titleGenerate.classList.remove("is-loading");
+  terminal.titleGenerate.hidden = false;
+  terminal.titleReview.hidden = true;
+  terminal.titleInput.readOnly = false;
+  terminal.pane.classList.remove("has-title-suggestion");
+  if (restoreOriginal && terminal.titleOriginal) {
+    terminal.titleInput.value = terminal.titleOriginal;
+    terminal.titleDisplay.textContent = terminal.titleOriginal;
+  }
+  terminal.titleOriginal = "";
+  terminal.titleSuggestion = "";
+}
+
+function showTerminalTitleSuggestion(terminal, title) {
+  terminal.titleOriginal = terminal.titleInput.value;
+  terminal.titleSuggestion = title;
+  terminal.titleInput.value = title;
+  terminal.titleDisplay.textContent = title;
+  terminal.titleInput.readOnly = true;
+  terminal.titleGenerate.hidden = true;
+  terminal.titleReview.hidden = false;
+  terminal.pane.classList.add("has-title-suggestion");
+  refreshIcons(terminal.titleReview);
+  terminal.titleReview.querySelector(".pane-title-accept").focus({ preventScroll: true });
+}
+
+function acceptTerminalTitleSuggestion(terminal) {
+  const title = terminal?.titleSuggestion;
+  if (!title) return;
+  clearTerminalTitleSuggestion(terminal);
+  commitTerminalTitle(terminal, title);
+  terminal.term.focus();
+}
+
+function rejectTerminalTitleSuggestion(terminal) {
+  if (!terminal?.titleSuggestion) return;
+  clearTerminalTitleSuggestion(terminal, true);
+  terminal.term.focus();
+}
+
+async function generateTerminalTitle(terminal) {
+  if (!terminal || terminal.titleGenerate.disabled) return false;
+  if (state.settings.aiTitleProvider === "none") {
+    toast("AI-generated terminal titles are disabled", "info", 2200);
+    return false;
+  }
+  const provider = aiProviderById(state.settings.aiTitleProvider);
+  if (state.aiProviders.length > 0 && !provider?.available) {
+    toast(provider?.status || "The selected AI provider is not available", "error", 3200);
+    return false;
+  }
+  const text = terminalTitleContextText(terminal);
+  if (!text) {
+    toast("This terminal has no text to title yet", "info", 2200);
+    return false;
+  }
+
+  clearTerminalTitleSuggestion(terminal);
+  const token = terminal.titleGenerationToken;
+  terminal.titleGenerate.disabled = true;
+  terminal.titleGenerate.classList.add("is-loading");
+  const response = await requestBridge({
+    type: "generateTerminalTitle",
+    provider: state.settings.aiTitleProvider,
+    context: state.settings.copilotTitleContext,
+    contextKb: Number(state.settings.copilotTitleContextKb),
+    cwd: terminal.cwd || "",
+    effort: state.settings.copilotTitleEffort,
+    maxWords: Number(state.settings.copilotTitleMaxWords),
+    minWords: Number(state.settings.copilotTitleMinWords),
+    model: state.settings.copilotTitleModel,
+    currentTitle: terminal.titleInput.value,
+    shell: terminal.shell || "",
+    text
+  }, { timeout: 180000 });
+
+  if (state.terminals.get(terminal.id) !== terminal || terminal.titleGenerationToken !== token) return false;
+  terminal.titleGenerate.disabled = false;
+  terminal.titleGenerate.classList.remove("is-loading");
+  if (!response?.title) {
+    toast(response?.error || "The selected AI provider could not suggest a title", "error", 3200);
+    return false;
+  }
+  showTerminalTitleSuggestion(terminal, response.title);
+  return true;
 }
 
 function bindPaneDrag(terminal) {
@@ -4089,6 +4516,8 @@ function effectiveScrollback() {
 // (input-detection.js) so they can be unit-tested in isolation. The renderer's
 // job here is only to decide *which* line to inspect and pass the caret context.
 const promptDetector = (typeof window !== "undefined" && window.InputPromptDetector) || {
+  aiAssistantTuiProvider: () => "",
+  isAiAssistantPromptReady: () => false,
   isCopilotPromptReady: () => false,
   isCopilotTui: () => false,
   isShellPrompt: () => false,
@@ -4124,9 +4553,9 @@ function terminalExecutionReadiness(terminal) {
   const buffer = terminal?.term?.buffer?.active;
   if (!buffer || terminal.status !== "live") return { mode: "none", ready: false };
   const lines = activeBufferLines(terminal);
-  if (promptDetector.isCopilotTui(lines) || promptDetector.isCopilotPromptReady(lines, true)) {
-    terminal.copilotTuiDetected = true;
-  }
+  const detectedProvider = promptDetector.aiAssistantTuiProvider(lines)
+    || (promptDetector.isCopilotTui(lines) ? "copilot" : "");
+  if (detectedProvider) terminal.aiAssistantTuiProvider = detectedProvider;
 
   const cursorRow = buffer.baseY + buffer.cursorY;
   const physicalLine = readBufferLine(buffer, cursorRow);
@@ -4135,13 +4564,13 @@ function terminalExecutionReadiness(terminal) {
     && Boolean(logicalLine)
     && buffer.cursorX >= physicalLine.length
     && promptDetector.isShellPrompt(logicalLine);
-  if (terminal.copilotTuiDetected) {
+  if (terminal.aiAssistantTuiProvider) {
     if (shellReady) {
-      terminal.copilotTuiDetected = false;
+      terminal.aiAssistantTuiProvider = "";
     } else {
       return {
-        mode: "copilot",
-        ready: promptDetector.isCopilotPromptReady(lines, true)
+        mode: terminal.aiAssistantTuiProvider,
+        ready: promptDetector.isAiAssistantPromptReady(lines, terminal.aiAssistantTuiProvider)
       };
     }
   }
@@ -4154,11 +4583,10 @@ function terminalExecutionReadiness(terminal) {
 
 function terminalEnterSequence(terminal) {
   const lines = activeBufferLines(terminal);
-  return terminal?.copilotTuiDetected
-    || promptDetector.isCopilotTui(lines)
-    || promptDetector.isCopilotPromptReady(lines, true)
-    ? COPILOT_TUI_ENTER
-    : "\r";
+  const provider = terminal?.aiAssistantTuiProvider
+    || promptDetector.aiAssistantTuiProvider(lines)
+    || (promptDetector.isCopilotTui(lines) ? "copilot" : "");
+  return provider === "copilot" ? COPILOT_TUI_ENTER : "\r";
 }
 
 function pasteIntoSpecificTerminal(terminal, text) {
@@ -5216,6 +5644,38 @@ function pendingTerminalAnalyticsFocus(terminalId = null) {
   return Math.max(0, performance.now() - runtime.focusStartedAt);
 }
 
+function showCurrentTerminalContextMenu(event, terminal, returnFocus) {
+  event.preventDefault();
+  event.stopPropagation();
+  renderContextMenu([
+    {
+      label: "Focus terminal",
+      icon: "mouse-pointer-2",
+      run: () => setActiveTerminalAndReveal(terminal.id)
+    },
+    {
+      label: "Quick send clipboard",
+      icon: "clipboard-paste",
+      title: "Paste clipboard text into this terminal without pressing Enter",
+      disabled: terminal.status !== "live",
+      run: async () => {
+        setActiveTerminalAndReveal(terminal.id);
+        await pasteIntoTerminal(terminal.id);
+      }
+    },
+    { separator: true },
+    ...buildMoveToPageItems(terminal),
+    { separator: true },
+    {
+      label: "Close terminal",
+      icon: "x",
+      danger: true,
+      run: () => removeTerminal(terminal.id)
+    }
+  ]);
+  showBuiltContextMenu(event.clientX, event.clientY, { returnFocus });
+}
+
 function renderTerminalAnalytics() {
   if (!elements.analyticsTerminalList) return;
   ensureAnalyticsCurrentDay();
@@ -5228,10 +5688,17 @@ function renderTerminalAnalytics() {
 
   for (const terminal of state.terminals.values()) {
     const record = ensureTerminalAnalyticsRecord(terminal);
-    const row = document.createElement("div");
+    const item = document.createElement("div");
+    item.className = "analytics-terminal-item";
+    item.setAttribute("role", "listitem");
+    const row = document.createElement("button");
+    row.type = "button";
     row.className = "analytics-terminal-row";
     row.classList.toggle("is-focused", state.analyticsRuntime.focusedTerminalId === terminal.id);
-    row.setAttribute("role", "listitem");
+    row.title = `Focus ${terminal.titleInput.value || record.title || "Terminal"}; right-click for actions`;
+    row.setAttribute("aria-label", row.title);
+    row.addEventListener("click", () => setActiveTerminalAndReveal(terminal.id));
+    row.addEventListener("contextmenu", (event) => showCurrentTerminalContextMenu(event, terminal, row));
     const identity = document.createElement("div");
     identity.className = "analytics-terminal-identity";
     const indicator = document.createElement("i");
@@ -5247,7 +5714,8 @@ function renderTerminalAnalytics() {
     focus.textContent = formatAnalyticsDuration(record.focusMs + pendingTerminalAnalyticsFocus(terminal.id));
     metrics.append(keys, focus);
     row.append(identity, metrics);
-    elements.analyticsTerminalList.append(row);
+    item.append(row);
+    elements.analyticsTerminalList.append(item);
   }
   elements.analyticsEmpty.hidden = state.terminals.size > 0;
 }
@@ -6843,30 +7311,39 @@ function attachTmuxSession(candidate) {
   });
 }
 
-/* ---------------- Copilot session resume --------------- */
+/* ---------------- AI assistant session resume --------------- */
 
 const COPILOT_SESSION_PAGE_SIZE = 80;
-const COPILOT_SESSION_SOURCES = new Set(["cli", "vscode", "visualstudio"]);
+const COPILOT_SESSION_SOURCES = new Set(["claude", "cli", "vscode", "visualstudio"]);
 const copilotResume = {
   closeTimer: 0,
   generation: 0,
   newTerminal: false,
+  provider: "copilot",
   sessions: [],
   terminalId: null,
   visibleLimit: COPILOT_SESSION_PAGE_SIZE
 };
 
 function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
+  const provider = state.settings.aiSessionProvider;
+  if (provider !== "copilot" && provider !== "claude") {
+    toast("Choose an interactive AI assistant in Settings first", "warn", 2800);
+    return false;
+  }
   copilotResume.terminalId = terminal?.id || null;
   copilotResume.newTerminal = Boolean(newTerminal);
+  copilotResume.provider = provider;
   copilotResume.sessions = [];
   copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
   copilotResume.generation += 1;
   window.clearTimeout(copilotResume.closeTimer);
   copilotResume.closeTimer = 0;
+  const name = aiAssistantName(provider);
+  document.querySelector("#copilotResumeTitle").textContent = `Resume ${name} session`;
   elements.copilotResumeDescription.textContent = copilotResume.newTerminal
-    ? "Choose local CLI or editor history to continue in a new MultiTerm terminal."
-    : `Choose a local Copilot CLI session to continue in ${terminal?.titleInput.value || "this terminal"}.`;
+    ? `Choose local ${name} history to continue in a new MultiTerm terminal.`
+    : `Choose a local ${name} session to continue in ${terminal?.titleInput.value || "this terminal"}.`;
   elements.copilotResumeSearch.value = "";
   elements.copilotResumeOverlay.hidden = false;
   window.requestAnimationFrame(() => {
@@ -6874,6 +7351,7 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
     elements.copilotResumeSearch.focus();
   });
   refreshCopilotSessions();
+  return true;
 }
 
 function closeCopilotResume() {
@@ -6908,10 +7386,14 @@ function normalizeCopilotSession(candidate) {
 
 async function refreshCopilotSessions() {
   const generation = ++copilotResume.generation;
+  const provider = copilotResume.provider;
+  const name = aiAssistantName(provider);
   elements.copilotResumeRefresh.disabled = true;
-  elements.copilotResumeStatus.textContent = "Looking for local Copilot CLI, VS Code, and Visual Studio sessions\u2026";
+  elements.copilotResumeStatus.textContent = provider === "claude"
+    ? "Looking for local Claude sessions\u2026"
+    : "Looking for local Copilot CLI, VS Code, and Visual Studio sessions\u2026";
   elements.copilotResumeList.innerHTML = '<div class="copilot-resume-empty">Reading session metadata\u2026</div>';
-  const response = await requestBridge({ type: "listCopilotSessions" }, { timeout: 20000 });
+  const response = await requestBridge({ type: provider === "claude" ? "listClaudeSessions" : "listCopilotSessions" }, { timeout: 20000 });
   if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
 
   elements.copilotResumeRefresh.disabled = false;
@@ -6920,7 +7402,7 @@ async function refreshCopilotSessions() {
     .filter(Boolean);
   renderCopilotSessions();
   if (copilotResume.sessions.length === 0) {
-    elements.copilotResumeStatus.textContent = response?.message || "The local bridge did not return any Copilot sessions.";
+    elements.copilotResumeStatus.textContent = response?.message || `The local bridge did not return any ${name} sessions.`;
   }
   refreshIcons(elements.copilotResumeOverlay);
 }
@@ -6929,10 +7411,11 @@ function copilotSessionTitle(session) {
   if (session.name) return session.name;
   if (session.repository) return session.repository;
   const pathParts = session.cwd.split(/[\\/]/).filter(Boolean);
-  return pathParts[pathParts.length - 1] || "Untitled Copilot session";
+  return pathParts[pathParts.length - 1] || `Untitled ${copilotSourceLabel(session.source)} session`;
 }
 
 function copilotSourceLabel(source) {
+  if (source === "claude") return "Claude";
   if (source === "vscode") return "VS Code";
   if (source === "visualstudio") return "Visual Studio";
   return "Copilot CLI";
@@ -6956,7 +7439,7 @@ function renderCopilotSessions() {
     const empty = document.createElement("div");
     empty.className = "copilot-resume-empty";
     empty.textContent = copilotResume.sessions.length === 0
-      ? "No resumable Copilot sessions found."
+      ? `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`
       : "No sessions match this search.";
     elements.copilotResumeList.append(empty);
   }
@@ -7031,27 +7514,30 @@ function powerShellLiteral(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function openCopilotSessionTerminal(session, command, cwd = session.cwd) {
+function openCopilotSessionTerminal(session, command, cwd = session.cwd, provider = copilotResume.provider) {
   return addTerminal({
     reveal: true,
     runStartup: true,
     shell: "pwsh",
     cwd: cwd || undefined,
-    title: `Copilot \u00b7 ${copilotSessionTitle(session)}`,
+    title: `${aiAssistantName(provider)} \u00b7 ${copilotSessionTitle(session)}`,
     pendingCommand: command
   });
 }
 
 async function resumeCopilotSession(session) {
   const id = String(session?.id || "");
+  const provider = copilotResume.provider;
   const terminal = state.terminals.get(copilotResume.terminalId);
   if (!COPILOT_RESUME_ID_PATTERN.test(id) || (!copilotResume.newTerminal && !terminal)) {
-    toast("That terminal or Copilot session is no longer available", "warn", 2400);
+    toast(`That terminal or ${aiAssistantName(provider)} session is no longer available`, "warn", 2400);
     return false;
   }
-  if (copilotResume.newTerminal && session.source === "cli") {
+  if (copilotResume.newTerminal && (session.source === "cli" || session.source === "claude")) {
+    const command = buildAiAssistantCommand({ provider, resumeId: id });
+    if (!command) return false;
     closeCopilotResume();
-    openCopilotSessionTerminal(session, `copilot --resume=${id} --yolo`);
+    openCopilotSessionTerminal(session, command, session.cwd, provider);
     return true;
   }
   if (copilotResume.newTerminal) {
@@ -7074,7 +7560,7 @@ async function resumeCopilotSession(session) {
   }
   closeCopilotResume();
   setAwaitingInput(terminal, false);
-  sendBridge({ type: "input", id: terminal.id, data: `copilot --resume=${id} --yolo\r` });
+  sendBridge({ type: "input", id: terminal.id, data: `${buildAiAssistantCommand({ provider, resumeId: id })}\r` });
   window.requestAnimationFrame(() => terminal.term.focus());
   return true;
 }
@@ -9628,6 +10114,7 @@ function syncControlsFromSettings() {
     state.settings.copilotImportContextKb,
     elements.copilotImportContextKb
   );
+  syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
@@ -9919,7 +10406,7 @@ function queueAutomaticTerminalCommand(terminal, rawCommand, options = {}) {
     toast(
       sanitizeTerminalCommand(rawCommand)
         ? `Commands are limited to ${MAX_TERMINAL_COMMAND_LENGTH} characters.`
-        : "Enter a command or Copilot prompt to queue.",
+        : "Enter a command or AI assistant prompt to queue.",
       "info",
       2000
     );
@@ -11309,7 +11796,7 @@ function linkedHandoffTarget(source, requestedName) {
 }
 
 function uniqueHandoffTerminalTitle(source) {
-  const base = `Handoff from ${source.titleInput.value || "Copilot"}`;
+  const base = `Handoff from ${source.titleInput.value || "AI assistant"}`;
   let title = base;
   let index = 2;
   const existing = new Set([...state.terminals.values()].map((terminal) => automationApi.terminalName(terminal.titleInput.value)));
@@ -11317,12 +11804,16 @@ function uniqueHandoffTerminalTitle(source) {
   return title;
 }
 
-function openHandoffCopilotTerminal(source, payload) {
+function openHandoffAiAssistantTerminal(source, payload) {
+  if (!aiAssistantAvailable()) {
+    toast("Choose an installed, signed-in interactive AI assistant before opening a handoff consumer", "error", 3200);
+    return null;
+  }
   return addTerminal({
     cwd: source.cwd,
     pageId: source.pageId,
-    pendingCopilotYolo: true,
-    pendingHandoff: { payload, requireCopilot: true, sourceId: source.id },
+    pendingAiAssistant: true,
+    pendingHandoff: { payload, requireAssistant: true, sourceId: source.id },
     reveal: true,
     shell: "pwsh",
     title: uniqueHandoffTerminalTitle(source)
@@ -11358,14 +11849,18 @@ async function sendTerminalHandoff(source, target, payload) {
 function scanTerminalHandoff(terminal) {
   if (!terminal || state.automations.paused || terminal.status !== "live") return false;
   const readiness = terminalExecutionReadiness(terminal);
-  if (readiness.mode !== "copilot" || !readiness.ready) return false;
+  if (!["copilot", "claude"].includes(readiness.mode) || !readiness.ready) return false;
   const handoff = automationApi.extractLatestHandoff(terminalHandoffRows(terminal), terminal.lastHandoffRow);
   if (!handoff) return false;
   terminal.lastHandoffRow = handoff.markerRow;
 
   if (!handoff.targetName) {
-    openHandoffCopilotTerminal(terminal, handoff.payload);
-    addAutomationHistory("queued", `New handoff from ${terminal.titleInput.value}`, "Opening a Copilot YOLO consumer");
+    const consumer = openHandoffAiAssistantTerminal(terminal, handoff.payload);
+    if (!consumer) {
+      addAutomationHistory("blocked", `Handoff from ${terminal.titleInput.value}`, "No interactive AI assistant is available");
+      return false;
+    }
+    addAutomationHistory("queued", `New handoff from ${terminal.titleInput.value}`, `Opening a ${aiAssistantName()} consumer`);
     return true;
   }
 
@@ -11405,7 +11900,7 @@ function handoffPastePayload(payload, mode) {
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
     .trim();
   if (!value) return "";
-  return mode === "copilot" ? value : sanitizeTerminalCommand(value);
+  return mode === "copilot" || mode === "claude" ? value : sanitizeTerminalCommand(value);
 }
 
 async function dispatchTerminalHandoff(terminal) {
@@ -11414,7 +11909,7 @@ async function dispatchTerminalHandoff(terminal) {
   const scheduledStage = pendingAutomationStage(terminal);
   if (!message && !scheduledStage) return false;
   const readiness = terminalExecutionReadiness(terminal);
-  if (terminal.handoffRequiresCopilot && readiness.mode !== "copilot") {
+  if (terminal.handoffRequiresAssistant && !["copilot", "claude"].includes(readiness.mode)) {
     scheduleTerminalHandoffDelivery(terminal, AUTO_QUEUE_SETTLE_MS);
     return false;
   }
@@ -11456,7 +11951,7 @@ async function dispatchTerminalHandoff(terminal) {
       return false;
     }
     state.terminalMessages.delete(message.id);
-    terminal.handoffRequiresCopilot = false;
+    terminal.handoffRequiresAssistant = false;
     updateTerminalMessageIndicators();
     addAutomationHistory("staged", `Handoff staged in ${terminal.titleInput.value}`, "Review the input and press Enter when ready");
     toast(`Handoff staged in ${terminal.titleInput.value}`, "success", 2200);
@@ -12578,8 +13073,8 @@ const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.send-message": "Send to terminal",
   "terminal.open-folder": "Open folder",
   "terminal.new-here": "New terminal here",
-  "terminal.copilot-yolo": "Run Copilot CLI (YOLO)",
-  "terminal.copilot-resume": "Resume Copilot CLI session",
+  "terminal.copilot-yolo": "Run AI assistant",
+  "terminal.copilot-resume": "Resume AI assistant session",
   "terminal.new-admin": "New Administrator terminal",
   "terminal.run-script": "Run script",
   "terminal.logging.toggle": "Toggle logging",
@@ -13668,6 +14163,8 @@ function stableContextActionToken(value) {
 function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const hasSelection = Boolean(selection);
   const isZoomed = state.zoomedId === terminal.id;
+  const assistantName = aiAssistantName();
+  const assistantAvailable = aiAssistantAvailable();
   const snippetItems = (state.settings.snippets || []).slice(0, 8).map((snippet) => ({
     label: snippet.name || snippet.command,
     icon: "terminal",
@@ -13703,32 +14200,44 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Open folder", icon: "folder-open", shortcutId: "terminal.open-folder", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd }) },
     {
-      label: "Run Copilot CLI (YOLO)",
+      label: `Run ${assistantName}`,
       icon: "bot",
       shortcutId: "terminal.copilot-yolo",
-      title: "Runs Copilot with YOLO permissions in the focused terminal, or opens one on this page",
-      run: launchCopilotCli
+      title: assistantAvailable
+        ? `Runs ${assistantName} with permission prompts bypassed in the focused terminal, or opens one on this page`
+        : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
+      disabled: !assistantAvailable,
+      run: launchAiAssistant
     },
     {
-      label: "Resume Copilot CLI session\u2026",
+      label: `Resume ${assistantName} session\u2026`,
       icon: "history",
       shortcutId: "terminal.copilot-resume",
-      title: "Choose a local Copilot CLI session and resume it with YOLO permissions",
+      title: assistantAvailable
+        ? `Choose a local ${assistantName} session and resume it with permission prompts bypassed`
+        : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
+      disabled: !assistantAvailable,
       run: () => openCopilotResume(terminal)
     },
     {
       input: true,
-      label: "Copilot model",
+      label: `${assistantName} model`,
       icon: "bot",
       customizationId: "terminal.copilot-model",
+      disabled: !assistantAvailable,
       placeholder: "model name",
       run: (value) => sendTerminalSlashCommand(terminal, "model", value)
     },
     {
       input: true,
-      label: "Copilot CWD",
+      label: state.settings.aiSessionProvider === "claude"
+        ? "Claude add directory"
+        : state.settings.aiSessionProvider === "copilot"
+          ? "Copilot CWD"
+          : "AI assistant directory",
       icon: "folder-input",
       customizationId: "terminal.copilot-cwd",
+      disabled: !assistantAvailable,
       placeholder: terminal.cwd || "path",
       value: terminal.copilotCwd || terminal.cwd || "",
       suggestions: state.copilotCwdHistory,
@@ -13773,6 +14282,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
 function sendTerminalSlashCommand(terminal, command, rawValue) {
   const value = safeTerminalCommand(rawValue);
   if (!terminal || !value) return false;
+  sendBridge({ type: "input", id: terminal.id, data: COPILOT_CLEAR_PROMPT });
   return sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
 }
 
@@ -13787,23 +14297,66 @@ function sendCopilotCwd(terminal, rawValue) {
   terminal.copilotCwd = value;
   rememberCopilotCwd(value);
   saveSessionSnapshot();
-  return sendTerminalSlashCommand(terminal, "cwd", value);
+  return sendTerminalSlashCommand(terminal, state.settings.aiSessionProvider === "claude" ? "add-dir" : "cwd", value);
 }
 
-function invokeCopilotCli(terminal) {
+function aiAssistantName(provider = state.settings.aiSessionProvider) {
+  if (provider === "claude") return "Claude";
+  if (provider === "copilot") return "GitHub Copilot";
+  return "AI assistant";
+}
+
+function aiAssistantAvailable() {
+  return aiProviderAvailableFor(aiProviderById(state.settings.aiSessionProvider), "session");
+}
+
+function quotedAiArgument(value) {
+  const argument = String(value || "").trim();
+  return AI_MODEL_ID_PATTERN.test(argument) ? `"${argument}"` : "";
+}
+
+function buildAiAssistantCommand({ provider = state.settings.aiSessionProvider, resumeId = "" } = {}) {
+  if (provider !== "copilot" && provider !== "claude") return "";
+  const parts = provider === "claude"
+    ? ["claude", "--dangerously-skip-permissions"]
+    : ["copilot", "--yolo"];
+  if (resumeId && COPILOT_RESUME_ID_PATTERN.test(resumeId)) {
+    parts.push("--resume", quotedAiArgument(resumeId));
+  }
+  const model = quotedAiArgument(state.settings.aiSessionModel);
+  if (model) parts.push("--model", model);
+  if (COPILOT_TITLE_EFFORTS.has(state.settings.aiSessionEffort) && state.settings.aiSessionEffort !== "none") {
+    parts.push("--effort", state.settings.aiSessionEffort);
+  }
+  if (provider === "copilot" && COPILOT_TITLE_CONTEXTS.has(state.settings.aiSessionContext)) {
+    parts.push("--context", state.settings.aiSessionContext);
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+function invokeAiAssistant(terminal) {
+  const command = buildAiAssistantCommand();
+  if (!command || !aiAssistantAvailable()) {
+    toast(`${aiAssistantName()} is not installed and signed in`, "error", 2800);
+    return false;
+  }
   setAwaitingInput(terminal, false);
-  if (!sendBridge({ type: "input", id: terminal.id, data: COPILOT_YOLO_COMMAND })) return false;
+  if (!sendBridge({ type: "input", id: terminal.id, data: command })) return false;
   sendBridge({ type: "input", id: terminal.id, data: "\r" });
   window.requestAnimationFrame(() => terminal.term.focus());
   return true;
 }
 
-function launchCopilotCli() {
+function launchAiAssistant() {
+  if (!aiAssistantAvailable()) {
+    toast(`${aiAssistantName()} is not installed and signed in`, "error", 2800);
+    return false;
+  }
   const focused = keyboardFocusedTerminal();
   if (focused) {
-    if (focused.status === "live") return invokeCopilotCli(focused);
-    focused.pendingCopilotYolo = true;
-    toast(`Copilot will start when ${focused.titleInput.value || "the terminal"} is ready`, "info", 2200);
+    if (focused.status === "live") return invokeAiAssistant(focused);
+    focused.pendingAiAssistant = true;
+    toast(`${aiAssistantName()} will start when ${focused.titleInput.value || "the terminal"} is ready`, "info", 2200);
     return true;
   }
 
@@ -13812,7 +14365,7 @@ function launchCopilotCli() {
     reveal: true,
     runStartup: true,
     pageId: currentPageId,
-    pendingCopilotYolo: true
+    pendingAiAssistant: true
   });
   toast(`Opening ${terminal.titleInput.value || "a new terminal"} on ${pageName(currentPageId) || "the current page"}`, "success", 2200);
   return true;
@@ -13843,10 +14396,13 @@ function buildSurfaceContextMenu() {
     { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here }) },
     { label: "Run script as Administrator\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here, elevated: true }) },
     {
-      label: "Run Copilot CLI (YOLO)",
+      label: `Run ${aiAssistantName()}`,
       icon: "bot",
-      title: "Runs Copilot with YOLO permissions in the focused terminal, or opens one on this page",
-      run: launchCopilotCli
+      title: aiAssistantAvailable()
+        ? `Runs ${aiAssistantName()} with permission prompts bypassed in the focused terminal, or opens one on this page`
+        : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
+      disabled: !aiAssistantAvailable(),
+      run: launchAiAssistant
     },
     { separator: true },
     { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", cwd: here || undefined }) },
@@ -15000,6 +15556,7 @@ function renderContextMenu(items, {
       const input = document.createElement("input");
       input.className = "ctx-command-input";
       input.type = "text";
+      input.disabled = Boolean(item.disabled);
       input.autocomplete = "off";
       input.spellcheck = false;
       input.placeholder = item.placeholder || "";
@@ -15028,6 +15585,7 @@ function renderContextMenu(items, {
           button.className = "ctx-command-suggestion";
           button.textContent = suggestion;
           button.title = suggestion;
+          button.disabled = Boolean(item.disabled);
           button.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -15851,12 +16409,20 @@ function createComboboxOptionIcon(option) {
 
 function enhanceComboboxes() {
   const targets = [
+    elements.aiSessionProvider,
+    elements.aiSessionModel,
+    elements.aiSessionEffort,
+    elements.aiSessionContext,
+    elements.aiTitleProvider,
     elements.shellSelect,
     elements.layoutMode,
     elements.pagerPlacement,
     elements.appTheme,
     elements.fontFamily,
     elements.headerActionDragScope,
+    elements.copilotTitleModel,
+    elements.copilotTitleEffort,
+    elements.copilotTitleContext,
     elements.cursorStyle,
     elements.terminalTheme,
     elements.rightClickAction,
@@ -16281,4 +16847,332 @@ function normalizeWorkspaceZoom(value) {
         )
       )
     : WORKSPACE_ZOOM_BOUNDS.fallback;
+}
+
+async function refreshAiProviders() {
+  const generation = ++state.aiProviderDiscovery.generation;
+  state.aiProviderDiscovery.loading = true;
+  elements.aiTitleProviderStatus.textContent = "Checking local AI providers...";
+  const response = await requestBridge({ type: "listAiProviders" }, { timeout: 30000 });
+  if (generation !== state.aiProviderDiscovery.generation) return state.aiProviders;
+  state.aiProviderDiscovery.loading = false;
+  state.aiProviders = Array.isArray(response?.providers)
+    ? response.providers.filter((provider) => AI_PROVIDER_IDS.has(provider?.id))
+    : [];
+  const available = state.aiProviders.filter((provider) => provider?.available);
+  elements.aiTitleProviderStatus.textContent = available.length > 0
+    ? `${available.length} AI provider${available.length === 1 ? "" : "s"} available.`
+    : "No signed-in AI provider is currently available.";
+  syncAiSessionControls();
+  syncAiTitleControls();
+  openAiSetup();
+  return state.aiProviders;
+}
+
+function syncAiSessionControls() {
+  const previous = JSON.stringify({
+    context: state.settings.aiSessionContext,
+    effort: state.settings.aiSessionEffort,
+    model: state.settings.aiSessionModel,
+    provider: state.settings.aiSessionProvider
+  });
+  const providerChoices = [{ value: "none", label: "Disabled" }];
+  for (const id of ["copilot", "claude"]) {
+    const provider = aiProviderById(id);
+    const name = id === "copilot" ? "GitHub Copilot" : "Claude";
+    const available = aiProviderAvailableFor(provider, "session");
+    providerChoices.push({
+      value: id,
+      label: available ? name : `${name} (unavailable)`,
+      disabled: !available && state.settings.aiSessionProvider !== id
+    });
+  }
+  state.settings.aiSessionProvider = setAiSelectOptions(
+    elements.aiSessionProvider,
+    providerChoices,
+    normalizeAiProviderId(state.settings.aiSessionProvider)
+  );
+
+  const provider = aiProviderById(state.settings.aiSessionProvider);
+  const available = aiProviderAvailableFor(provider, "session") && Array.isArray(provider.models) && provider.models.length > 0;
+  const resumeName = aiAssistantName(state.settings.aiSessionProvider);
+  elements.copilotSessionsToggle.disabled = !available;
+  elements.copilotSessionsToggle.title = available
+    ? `Resume a ${resumeName} session`
+    : "Choose an available interactive AI assistant in Settings";
+  elements.copilotSessionsToggle.setAttribute("aria-label", elements.copilotSessionsToggle.title);
+  if (!available) {
+    const savedModel = state.settings.aiSessionModel || "default";
+    setAiSelectOptions(elements.aiSessionModel, [{ value: savedModel, label: savedModel === "default" ? "Provider default" : savedModel }], savedModel);
+    setAiSelectOptions(elements.aiSessionEffort, [{ value: state.settings.aiSessionEffort, label: "Provider default" }], state.settings.aiSessionEffort);
+    setAiSelectOptions(elements.aiSessionContext, [{ value: "default", label: "Provider default" }], "default");
+    elements.aiSessionModel.disabled = true;
+    elements.aiSessionEffort.disabled = true;
+    elements.aiSessionContext.disabled = true;
+    elements.aiSessionProviderStatus.textContent = state.settings.aiSessionProvider === "none"
+      ? "Interactive AI assistant actions are disabled."
+      : aiProviderStatusFor(provider, "session");
+    refreshComboboxes();
+    return;
+  }
+
+  elements.aiSessionModel.disabled = false;
+  elements.aiSessionEffort.disabled = false;
+  elements.aiSessionContext.disabled = false;
+  state.settings.aiSessionModel = setAiSelectOptions(
+    elements.aiSessionModel,
+    provider.models.map((model) => ({ value: model.id, label: aiModelLabel(model) })),
+    state.settings.aiSessionModel
+  );
+  const model = provider.models.find((candidate) => candidate.id === state.settings.aiSessionModel);
+  const efforts = Array.isArray(model?.efforts) ? model.efforts.filter(Boolean) : [];
+  const effortChoices = efforts.length > 0
+    ? efforts.map((effort) => ({ value: effort, label: effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1) }))
+    : [{ value: "none", label: "Provider default" }];
+  const preferredEffort = efforts.includes(state.settings.aiSessionEffort)
+    ? state.settings.aiSessionEffort
+    : model?.defaultEffort || effortChoices[0].value;
+  state.settings.aiSessionEffort = setAiSelectOptions(elements.aiSessionEffort, effortChoices, preferredEffort);
+
+  const promptTokens = Number(model?.maxPromptTokens) || 0;
+  const contextTokens = Number(model?.maxContextTokens) || 0;
+  const defaultLimit = formatAiTokenCount(promptTokens || contextTokens);
+  const contextChoices = [{
+    value: "default",
+    label: `Provider default${defaultLimit ? ` - ${defaultLimit} tokens` : ""}`
+  }];
+  if (provider.id === "copilot" && promptTokens > 0 && contextTokens > promptTokens) {
+    contextChoices.push({ value: "long_context", label: `Extended - ${formatAiTokenCount(contextTokens)} tokens` });
+  }
+  state.settings.aiSessionContext = setAiSelectOptions(elements.aiSessionContext, contextChoices, state.settings.aiSessionContext);
+  elements.aiSessionProviderStatus.textContent = `${provider.name || provider.id} is ready with ${provider.models.length} model${provider.models.length === 1 ? "" : "s"}.`;
+  refreshComboboxes();
+  if (JSON.stringify({
+    context: state.settings.aiSessionContext,
+    effort: state.settings.aiSessionEffort,
+    model: state.settings.aiSessionModel,
+    provider: state.settings.aiSessionProvider
+  }) !== previous) saveSettings();
+}
+
+function availableAiProviderId(preferred, kind = "title", fallback = true) {
+  if (preferred === "none") return "none";
+  if (aiProviderAvailableFor(aiProviderById(preferred), kind)) return preferred;
+  return fallback ? state.aiProviders.find((provider) => aiProviderAvailableFor(provider, kind))?.id || "none" : "none";
+}
+
+function normalizeAiProviderBootstrap(value) {
+  if (!value || value.version !== 1 || !AI_PROVIDER_IDS.has(value.provider)) return null;
+  return { version: 1, provider: value.provider };
+}
+
+function consumeAiProviderBootstrap() {
+  if (!state.aiProviderBootstrap) return;
+  state.aiProviderBootstrap = null;
+  sendBridge({ type: "aiProviderBootstrapConsumed" });
+}
+
+function acceptAiProviderBootstrap(value) {
+  state.aiProviderBootstrap = normalizeAiProviderBootstrap(value);
+  if (state.settings.aiSetupCompleted) consumeAiProviderBootstrap();
+}
+
+function aiSetupProfile(kind) {
+  const title = kind === "title";
+  return {
+    controls: title
+      ? {
+          context: elements.aiSetupTitleContext,
+          effort: elements.aiSetupTitleEffort,
+          model: elements.aiSetupTitleModel,
+          provider: elements.aiSetupTitleProvider
+        }
+      : {
+          context: elements.aiSetupSessionContext,
+          effort: elements.aiSetupSessionEffort,
+          model: elements.aiSetupSessionModel,
+          provider: elements.aiSetupSessionProvider
+        },
+    draft: state.aiSetup.draft?.[kind]
+  };
+}
+
+function syncAiSetupProfile(kind) {
+  const { controls, draft } = aiSetupProfile(kind);
+  if (!draft) return;
+  const providerChoices = [{ value: "none", label: "Disabled" }];
+  for (const id of ["copilot", "claude"]) {
+    const provider = aiProviderById(id);
+    const name = id === "copilot" ? "GitHub Copilot" : "Claude";
+    const available = aiProviderAvailableFor(provider, kind);
+    providerChoices.push({
+      value: id,
+      label: available ? name : `${name} (unavailable)`,
+      disabled: !available
+    });
+  }
+  draft.provider = setAiSelectOptions(controls.provider, providerChoices, draft.provider);
+  const provider = aiProviderById(draft.provider);
+  const available = aiProviderAvailableFor(provider, kind) && Array.isArray(provider.models) && provider.models.length > 0;
+  if (!available) {
+    draft.provider = "none";
+    controls.provider.value = "none";
+    draft.model = setAiSelectOptions(controls.model, [{ value: "", label: "Provider default" }], "");
+    draft.effort = setAiSelectOptions(controls.effort, [{ value: "none", label: "Provider default" }], "none");
+    draft.context = setAiSelectOptions(controls.context, [{ value: "default", label: "Provider default" }], "default");
+    controls.model.disabled = true;
+    controls.effort.disabled = true;
+    controls.context.disabled = true;
+    return;
+  }
+
+  controls.model.disabled = false;
+  controls.effort.disabled = false;
+  controls.context.disabled = false;
+  draft.model = setAiSelectOptions(
+    controls.model,
+    provider.models.map((model) => ({ value: model.id, label: aiModelLabel(model) })),
+    draft.model
+  );
+  const model = provider.models.find((candidate) => candidate.id === draft.model);
+  const efforts = Array.isArray(model?.efforts) ? model.efforts.filter(Boolean) : [];
+  const effortChoices = efforts.length > 0
+    ? efforts.map((effort) => ({ value: effort, label: effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1) }))
+    : [{ value: "none", label: "Provider default" }];
+  draft.effort = setAiSelectOptions(
+    controls.effort,
+    effortChoices,
+    efforts.includes(draft.effort) ? draft.effort : model?.defaultEffort || effortChoices[0].value
+  );
+  const promptTokens = Number(model?.maxPromptTokens) || 0;
+  const contextTokens = Number(model?.maxContextTokens) || 0;
+  const tokenLimit = formatAiTokenCount(promptTokens || contextTokens);
+  const contextChoices = [{ value: "default", label: `Provider default${tokenLimit ? ` - ${tokenLimit} tokens` : ""}` }];
+  if (provider.id === "copilot" && promptTokens > 0 && contextTokens > promptTokens) {
+    contextChoices.push({ value: "long_context", label: `Extended - ${formatAiTokenCount(contextTokens)} tokens` });
+  }
+  draft.context = setAiSelectOptions(controls.context, contextChoices, draft.context);
+}
+
+function updateAiSetupStatus() {
+  const available = state.aiProviders.filter((provider) => aiProviderAvailableFor(provider, "title") || aiProviderAvailableFor(provider, "session"));
+  if (available.length > 0) {
+    elements.aiSetupStatus.textContent = `${available.map((provider) => provider.name || provider.id).join(" and ")} detected.`;
+    return;
+  }
+  const reasons = state.aiProviders.map((provider) => provider.status).filter(Boolean);
+  elements.aiSetupStatus.textContent = reasons.length > 0
+    ? `No AI provider is ready. ${reasons.join(" ")}`
+    : "No AI provider is installed and signed in. Both operations can remain disabled.";
+}
+
+function openAiSetup() {
+  if (state.settings.aiSetupCompleted || navigator.webdriver || !elements.aiSetupOverlay?.hidden) return;
+  const bootstrapProvider = state.aiProviderBootstrap?.provider;
+  state.aiSetup.draft = {
+    session: {
+      context: state.settings.aiSessionContext,
+      effort: state.settings.aiSessionEffort,
+      model: state.settings.aiSessionModel,
+      provider: availableAiProviderId(
+        bootstrapProvider || state.settings.aiSessionProvider,
+        "session",
+        !bootstrapProvider
+      )
+    },
+    title: {
+      context: state.settings.copilotTitleContext,
+      effort: state.settings.copilotTitleEffort,
+      model: state.settings.copilotTitleModel,
+      provider: availableAiProviderId(
+        bootstrapProvider || state.settings.aiTitleProvider,
+        "title",
+        !bootstrapProvider
+      )
+    }
+  };
+  consumeAiProviderBootstrap();
+  state.aiSetup.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  syncAiSetupProfile("title");
+  syncAiSetupProfile("session");
+  updateAiSetupStatus();
+  elements.appShell.inert = true;
+  elements.aiSetupOverlay.hidden = false;
+  requestAnimationFrame(() => {
+    elements.aiSetupOverlay.classList.add("is-open");
+    elements.aiSetupTitleProvider.focus();
+  });
+}
+
+function saveAiSetup() {
+  const draft = state.aiSetup.draft;
+  if (!draft) return;
+  state.settings.aiTitleProvider = draft.title.provider;
+  state.settings.copilotTitleModel = draft.title.model;
+  state.settings.copilotTitleEffort = draft.title.effort;
+  state.settings.copilotTitleContext = draft.title.context;
+  state.settings.aiSessionProvider = draft.session.provider;
+  state.settings.aiSessionModel = draft.session.model;
+  state.settings.aiSessionEffort = draft.session.effort;
+  state.settings.aiSessionContext = draft.session.context;
+  state.settings.aiSetupCompleted = true;
+  saveSettings();
+  syncCopilotTitleSettings();
+  syncAiSessionSettings();
+  elements.aiSetupOverlay.classList.remove("is-open");
+  setTimeout(() => {
+    elements.aiSetupOverlay.hidden = true;
+    elements.appShell.inert = false;
+    state.aiSetup.returnFocus?.focus?.();
+    state.aiSetup.draft = null;
+    state.aiSetup.returnFocus = null;
+    if (state.aiProviderDiscovery.initializeUpdatesAfterSetup) {
+      state.aiProviderDiscovery.initializeUpdatesAfterSetup = false;
+      initializeAutomaticUpdateChecks();
+    }
+  }, 140);
+}
+
+function bindAiSetup() {
+  for (const kind of ["title", "session"]) {
+    const { controls } = aiSetupProfile(kind);
+    controls.provider.addEventListener("change", () => {
+      if (!state.aiSetup.draft) return;
+      state.aiSetup.draft[kind].provider = normalizeAiProviderId(controls.provider.value);
+      state.aiSetup.draft[kind].model = "";
+      syncAiSetupProfile(kind);
+    });
+    controls.model.addEventListener("change", () => {
+      if (!state.aiSetup.draft) return;
+      state.aiSetup.draft[kind].model = controls.model.value;
+      syncAiSetupProfile(kind);
+    });
+    controls.effort.addEventListener("change", () => {
+      if (state.aiSetup.draft) state.aiSetup.draft[kind].effort = controls.effort.value;
+    });
+    controls.context.addEventListener("change", () => {
+      if (state.aiSetup.draft) state.aiSetup.draft[kind].context = controls.context.value;
+    });
+  }
+  elements.aiSetupSave.addEventListener("click", saveAiSetup);
+  elements.aiSetupOverlay.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const focusable = [...elements.aiSetupOverlay.querySelectorAll("select:not(:disabled), button:not(:disabled)")];
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+}
+
+function shouldAutomaticallyRefreshAiProviders() {
+  return !state.settings.aiSetupCompleted
+    || state.settings.aiTitleProvider !== "none"
+    || state.settings.aiSessionProvider !== "none";
 }

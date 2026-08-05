@@ -447,7 +447,7 @@ test.describe("Automation Studio", () => {
     });
   });
 
-  test("opens a Copilot YOLO consumer for an unnamed HAND OFF and stages context", async ({ page }) => {
+  test("opens a configured Claude consumer for an unnamed HAND OFF and stages context", async ({ page }) => {
     const token = "unnamed-handoff-context";
     await expect.poll(() => page.evaluate(() => [...state.terminals.values()].every((terminal) => terminal.status === "live"))).toBe(true);
     const sourceMetadata = await page.evaluate(() => {
@@ -456,13 +456,25 @@ test.describe("Automation Studio", () => {
     });
     await page.evaluate(async (payloadToken) => {
       const source = [...state.terminals.values()][0];
+      window.__automationAssistantProfile = {
+        providers: state.aiProviders,
+        context: state.settings.aiSessionContext,
+        effort: state.settings.aiSessionEffort,
+        model: state.settings.aiSessionModel,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{ id: "claude", available: true }];
+      state.settings.aiSessionProvider = "claude";
+      state.settings.aiSessionModel = "claude-sonnet-4-6[1m]";
+      state.settings.aiSessionEffort = "high";
+      state.settings.aiSessionContext = "default";
       window.__automationOriginalReadiness = terminalExecutionReadiness;
       terminalExecutionReadiness = (terminal) => terminal.id === source.id
-        ? { mode: "copilot", ready: true }
+        ? { mode: "claude", ready: true }
         : { mode: "shell", ready: true };
-      window.__automationOriginalInvokeCopilot = invokeCopilotCli;
-      window.__automationCopilotLaunches = [];
-      invokeCopilotCli = (terminal) => window.__automationCopilotLaunches.push(terminal.id);
+      window.__automationOriginalInvokeAssistant = invokeAiAssistant;
+      window.__automationAssistantLaunches = [];
+      invokeAiAssistant = (terminal) => window.__automationAssistantLaunches.push(terminal.id);
       window.__automationInputFrames = [];
       window.__automationOriginalSend = state.socket.send;
       state.socket.send = (payload) => {
@@ -478,13 +490,13 @@ test.describe("Automation Studio", () => {
     }, token);
 
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
-    await expect.poll(() => page.evaluate(() => window.__automationCopilotLaunches.length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.__automationAssistantLaunches.length)).toBe(1);
     expect(await page.evaluate(() => state.automations.history.some((entry) => entry.status === "staged"))).toBe(false);
     await page.evaluate(() => {
       const source = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Tests");
       terminalExecutionReadiness = (terminal) => terminal.id === source.id
-        ? { mode: "copilot", ready: true }
-        : { mode: "copilot", ready: true };
+        ? { mode: "claude", ready: true }
+        : { mode: "claude", ready: true };
     });
     await expect.poll(() => page.evaluate(() => state.automations.history.some((entry) => entry.status === "staged"))).toBe(true);
     const fallback = await page.evaluate(() => {
@@ -511,10 +523,17 @@ test.describe("Automation Studio", () => {
     await page.evaluate(() => {
       state.socket.send = window.__automationOriginalSend;
       terminalExecutionReadiness = window.__automationOriginalReadiness;
-      invokeCopilotCli = window.__automationOriginalInvokeCopilot;
-      delete window.__automationCopilotLaunches;
+      invokeAiAssistant = window.__automationOriginalInvokeAssistant;
+      const profile = window.__automationAssistantProfile;
+      state.aiProviders = profile.providers;
+      state.settings.aiSessionProvider = profile.provider;
+      state.settings.aiSessionModel = profile.model;
+      state.settings.aiSessionEffort = profile.effort;
+      state.settings.aiSessionContext = profile.context;
+      delete window.__automationAssistantLaunches;
+      delete window.__automationAssistantProfile;
       delete window.__automationInputFrames;
-      delete window.__automationOriginalInvokeCopilot;
+      delete window.__automationOriginalInvokeAssistant;
       delete window.__automationOriginalReadiness;
       delete window.__automationOriginalSend;
     });

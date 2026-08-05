@@ -49,10 +49,11 @@ UninstallDisplayIcon={app}\MultiTerm.ico
 ; Per-user install by default (no UAC); user may elect a machine-wide install.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-; Single installer covers x86, x64, and ARM64: the payload is architecture-neutral
-; (a PowerShell script, managed libraries, and web assets; no native binaries). ArchitecturesAllowed is
-; intentionally omitted so setup runs on every architecture; x64compatible matches
-; x64 and ARM64 so those install into 64-bit Program Files.
+; Single installer covers x86, x64, and ARM64. The terminal bridge and web assets
+; are architecture-neutral; native Explorer packages cover each architecture.
+; The optional bundled Copilot SDK runtime is x64 and degrades to unavailable on
+; unsupported hosts without affecting terminal operation. ArchitecturesAllowed is
+; intentionally omitted; x64compatible installs x64/ARM64 into 64-bit Program Files.
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=Output
 OutputBaseFilename=MultiTerm-Setup-{#MyAppVersion}
@@ -83,6 +84,7 @@ Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\{#MyScriptFile}"; Flags: dontcopy
 Source: "{#RepoRoot}\lib\terminal-gui\*.dll"; DestDir: "{app}\lib\terminal-gui"; Flags: ignoreversion
 Source: "{#RepoRoot}\lib\terminal-gui\README.md"; DestDir: "{app}\lib\terminal-gui"; Flags: ignoreversion
+Source: "{#RepoRoot}\lib\copilot-sdk-host\publish\*"; DestDir: "{app}\lib\copilot-sdk-host"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "cli\multiterm.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "cli\Manage-SystemPath.ps1"; DestDir: "{app}\CLI"; Flags: ignoreversion
 Source: "{#RepoRoot}\scripts\MultiTerm-Watchdog.ps1"; DestDir: "{app}\Watchdog"; Flags: ignoreversion
@@ -135,6 +137,106 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\VSCode\Install-VSCodeIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: waituntilterminated; RunOnceId: "RemoveMultiTermVSCodeIntegration"
 
 [Code]
+var
+  AiProviderPage: TInputOptionWizardPage;
+  CopilotCliDetected: Boolean;
+  ClaudeCliDetected: Boolean;
+
+function CommandIsAvailable(const CommandName: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(
+    ExpandConstant('{sys}\where.exe'),
+    CommandName,
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) and (ResultCode = 0);
+end;
+
+procedure InitializeWizard;
+begin
+  CopilotCliDetected := CommandIsAvailable('copilot');
+  ClaudeCliDetected := CommandIsAvailable('claude');
+
+  AiProviderPage := CreateInputOptionPage(
+    wpSelectTasks,
+    'AI assistant defaults',
+    'Choose the provider MultiTerm should prefer on first launch.',
+    'Setup checks only whether each interactive CLI is on PATH. After launch, MultiTerm verifies sign-in and asks separately about terminal titles and interactive sessions, with live model, context, and thinking-effort choices.',
+    True,
+    False
+  );
+  if CopilotCliDetected then
+    AiProviderPage.Add('GitHub Copilot CLI (detected)')
+  else
+    AiProviderPage.Add('GitHub Copilot CLI (not detected)');
+  if ClaudeCliDetected then
+    AiProviderPage.Add('Claude Code CLI (detected)')
+  else
+    AiProviderPage.Add('Claude Code CLI (not detected)');
+  AiProviderPage.Add('Disabled');
+  AiProviderPage.CheckListBox.ItemEnabled[0] := CopilotCliDetected;
+  AiProviderPage.CheckListBox.ItemEnabled[1] := ClaudeCliDetected;
+
+  if CopilotCliDetected then
+    AiProviderPage.SelectedValueIndex := 0
+  else if ClaudeCliDetected then
+    AiProviderPage.SelectedValueIndex := 1
+  else
+    AiProviderPage.SelectedValueIndex := 2;
+end;
+
+function SelectedAiProvider: String;
+begin
+  case AiProviderPage.SelectedValueIndex of
+    0: Result := 'copilot';
+    1: Result := 'claude';
+  else
+    Result := 'none';
+  end;
+end;
+
+procedure WriteAiProviderBootstrap;
+var
+  BootstrapDirectory: String;
+  BootstrapPath: String;
+  TemporaryPath: String;
+  CopilotDetectedJson: String;
+  ClaudeDetectedJson: String;
+  Json: String;
+begin
+  BootstrapDirectory := ExpandConstant('{localappdata}\MultiTerm');
+  BootstrapPath := AddBackslash(BootstrapDirectory) + 'ai-provider-bootstrap.json';
+  TemporaryPath := BootstrapPath + '.tmp';
+  ForceDirectories(BootstrapDirectory);
+  if CopilotCliDetected then CopilotDetectedJson := 'true' else CopilotDetectedJson := 'false';
+  if ClaudeCliDetected then ClaudeDetectedJson := 'true' else ClaudeDetectedJson := 'false';
+  Json := '{"version":1,"provider":"' + SelectedAiProvider +
+    '","detected":{"copilotCli":' + CopilotDetectedJson +
+    ',"claudeCli":' + ClaudeDetectedJson + '}}';
+  DeleteFile(TemporaryPath);
+  if not SaveStringToFile(TemporaryPath, Json, False) then
+  begin
+    Log('Could not write the AI provider bootstrap file.');
+    Exit;
+  end;
+  DeleteFile(BootstrapPath);
+  if not RenameFile(TemporaryPath, BootstrapPath) then
+  begin
+    DeleteFile(TemporaryPath);
+    Log('Could not finalize the AI provider bootstrap file.');
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if (CurStep = ssPostInstall) and (not WizardSilent) then
+    WriteAiProviderBootstrap;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;

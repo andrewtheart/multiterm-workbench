@@ -38,8 +38,10 @@ test.describe("Enhancement milestone", () => {
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await page.evaluate(() => closeAllTerminals());
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(0);
     await page.evaluate(() => addTerminal({ title: "Enhancement test" }));
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(1);
   });
 
   test.afterAll(async () => {
@@ -105,12 +107,17 @@ test.describe("Enhancement milestone", () => {
     const setup = await page.evaluate(() => {
       localStorage.removeItem("multiterm.copilotCwdHistory");
       state.copilotCwdHistory = [];
+      const originalProviders = state.aiProviders;
+      const originalProvider = state.settings.aiSessionProvider;
+      state.aiProviders = [{ id: "copilot", available: true, interactiveAvailable: true }];
+      state.settings.aiSessionProvider = "copilot";
       const first = [...state.terminals.values()][0];
       first.copilotCwd = "";
       const second = addTerminal({ title: "Second CWD target" });
-      return { firstId: first.id, secondId: second.id };
+      return { firstId: first.id, secondId: second.id, originalProviders, originalProvider };
     });
     await expect(page.locator(".pane-status.is-live")).toHaveCount(2);
+    await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(2);
 
     const submitCwd = async (terminalId, value) => {
       await page.evaluate((id) => showContextMenu(20, 20, state.terminals.get(id), ""), terminalId);
@@ -124,7 +131,11 @@ test.describe("Enhancement milestone", () => {
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
-    await page.evaluate((id) => showContextMenu(20, 20, state.terminals.get(id), ""), setup.firstId);
+    await page.evaluate((id) => {
+      state.aiProviders = [{ id: "copilot", available: true, interactiveAvailable: true }];
+      state.settings.aiSessionProvider = "copilot";
+      showContextMenu(20, 20, state.terminals.get(id), "");
+    }, setup.firstId);
     const cwdRow = page.locator('[data-customization-id="terminal.copilot-cwd"]');
     await expect(cwdRow.locator(".ctx-command-input")).toHaveValue("D:\\first workspace");
     await expect(cwdRow.locator(".ctx-command-suggestion")).toHaveText([
@@ -166,11 +177,13 @@ test.describe("Enhancement milestone", () => {
     expect(capped[0]).toBe("D:\\history-11");
     expect(capped.at(-1)).toBe("D:\\history-2");
     await expect(page.locator('[data-customization-id="terminal.copilot-cwd"] .ctx-command-suggestion')).toHaveCount(10);
-    await page.evaluate(() => {
+    await page.evaluate((profile) => {
       hideContextMenu();
       localStorage.removeItem("multiterm.copilotCwdHistory");
       state.copilotCwdHistory = [];
-    });
+      state.aiProviders = profile.originalProviders;
+      state.settings.aiSessionProvider = profile.originalProvider;
+    }, setup);
     await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(1);
   });
 
@@ -313,14 +326,12 @@ test.describe("Enhancement milestone", () => {
       state.socket.send = (payload) => sent.push(JSON.parse(payload));
 
       showContextMenu(20, 20, terminal, "");
-      const fields = [...document.querySelectorAll(".ctx-command-field")];
-      const model = fields.find((field) => field.querySelector("span")?.textContent === "Copilot model")?.querySelector("input");
+      const model = document.querySelector('[data-customization-id="terminal.copilot-model"] input');
       model.value = "gpt-test";
       model.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
 
       showContextMenu(20, 20, terminal, "");
-      const cwdField = [...document.querySelectorAll(".ctx-command-field")]
-        .find((field) => field.querySelector("span")?.textContent === "Copilot CWD")?.querySelector("input");
+      const cwdField = document.querySelector('[data-customization-id="terminal.copilot-cwd"] input');
       cwdField.value = "D:\\work tree";
       cwdField.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
 
@@ -329,29 +340,133 @@ test.describe("Enhancement milestone", () => {
       return sent.filter((frame) => frame.type === "input" && frame.id === terminal.id);
     });
 
-    expect(frames.map((frame) => frame.data).filter((data) => data.startsWith("/")))
-      .toEqual(["/model gpt-test\r", "/cwd D:\\work tree\r"]);
+    expect(frames.map((frame) => frame.data)
+      .filter((data) => data === "\x15" || data.startsWith("/")))
+      .toEqual(["\x15", "/model gpt-test\r", "\x15", "/cwd D:\\work tree\r"]);
   });
 
-  test("Copilot YOLO context action sends the command followed by Enter", async () => {
+  test("offers Copilot title suggestions inline for approval or rejection", async () => {
+    const originalTitle = await page.locator(".terminal-pane").first().locator(".pane-title").inputValue();
+    const setup = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      await new Promise((resolve) => terminal.term.write("npm test\r\n699 tests passed\r\n", resolve));
+      const originalProviders = state.aiProviders;
+      const originalProvider = state.settings.aiTitleProvider;
+      state.aiProviders = [{ id: "copilot", available: true, titleAvailable: true }];
+      state.settings.aiTitleProvider = "copilot";
+      state.settings.copilotTitleModel = "claude-opus-4.6";
+      state.settings.copilotTitleEffort = "medium";
+      state.settings.copilotTitleContext = "default";
+      state.settings.copilotTitleContextKb = 16;
+      state.settings.copilotTitleMinWords = 2;
+      state.settings.copilotTitleMaxWords = 8;
+      window.__titleFrames = [];
+      window.__titleOriginalSend = state.socket.send;
+      state.socket.send = (payload) => {
+        const frame = JSON.parse(payload);
+        window.__titleFrames.push(frame);
+        if (frame.type === "generateTerminalTitle") return;
+        window.__titleOriginalSend.call(state.socket, payload);
+      };
+      return { id: terminal.id, originalProviders, originalProvider };
+    });
+
+    const pane = page.locator(`.terminal-pane[data-id="${setup.id}"]`);
+    await pane.locator(".pane-title-generate").click();
+    await expect.poll(() => page.evaluate(() => window.__titleFrames.filter((frame) => frame.type === "generateTerminalTitle").length)).toBe(1);
+    await page.evaluate(() => {
+      const request = window.__titleFrames.find((frame) => frame.type === "generateTerminalTitle");
+      handleBridgeMessage({
+        type: "terminalTitleSuggestion",
+        requestId: request.requestId,
+        title: "Verify MultiTerm Test Suite"
+      });
+    });
+    await expect(pane.locator(".pane-title")).toHaveValue("Verify MultiTerm Test Suite");
+    await expect(pane.locator(".pane-title-accept")).toBeVisible();
+    await expect(pane.locator(".pane-title-reject")).toBeVisible();
+    await pane.locator(".pane-title-reject").click();
+    await expect(pane.locator(".pane-title")).toHaveValue(originalTitle);
+
+    await pane.locator(".pane-title-generate").click();
+    await expect.poll(() => page.evaluate(() => window.__titleFrames.filter((frame) => frame.type === "generateTerminalTitle").length)).toBe(2);
+    await page.evaluate(() => {
+      const requests = window.__titleFrames.filter((frame) => frame.type === "generateTerminalTitle");
+      handleBridgeMessage({
+        type: "terminalTitleSuggestion",
+        requestId: requests[1].requestId,
+        title: "Verify MultiTerm Test Suite"
+      });
+    });
+    await expect(pane.locator(".pane-title-accept")).toBeVisible();
+    await pane.locator(".pane-title-accept").click();
+    await expect(pane.locator(".pane-title")).toHaveValue("Verify MultiTerm Test Suite");
+
+    const result = await page.evaluate((profile) => {
+      state.socket.send = window.__titleOriginalSend;
+      delete window.__titleOriginalSend;
+      const frames = window.__titleFrames;
+      delete window.__titleFrames;
+      state.aiProviders = profile.originalProviders;
+      state.settings.aiTitleProvider = profile.originalProvider;
+      return {
+        requests: frames.filter((frame) => frame.type === "generateTerminalTitle"),
+        renames: frames.filter((frame) => frame.type === "title")
+      };
+    }, setup);
+    expect(result.requests).toHaveLength(2);
+    expect(result.requests[0]).toMatchObject({
+      context: "default",
+      effort: "medium",
+      maxWords: 8,
+      minWords: 2,
+      model: "claude-opus-4.6",
+      provider: "copilot"
+    });
+    expect(result.requests[0].text).toContain("699 tests passed");
+    expect(result.renames).toContainEqual({
+      type: "title",
+      id: setup.id,
+      title: "Verify MultiTerm Test Suite"
+    });
+  });
+
+  test("interactive assistant context action applies Copilot session defaults", async () => {
     const result = await page.evaluate(async () => {
       const terminal = [...state.terminals.values()][0];
       const sent = [];
       let focused = false;
       const originalSend = state.socket.send;
       const originalFocus = terminal.term.focus;
+      const originalProviders = state.aiProviders;
+      const originalSettings = {
+        context: state.settings.aiSessionContext,
+        effort: state.settings.aiSessionEffort,
+        model: state.settings.aiSessionModel,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{ id: "copilot", available: true }];
+      state.settings.aiSessionProvider = "copilot";
+      state.settings.aiSessionModel = "gpt-5.4";
+      state.settings.aiSessionEffort = "high";
+      state.settings.aiSessionContext = "long_context";
       state.socket.send = (payload) => sent.push(JSON.parse(payload));
       terminal.term.focus = () => { focused = true; };
 
       showContextMenu(20, 20, terminal, "");
       const item = [...document.querySelectorAll("#contextMenu .ctx-item")]
-        .find((row) => row.textContent.includes("Run Copilot CLI (YOLO)"));
+        .find((row) => row.textContent.includes("Run GitHub Copilot"));
       const title = item?.title || "";
       item?.click();
       await new Promise((resolve) => requestAnimationFrame(resolve));
 
       terminal.term.focus = originalFocus;
       state.socket.send = originalSend;
+      state.aiProviders = originalProviders;
+      state.settings.aiSessionProvider = originalSettings.provider;
+      state.settings.aiSessionModel = originalSettings.model;
+      state.settings.aiSessionEffort = originalSettings.effort;
+      state.settings.aiSessionContext = originalSettings.context;
       return {
         focused,
         hidden: elements.contextMenu.hidden,
@@ -363,18 +478,63 @@ test.describe("Enhancement milestone", () => {
     expect({ ...result, frames: undefined }).toEqual({
       focused: true,
       hidden: true,
-      title: "Runs Copilot with YOLO permissions in the focused terminal, or opens one on this page",
+      title: "Runs GitHub Copilot with permission prompts bypassed in the focused terminal, or opens one on this page",
       frames: undefined
     });
-    const commandIndex = result.frames.findIndex((frame) => frame.data === "copilot --yolo");
+    const command = "copilot --yolo --model \"gpt-5.4\" --effort high --context long_context";
+    const commandIndex = result.frames.findIndex((frame) => frame.data === command);
     expect(commandIndex).toBeGreaterThanOrEqual(0);
     expect(result.frames.slice(commandIndex, commandIndex + 2)).toEqual([
-      { type: "input", id: result.frames[commandIndex].id, data: "copilot --yolo" },
+      { type: "input", id: result.frames[commandIndex].id, data: command },
       { type: "input", id: result.frames[commandIndex].id, data: "\r" }
     ]);
   });
 
-  test("Copilot YOLO surface action opens a terminal on the current page when none is focused", async () => {
+  test("interactive assistant context action applies Claude session defaults", async () => {
+    const result = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      const sent = [];
+      const originalSend = state.socket.send;
+      const originalProviders = state.aiProviders;
+      const originalSettings = {
+        context: state.settings.aiSessionContext,
+        effort: state.settings.aiSessionEffort,
+        model: state.settings.aiSessionModel,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{ id: "claude", available: true }];
+      state.settings.aiSessionProvider = "claude";
+      state.settings.aiSessionModel = "claude-sonnet-4-6[1m]";
+      state.settings.aiSessionEffort = "high";
+      state.settings.aiSessionContext = "default";
+      state.socket.send = (payload) => sent.push(JSON.parse(payload));
+
+      showContextMenu(20, 20, terminal, "");
+      const item = [...document.querySelectorAll("#contextMenu .ctx-item")]
+        .find((row) => row.textContent.includes("Run Claude"));
+      item?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+
+      state.socket.send = originalSend;
+      state.aiProviders = originalProviders;
+      state.settings.aiSessionProvider = originalSettings.provider;
+      state.settings.aiSessionModel = originalSettings.model;
+      state.settings.aiSessionEffort = originalSettings.effort;
+      state.settings.aiSessionContext = originalSettings.context;
+      return sent.filter((frame) => frame.type === "input" && frame.id === terminal.id);
+    });
+
+    expect(result.slice(-2)).toEqual([
+      {
+        type: "input",
+        id: result.at(-2).id,
+        data: "claude --dangerously-skip-permissions --model \"claude-sonnet-4-6[1m]\" --effort high"
+      },
+      { type: "input", id: result.at(-2).id, data: "\r" }
+    ]);
+  });
+
+  test("interactive assistant surface action opens a terminal on the current page when none is focused", async () => {
     const setup = await page.evaluate(() => {
       closeAllTerminals();
       const pageId = addPage({ name: "Copilot page" });
@@ -384,6 +544,18 @@ test.describe("Enhancement milestone", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
     await expect(page.locator(".pane-status")).toHaveClass(/is-live/);
     await page.evaluate(() => {
+      window.__copilotLaunchProfile = {
+        providers: state.aiProviders,
+        context: state.settings.aiSessionContext,
+        effort: state.settings.aiSessionEffort,
+        model: state.settings.aiSessionModel,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{ id: "copilot", available: true }];
+      state.settings.aiSessionProvider = "copilot";
+      state.settings.aiSessionModel = "gpt-5.4";
+      state.settings.aiSessionEffort = "high";
+      state.settings.aiSessionContext = "long_context";
       window.__copilotLaunchFrames = [];
       window.__copilotLaunchOriginalSend = state.socket.send;
       state.socket.send = function (payload) {
@@ -395,20 +567,28 @@ test.describe("Enhancement milestone", () => {
       showSurfaceContextMenu(20, 20);
     });
 
-    await page.locator("#contextMenu .ctx-item", { hasText: "Run Copilot CLI (YOLO)" }).click();
+    const command = "copilot --yolo --model \"gpt-5.4\" --effort high --context long_context";
+    await page.locator("#contextMenu .ctx-item", { hasText: "Run GitHub Copilot" }).click();
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
-    await expect.poll(() => page.evaluate(() => window.__copilotLaunchFrames
-      .filter((frame) => frame.type === "input" && (frame.data === "copilot --yolo" || frame.data === "\r"))
-      .map((frame) => frame.data))).toEqual(["copilot --yolo", "\r"]);
+    await expect.poll(() => page.evaluate((expectedCommand) => window.__copilotLaunchFrames
+      .filter((frame) => frame.type === "input" && (frame.data === expectedCommand || frame.data === "\r"))
+      .map((frame) => frame.data), command)).toEqual([command, "\r"]);
 
-    const result = await page.evaluate((expectedPageId) => {
+    const result = await page.evaluate(({ command, expectedPageId }) => {
       state.socket.send = window.__copilotLaunchOriginalSend;
       delete window.__copilotLaunchOriginalSend;
+      const profile = window.__copilotLaunchProfile;
+      delete window.__copilotLaunchProfile;
+      state.aiProviders = profile.providers;
+      state.settings.aiSessionProvider = profile.provider;
+      state.settings.aiSessionModel = profile.model;
+      state.settings.aiSessionEffort = profile.effort;
+      state.settings.aiSessionContext = profile.context;
       const create = window.__copilotLaunchFrames.find((frame) => frame.type === "create");
       const input = window.__copilotLaunchFrames
         .filter((frame) => frame.type === "input"
           && frame.id === create.id
-          && (frame.data === "copilot --yolo" || frame.data === "\r"))
+          && (frame.data === command || frame.data === "\r"))
         .map((frame) => frame.data);
       delete window.__copilotLaunchFrames;
       const terminal = state.terminals.get(create.id);
@@ -418,9 +598,9 @@ test.describe("Enhancement milestone", () => {
         terminalId: terminal.id,
         terminalPageId: terminal.pageId
       };
-    }, setup.pageId);
+    }, { command, expectedPageId: setup.pageId });
     expect(result.terminalPageId).toBe(setup.pageId);
-    expect(result.input).toEqual(["copilot --yolo", "\r"]);
+    expect(result.input).toEqual([command, "\r"]);
 
     await page.evaluate(({ existingId, terminalId, pageId }) => {
       removeTerminal(terminalId);
@@ -438,6 +618,18 @@ test.describe("Enhancement milestone", () => {
     const secondId = await page.evaluate(() => addTerminal({ title: "Other terminal" }).id);
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
     await page.evaluate(({ firstId }) => {
+      window.__copilotResumeProfile = {
+        providers: state.aiProviders,
+        context: state.settings.aiSessionContext,
+        effort: state.settings.aiSessionEffort,
+        model: state.settings.aiSessionModel,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{ id: "copilot", available: true }];
+      state.settings.aiSessionProvider = "copilot";
+      state.settings.aiSessionModel = "gpt-5.4";
+      state.settings.aiSessionEffort = "high";
+      state.settings.aiSessionContext = "long_context";
       const sessions = [
         {
           id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
@@ -475,7 +667,7 @@ test.describe("Enhancement milestone", () => {
       showContextMenu(20, 20, terminal, "");
     }, { firstId });
 
-    await page.locator("#contextMenu .ctx-item", { hasText: "Resume Copilot CLI session" }).click();
+    await page.locator("#contextMenu .ctx-item", { hasText: "Resume GitHub Copilot session" }).click();
     await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
     await expect(page.locator("#copilotResumeSearch")).toBeFocused();
     await expect(page.locator(".copilot-session-card")).toHaveCount(2);
@@ -493,14 +685,93 @@ test.describe("Enhancement milestone", () => {
       delete window.__copilotOriginalSend;
       const sent = window.__copilotResumeFrames;
       delete window.__copilotResumeFrames;
+      const profile = window.__copilotResumeProfile;
+      delete window.__copilotResumeProfile;
+      state.aiProviders = profile.providers;
+      state.settings.aiSessionProvider = profile.provider;
+      state.settings.aiSessionModel = profile.model;
+      state.settings.aiSessionEffort = profile.effort;
+      state.settings.aiSessionContext = profile.context;
       return sent;
     });
-    expect(frames.filter((frame) => frame.type === "input" && frame.data.startsWith("copilot --resume="))).toEqual([{
+    expect(frames.filter((frame) => frame.type === "input" && frame.data.startsWith("copilot --yolo --resume"))).toEqual([{
       type: "input",
       id: firstId,
-      data: "copilot --resume=62d43a25-c209-4933-af9a-24d9bff3789c --yolo\r"
+      data: "copilot --yolo --resume \"62d43a25-c209-4933-af9a-24d9bff3789c\" --model \"gpt-5.4\" --effort high --context long_context\r"
     }]);
     await page.evaluate((id) => removeTerminal(id), secondId);
+  });
+
+  test("lists and resumes a local Claude session in the invoking terminal", async () => {
+    const terminalId = await page.evaluate(() => {
+      closeAllTerminals();
+      const terminal = addTerminal({ title: "Claude resume target" });
+      window.__claudeResumeProfile = {
+        providers: state.aiProviders,
+        context: state.settings.aiSessionContext,
+        effort: state.settings.aiSessionEffort,
+        model: state.settings.aiSessionModel,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{ id: "claude", available: true }];
+      state.settings.aiSessionProvider = "claude";
+      state.settings.aiSessionModel = "claude-sonnet-4-6[1m]";
+      state.settings.aiSessionEffort = "high";
+      state.settings.aiSessionContext = "default";
+      window.__claudeResumeFrames = [];
+      window.__claudeResumeOriginalSend = state.socket.send;
+      state.socket.send = (payload) => {
+        const frame = JSON.parse(payload);
+        window.__claudeResumeFrames.push(frame);
+        if (frame.type === "listClaudeSessions") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "claudeSessions",
+            requestId: frame.requestId,
+            sessions: [{
+              id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+              key: "claude:bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+              source: "claude",
+              name: "Continue Claude provider parity",
+              cwd: "D:\\multiTerm",
+              branch: "main",
+              updatedAt: "2026-08-04T00:18:07.329Z"
+            }],
+            message: ""
+          }), 0);
+        }
+      };
+      showContextMenu(20, 20, terminal, "");
+      return terminal.id;
+    });
+
+    await page.locator("#contextMenu .ctx-item", { hasText: "Resume Claude session" }).click();
+    await expect(page.locator("#copilotResumeTitle")).toHaveText("Resume Claude session");
+    await expect(page.locator(".copilot-session-card")).toHaveCount(1);
+    await expect(page.locator(".copilot-session-card")).toContainText("Continue Claude provider parity");
+    await expect(page.locator(".copilot-session-source")).toHaveText("Claude");
+    await page.locator(".copilot-session-card").click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+
+    const frames = await page.evaluate(() => {
+      state.socket.send = window.__claudeResumeOriginalSend;
+      delete window.__claudeResumeOriginalSend;
+      const sent = window.__claudeResumeFrames;
+      delete window.__claudeResumeFrames;
+      const profile = window.__claudeResumeProfile;
+      delete window.__claudeResumeProfile;
+      state.aiProviders = profile.providers;
+      state.settings.aiSessionProvider = profile.provider;
+      state.settings.aiSessionModel = profile.model;
+      state.settings.aiSessionEffort = profile.effort;
+      state.settings.aiSessionContext = profile.context;
+      return sent;
+    });
+    expect(frames).toContainEqual(expect.objectContaining({ type: "listClaudeSessions" }));
+    expect(frames).toContainEqual({
+      type: "input",
+      id: terminalId,
+      data: "claude --dangerously-skip-permissions --resume \"bdfb990d-4ee9-4b72-a41c-fcbf0c79a373\" --model \"claude-sonnet-4-6[1m]\" --effort high\r"
+    });
   });
 
   test("queries all Copilot clients from the main UI and continues an editor session in a new terminal", async () => {

@@ -25,6 +25,9 @@ const {
   classifyInputPrompt,
   looksLikeInputPromptBlock,
   classifyInputPromptBlock,
+  aiAssistantTuiProvider,
+  isAiAssistantTui,
+  isAiAssistantPromptReady,
   isCopilotTui,
   isCopilotPromptReady
 } = detector;
@@ -37,9 +40,32 @@ describe("input-detection: module surface", () => {
     expect(typeof classifyInputPrompt).toBe("function");
     expect(typeof looksLikeInputPromptBlock).toBe("function");
     expect(typeof classifyInputPromptBlock).toBe("function");
+    expect(typeof aiAssistantTuiProvider).toBe("function");
+    expect(typeof isAiAssistantTui).toBe("function");
+    expect(typeof isAiAssistantPromptReady).toBe("function");
     expect(typeof isCopilotTui).toBe("function");
     expect(typeof isCopilotPromptReady).toBe("function");
     expect(Array.isArray(detector.PROMPT_PATTERNS)).toBe(true);
+  });
+});
+
+describe("input-detection: Claude Code TUI readiness", () => {
+  const header = "Claude Code v2.1.71";
+
+  it("recognises the empty Claude composer as ready", () => {
+    const screen = [header, "Tips for getting started", "❯", "? for shortcuts"];
+    expect(aiAssistantTuiProvider(screen)).toBe("claude");
+    expect(isAiAssistantTui(screen)).toBe(true);
+    expect(isAiAssistantPromptReady(screen)).toBe(true);
+  });
+
+  it("rejects Claude while a response is in progress", () => {
+    const screen = [header, "✻ Working... (esc to interrupt)", "? for shortcuts"];
+    expect(isAiAssistantPromptReady(screen)).toBe(false);
+  });
+
+  it("recognises a ready composer after the known Claude header scrolls away", () => {
+    expect(isAiAssistantPromptReady(["Previous response", "❯"], "claude")).toBe(true);
   });
 });
 

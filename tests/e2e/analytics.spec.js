@@ -26,10 +26,14 @@ test.describe("Terminal interaction analytics", () => {
       closeAllTerminals();
       state.analytics = emptyTerminalAnalytics();
       saveTerminalAnalytics();
+    });
+    await expect.poll(() => page.evaluate(async () => (await fetch("/health")).json().then((health) => health.sessions))).toBe(0);
+    await page.evaluate(() => {
       addTerminal({ title: "Analytics primary" });
     });
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
     await expect(page.locator(".pane-status")).toHaveClass(/is-live/);
+    await expect.poll(() => page.evaluate(async () => (await fetch("/health")).json().then((health) => health.sessions))).toBe(1);
   });
 
   test.afterAll(async () => {
@@ -103,12 +107,68 @@ test.describe("Terminal interaction analytics", () => {
     await expect(page.locator("#analyticsTotalKeystrokes")).toHaveText("4");
   });
 
+  test("focuses Current terminals and exposes quick actions on right click", async () => {
+    const setup = await page.evaluate(() => {
+      const baselineCount = state.terminals.size;
+      const terminal = addTerminal({ title: "Analytics temporary" });
+      window.__analyticsOriginalPasteIntoTerminal = pasteIntoTerminal;
+      window.__analyticsQuickSendIds = [];
+      window.__analyticsInitialPageIds = state.pages.map((entry) => entry.id);
+      pasteIntoTerminal = async (id) => window.__analyticsQuickSendIds.push(id);
+      renderTerminalAnalytics();
+      return { baselineCount, temporaryId: terminal.id };
+    });
+    const { baselineCount, temporaryId } = setup;
+    await expect(page.locator(".terminal-pane")).toHaveCount(baselineCount + 1);
+    await page.evaluate(() => {
+      const group = document.querySelector("#settings-group-analytics");
+      if (group.getAttribute("aria-expanded") !== "true") group.click();
+    });
+    const temporaryRow = page.getByRole("button", { name: /Focus Analytics temporary/ });
+
+    await temporaryRow.click();
+    await expect.poll(() => page.evaluate(() => state.activeId)).toBe(temporaryId);
+
+    await temporaryRow.click({ button: "right" });
+    await expect(page.locator("#contextMenu").getByText("Quick send clipboard", { exact: true })).toBeVisible();
+    await expect(page.locator("#contextMenu").getByText("Move to new page", { exact: true })).toBeVisible();
+    await expect(page.locator("#contextMenu").getByText("Close terminal", { exact: true })).toBeVisible();
+    await page.locator("#contextMenu").getByText("Quick send clipboard", { exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__analyticsQuickSendIds)).toEqual([temporaryId]);
+
+    await temporaryRow.click({ button: "right" });
+    await page.locator("#contextMenu").getByText("Move to new page", { exact: true }).click();
+    const moved = await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      return {
+        createdPageId: state.pages.find((entry) => !window.__analyticsInitialPageIds.includes(entry.id))?.id,
+        pageId: terminal?.pageId,
+        pageCount: state.pages.length
+      };
+    }, temporaryId);
+    expect(moved.pageCount).toBe(2);
+    expect(moved.pageId).toBe(moved.createdPageId);
+
+    await page.getByRole("button", { name: /Focus Analytics primary/ }).click();
+    await temporaryRow.click({ button: "right" });
+    await page.locator("#contextMenu").getByText("Close terminal", { exact: true }).click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(baselineCount);
+    await page.evaluate((pageId) => {
+      pasteIntoTerminal = window.__analyticsOriginalPasteIntoTerminal;
+      removePage(pageId);
+      delete window.__analyticsOriginalPasteIntoTerminal;
+      delete window.__analyticsQuickSendIds;
+      delete window.__analyticsInitialPageIds;
+    }, moved.createdPageId);
+  });
+
   test("persists aggregate and per-terminal analytics across reload", async () => {
     const before = await page.evaluate(() => {
       endTerminalAnalyticsFocus();
       saveTerminalAnalytics();
       return JSON.parse(localStorage.getItem(TERMINAL_ANALYTICS_STORAGE_KEY));
     });
+    await expect.poll(() => page.evaluate(async () => (await fetch("/health")).json().then((health) => health.sessions))).toBe(2);
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await expect(page.locator(".terminal-pane")).toHaveCount(2);

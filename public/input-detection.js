@@ -282,25 +282,50 @@
     return classifyInputPrompt(line, context) !== null;
   }
 
-  function copilotScreenLines(lines) {
+  function aiAssistantScreenLines(lines) {
     const values = Array.isArray(lines) ? lines : [lines];
     return values.map((line) => normalize(line));
   }
 
+  function aiAssistantTuiProvider(lines) {
+    const screen = aiAssistantScreenLines(lines).join(" ");
+    if (/\bCopilot\s+v[\d.]+\s+uses\s+AI\b/i.test(screen)) return "copilot";
+    if (/\bClaude Code\b(?:\s+v[\w.-]+)?/i.test(screen)) return "claude";
+    return "";
+  }
+
+  function isAiAssistantTui(lines) {
+    return Boolean(aiAssistantTuiProvider(lines));
+  }
+
+  function isAiAssistantPromptReady(lines, knownProvider = "") {
+    const screen = aiAssistantScreenLines(lines);
+    const provider = typeof knownProvider === "string" && knownProvider
+      ? knownProvider
+      : aiAssistantTuiProvider(screen);
+    if (provider === "copilot") {
+      return screen.some((line) => /^\s*\/\s*commands\s*·\s*\?\s*help\b/i.test(line));
+    }
+    if (provider === "claude") {
+      return screen.some((line) => /^\s*❯\s*$/.test(line));
+    }
+    return false;
+  }
+
   function isCopilotTui(lines) {
-    const screen = copilotScreenLines(lines).join(" ");
-    return /\bCopilot\s+v[\d.]+\s+uses\s+AI\b/i.test(screen);
+    return aiAssistantTuiProvider(lines) === "copilot";
   }
 
   function isCopilotPromptReady(lines, knownCopilot) {
-    const screen = copilotScreenLines(lines);
-    return (knownCopilot === true || isCopilotTui(screen))
-      && screen.some((line) => /^\s*\/\s*commands\s*·\s*\?\s*help\b/i.test(line));
+    return isAiAssistantPromptReady(lines, knownCopilot === true ? "copilot" : "");
   }
 
   return {
     stripAnsi,
     isShellPrompt,
+    aiAssistantTuiProvider,
+    isAiAssistantTui,
+    isAiAssistantPromptReady,
     isCopilotTui,
     isCopilotPromptReady,
     looksLikeInputPrompt,

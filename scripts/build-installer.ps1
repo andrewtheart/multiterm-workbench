@@ -1107,6 +1107,19 @@ $NativeModuleGuardPath = Join-Path $RepoRoot 'scripts\confirm-native-module-unlo
 Write-Step "Checking for running MultiTerm native module users..."
 & $NativeModuleGuardPath -RepositoryRoot $RepoRoot
 
+$CopilotSdkHostProject = Join-Path $RepoRoot 'lib\copilot-sdk-host\MultiTerm.CopilotSdkHost.csproj'
+$CopilotSdkHostOutput = Join-Path $RepoRoot 'lib\copilot-sdk-host\publish'
+Write-Step "Building GitHub Copilot SDK host..."
+Invoke-Native {
+    dotnet build $CopilotSdkHostProject --configuration Release --nologo
+} "GitHub Copilot SDK host build failed"
+if (-not (Test-Path -LiteralPath (Join-Path $CopilotSdkHostOutput 'MultiTerm.CopilotSdkHost.exe') -PathType Leaf)) {
+    throw "GitHub Copilot SDK host build did not produce MultiTerm.CopilotSdkHost.exe."
+}
+if (-not (Test-Path -LiteralPath (Join-Path $CopilotSdkHostOutput 'runtimes\win-x64\native\copilot.exe') -PathType Leaf)) {
+    throw "GitHub Copilot SDK host build did not include its bundled Windows runtime."
+}
+
 # --- Locate ISCC.exe ------------------------------------------------------------
 if (-not $IsccPath) {
     $candidates = @(

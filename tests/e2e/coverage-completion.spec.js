@@ -91,7 +91,7 @@ test.describe("Renderer coverage completion", () => {
       shellBlock: null,
       looksBlock: true,
       looksSingle: true,
-      commonJsApi: ["PROMPT_PATTERNS", "SHELL_PROMPT_PATTERNS", "classifyInputPrompt", "classifyInputPromptBlock", "isCopilotPromptReady", "isCopilotTui", "isShellPrompt", "looksLikeInputPrompt", "looksLikeInputPromptBlock", "stripAnsi"]
+      commonJsApi: ["PROMPT_PATTERNS", "SHELL_PROMPT_PATTERNS", "aiAssistantTuiProvider", "classifyInputPrompt", "classifyInputPromptBlock", "isAiAssistantPromptReady", "isAiAssistantTui", "isCopilotPromptReady", "isCopilotTui", "isShellPrompt", "looksLikeInputPrompt", "looksLikeInputPromptBlock", "stripAnsi"]
     });
   });
 
@@ -4015,7 +4015,7 @@ test.describe("Renderer coverage completion", () => {
       elements.statisticsClose.disabled = false;
       elements.statisticsRefresh.disabled = false;
       closeStatistics();
-      launchCopilotCli(null);
+      launchAiAssistant();
 
       window.fetch = savedFetch;
       window.multiterm = savedMultiterm;
