@@ -28,6 +28,10 @@ const { CopilotClient } = require("@github/copilot-sdk");
 const pty = require("@homebridge/node-pty-prebuilt-multiarch");
 const terminalMessaging = require("./public/terminal-messaging");
 const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
+const {
+  requestPromptLibraryHost,
+  stopPromptLibraryHost
+} = require("./lib/prompt-library-client");
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3177);
@@ -134,6 +138,7 @@ function unregisterInstance() {
  * @property {() => Promise<string>} [findClaudeExecutable]
  * @property {(file: string, args: string[], options: object, callback: Function) => void} [execFile]
  * @property {(file: string, args: string[], options: object) => object} [spawnProcess]
+ * @property {(message: object) => Promise<object>} [promptLibraryRequest]
  */
 /** @type {Readonly<SessionDependencies>} */
 const defaultSessionDependencies = Object.freeze({
@@ -142,6 +147,7 @@ const defaultSessionDependencies = Object.freeze({
   findCopilotExecutable,
   findClaudeExecutable,
   loadClaudeSdk,
+  promptLibraryRequest: requestPromptLibraryHost,
   spawnProcess: childProcess.spawn,
   spawnPty: pty.spawn.bind(pty)
 });
@@ -815,6 +821,7 @@ function handleUnhandledRejection(reason) {
 }
 
 function handleProcessExit() {
+  stopPromptLibraryHost();
   closeSessions(false);
 }
 
@@ -1155,6 +1162,12 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "generateTerminalTitle":
       sendTerminalTitleSuggestion(client, message, dependencies);
+      break;
+    case "promptLibraryList":
+    case "promptLibraryGet":
+    case "promptLibrarySave":
+    case "promptLibraryDelete":
+      sendPromptLibraryResponse(client, message, dependencies.promptLibraryRequest || requestPromptLibraryHost);
       break;
     case "input":
       writeSession(message.id, message.data);
@@ -2510,6 +2523,7 @@ function describeElevationError(detail) {
 
 function shutdown() {
   stopMemStats();
+  stopPromptLibraryHost();
   const shutdownWaitMs = Math.max(
     SHUTDOWN_MAX_WAIT_MS,
     Math.max(0, sessions.size - 1) * SESSION_TEARDOWN_STAGGER_MS
@@ -2537,6 +2551,56 @@ function shutdown() {
     }
   }, SHUTDOWN_POLL_MS);
   drain.unref();
+}
+
+const promptLibraryOperations = new Map([
+  ["promptLibraryList", "list"],
+  ["promptLibraryGet", "get"],
+  ["promptLibrarySave", "upsert"],
+  ["promptLibraryDelete", "delete"]
+]);
+
+async function sendPromptLibraryResponse(client, message, requestHost = requestPromptLibraryHost) {
+  const requestId = typeof message?.requestId === "string" ? message.requestId : "";
+  const operation = promptLibraryOperations.get(message?.type);
+  if (!requestId || !operation) {
+    client.send({
+      type: "promptLibraryResponse",
+      ok: false,
+      requestId,
+      errorCode: "invalid_request",
+      error: "The Prompt Library request is invalid."
+    });
+    return;
+  }
+  const expectedRevision = Number(message.expectedRevision);
+  const request = {
+    operation,
+    requestId,
+    id: typeof message.id === "string" ? message.id : "",
+    name: typeof message.name === "string" ? message.name : "",
+    body: typeof message.body === "string" ? message.body : "",
+    expectedRevision: Number.isSafeInteger(expectedRevision) && expectedRevision >= 0 ? expectedRevision : 0
+  };
+  try {
+    const response = await requestHost(request);
+    client.send(response);
+    if (response?.ok === true && (operation === "upsert" || operation === "delete")) {
+      broadcast({
+        type: "promptLibraryChanged",
+        libraryRevision: Number(response.libraryRevision) || 0
+      });
+    }
+  } catch (error) {
+    console.warn(`[bridge] Prompt Library request failed: ${error.message}`);
+    client.send({
+      type: "promptLibraryResponse",
+      ok: false,
+      requestId,
+      errorCode: "host_unavailable",
+      error: "Prompt Library storage is unavailable."
+    });
+  }
 }
 
 function computeMemStats(callback) {
@@ -4243,6 +4307,7 @@ module.exports = {
     generateClaudeTerminalTitle,
     generateAiTerminalTitle,
     sendTerminalTitleSuggestion,
+    sendPromptLibraryResponse,
     getWorkingDirectory,
     isLocalAddress,
     isLoopbackBindHost,

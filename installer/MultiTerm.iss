@@ -50,11 +50,12 @@ UninstallDisplayIcon={app}\MultiTerm.ico
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ; Single installer covers x86, x64, and ARM64. The terminal bridge and web assets
-; are architecture-neutral; native Explorer packages cover each architecture.
+; are architecture-neutral; native Prompt Library and Explorer files are selected
+; for the target architecture.
 ; The optional bundled Copilot SDK runtime is x64 and degrades to unavailable on
 ; unsupported hosts without affecting terminal operation. ArchitecturesAllowed is
 ; intentionally omitted; x64compatible installs x64/ARM64 into 64-bit Program Files.
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible or arm64
 OutputDir=Output
 OutputBaseFilename=MultiTerm-Setup-{#MyAppVersion}
 SetupIconFile=MultiTerm.ico
@@ -85,6 +86,15 @@ Source: "{#RepoRoot}\{#MyScriptFile}"; Flags: dontcopy
 Source: "{#RepoRoot}\lib\terminal-gui\*.dll"; DestDir: "{app}\lib\terminal-gui"; Flags: ignoreversion
 Source: "{#RepoRoot}\lib\terminal-gui\README.md"; DestDir: "{app}\lib\terminal-gui"; Flags: ignoreversion
 Source: "{#RepoRoot}\lib\copilot-sdk-host\publish\*"; DestDir: "{app}\lib\copilot-sdk-host"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\arm64\MultiTerm.PromptLibraryHost.exe"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion; Check: PreferArm64PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\arm64\MultiTerm.PromptLibraryHost.exe.config"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion; Check: PreferArm64PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\arm64\sqlite3mc.dll"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion; Check: PreferArm64PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\x64\MultiTerm.PromptLibraryHost.exe"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion solidbreak; Check: PreferX64PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\x64\MultiTerm.PromptLibraryHost.exe.config"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion; Check: PreferX64PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\x64\sqlite3mc.dll"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion; Check: PreferX64PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\x86\MultiTerm.PromptLibraryHost.exe"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion solidbreak; Check: PreferX86PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\x86\MultiTerm.PromptLibraryHost.exe.config"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion; Check: PreferX86PromptLibraryFiles
+Source: "{#RepoRoot}\lib\prompt-library-host\publish\x86\sqlite3mc.dll"; DestDir: "{app}\lib\prompt-library-host"; Flags: ignoreversion; Check: PreferX86PromptLibraryFiles
 Source: "cli\multiterm.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "cli\Manage-SystemPath.ps1"; DestDir: "{app}\CLI"; Flags: ignoreversion
 Source: "{#RepoRoot}\scripts\MultiTerm-Watchdog.ps1"; DestDir: "{app}\Watchdog"; Flags: ignoreversion
@@ -141,6 +151,21 @@ var
   AiProviderPage: TInputOptionWizardPage;
   CopilotCliDetected: Boolean;
   ClaudeCliDetected: Boolean;
+
+function PreferArm64PromptLibraryFiles: Boolean;
+begin
+  Result := IsArm64;
+end;
+
+function PreferX64PromptLibraryFiles: Boolean;
+begin
+  Result := not PreferArm64PromptLibraryFiles and IsX64Compatible;
+end;
+
+function PreferX86PromptLibraryFiles: Boolean;
+begin
+  Result := not PreferArm64PromptLibraryFiles and not PreferX64PromptLibraryFiles;
+end;
 
 function CommandIsAvailable(const CommandName: String): Boolean;
 var

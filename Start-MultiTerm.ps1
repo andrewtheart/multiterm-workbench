@@ -369,6 +369,21 @@ if (-not (Test-Path -LiteralPath $copilotSdkHostPath -PathType Leaf)) {
     $copilotSdkHostPath = Join-Path $copilotSdkHostDirectory "publish\MultiTerm.CopilotSdkHost.exe"
 }
 $env:MULTITERM_COPILOT_SDK_HOST = $copilotSdkHostPath
+$promptLibraryHostDirectory = Join-Path $PSScriptRoot "lib\prompt-library-host"
+$promptLibraryHostPath = Join-Path $promptLibraryHostDirectory "MultiTerm.PromptLibraryHost.exe"
+if (-not (Test-Path -LiteralPath $promptLibraryHostPath -PathType Leaf)) {
+    $nativeArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    $promptLibraryArchitecture = switch ($nativeArchitecture.ToUpperInvariant()) {
+        'ARM64' { 'arm64' }
+        'AMD64' { 'x64' }
+        default { 'x86' }
+    }
+    $promptLibraryHostPath = Join-Path $promptLibraryHostDirectory "publish\$promptLibraryArchitecture\MultiTerm.PromptLibraryHost.exe"
+}
+if (-not (Test-Path -LiteralPath $promptLibraryHostPath -PathType Leaf)) {
+    $promptLibraryHostPath = Join-Path $promptLibraryHostDirectory "publish\MultiTerm.PromptLibraryHost.exe"
+}
+$env:MULTITERM_PROMPT_LIBRARY_HOST = $promptLibraryHostPath
 
 if (-not (Test-Path -LiteralPath $publicDir -PathType Container)) {
   throw "Cannot find public assets at $publicDir"
@@ -1248,6 +1263,146 @@ namespace MultiTerm.PowerShellBridge
         }
     }
 
+    internal sealed class PromptLibraryHostClient : IDisposable
+    {
+        private const int MaximumLineBytes = 1024 * 1024;
+        private readonly object sync = new object();
+        private readonly StringBuilder standardError = new StringBuilder();
+        private Process process;
+
+        public string Request(Dictionary<string, string> message)
+        {
+            lock (this.sync)
+            {
+                this.EnsureStarted();
+                string request = this.BuildRequest(message);
+                byte[] requestBytes = new UTF8Encoding(false).GetBytes(request + "\n");
+                if (requestBytes.Length > MaximumLineBytes)
+                {
+                    throw new InvalidOperationException("Prompt Library request exceeds the bridge message limit.");
+                }
+
+                Task<string> responseTask = this.process.StandardOutput.ReadLineAsync();
+                this.process.StandardInput.BaseStream.Write(requestBytes, 0, requestBytes.Length);
+                this.process.StandardInput.BaseStream.Flush();
+                if (!responseTask.Wait(15000))
+                {
+                    this.StopProcess();
+                    throw new TimeoutException("Prompt Library host request timed out.");
+                }
+                string response = responseTask.Result;
+                if (String.IsNullOrEmpty(response))
+                {
+                    string detail = this.ReadError();
+                    this.StopProcess();
+                    throw new InvalidOperationException(String.IsNullOrEmpty(detail)
+                        ? "Prompt Library host closed unexpectedly."
+                        : detail);
+                }
+                if (Encoding.UTF8.GetByteCount(response) > MaximumLineBytes)
+                {
+                    this.StopProcess();
+                    throw new InvalidOperationException("Prompt Library host returned an oversized response.");
+                }
+                string requestId = Json.Get(message, "requestId");
+                if (response.IndexOf("\"requestId\":" + Json.Quote(requestId), StringComparison.Ordinal) < 0)
+                {
+                    this.StopProcess();
+                    throw new InvalidOperationException("Prompt Library host returned an uncorrelated response.");
+                }
+                return response;
+            }
+        }
+
+        private string BuildRequest(Dictionary<string, string> message)
+        {
+            string type = Json.Get(message, "type");
+            string operation;
+            if (type == "promptLibraryList") operation = "list";
+            else if (type == "promptLibraryGet") operation = "get";
+            else if (type == "promptLibrarySave") operation = "upsert";
+            else if (type == "promptLibraryDelete") operation = "delete";
+            else throw new InvalidOperationException("Unsupported Prompt Library request.");
+
+            long expectedRevision;
+            if (!Int64.TryParse(Json.Get(message, "expectedRevision"), NumberStyles.Integer, CultureInfo.InvariantCulture, out expectedRevision)
+                || expectedRevision < 0)
+            {
+                expectedRevision = 0;
+            }
+            return "{\"operation\":" + Json.Quote(operation)
+                + ",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
+                + ",\"id\":" + Json.Quote(Json.Get(message, "id"))
+                + ",\"name\":" + Json.Quote(Json.Get(message, "name"))
+                + ",\"body\":" + Json.Quote(Json.Get(message, "body"))
+                + ",\"expectedRevision\":" + expectedRevision.ToString(CultureInfo.InvariantCulture)
+                + "}";
+        }
+
+        private void EnsureStarted()
+        {
+            if (this.process != null && !this.process.HasExited) return;
+            this.StopProcess();
+            string host = Environment.GetEnvironmentVariable("MULTITERM_PROMPT_LIBRARY_HOST");
+            if (String.IsNullOrEmpty(host) || !File.Exists(host))
+            {
+                throw new FileNotFoundException("The encrypted Prompt Library host is not installed.");
+            }
+            ProcessStartInfo start = new ProcessStartInfo();
+            start.FileName = host;
+            start.WorkingDirectory = Path.GetDirectoryName(host);
+            start.UseShellExecute = false;
+            start.CreateNoWindow = true;
+            start.RedirectStandardInput = true;
+            start.RedirectStandardOutput = true;
+            start.RedirectStandardError = true;
+            start.StandardOutputEncoding = new UTF8Encoding(false);
+            start.StandardErrorEncoding = new UTF8Encoding(false);
+            this.standardError.Length = 0;
+            this.process = Process.Start(start);
+            this.process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs eventArgs)
+            {
+                if (String.IsNullOrEmpty(eventArgs.Data)) return;
+                lock (this.standardError)
+                {
+                    this.standardError.AppendLine(eventArgs.Data);
+                    if (this.standardError.Length > 8192)
+                    {
+                        this.standardError.Remove(0, this.standardError.Length - 8192);
+                    }
+                }
+            };
+            this.process.BeginErrorReadLine();
+        }
+
+        private string ReadError()
+        {
+            lock (this.standardError)
+            {
+                return this.standardError.ToString().Trim();
+            }
+        }
+
+        private void StopProcess()
+        {
+            Process child = this.process;
+            this.process = null;
+            if (child == null) return;
+            try { child.StandardInput.Close(); } catch { }
+            try
+            {
+                if (!child.HasExited) child.Kill();
+            }
+            catch { }
+            child.Dispose();
+        }
+
+        public void Dispose()
+        {
+            lock (this.sync) this.StopProcess();
+        }
+    }
+
     public sealed class BridgeServer
     {
         private sealed class OutputBatch
@@ -1274,6 +1429,7 @@ namespace MultiTerm.PowerShellBridge
         private readonly ConcurrentDictionary<string, BridgeClient> clients = new ConcurrentDictionary<string, BridgeClient>();
         private readonly ConcurrentDictionary<string, TerminalSession> sessions = new ConcurrentDictionary<string, TerminalSession>();
         private readonly ConcurrentDictionary<string, CopilotSessionMetadata> copilotSessionCatalog = new ConcurrentDictionary<string, CopilotSessionMetadata>();
+        private readonly PromptLibraryHostClient promptLibraryHost = new PromptLibraryHostClient();
         private readonly object terminalMessageLock = new object();
         private readonly Dictionary<string, TerminalMessage> terminalMessages = new Dictionary<string, TerminalMessage>(StringComparer.Ordinal);
         private readonly object automationLeaseLock = new object();
@@ -1504,6 +1660,7 @@ namespace MultiTerm.PowerShellBridge
                 try { this.listener.Stop(); } catch { }
                 try { this.listener.Close(); } catch { }
             }
+            this.promptLibraryHost.Dispose();
             this.UnregisterInstance();
         }
 
@@ -2877,6 +3034,13 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.GenerateTerminalTitle(client, message);
             }
+            else if (type == "promptLibraryList"
+                || type == "promptLibraryGet"
+                || type == "promptLibrarySave"
+                || type == "promptLibraryDelete")
+            {
+                this.HandlePromptLibraryRequest(client, message);
+            }
             else if (type == "elevate")
             {
                 this.ElevateSession(client, message);
@@ -2923,6 +3087,40 @@ namespace MultiTerm.PowerShellBridge
             {
                 client.Send("{\"type\":\"error\",\"message\":\"Unsupported message type: " + Json.Escape(type) + "\"}");
             }
+        }
+
+        private void HandlePromptLibraryRequest(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            if (String.IsNullOrEmpty(requestId))
+            {
+                client.Send("{\"type\":\"promptLibraryResponse\",\"ok\":false,\"requestId\":\"\","
+                    + "\"errorCode\":\"invalid_request\",\"error\":\"The Prompt Library request is invalid.\"}");
+                return;
+            }
+            string type = Json.Get(message, "type");
+            ThreadPool.QueueUserWorkItem(delegate(object ignored)
+            {
+                try
+                {
+                    string response = this.promptLibraryHost.Request(message);
+                    client.Send(response);
+                    bool mutation = type == "promptLibrarySave" || type == "promptLibraryDelete";
+                    if (mutation && response.IndexOf("\"ok\":true", StringComparison.Ordinal) >= 0)
+                    {
+                        Match revision = Regex.Match(response, "\\\"libraryRevision\\\":(?<value>[0-9]+)");
+                        string value = revision.Success ? revision.Groups["value"].Value : "0";
+                        this.Broadcast("{\"type\":\"promptLibraryChanged\",\"libraryRevision\":" + value + "}");
+                    }
+                }
+                catch (Exception error)
+                {
+                    this.Log("warn", "Prompt Library request failed: " + error.Message);
+                    client.Send("{\"type\":\"promptLibraryResponse\",\"ok\":false,\"requestId\":"
+                        + Json.Quote(requestId)
+                        + ",\"errorCode\":\"host_unavailable\",\"error\":\"Prompt Library storage is unavailable.\"}");
+                }
+            });
         }
 
         private void ApplyCommunicationConfig(BridgeClient client, Dictionary<string, string> message)

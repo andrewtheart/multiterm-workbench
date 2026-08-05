@@ -1107,6 +1107,10 @@ $NativeModuleGuardPath = Join-Path $RepoRoot 'scripts\confirm-native-module-unlo
 Write-Step "Checking for running MultiTerm native module users..."
 & $NativeModuleGuardPath -RepositoryRoot $RepoRoot
 
+$PromptLibraryHostBuild = Join-Path $RepoRoot 'scripts\build-prompt-library-host.ps1'
+Write-Step "Building encrypted Prompt Library hosts..."
+& $PromptLibraryHostBuild
+
 $CopilotSdkHostProject = Join-Path $RepoRoot 'lib\copilot-sdk-host\MultiTerm.CopilotSdkHost.csproj'
 $CopilotSdkHostOutput = Join-Path $RepoRoot 'lib\copilot-sdk-host\publish'
 Write-Step "Building GitHub Copilot SDK host..."

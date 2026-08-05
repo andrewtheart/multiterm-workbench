@@ -21,6 +21,7 @@
     "test": "npm run test:iterative",
     "pretest:unit": "npm run build:help",
     "test:unit": "vitest run",
+    "test:prompt-library": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\\test-prompt-library.ps1",
     "test:iterative": "npm run test:unit && npm run test:e2e",
     "test:full": "npm run test:coverage && npm run test:e2e:full",
     "test:watch": "vitest",

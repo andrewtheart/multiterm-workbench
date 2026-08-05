@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>MultiTerm.PromptLibraryHost</AssemblyName>
+    <RootNamespace>MultiTerm.PromptLibraryHost</RootNamespace>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <PromptLibraryNativeArch Condition="'$(PromptLibraryNativeArch)' == ''">x64</PromptLibraryNativeArch>
+    <PlatformTarget Condition="'$(PromptLibraryNativeArch)' == 'x86'">x86</PlatformTarget>
+    <PlatformTarget Condition="'$(PromptLibraryNativeArch)' == 'x64'">x64</PlatformTarget>
+    <PlatformTarget Condition="'$(PromptLibraryNativeArch)' == 'arm64'">ARM64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <OutputPath>publish\$(PromptLibraryNativeArch)\</OutputPath>
+    <IntermediateOutputPath>obj\$(PromptLibraryNativeArch)\$(Configuration)\</IntermediateOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Security" />
+    <Reference Include="System.Web.Extensions" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\sqlite3mc\bin\$(PromptLibraryNativeArch)\sqlite3mc.dll"
+          Link="sqlite3mc.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\sqlite3mc\bin\$(PromptLibraryNativeArch)\sqlite3mc.dll')" />
+  </ItemGroup>
+</Project>
