@@ -346,6 +346,55 @@ test.describe("Command palette — every option works", () => {
     await expect(page.locator("#fontSizeValue")).toHaveText(`${fontBefore}px`);
   });
 
+  test("searches Help text with highlights, navigation, and optional regex", async () => {
+    await page.locator("#helpDocToggle").click();
+    await expect(page.locator("#helpOverlay")).toBeVisible();
+    const helpFrame = page.frames().find((frame) => frame.url().includes("help.html"));
+    expect(helpFrame).toBeTruthy();
+
+    await page.keyboard.press("Control+f");
+    await expect(page.locator("#helpSearchBar")).toBeVisible();
+    await expect(page.locator("#helpSearchInput")).toBeFocused();
+    await expect(page.locator("#helpSearchRegex")).toHaveAttribute("aria-pressed", "false");
+    await page.locator("#helpSearchInput").fill("terminal");
+    await expect(page.locator("#helpSearchStatus")).toHaveText(/1 \/ \d+/);
+
+    const total = Number((await page.locator("#helpSearchStatus").textContent()).split("/")[1].trim());
+    expect(total).toBeGreaterThan(1);
+    await expect.poll(() => helpFrame.evaluate(() => ({
+      active: CSS.highlights.get("multiterm-help-search-active")?.size || 0,
+      all: CSS.highlights.get("multiterm-help-search")?.size || 0
+    }))).toEqual({ active: 1, all: total });
+
+    await page.locator("#helpSearchPrevious").click();
+    await expect(page.locator("#helpSearchStatus")).toHaveText(`${total} / ${total}`);
+    await page.locator("#helpSearchNext").click();
+    await expect(page.locator("#helpSearchStatus")).toHaveText(`1 / ${total}`);
+
+    await page.locator("#helpSearchRegex").click();
+    await expect(page.locator("#helpSearchRegex")).toHaveAttribute("aria-pressed", "true");
+    await page.locator("#helpSearchInput").fill("[");
+    await expect(page.locator("#helpSearchInput")).toHaveAttribute("aria-invalid", "true");
+    await expect(page.locator("#helpSearchStatus")).toHaveText("Invalid regex");
+    await expect(page.locator("#helpSearchNext")).toBeDisabled();
+
+    await page.locator("#helpSearchInput").fill("MultiTerm\\s+Workbench");
+    await expect(page.locator("#helpSearchInput")).not.toHaveAttribute("aria-invalid", "true");
+    await expect(page.locator("#helpSearchStatus")).toHaveText(/1 \/ [1-9]\d*/);
+
+    await page.locator("#helpSearchClose").click();
+    await expect(page.locator("#helpSearchBar")).toBeHidden();
+    await helpFrame.locator("a").first().focus();
+    await page.keyboard.press("Control+f");
+    await expect(page.locator("#helpSearchInput")).toBeFocused();
+    await expect(page.locator("#helpSearchRegex")).toHaveAttribute("aria-pressed", "false");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#helpSearchBar")).toBeHidden();
+    await expect(page.locator("#helpOverlay")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#helpOverlay")).toBeHidden();
+  });
+
   test("all 11 layout commands set the host layout", async () => {
     for (const [label, value] of LAYOUTS) {
       await runCmd(`Layout: ${label}`);

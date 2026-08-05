@@ -239,6 +239,37 @@ describe("open-folder forwarding", () => {
     ws.close();
     expect(app.pendingOpenFolders).toEqual([]);
   });
+
+  it("delivers to the most recently active visible renderer", async () => {
+    const connectRenderer = () => new Promise((resolve, reject) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${new URL(baseUrl).port}/ws`);
+      ws.addEventListener("message", (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "welcome") resolve(ws);
+      });
+      ws.addEventListener("error", reject);
+    });
+    const first = await connectRenderer();
+    const second = await connectRenderer();
+    const firstMessages = [];
+    const secondMessages = [];
+    first.addEventListener("message", (event) => firstMessages.push(JSON.parse(event.data)));
+    second.addEventListener("message", (event) => secondMessages.push(JSON.parse(event.data)));
+    first.send(JSON.stringify({ type: "rendererPresence", visible: true }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    second.send(JSON.stringify({ type: "rendererPresence", visible: true }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect((await post(JSON.stringify({ path: folder }))).status).toBe(200);
+    await vi.waitFor(() => {
+      expect(secondMessages.some((message) => message.type === "openFolder" && message.path === folder)).toBe(true);
+    });
+    expect(firstMessages.some((message) => message.type === "openFolder")).toBe(false);
+
+    first.close();
+    second.close();
+    expect(app.pendingOpenFolders).toEqual([]);
+  });
 });
 
 describe("WebSocket upgrade guards", () => {

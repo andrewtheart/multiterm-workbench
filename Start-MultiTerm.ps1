@@ -2152,12 +2152,24 @@ namespace MultiTerm.PowerShellBridge
             string message = "{\"type\":\"openFolder\",\"path\":" + Json.Quote(folder) + "}";
             lock (this.openFolderLock)
             {
+                BridgeClient target = null;
                 foreach (BridgeClient client in this.clients.Values)
                 {
-                    if (client.Send(message))
+                    if (!client.IsRenderer)
                     {
-                        return;
+                        continue;
                     }
+                    if (target == null
+                        || (client.RendererVisible && !target.RendererVisible)
+                        || (client.RendererVisible == target.RendererVisible
+                            && client.RendererActiveAt > target.RendererActiveAt))
+                    {
+                        target = client;
+                    }
+                }
+                if (target != null && target.Send(message))
+                {
+                    return;
                 }
                 this.pendingOpenFolders.Enqueue(folder);
             }
@@ -2930,6 +2942,8 @@ namespace MultiTerm.PowerShellBridge
             if (type == "rendererPresence")
             {
                 client.IsRenderer = true;
+                client.RendererActiveAt = DateTime.UtcNow.Ticks;
+                client.RendererVisible = Json.Get(message, "visible") != "false";
                 this.watchdogSuppressed = false;
             }
             else if (type == "aiProviderBootstrapConsumed")
@@ -6155,6 +6169,10 @@ namespace MultiTerm.PowerShellBridge
         public WebSocket Socket { get; private set; }
 
         public bool IsRenderer { get; set; }
+
+        public long RendererActiveAt { get; set; }
+
+        public bool RendererVisible { get; set; }
 
         public bool Send(string message)
         {

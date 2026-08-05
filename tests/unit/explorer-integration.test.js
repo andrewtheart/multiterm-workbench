@@ -58,11 +58,16 @@ describe("File Explorer integration", () => {
     expect(bridge).toContain("PendingOpenFoldersJson");
     expect(bridge).toContain("public bool Send(string message)");
     expect(bridge).toContain("lock (this.openFolderLock)");
+    expect(bridge).toContain("if (!client.IsRenderer)");
+    expect(bridge).toContain("client.RendererVisible && !target.RendererVisible");
+    expect(bridge).toContain("client.RendererActiveAt > target.RendererActiveAt");
     expect(bridge).toContain("private bool SendOpenFolderToExisting");
     expect(bridge).toContain("is already in use by another application");
     expect(renderer.indexOf("function openFolderInNewTerminal")).toBeGreaterThan(
       renderer.indexOf("function handleBridgeMessage")
     );
+    expect(renderer).toContain('window.addEventListener("focus", announceRendererPresence)');
+    expect(renderer).toContain('visible: document.visibilityState === "visible"');
   });
 
   // A bridge whose window is closed still answers /open-folder, so forwarding

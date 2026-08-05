@@ -9,7 +9,7 @@ MultiTerm Workbench is a Windows terminal workspace for running PowerShell 7, Wi
 3. Select **Add terminal** or press <kbd>Ctrl+T</kbd>.
 4. Click a pane to make it active, then type normally.
 
-Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>F1</kbd> to open this in-app help guide, or <kbd>Ctrl+Shift+P</kbd> to search the command palette.
+Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>F1</kbd> to open this in-app help guide, or <kbd>Ctrl+Shift+P</kbd> to search the command palette. While Help is open, <kbd>Ctrl+F</kbd> searches this guide and highlights every match. Use <kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> for the next / previous match; select `.*` only when the query should be treated as a regular expression.
 
 ## Terminals
 
@@ -418,6 +418,7 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 | <kbd>Ctrl+Shift+Q</kbd> | Dequeue next command |
 | <kbd>Alt+Q</kbd> | Quick terminal switcher |
 | <kbd>Ctrl+F</kbd> | Find in active terminal |
+| <kbd>Ctrl+F</kbd> while Help is open | Find in Help |
 | <kbd>Ctrl+Shift+F</kbd> | Find in all terminals |
 | <kbd>Ctrl+Shift+B</kbd> | Broadcast command |
 | <kbd>F11</kbd> / <kbd>Esc</kbd> | Enter fullscreen focus mode / exit and restore the previous UI |

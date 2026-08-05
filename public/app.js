@@ -454,6 +454,14 @@ const elements = {
   helpDocClose: document.querySelector("#helpDocClose"),
   helpOverlay: document.querySelector("#helpOverlay"),
   helpFrame: document.querySelector("#helpFrame"),
+  helpSearchBar: document.querySelector("#helpSearchBar"),
+  helpSearchClose: document.querySelector("#helpSearchClose"),
+  helpSearchInput: document.querySelector("#helpSearchInput"),
+  helpSearchNext: document.querySelector("#helpSearchNext"),
+  helpSearchPrevious: document.querySelector("#helpSearchPrevious"),
+  helpSearchRegex: document.querySelector("#helpSearchRegex"),
+  helpSearchStatus: document.querySelector("#helpSearchStatus"),
+  helpSearchToggle: document.querySelector("#helpSearchToggle"),
   highlightInputPrompts: document.querySelector("#highlightInputPrompts"),
   host: document.querySelector("#terminalHost"),
   keepSessionsOnClose: document.querySelector("#keepSessionsOnClose"),
@@ -867,7 +875,11 @@ window.addEventListener("DOMContentLoaded", () => {
   bindFullscreenEvents();
   bindFindAll();
   window.addEventListener("resize", noteResizeGesture);
-  document.addEventListener("visibilitychange", flushAllTerminalOutput);
+  window.addEventListener("focus", announceRendererPresence);
+  document.addEventListener("visibilitychange", () => {
+    flushAllTerminalOutput();
+    announceRendererPresence();
+  });
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
   });
@@ -1019,6 +1031,13 @@ function bindControls() {
   elements.helpToggle.addEventListener("click", openShortcuts);
   elements.helpDocToggle.addEventListener("click", openHelp);
   elements.helpDocClose.addEventListener("click", closeHelp);
+  elements.helpSearchToggle.addEventListener("click", openHelpSearch);
+  elements.helpSearchClose.addEventListener("click", closeHelpSearch);
+  elements.helpSearchInput.addEventListener("input", updateHelpSearch);
+  elements.helpSearchRegex.addEventListener("click", toggleHelpSearchRegex);
+  elements.helpSearchPrevious.addEventListener("click", () => moveHelpSearch(-1));
+  elements.helpSearchNext.addEventListener("click", () => moveHelpSearch(1));
+  elements.helpFrame.addEventListener("load", prepareHelpSearchDocument);
   elements.helpOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.helpOverlay) closeHelp();
   });
@@ -1537,7 +1556,7 @@ function connectBridge(locationProtocol = window.location.protocol) {
     state.reconnectAttempts = 0;
     setBridgeStatus("Bridge connected", "online");
     log.info("bridge", wasReconnecting ? "WebSocket reconnected" : "WebSocket connected");
-    sendBridge({ type: "rendererPresence" });
+    announceRendererPresence();
     sendBridgeConfig();
     sendCommunicationConfig();
     if (!navigator.webdriver && shouldAutomaticallyRefreshAiProviders()) {
@@ -7800,8 +7819,34 @@ function handleHelpShortcut(event) {
   openHelp();
 }
 
+function handleHelpSearchKeydown(event) {
+  if (!elements.helpOverlay || elements.helpOverlay.hidden) return;
+  const key = event.key.toLowerCase();
+  if (event.ctrlKey && !event.altKey && !event.metaKey && key === "f") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openHelpSearch();
+    return;
+  }
+  const navigatesSearch = event.key === "F3"
+    || (event.key === "Enter" && event.target === elements.helpSearchInput);
+  if (!elements.helpSearchBar.hidden && navigatesSearch) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    moveHelpSearch(event.shiftKey ? -1 : 1);
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (elements.helpSearchBar.hidden) closeHelp();
+    else closeHelpSearch();
+  }
+}
+
 function bindGlobalShortcuts() {
   window.addEventListener("keydown", handleHelpShortcut, true);
+  window.addEventListener("keydown", handleHelpSearchKeydown, true);
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
 
@@ -13218,6 +13263,200 @@ function closeShortcuts() {
 
 /* ---------------- Help --------------- */
 
+const HELP_SEARCH_HIGHLIGHT = "multiterm-help-search";
+const HELP_SEARCH_ACTIVE_HIGHLIGHT = "multiterm-help-search-active";
+const helpSearch = {
+  activeIndex: -1,
+  document: null,
+  matches: []
+};
+
+function clearHelpSearchHighlights(doc = helpSearch.document) {
+  const highlights = doc?.defaultView?.CSS?.highlights;
+  if (!highlights) return;
+  highlights.delete(HELP_SEARCH_HIGHLIGHT);
+  highlights.delete(HELP_SEARCH_ACTIVE_HIGHLIGHT);
+}
+
+function prepareHelpSearchDocument() {
+  const doc = elements.helpFrame.contentDocument;
+  if (!doc?.body || elements.helpFrame.src === "about:blank") return;
+  if (helpSearch.document && helpSearch.document !== doc) {
+    clearHelpSearchHighlights(helpSearch.document);
+  }
+  helpSearch.document = doc;
+  if (!doc.querySelector("style[data-help-search-highlights]")) {
+    const style = doc.createElement("style");
+    style.dataset.helpSearchHighlights = "";
+    style.textContent = `
+      ::highlight(${HELP_SEARCH_HIGHLIGHT}) {
+        background-color: rgba(255, 196, 64, 0.42);
+        color: inherit;
+      }
+      ::highlight(${HELP_SEARCH_ACTIVE_HIGHLIGHT}) {
+        background-color: #ffb52e;
+        color: #17120a;
+        text-decoration: underline 2px #8c4f00;
+      }
+    `;
+    doc.head.append(style);
+  }
+  doc.removeEventListener("keydown", handleHelpSearchKeydown, true);
+  doc.addEventListener("keydown", handleHelpSearchKeydown, true);
+  updateHelpSearch();
+}
+
+function openHelpSearch() {
+  elements.helpSearchBar.hidden = false;
+  elements.helpSearchToggle.setAttribute("aria-expanded", "true");
+  refreshIcons(elements.helpSearchBar);
+  window.requestAnimationFrame(() => {
+    elements.helpSearchInput.focus();
+    elements.helpSearchInput.select();
+  });
+}
+
+function closeHelpSearch(options = {}) {
+  const restoreFocus = options.restoreFocus !== false;
+  elements.helpSearchBar.hidden = true;
+  elements.helpSearchToggle.setAttribute("aria-expanded", "false");
+  elements.helpSearchInput.value = "";
+  elements.helpSearchInput.removeAttribute("aria-invalid");
+  elements.helpSearchRegex.setAttribute("aria-pressed", "false");
+  helpSearch.matches = [];
+  helpSearch.activeIndex = -1;
+  clearHelpSearchHighlights();
+  renderHelpSearchStatus();
+  if (restoreFocus) elements.helpFrame.focus();
+}
+
+function toggleHelpSearchRegex() {
+  const enabled = elements.helpSearchRegex.getAttribute("aria-pressed") !== "true";
+  elements.helpSearchRegex.setAttribute("aria-pressed", String(enabled));
+  updateHelpSearch();
+  elements.helpSearchInput.focus();
+}
+
+function helpSearchTextMap(doc) {
+  const rows = [];
+  let text = "";
+  const view = doc.defaultView;
+  const walker = doc.createTreeWalker(doc.body, view.NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!node.data || !parent || parent.closest("script, style, noscript, [hidden], [aria-hidden='true']")) {
+        return view.NodeFilter.FILTER_REJECT;
+      }
+      return view.NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  let node;
+  while ((node = walker.nextNode())) {
+    const start = text.length;
+    text += node.data;
+    rows.push({ node, start, end: text.length });
+  }
+  return { rows, text };
+}
+
+function helpSearchRange(doc, rows, start, end) {
+  const startRow = rows.find((row) => start >= row.start && start < row.end);
+  const endRow = rows.find((row) => end > row.start && end <= row.end);
+  if (!startRow || !endRow) return null;
+  const range = doc.createRange();
+  range.setStart(startRow.node, start - startRow.start);
+  range.setEnd(endRow.node, end - endRow.start);
+  return range;
+}
+
+function compileHelpSearchPattern(query) {
+  if (elements.helpSearchRegex.getAttribute("aria-pressed") === "true") {
+    return new RegExp(query, "giu");
+  }
+  return new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+}
+
+function updateHelpSearch() {
+  clearHelpSearchHighlights();
+  helpSearch.matches = [];
+  helpSearch.activeIndex = -1;
+  elements.helpSearchInput.removeAttribute("aria-invalid");
+  const query = elements.helpSearchInput.value;
+  const doc = helpSearch.document;
+  if (!query || !doc?.body) {
+    renderHelpSearchStatus();
+    return;
+  }
+
+  let pattern;
+  try {
+    pattern = compileHelpSearchPattern(query);
+  } catch (error) {
+    elements.helpSearchInput.setAttribute("aria-invalid", "true");
+    renderHelpSearchStatus(error.message);
+    return;
+  }
+
+  const { rows, text } = helpSearchTextMap(doc);
+  let match;
+  while ((match = pattern.exec(text))) {
+    if (match[0].length === 0) {
+      pattern.lastIndex += 1;
+      continue;
+    }
+    const range = helpSearchRange(doc, rows, match.index, match.index + match[0].length);
+    if (range) helpSearch.matches.push(range);
+  }
+  helpSearch.activeIndex = helpSearch.matches.length > 0 ? 0 : -1;
+  renderHelpSearchHighlights();
+  renderHelpSearchStatus();
+  scrollToActiveHelpMatch();
+}
+
+function renderHelpSearchHighlights() {
+  const doc = helpSearch.document;
+  const view = doc?.defaultView;
+  if (!view?.CSS?.highlights || typeof view.Highlight !== "function") return;
+  clearHelpSearchHighlights(doc);
+  if (helpSearch.matches.length === 0) return;
+  view.CSS.highlights.set(HELP_SEARCH_HIGHLIGHT, new view.Highlight(...helpSearch.matches));
+  const active = helpSearch.matches[helpSearch.activeIndex];
+  if (active) {
+    view.CSS.highlights.set(HELP_SEARCH_ACTIVE_HIGHLIGHT, new view.Highlight(active));
+  }
+}
+
+function renderHelpSearchStatus(error = "") {
+  const count = helpSearch.matches.length;
+  const active = helpSearch.activeIndex >= 0 ? helpSearch.activeIndex + 1 : 0;
+  elements.helpSearchStatus.textContent = error ? "Invalid regex" : `${active} / ${count}`;
+  elements.helpSearchStatus.classList.toggle("is-error", Boolean(error));
+  elements.helpSearchStatus.title = error;
+  elements.helpSearchPrevious.disabled = count === 0;
+  elements.helpSearchNext.disabled = count === 0;
+}
+
+function scrollToActiveHelpMatch() {
+  const range = helpSearch.matches[helpSearch.activeIndex];
+  const view = helpSearch.document?.defaultView;
+  if (!range || !view) return;
+  const rect = range.getBoundingClientRect();
+  if (rect.top >= 48 && rect.bottom <= view.innerHeight - 24) return;
+  view.scrollTo({
+    behavior: "smooth",
+    top: Math.max(0, view.scrollY + rect.top - Math.round(view.innerHeight * 0.3))
+  });
+}
+
+function moveHelpSearch(direction) {
+  const count = helpSearch.matches.length;
+  if (count === 0) return;
+  helpSearch.activeIndex = (helpSearch.activeIndex + direction + count) % count;
+  renderHelpSearchHighlights();
+  renderHelpSearchStatus();
+  scrollToActiveHelpMatch();
+}
+
 function openHelp() {
   closePalette();
   const resolved = document.documentElement.dataset.appTheme === "light" ? "light" : "dark";
@@ -13233,6 +13472,7 @@ function openHelp() {
 }
 
 function closeHelp() {
+  closeHelpSearch({ restoreFocus: false });
   elements.helpOverlay.classList.remove("is-open");
   window.setTimeout(() => {
     elements.helpOverlay.hidden = true;
@@ -17237,4 +17477,8 @@ function shouldAutomaticallyRefreshAiProviders() {
   return !state.settings.aiSetupCompleted
     || state.settings.aiTitleProvider !== "none"
     || state.settings.aiSessionProvider !== "none";
+}
+
+function announceRendererPresence() {
+  sendBridge({ type: "rendererPresence", visible: document.visibilityState === "visible" });
 }

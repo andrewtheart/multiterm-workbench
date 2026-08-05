@@ -840,7 +840,29 @@
       <div class="palette help-dialog" role="dialog" aria-modal="true" aria-label="MultiTerm help">
         <div class="help-head">
           <span>Help</span>
-          <button id="helpDocClose" class="icon-button" type="button" title="Close" aria-label="Close">
+          <div class="help-head-actions">
+            <button id="helpSearchToggle" class="icon-button" type="button" title="Find in Help (Ctrl+F)" aria-label="Find in Help" aria-keyshortcuts="Control+F" aria-controls="helpSearchBar" aria-expanded="false">
+              <i data-lucide="search"></i>
+            </button>
+            <button id="helpDocClose" class="icon-button" type="button" title="Close" aria-label="Close">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+        </div>
+        <div id="helpSearchBar" class="help-search" role="search" hidden>
+          <label class="help-search-field">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="helpSearchInput" type="search" placeholder="Find in Help" aria-label="Find in Help" aria-controls="helpFrame" autocomplete="off" spellcheck="false">
+          </label>
+          <button id="helpSearchRegex" class="help-search-regex" type="button" title="Use regular expression" aria-label="Use regular expression" aria-pressed="false">.*</button>
+          <output id="helpSearchStatus" class="help-search-status" for="helpSearchInput" aria-live="polite" aria-atomic="true">0 / 0</output>
+          <button id="helpSearchPrevious" class="icon-button" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled>
+            <i data-lucide="chevron-up"></i>
+          </button>
+          <button id="helpSearchNext" class="icon-button" type="button" title="Next match (Enter)" aria-label="Next match" disabled>
+            <i data-lucide="chevron-down"></i>
+          </button>
+          <button id="helpSearchClose" class="icon-button" type="button" title="Close search (Escape)" aria-label="Close search">
             <i data-lucide="x"></i>
           </button>
         </div>

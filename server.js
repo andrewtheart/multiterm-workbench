@@ -583,13 +583,22 @@ function normalizeOpenFolder(value) {
 // Only a renderer can turn a folder into a terminal, so hold the request until
 // one is present rather than dropping it.
 function dispatchOpenFolder(folder) {
+  let target = null;
   for (const client of clients) {
-    if (client.renderer) {
-      client.send({ type: "openFolder", path: folder });
-      return true;
-    } else {
+    if (!client.renderer) {
       // Relay helpers and other non-renderer clients cannot open terminals.
+      continue;
     }
+    if (!target
+        || (client.rendererVisible && !target.rendererVisible)
+        || (client.rendererVisible === target.rendererVisible
+          && client.rendererActiveAt > target.rendererActiveAt)) {
+      target = client;
+    }
+  }
+  if (target) {
+    target.send({ type: "openFolder", path: folder });
+    return true;
   }
   pendingOpenFolders.push(folder);
   return false;
@@ -719,6 +728,8 @@ server.on("upgrade", (request, socket) => {
     buffer: Buffer.alloc(0),
     id: crypto.randomUUID(),
     renderer: false,
+    rendererActiveAt: 0,
+    rendererVisible: false,
     socket,
     send(message) {
       client.sendFrame(encodeFrame(JSON.stringify(message)));
@@ -1134,6 +1145,8 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
   switch (message.type) {
     case "rendererPresence":
       client.renderer = true;
+      client.rendererActiveAt = Date.now();
+      client.rendererVisible = message.visible !== false;
       watchdogSuppressed = false;
       break;
     case "aiProviderBootstrapConsumed":
