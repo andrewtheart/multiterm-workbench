@@ -116,7 +116,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("keeps New terminal fully reachable in a compressed desktop header", async () => {
     try {
-      for (const width of [1041, 1145, 1270, 1280]) {
+      for (const width of [1041, 1145, 1270, 1280, 1440, 1680]) {
         await page.setViewportSize({ width, height: 768 });
         const addTerminalButton = page.locator("#addTerminal");
         const headerToggle = page.locator("#toggleHeaderTop");

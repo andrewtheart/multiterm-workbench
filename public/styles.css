@@ -543,7 +543,7 @@ body:not(.header-hidden) .chrome-controls #toggleHeader {
   align-items: end;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(130px, 170px) minmax(180px, 300px) minmax(160px, 260px) auto;
+  grid-template-columns: minmax(100px, 170px) minmax(140px, 300px) minmax(120px, 260px) max-content;
   width: min(1100px, 100%);
 }
 
