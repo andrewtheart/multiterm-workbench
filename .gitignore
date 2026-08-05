@@ -3,6 +3,11 @@ node_modules/
 lib/copilot-sdk-host/bin/
 lib/copilot-sdk-host/obj/
 lib/copilot-sdk-host/publish/
+lib/prompt-library-host/bin/
+lib/prompt-library-host/obj/
+lib/prompt-library-host/publish/
+lib/sqlite3mc/bin/
+lib/sqlite3mc/build/
 
 # Logs
 *.log
