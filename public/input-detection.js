@@ -165,7 +165,7 @@
 
   // An enumerated / lettered list item: "1.", "1)", "(1)", "[1]", "a.", "b)".
   const LIST_ITEM_PATTERN =
-    /^\s{0,8}(?:\(\s*(?:\d{1,3}|[a-zA-Z])\s*\)|\[\s*(?:\d{1,3}|[a-zA-Z])\s*\]|(?:\d{1,3}|[a-zA-Z])[.)])\s+\S/;
+    /^\s{0,8}(?:[❯➤▸▶►]\s*)?(?:\(\s*(?:\d{1,3}|[a-zA-Z])\s*\)|\[\s*(?:\d{1,3}|[a-zA-Z])\s*\]|(?:\d{1,3}|[a-zA-Z])[.)])\s+\S/;
 
   // A header that introduces an interactive question / choice across a block.
   const BLOCK_HEADER_PATTERN =
@@ -321,6 +321,23 @@
     return false;
   }
 
+  function classifyAiAssistantQuestion(lines, knownProvider = "") {
+    const screen = aiAssistantScreenLines(lines).filter(Boolean);
+    const provider = knownProvider || aiAssistantTuiProvider(screen);
+    if (!provider || screen.length === 0) return null;
+    const block = classifyInputPromptBlock(screen, { cursorAtLineEnd: true });
+    if (block?.category === "question") return { category: "question", confidence: "high", provider };
+
+    const hasInterrogative = screen.some((line) => (
+      /\?\s*$/.test(line)
+      && /\b(?:what|which|how|where|when|who|why|would|should|could|do|does|is|are|can)\b/i.test(line)
+    ));
+    if (block?.category === "select" && hasInterrogative) {
+      return { category: "question", confidence: "high", provider };
+    }
+    return null;
+  }
+
   function isCopilotTui(lines) {
     return aiAssistantTuiProvider(lines) === "copilot";
   }
@@ -335,6 +352,7 @@
     aiAssistantTuiProvider,
     isAiAssistantTui,
     isAiAssistantPromptReady,
+    classifyAiAssistantQuestion,
     isCopilotTui,
     isCopilotPromptReady,
     looksLikeInputPrompt,

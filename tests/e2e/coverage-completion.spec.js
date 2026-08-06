@@ -91,7 +91,7 @@ test.describe("Renderer coverage completion", () => {
       shellBlock: null,
       looksBlock: true,
       looksSingle: true,
-      commonJsApi: ["PROMPT_PATTERNS", "SHELL_PROMPT_PATTERNS", "aiAssistantTuiProvider", "classifyInputPrompt", "classifyInputPromptBlock", "isAiAssistantPromptReady", "isAiAssistantTui", "isCopilotPromptReady", "isCopilotTui", "isShellPrompt", "looksLikeInputPrompt", "looksLikeInputPromptBlock", "stripAnsi"]
+      commonJsApi: ["PROMPT_PATTERNS", "SHELL_PROMPT_PATTERNS", "aiAssistantTuiProvider", "classifyAiAssistantQuestion", "classifyInputPrompt", "classifyInputPromptBlock", "isAiAssistantPromptReady", "isAiAssistantTui", "isCopilotPromptReady", "isCopilotTui", "isShellPrompt", "looksLikeInputPrompt", "looksLikeInputPromptBlock", "stripAnsi"]
     });
   });
 

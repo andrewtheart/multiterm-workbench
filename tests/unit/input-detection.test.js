@@ -28,6 +28,7 @@ const {
   aiAssistantTuiProvider,
   isAiAssistantTui,
   isAiAssistantPromptReady,
+  classifyAiAssistantQuestion,
   isCopilotTui,
   isCopilotPromptReady
 } = detector;
@@ -448,5 +449,55 @@ describe("input-detection: classifyInputPromptBlock — multi-line questions", (
   it("returns null for an empty or missing argument", () => {
     expect(classifyInputPromptBlock([])).toBeNull();
     expect(classifyInputPromptBlock("")).toBeNull();
+  });
+});
+
+describe("input-detection: assistant question forms", () => {
+  it("recognizes the Copilot ask-user form", () => {
+    const lines = [
+      "Copilot v1.0.78 uses AI. Check for mistakes.",
+      "Question",
+      "What would you like help with right now?",
+      "❯ 1. Make a code change (edit files) (Recommended)",
+      "2. Run tests or build",
+      "3. Search the repo for code or symbols",
+      "4. Review or explain code",
+      "5. Plan a new feature or task",
+      "6. Other (type your answer)",
+      "↑/↓ to select · enter to confirm · esc to cancel"
+    ];
+    expect(classifyAiAssistantQuestion(lines)).toEqual({
+      category: "question",
+      confidence: "high",
+      provider: "copilot"
+    });
+  });
+
+  it("recognizes a Claude multi-step question form", () => {
+    const lines = [
+      "Claude Code v2.0.27",
+      "What angle do you want to take with this post?",
+      "❯ 1. Feature announcement/demo",
+      "Show off the new capability with examples of how it works",
+      "2. User benefit story",
+      "Focus on the problem this solves and how it improves the experience",
+      "3. Technical insight",
+      "4. Broader AI interaction trend",
+      "5. Type something.",
+      "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"
+    ];
+    expect(classifyAiAssistantQuestion(lines)).toEqual({
+      category: "question",
+      confidence: "high",
+      provider: "claude"
+    });
+  });
+
+  it("does not turn an ordinary shell selection menu into a question", () => {
+    expect(classifyAiAssistantQuestion([
+      "Choose a template:",
+      "1. React",
+      "2. Vue"
+    ])).toBeNull();
   });
 });
