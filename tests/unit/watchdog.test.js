@@ -35,6 +35,25 @@ const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), 
     expect(watchdog).toContain('$rendererGraceSeconds = 12');
   });
 
+  // A killed bridge leaves its record behind, and Windows hands that PID to some
+  // unrelated process. "The PID exists" then keeps the record alive forever and
+  // every poll warns the user about a bridge that died long ago.
+  it("prunes a stale record whose PID no longer owns the registered port", () => {
+    expect(watchdog).toContain("function Test-BridgeOwnsPort");
+    expect(watchdog).toContain("[int]$_.OwningProcess -eq $ProcessId");
+    expect(watchdog).toMatch(
+      /if \(\$null -eq \$bridgeProcess -or -not \(Test-BridgeOwnsPort -ProcessId \$recordPid -Port \$recordPort\)\) \{[\s\S]{0,200}?Remove-Item -LiteralPath \$file\.FullName/
+    );
+    // Get-NetTCPConnection throws rather than returning nothing when no row
+    // matches, so filtering by port in the cmdlet would make "nothing is
+    // listening" indistinguishable from "the TCP table is unreadable" -- and the
+    // dead bridge this test exists for would never be pruned.
+    expect(watchdog).toContain("Get-NetTCPConnection -State Listen -ErrorAction Stop");
+    expect(watchdog).not.toContain("Get-NetTCPConnection -LocalPort $Port");
+    expect(watchdog).toContain("$onPort = @($listeners | Where-Object { [int]$_.LocalPort -eq $Port })");
+    expect(watchdog).toMatch(/if \(\$onPort\.Count -eq 0\) \{\s*return \$false/);
+  });
+
   it("warns about command termination and requests protected graceful shutdown", () => {
     expect(watchdog).toContain("asks each terminal to exit cleanly first");
     expect(watchdog).toContain("will be interrupted and then terminated");

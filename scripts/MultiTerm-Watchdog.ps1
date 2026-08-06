@@ -58,6 +58,32 @@ function Test-LoopbackInstanceUri {
   return $Uri.Host -in @("127.0.0.1", "localhost", "::1")
 }
 
+# A record only describes a live bridge while its PID still owns the port it
+# registered. Windows recycles PIDs, so "that PID exists" alone keeps a dead
+# bridge's record alive forever and turns every poll into a false health alarm.
+function Test-BridgeOwnsPort {
+  param(
+    [int]$ProcessId,
+    [int]$Port
+  )
+
+  try {
+    # Queried unfiltered on purpose: Get-NetTCPConnection *throws* when no row
+    # matches, so a port filter cannot tell "nothing is listening" apart from
+    # "the TCP table is unreadable". A machine always has some listener.
+    $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+  } catch {
+    # Without the TCP table we cannot disprove ownership, so leave the record be
+    # and let the health check decide.
+    return $true
+  }
+  $onPort = @($listeners | Where-Object { [int]$_.LocalPort -eq $Port })
+  if ($onPort.Count -eq 0) {
+    return $false
+  }
+  return [bool]($onPort | Where-Object { [int]$_.OwningProcess -eq $ProcessId })
+}
+
 function Get-WatchdogBrush {
   param([string]$Color)
 
@@ -372,7 +398,7 @@ try {
         $key = [string]$recordPid
         $seen[$key] = $true
         $bridgeProcess = Get-Process -Id $recordPid -ErrorAction SilentlyContinue
-        if ($null -eq $bridgeProcess) {
+        if ($null -eq $bridgeProcess -or -not (Test-BridgeOwnsPort -ProcessId $recordPid -Port $recordPort)) {
           Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
           $states.Remove($key)
           continue
