@@ -56,7 +56,7 @@ describe("Visual Studio integration", () => {
     expect(installScript).toContain("MultiTerm\\Integrations");
     expect(installScript).toContain("$legacyStateFile");
     expect(installer).toContain('Name: "visualstudioextension"');
-    expect(installer).toMatch(/Name: "visualstudioextension";[^\r\n]*Flags: unchecked/);
+    expect(installer).toMatch(/Name: "visualstudioextension";[^\r\n]*Visual Studio extension \(experimental\)/);
     expect(installer).toContain("Install-VisualStudioIntegration.ps1");
     expect(installer).toContain("VisualStudioIntegrationStateExists");
     expect(installer).toContain("RemoveMultiTermVisualStudioIntegration");

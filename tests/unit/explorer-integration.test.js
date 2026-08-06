@@ -16,11 +16,11 @@ const commandSource = fs.readFileSync(path.join(root, "installer", "explorer-int
 const renderer = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
 
 describe("File Explorer integration", () => {
-  it("requires the user to opt in before installing the context-menu feature", () => {
+  it("offers the context-menu feature enabled by default and honours clearing it", () => {
     expect(installer).toContain('Name: "explorercontext"');
     expect(installer).toContain("Add 'Open in MultiTerm' to File Explorer folder context menus");
-    expect(installer).toMatch(/Name: "explorercontext"[^\r\n]+Flags: unchecked/);
-    expect(installer).toContain("File Explorer integration (select to enable):");
+    expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Flags: unchecked/);
+    expect(installer).toContain("File Explorer integration:");
     expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Flags: checkedonce/);
     expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Check:/);
     expect(installer).not.toMatch(/Tasks: explorercontext[^\r\n]+Check: not IsAdminInstallMode/);

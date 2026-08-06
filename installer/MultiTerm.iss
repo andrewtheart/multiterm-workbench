@@ -79,12 +79,12 @@ MinVersion=10.0.17763
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "watchdog"; Description: "Install the MultiTerm watchdog (recommended; monitors bridges and asks before closing orphaned terminal sessions)"; GroupDescription: "Background monitoring:"
-Name: "explorercontext"; Description: "Add 'Open in MultiTerm' to File Explorer folder context menus (optional; Windows 11 requires administrator approval)"; GroupDescription: "File Explorer integration (select to enable):"; Flags: unchecked
-Name: "vscodeextension"; Description: "Visual Studio Code extension (.vsix) - add 'Open in MultiTerm' to Explorer menus"; GroupDescription: "Editor extensions (choose either, both, or neither):"; Flags: unchecked
-Name: "visualstudioextension"; Description: "Visual Studio extension (.vsix) - add 'Open in MultiTerm' to Solution Explorer and Tools"; GroupDescription: "Editor extensions (choose either, both, or neither):"; Flags: unchecked
-Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 'multiterm' command)"; GroupDescription: "Command-line integration (machine-wide Program Files installs only):"; Flags: unchecked; Check: IsProtectedSystemPathInstall
+Name: "explorercontext"; Description: "Add 'Open in MultiTerm' to File Explorer folder context menus (Windows 11 requires administrator approval)"; GroupDescription: "File Explorer integration:"
+Name: "vscodeextension"; Description: "Visual Studio Code extension (experimental) - adds 'Open in MultiTerm' to Explorer menus"; GroupDescription: "Editor extensions (experimental; clear a box to skip or remove one):"
+Name: "visualstudioextension"; Description: "Visual Studio extension (experimental) - adds 'Open in MultiTerm' to Solution Explorer and Tools"; GroupDescription: "Editor extensions (experimental; clear a box to skip or remove one):"
+Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 'multiterm' command)"; GroupDescription: "Command-line integration (machine-wide Program Files installs only):"; Check: IsProtectedSystemPathInstall
 
 [Files]
 Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
@@ -237,7 +237,7 @@ begin
   begin
     WizardForm.PageNameLabel.Caption := 'Choose integrations';
     WizardForm.PageDescriptionLabel.Caption :=
-      'Editor extensions and system integrations are optional and can be changed by running Setup again.';
+      'Everything is enabled by default. Clear any you do not want - the editor extensions are experimental. Run Setup again to change these later.';
   end
   else if CurPageID = wpReady then
   begin

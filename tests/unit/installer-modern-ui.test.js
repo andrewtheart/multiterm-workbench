@@ -31,10 +31,15 @@ describe("modern installer UI", () => {
     expect(releaseBuild).toContain("gen-installer-art.ps1");
   });
 
-  it("keeps both editor extensions explicitly optional", () => {
-    expect(installer).toMatch(/Name: "vscodeextension";[^\r\n]*Flags: unchecked/);
-    expect(installer).toMatch(/Name: "visualstudioextension";[^\r\n]*Flags: unchecked/);
-    expect(installer).toContain("choose either, both, or neither");
+  // Every integration ships enabled; the editor extensions carry an explicit
+  // experimental label because they change another IDE's installed state.
+  it("enables every integration by default and marks the editor extensions experimental", () => {
+    const tasks = installerSection("[Tasks]", "[Files]");
+    expect(tasks).not.toMatch(/Flags:[^\r\n]*unchecked/);
+    expect(installer).toMatch(/Name: "vscodeextension";[^\r\n]*Visual Studio Code extension \(experimental\)/);
+    expect(installer).toMatch(/Name: "visualstudioextension";[^\r\n]*Visual Studio extension \(experimental\)/);
+    expect(installer).toContain("Editor extensions (experimental; clear a box to skip or remove one):");
+    expect(installer).toContain("the editor extensions are experimental");
   });
 
   it("checks both editor helper start and exit failures as the original user", () => {
