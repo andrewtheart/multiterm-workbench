@@ -103,6 +103,143 @@ test.describe("Enhancement milestone", () => {
     await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(1);
   });
 
+  test("changes the captured terminal directory only after validation and prompt readiness", async () => {
+    const setup = await page.evaluate(() => {
+      const first = [...state.terminals.values()][0];
+      first.cwd = "D:\\before";
+      const second = addTerminal({ title: "CWD focus decoy" });
+      window.__cwdOriginalReadiness = terminalExecutionReadiness;
+      window.__cwdOriginalSend = state.socket.send;
+      window.__cwdReady = false;
+      window.__cwdFrames = [];
+      terminalExecutionReadiness = () => ({ mode: "shell", ready: window.__cwdReady });
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__cwdFrames.push(frame);
+        if (frame.type === "validateDirectory") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "directoryValidation",
+            requestId: frame.requestId,
+            kind: "host",
+            valid: true,
+            path: "D:\\validated path",
+            error: ""
+          }), 0);
+        }
+      };
+      showContextMenu(20, 20, first, "");
+      setActiveTerminal(second.id);
+      return { firstId: first.id, secondId: second.id };
+    });
+
+    await page.locator("#contextMenu .ctx-item", { hasText: "Change working directory" }).click();
+    await expect(page.locator("#cwdChangeOverlay")).toBeVisible();
+    await expect(page.locator("#cwdChangeTarget")).toHaveText(/Enhancement test|Renamed source terminal/);
+    await page.locator("#cwdChangeInput").fill("D:\\validated path");
+    await expect(page.locator("#cwdChangeStatus")).toContainText("Waiting for an idle");
+    await expect(page.locator("#cwdChangeSend")).toBeDisabled();
+
+    await page.evaluate(() => { window.__cwdReady = true; });
+    await expect(page.locator("#cwdChangeSend")).toBeEnabled();
+    await page.locator("#cwdChangeSend").click();
+    await expect(page.locator("#cwdChangeOverlay")).toBeHidden();
+
+    const result = await page.evaluate(({ firstId, secondId }) => {
+      state.socket.send = window.__cwdOriginalSend;
+      terminalExecutionReadiness = window.__cwdOriginalReadiness;
+      const frames = window.__cwdFrames;
+      delete window.__cwdFrames;
+      delete window.__cwdOriginalSend;
+      delete window.__cwdOriginalReadiness;
+      delete window.__cwdReady;
+      const cwd = state.terminals.get(firstId)?.cwd;
+      removeTerminal(secondId);
+      return { cwd, frames };
+    }, setup);
+    expect(result.cwd).toBe("D:\\validated path");
+    expect(result.frames.filter((frame) => frame.type === "input"
+      && frame.id === setup.firstId
+      && (frame.data === "Set-Location -LiteralPath 'D:\\validated path'" || frame.data === "\r"))).toEqual([
+      { type: "input", id: setup.firstId, data: "Set-Location -LiteralPath 'D:\\validated path'" },
+      { type: "input", id: setup.firstId, data: "\r" }
+    ]);
+  });
+
+  test("builds shell and assistant directory commands without treating paths as syntax", async () => {
+    const commands = await page.evaluate(() => ({
+      cmd: buildCwdChangeCommand({ shell: "cmd", aiAssistantTuiProvider: "" }, "C:\\100% & safe"),
+      copilot: buildCwdChangeCommand({ shell: "pwsh", aiAssistantTuiProvider: "copilot" }, "D:\\repo name"),
+      claude: buildCwdChangeCommand({ shell: "pwsh", aiAssistantTuiProvider: "claude" }, "D:\\repo name"),
+      powershell: buildCwdChangeCommand({ shell: "pwsh", aiAssistantTuiProvider: "" }, "D:\\O'Brien"),
+      wsl: buildCwdChangeCommand({ shell: "wsl", aiAssistantTuiProvider: "" }, "/mnt/c/O'Brien"),
+      parsedCwd: parseCwdQueryOutput("\u001b[2K│ Current working directory: D:\\live repo │\r\n"),
+      trackedWsl: (() => {
+        const terminal = { shell: "wsl", cwd: "", id: "wsl-cwd", titleInput: { value: "WSL" }, statusElement: { textContent: "" }, searchText: "" };
+        updateTerminalCwd(terminal, "/mnt/c/work");
+        return terminal.cwd;
+      })()
+    }));
+    expect(commands).toEqual({
+      cmd: 'cd /d "C:\\100^% & safe"',
+      copilot: "/cwd D:\\repo name",
+      claude: "/cd D:\\repo name",
+      powershell: "Set-Location -LiteralPath 'D:\\O''Brien'",
+      wsl: "cd -- '/mnt/c/O'\"'\"'Brien'",
+      parsedCwd: "D:\\live repo",
+      trackedWsl: "/mnt/c/work"
+    });
+  });
+
+  test("queries a ready Copilot TUI for its live working directory", async () => {
+    const terminalId = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      terminal.aiAssistantTuiProvider = "copilot";
+      terminal.cwd = "D:\\last known";
+      window.__liveCwdOriginalReadiness = terminalExecutionReadiness;
+      window.__liveCwdOriginalSend = state.socket.send;
+      window.__liveCwdFrames = [];
+      terminalExecutionReadiness = () => ({ mode: "copilot", ready: true });
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__liveCwdFrames.push(frame);
+        if (frame.type === "validateDirectory") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "directoryValidation",
+            requestId: frame.requestId,
+            kind: "host",
+            valid: true,
+            path: frame.path,
+            error: ""
+          }), 0);
+        }
+      };
+      openCwdChange(terminal.id);
+      window.setTimeout(() => {
+        if (!terminal.cwdQuery) return;
+        terminal.cwdQuery.output += "Current working directory: D:\\live Copilot repo\r\n";
+        terminal.outputRevision += 1;
+      }, 20);
+      return terminal.id;
+    });
+
+    await expect(page.locator("#cwdChangeSource")).toHaveText("Live Copilot session path");
+    await expect(page.locator("#cwdChangeInput")).toHaveValue("D:\\live Copilot repo");
+    await expect(page.locator("#cwdChangeSend")).toBeEnabled();
+
+    const frames = await page.evaluate(() => {
+      closeCwdChange();
+      state.socket.send = window.__liveCwdOriginalSend;
+      terminalExecutionReadiness = window.__liveCwdOriginalReadiness;
+      const sent = window.__liveCwdFrames;
+      delete window.__liveCwdFrames;
+      delete window.__liveCwdOriginalSend;
+      delete window.__liveCwdOriginalReadiness;
+      return sent;
+    });
+    expect(frames).toContainEqual({ type: "input", id: terminalId, data: "/cwd" });
+    expect(frames).toContainEqual({ type: "input", id: terminalId, data: "\u001b[13u" });
+  });
+
   test("remembers Copilot CWD per terminal and shows persistent cross-terminal history", async () => {
     const setup = await page.evaluate(() => {
       localStorage.removeItem("multiterm.copilotCwdHistory");
@@ -825,6 +962,15 @@ test.describe("Enhancement milestone", () => {
             name: sessions[1].name,
             source: "vscode"
           }), 0);
+        } else if (frame.type === "validateDirectory") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "directoryValidation",
+            requestId: frame.requestId,
+            kind: "host",
+            valid: true,
+            path: frame.path,
+            error: ""
+          }), 0);
         } else {
           window.__allCopilotOriginalSend.call(this, payload);
         }
@@ -836,7 +982,13 @@ test.describe("Enhancement milestone", () => {
     await expect(page.locator(".copilot-session-card")).toHaveCount(3);
     await expect(page.locator(".copilot-session-source")).toHaveText(["Copilot CLI", "VS Code", "Visual Studio"]);
     await page.locator(".copilot-session-card", { hasText: "VS Code history" }).click();
+    await expect(page.locator("#cwdChangeOverlay")).toBeVisible();
+    await expect(page.locator("#cwdChangeInput")).toHaveValue("C:\\src\\Yagu");
+    await expect(page.locator("#cwdChangeSend")).toBeEnabled();
+    await expect(page.locator(".terminal-pane")).toHaveCount(before);
+    await page.locator("#cwdChangeSend").click();
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+    await expect(page.locator("#cwdChangeOverlay")).toBeHidden();
     await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
     await expect(page.locator(".terminal-pane").last().locator(".pane-title")).toHaveValue(/VS Code history/);
     await expect.poll(() => page.evaluate(() => window.__allCopilotFrames
@@ -863,6 +1015,300 @@ test.describe("Enhancement milestone", () => {
     });
   });
 
+  test("filters the resume catalog with a validated Copilot AI search", async () => {
+    const profile = await page.evaluate(() => {
+      const saved = {
+        providers: state.aiProviders,
+        provider: state.settings.aiSessionProvider,
+        contextKb: state.settings.copilotSessionSearchContextKb
+      };
+      state.aiProviders = [{ id: "copilot", available: true, interactiveAvailable: true }];
+      state.settings.aiSessionProvider = "copilot";
+      state.settings.copilotSessionSearchContextKb = 1536;
+      const sessions = [
+        {
+          id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+          key: "cli:bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+          source: "cli",
+          name: "Database migration",
+          cwd: "D:\\db",
+          updatedAt: "2026-08-04T00:18:07.329Z"
+        },
+        {
+          id: "62d43a25-c209-4933-af9a-24d9bff3789c",
+          key: "vscode:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:62d43a25-c209-4933-af9a-24d9bff3789c",
+          source: "vscode",
+          name: "OAuth refresh flow",
+          cwd: "D:\\auth",
+          updatedAt: "2026-08-03T20:47:02.240Z"
+        },
+        {
+          id: "70ea177d-5558-40c4-b068-2477e84b9325",
+          key: "visualstudio:70ea177d-5558-40c4-b068-2477e84b9325:123456789abc",
+          source: "visualstudio",
+          name: "Terminal rendering",
+          cwd: "D:\\terminal",
+          updatedAt: "2026-08-02T20:47:02.240Z"
+        }
+      ];
+      window.__aiSearchFrames = [];
+      window.__aiSearchOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__aiSearchFrames.push(frame);
+        if (frame.type === "listCopilotSessions") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "copilotSessions",
+            requestId: frame.requestId,
+            sessions,
+            message: ""
+          }), 0);
+        } else if (frame.type === "searchCopilotSessions") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "copilotSessionSearch",
+            requestId: frame.requestId,
+            keys: [sessions[0].key, sessions[1].key, "unsafe:invented-key"]
+          }), 0);
+        } else {
+          window.__aiSearchOriginalSend.call(this, payload);
+        }
+      };
+      return saved;
+    });
+
+    await page.locator("#copilotSessionsToggle").click();
+    await expect(page.locator(".copilot-session-card")).toHaveCount(3);
+    await page.locator("#copilotResumeSearch").fill("Find sessions where I worked on data storage or login tokens");
+    await page.locator("#copilotResumeAiSearch").click();
+    await expect(page.locator("#copilotResumeAiSearch")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
+    await expect(page.locator(".copilot-session-card")).toContainText(["Database migration", "OAuth refresh flow"]);
+    await expect(page.locator("#copilotResumeStatus")).toHaveText("2 of 2 AI matches");
+
+    await page.locator("#copilotResumeSearch").fill("terminal rendering");
+    await expect(page.locator("#copilotResumeAiSearch")).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator(".copilot-session-card")).toHaveCount(1);
+    await expect(page.locator(".copilot-session-card")).toContainText("Terminal rendering");
+
+    const request = await page.evaluate((profile) => {
+      closeCopilotResume();
+      state.socket.send = window.__aiSearchOriginalSend;
+      const frame = window.__aiSearchFrames.find((entry) => entry.type === "searchCopilotSessions");
+      state.aiProviders = profile.providers;
+      state.settings.aiSessionProvider = profile.provider;
+      state.settings.copilotSessionSearchContextKb = profile.contextKb;
+      delete window.__aiSearchFrames;
+      delete window.__aiSearchOriginalSend;
+      return frame;
+    }, profile);
+    expect(request).toMatchObject({
+      type: "searchCopilotSessions",
+      contextKb: 1536,
+      query: "Find sessions where I worked on data storage or login tokens"
+    });
+  });
+
+  test("returns to the preserved session picker when CWD confirmation is cancelled", async () => {
+    const before = await page.locator(".terminal-pane").count();
+    await page.evaluate(() => {
+      const sessions = [{
+        id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+        key: "cli:bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+        source: "cli",
+        name: "Preserve picker state",
+        cwd: "D:\\multiTerm",
+        updatedAt: "2026-08-04T00:18:07.329Z"
+      }];
+      window.__cancelResumeOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        if (frame.type === "listCopilotSessions") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "copilotSessions",
+            requestId: frame.requestId,
+            sessions,
+            message: ""
+          }), 0);
+        } else if (frame.type === "validateDirectory") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "directoryValidation",
+            requestId: frame.requestId,
+            kind: "host",
+            valid: true,
+            path: frame.path,
+            error: ""
+          }), 0);
+        } else {
+          window.__cancelResumeOriginalSend.call(this, payload);
+        }
+      };
+    });
+
+    await page.locator("#copilotSessionsToggle").click();
+    await page.locator("#copilotResumeSearch").fill("preserve picker");
+    await page.locator(".copilot-session-card").click();
+    await expect(page.locator("#cwdChangeOverlay")).toBeVisible();
+    await page.locator("#cwdChangeCancel").click();
+    await expect(page.locator("#cwdChangeOverlay")).toBeHidden();
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await expect(page.locator("#copilotResumeSearch")).toHaveValue("preserve picker");
+    await expect(page.locator(".copilot-session-card")).toHaveCount(1);
+    await expect(page.locator(".terminal-pane")).toHaveCount(before);
+    await page.evaluate(() => {
+      closeCopilotResume();
+      state.socket.send = window.__cancelResumeOriginalSend;
+      delete window.__cancelResumeOriginalSend;
+    });
+  });
+
+  test("blocks changed Claude resume folders when the installed version lacks /cd", async () => {
+    const profile = await page.evaluate(() => {
+      const saved = {
+        providers: state.aiProviders,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{
+        id: "claude",
+        available: true,
+        interactiveAvailable: true,
+        cwdChangeAvailable: false,
+        cwdChangeStatus: "Changing a Claude session directory requires Claude Code 2.1.169 or newer."
+      }];
+      state.settings.aiSessionProvider = "claude";
+      copilotResume.newTerminal = true;
+      copilotResume.provider = "claude";
+      window.__oldClaudeOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        if (frame.type === "validateDirectory") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "directoryValidation",
+            requestId: frame.requestId,
+            kind: "host",
+            valid: true,
+            path: frame.path,
+            error: ""
+          }), 0);
+        }
+      };
+      openResumeCwdChange({
+        id: "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+        key: "claude:bdfb990d-4ee9-4b72-a41c-fcbf0c79a373",
+        source: "claude",
+        name: "Old Claude relocation",
+        cwd: "D:\\saved Claude project"
+      });
+      return saved;
+    });
+
+    await page.locator("#cwdChangeInput").fill("D:\\different Claude project");
+    await expect(page.locator("#cwdChangeSend")).toBeDisabled();
+    await expect(page.locator("#cwdChangeStatus")).toContainText("2.1.169 or newer");
+    await page.evaluate((profile) => {
+      closeCwdChange({ restoreResume: false });
+      state.socket.send = window.__oldClaudeOriginalSend;
+      state.aiProviders = profile.providers;
+      state.settings.aiSessionProvider = profile.provider;
+      copilotResume.newTerminal = false;
+      copilotResume.provider = "copilot";
+      copilotResume.suspended = false;
+      delete window.__oldClaudeOriginalSend;
+    }, profile);
+  });
+
+  test("resumes a native session in its saved folder then relocates once Copilot is ready", async () => {
+    const before = await page.locator(".terminal-pane").count();
+    const setup = await page.evaluate(() => {
+      const profile = {
+        providers: state.aiProviders,
+        provider: state.settings.aiSessionProvider
+      };
+      state.aiProviders = [{ id: "copilot", available: true, interactiveAvailable: true, cwdChangeAvailable: true }];
+      state.settings.aiSessionProvider = "copilot";
+      const session = {
+        id: "62d43a25-c209-4933-af9a-24d9bff3789c",
+        key: "cli:62d43a25-c209-4933-af9a-24d9bff3789c",
+        source: "cli",
+        name: "Native relocation",
+        cwd: "D:\\saved project",
+        updatedAt: "2026-08-04T00:18:07.329Z"
+      };
+      window.__nativeResumeProfile = profile;
+      window.__nativeResumeFrames = [];
+      window.__nativeResumeOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__nativeResumeFrames.push(frame);
+        if (frame.type === "listCopilotSessions") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "copilotSessions",
+            requestId: frame.requestId,
+            sessions: [session],
+            message: ""
+          }), 0);
+        } else if (frame.type === "validateDirectory") {
+          window.setTimeout(() => handleBridgeMessage({
+            type: "directoryValidation",
+            requestId: frame.requestId,
+            kind: "host",
+            valid: true,
+            path: frame.path,
+            error: ""
+          }), 0);
+        } else {
+          window.__nativeResumeOriginalSend.call(this, payload);
+        }
+      };
+      return session;
+    });
+
+    await page.locator("#copilotSessionsToggle").click();
+    await page.locator(".copilot-session-card", { hasText: "Native relocation" }).click();
+    await page.locator("#cwdChangeInput").fill("D:\\chosen project");
+    await expect(page.locator("#cwdChangeSend")).toBeEnabled();
+    await page.locator("#cwdChangeSend").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
+    await expect(page.locator(".terminal-pane").last().locator(".pane-status")).toHaveClass(/is-live/);
+
+    const relocation = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()].at(-1);
+      const beforeRelocation = { ...terminal.pendingCwdChange };
+      const originalReadiness = terminalExecutionReadiness;
+      terminal.aiAssistantTuiProvider = "copilot";
+      terminalExecutionReadiness = () => ({ mode: "copilot", ready: true });
+      schedulePendingCwdChange(terminal);
+      terminalExecutionReadiness = originalReadiness;
+      return {
+        beforeRelocation,
+        cwd: terminal.cwd,
+        id: terminal.id,
+        pending: terminal.pendingCwdChange
+      };
+    });
+    expect(relocation.beforeRelocation).toEqual({ path: "D:\\chosen project", provider: "copilot" });
+    expect(relocation.cwd).toBe("D:\\chosen project");
+    expect(relocation.pending).toBeNull();
+
+    const frames = await page.evaluate(() => {
+      state.socket.send = window.__nativeResumeOriginalSend;
+      const frames = window.__nativeResumeFrames;
+      const profile = window.__nativeResumeProfile;
+      state.aiProviders = profile.providers;
+      state.settings.aiSessionProvider = profile.provider;
+      delete window.__nativeResumeOriginalSend;
+      delete window.__nativeResumeFrames;
+      delete window.__nativeResumeProfile;
+      const terminal = [...state.terminals.values()].at(-1);
+      removeTerminal(terminal.id);
+      return frames;
+    });
+    expect(frames).toContainEqual(expect.objectContaining({
+      type: "create",
+      cwd: setup.cwd
+    }));
+    expect(frames).toContainEqual({ type: "input", id: relocation.id, data: "/cwd D:\\chosen project" });
+  });
+
   test("quit and close bridge closes terminal sessions with the window", async () => {
     const result = await page.evaluate(() => {
       const frames = [];
@@ -883,6 +1329,7 @@ test.describe("Enhancement milestone", () => {
     await page.evaluate(() => {
       closeAllTerminals();
       state.settings.notifyActivity = false;
+      state.settings.notifyQuestions = false;
       state.settings.notifySilence = false;
       state.settings.bellNotify = false;
       saveSettings();
@@ -905,6 +1352,7 @@ test.describe("Enhancement milestone", () => {
     await expect(flyout.locator('[data-notification-channel="activity"] [data-notification-value="global"]')).toHaveAttribute("aria-checked", "true");
 
     await flyout.locator('[data-notification-channel="activity"] [data-notification-value="on"]').click();
+    await flyout.locator('[data-notification-channel="question"] [data-notification-value="on"]').click();
     await flyout.locator('[data-notification-channel="idle"] [data-notification-value="off"]').click();
     await flyout.locator('[data-notification-channel="bell"] [data-notification-value="on"]').click();
     await expect(bellButton).toHaveAttribute("data-notification-state", "enabled");
@@ -924,6 +1372,7 @@ test.describe("Enhancement milestone", () => {
       setActiveTerminal(inherited.id);
       targetTerminal.createdAt = performance.now() - 3000;
       handleOutputNotifications(targetTerminal);
+      setAwaitingInput(targetTerminal, false, "question");
       handleBell(targetTerminal);
       window.Notification = NativeNotification;
       return {
@@ -933,8 +1382,8 @@ test.describe("Enhancement milestone", () => {
           .find((entry) => entry.id === targetTerminal.id)?.notificationOverrides
       };
     });
-    expect(result.bodies).toEqual(["Activity in Build watcher", "Bell in Build watcher"]);
-    expect(result.overrides).toEqual({ activity: true, idle: false, bell: true });
+    expect(result.bodies).toEqual(["Activity in Build watcher", "Question in Build watcher", "Bell in Build watcher"]);
+    expect(result.overrides).toEqual({ activity: true, question: true, idle: false, bell: true });
     expect(result.saved).toEqual(result.overrides);
 
     const inheritedIdle = await page.evaluate(() => {
@@ -945,19 +1394,16 @@ test.describe("Enhancement milestone", () => {
       terminal.silenceTimer = window.setTimeout(() => {}, 60000);
       const timer = terminal.silenceTimer;
       renderTerminalNotificationFlyout();
-      return { timer, terminalId: terminal.id };
-    });
-    await page.locator("#terminalNotificationReset").click();
-    expect(await page.evaluate(({ timer, terminalId }) => {
-      const terminal = state.terminals.get(terminalId);
+      elements.terminalNotificationReset.click();
       return { hadOutput: terminal.hadOutput, timerPreserved: terminal.silenceTimer === timer };
-    }, inheritedIdle)).toEqual({ hadOutput: true, timerPreserved: true });
+    });
+    expect(inheritedIdle).toEqual({ hadOutput: true, timerPreserved: true });
     await page.evaluate(() => {
       const terminal = [...state.terminals.values()].find((entry) => entry.titleInput.value === "Build watcher");
       window.clearTimeout(terminal.silenceTimer);
       terminal.hadOutput = false;
       state.settings.notifySilence = false;
-      terminal.notificationOverrides = { activity: true, idle: false, bell: true };
+      terminal.notificationOverrides = { activity: true, question: true, idle: false, bell: true };
       updateTerminalNotificationButton(terminal);
       renderTerminalNotificationFlyout();
       saveSessionSnapshot();
@@ -998,10 +1444,10 @@ test.describe("Enhancement milestone", () => {
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await expect.poll(() => page.evaluate(() => [...state.terminals.values()]
       .find((terminal) => terminal.titleInput.value === "Build watcher")?.notificationOverrides))
-      .toEqual({ activity: true, idle: false, bell: true });
+      .toEqual({ activity: true, question: true, idle: false, bell: true });
 
     const lifecycle = await page.evaluate(() => {
-      const expected = { activity: true, idle: false, bell: true };
+      const expected = { activity: true, question: true, idle: false, bell: true };
       const original = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Build watcher");
       runHeaderAction(original, "duplicate");
       const duplicate = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Build watcher copy");
@@ -1023,6 +1469,81 @@ test.describe("Enhancement milestone", () => {
     expect(lifecycle.duplicated).toEqual(lifecycle.expected);
     expect(lifecycle.restarted).toEqual(lifecycle.expected);
     expect(lifecycle.restored).toEqual(lifecycle.expected);
+  });
+
+  test("alerts once for a Claude question form even when prompt highlighting is off", async () => {
+    const result = await page.evaluate(() => {
+      const lines = [
+        "Claude Code v2.0.27",
+        "What angle do you want to take with this post?",
+        "❯ 1. Feature announcement/demo",
+        "Show off the new capability with examples of how it works",
+        "2. User benefit story",
+        "Focus on the problem this solves and how it improves the experience",
+        "3. Technical insight",
+        "4. Broader AI interaction trend",
+        "5. Type something.",
+        "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"
+      ];
+      const buffer = {
+        baseY: 0,
+        cursorX: lines.at(-1).length,
+        cursorY: lines.length - 1,
+        length: lines.length,
+        type: "alternate",
+        getLine(index) {
+          return index >= 0 && index < lines.length
+            ? { isWrapped: false, translateToString: () => lines[index] }
+            : null;
+        }
+      };
+      const pane = document.createElement("div");
+      const terminal = {
+        aiAssistantTuiProvider: "claude",
+        awaitingInput: false,
+        awaitingQuestion: false,
+        id: "claude-question-fixture",
+        notificationOverrides: {},
+        pane,
+        status: "live",
+        term: { buffer: { active: buffer }, rows: lines.length },
+        titleInput: { value: "Claude planning" }
+      };
+      const NativeNotification = window.Notification;
+      const previousHighlight = state.settings.highlightInputPrompts;
+      const previousQuestions = state.settings.notifyQuestions;
+      const bodies = [];
+      class NotificationRecorder {
+        static permission = "granted";
+        constructor(_title, options) { bodies.push(options.body); }
+      }
+      window.Notification = NotificationRecorder;
+      state.settings.highlightInputPrompts = false;
+      state.settings.notifyQuestions = true;
+      evaluateInputPrompt(terminal);
+      evaluateInputPrompt(terminal);
+      const firstPass = {
+        awaitingQuestion: terminal.awaitingQuestion,
+        bodies: [...bodies],
+        highlighted: pane.classList.contains("is-awaiting-input")
+      };
+      setAwaitingInput(terminal, false, "");
+      evaluateInputPrompt(terminal);
+      window.Notification = NativeNotification;
+      state.settings.highlightInputPrompts = previousHighlight;
+      state.settings.notifyQuestions = previousQuestions;
+      return { firstPass, rearmedBodies: bodies };
+    });
+
+    expect(result.firstPass).toEqual({
+      awaitingQuestion: true,
+      bodies: ["Question in Claude planning"],
+      highlighted: false
+    });
+    expect(result.rearmedBodies).toEqual([
+      "Question in Claude planning",
+      "Question in Claude planning"
+    ]);
   });
 
   test("notification focus selects the terminal and its page", async () => {

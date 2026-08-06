@@ -2326,6 +2326,20 @@ body.header-hidden .status-hint kbd,
   padding: 9px 0;
 }
 
+.copilot-resume-ai {
+  color: var(--primary);
+  flex: none;
+}
+
+.copilot-resume-ai[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--primary) 16%, var(--surface-high));
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+}
+
+.copilot-resume-ai.is-loading .ai-title-glyph {
+  animation: title-ai-spin 900ms linear infinite;
+}
+
 .copilot-resume-summary {
   color: var(--muted);
   font-size: 11px;
@@ -2463,6 +2477,129 @@ body.header-hidden .status-hint kbd,
 .copilot-resume-more {
   justify-self: center;
   margin: 4px auto;
+}
+
+/* ---------------- Working directory dialog --------------- */
+
+.palette.cwd-change {
+  width: min(620px, 94vw);
+}
+
+.cwd-change-head,
+.cwd-change-heading,
+.cwd-change-input-row,
+.cwd-change-actions {
+  align-items: center;
+  display: flex;
+}
+
+.cwd-change-head {
+  border-bottom: 1px solid var(--border);
+  justify-content: space-between;
+  padding: 18px 20px 15px;
+}
+
+.cwd-change-heading {
+  gap: 12px;
+  min-width: 0;
+}
+
+.cwd-change-mark {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  display: flex;
+  flex: none;
+  height: 38px;
+  justify-content: center;
+  width: 38px;
+}
+
+.cwd-change-head h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.cwd-change-head p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.cwd-change-body {
+  display: grid;
+  gap: 15px;
+  padding: 18px 20px 8px;
+}
+
+.cwd-change-current {
+  border-left: 2px solid var(--accent);
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 5px 10px;
+}
+
+.cwd-change-current > span,
+.cwd-change-field > span:first-child {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.cwd-change-current code {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cwd-change-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cwd-change-input-row {
+  gap: 8px;
+}
+
+.cwd-change-input-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cwd-change-input-row .icon-button {
+  flex: none;
+}
+
+.cwd-change-status {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 0;
+  min-height: 18px;
+}
+
+.cwd-change-status[data-tone="error"] { color: var(--danger); }
+.cwd-change-status[data-tone="ready"] { color: var(--accent); }
+.cwd-change-status[data-tone="waiting"] { color: var(--warn); }
+
+.cwd-change-actions {
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 20px 18px;
+}
+
+@media (max-width: 520px) {
+  .cwd-change-head,
+  .cwd-change-body,
+  .cwd-change-actions { padding-left: 14px; padding-right: 14px; }
+  .cwd-change-current code { white-space: normal; overflow-wrap: anywhere; }
 }
 
 @media (max-width: 600px) {
@@ -3810,6 +3947,159 @@ body[data-pager-placement="right"] .pager-add {
 .message-error[hidden],
 .terminal-messages-list + .artifact-empty[hidden] {
   display: none;
+}
+
+.message-field-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.message-code-language {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.message-code-language > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.message-code-language select {
+  font-size: 11.5px;
+  min-height: 26px;
+  padding: 0 6px;
+  width: auto;
+}
+
+/* Highlighting is painted in a <pre> directly beneath a transparent-text
+   textarea, so every property that affects glyph position has to match on both
+   layers or the colours drift away from the characters. */
+.code-editor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  display: grid;
+  /* A definite height keeps the painted layer from stretching the box to the
+     full length of the message; both layers then scroll inside it instead. */
+  height: 150px;
+  max-height: 50vh;
+  min-height: 90px;
+  overflow: hidden;
+  position: relative;
+  resize: vertical;
+}
+
+.code-editor:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 55%, var(--border));
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.code-editor-paint,
+.code-editor-input {
+  border: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  grid-area: 1 / 1;
+  height: 100%;
+  letter-spacing: normal;
+  line-height: 1.55;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  tab-size: 4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.code-editor-paint {
+  color: var(--text);
+  pointer-events: none;
+}
+
+.code-editor-input {
+  background: transparent;
+  /* The painted layer supplies every visible glyph; the textarea keeps only its
+     caret and selection so the two are never drawn twice. */
+  caret-color: var(--text);
+  color: transparent;
+  resize: none;
+}
+
+.code-editor-input:focus,
+.code-editor-input:focus-visible {
+  border: 0;
+  box-shadow: none;
+  outline: none;
+}
+
+.code-editor-input::placeholder {
+  color: var(--muted);
+}
+
+.code-editor-input::selection {
+  background: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+.tok-comment {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.tok-string {
+  color: #c3e88d;
+}
+
+.tok-variable {
+  color: #82aaff;
+}
+
+.tok-keyword {
+  color: #c792ea;
+}
+
+.tok-command {
+  color: #7fdbca;
+}
+
+.tok-parameter {
+  color: #f78c6c;
+}
+
+.tok-number {
+  color: #f78c6c;
+}
+
+.tok-operator {
+  color: #89ddff;
+}
+
+:root[data-app-theme="light"] .tok-string {
+  color: #0a7d2e;
+}
+
+:root[data-app-theme="light"] .tok-variable {
+  color: #1a54c4;
+}
+
+:root[data-app-theme="light"] .tok-keyword {
+  color: #8a2bbd;
+}
+
+:root[data-app-theme="light"] .tok-command {
+  color: #0b7285;
+}
+
+:root[data-app-theme="light"] .tok-parameter,
+:root[data-app-theme="light"] .tok-number {
+  color: #b34700;
+}
+
+:root[data-app-theme="light"] .tok-operator {
+  color: #0d6a86;
 }
 
 .message-error {
@@ -6414,6 +6704,25 @@ body[data-pager-placement="right"] .pager-add {
   color: var(--primary);
 }
 
+/* Model families in the AI pickers. Sticky so the family a long list is
+   currently scrolled into stays named. */
+.combobox-group {
+  background: var(--surface-translucent);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 8px 10px 4px;
+  position: sticky;
+  text-transform: uppercase;
+  top: -6px;
+  white-space: nowrap;
+}
+
+.combobox-group + .combobox-option {
+  margin-top: 1px;
+}
+
 .combobox-empty {
   color: var(--muted);
   font-size: 12px;
@@ -7368,6 +7677,13 @@ body.is-pane-resizing {
   display: none;
 }
 
+/* The bar is absolutely positioned over the stage, so reserve its height while
+   it is open; otherwise it covers the pane header row and intercepts clicks on
+   the header controls beneath it. */
+.stage.is-find-all-open .terminal-host {
+  padding-top: var(--find-all-inset, var(--stage-pad));
+}
+
 .find-all-bar svg {
   color: var(--muted);
   height: 15px;
@@ -7381,6 +7697,128 @@ body.is-pane-resizing {
 .find-all-count {
   min-width: 96px;
   white-space: nowrap;
+}
+
+/* Scope toggle: "All pages" pulls matching panes from every page onto this
+   stage, "This page" keeps the search where you are. */
+.find-all-scope {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 11.5px;
+  font-weight: 600;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.find-all-scope[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--primary) 16%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  color: var(--primary);
+}
+
+.find-all-scope[aria-pressed="true"] svg {
+  color: var(--primary);
+}
+
+/* Only offered when the scope is narrowed and matches are actually waiting on
+   other pages, so the count is never zero and never a guess. */
+.find-all-reveal {
+  align-items: center;
+  background: color-mix(in srgb, #ffd75f 16%, transparent);
+  border: 1px solid color-mix(in srgb, #ffd75f 50%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--text);
+  display: inline-flex;
+  font-size: 11.5px;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.find-all-reveal[hidden] {
+  display: none;
+}
+
+.find-all-reveal svg {
+  color: #ffd75f;
+}
+
+.find-all-reveal-count {
+  font-weight: 700;
+}
+
+.find-all-reveal-action {
+  color: var(--primary);
+  font-weight: 650;
+  text-decoration: underline;
+}
+
+/* A pane a search borrowed from another page. It is laid out on the current
+   stage for the duration of the search and handed straight back afterwards. */
+.terminal-host.is-search-gathering .terminal-pane.is-page-hidden.is-search-gathered:not(.is-search-hidden):not(.is-minimized) {
+  animation: search-gather-in var(--dur) var(--ease-emphasized);
+  display: grid;
+}
+
+.terminal-pane.is-search-gathered {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+
+@keyframes search-gather-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.pane-page-tag {
+  align-items: center;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--primary);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  gap: 4px;
+  letter-spacing: 0.03em;
+  max-width: 160px;
+  min-height: 0;
+  padding: 2px 8px 2px 6px;
+}
+
+.pane-page-tag[hidden] {
+  display: none;
+}
+
+.pane-page-tag svg {
+  color: var(--primary);
+  height: 12px;
+  width: 12px;
+}
+
+.pane-page-tag-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-host.is-search-gathering .terminal-pane.is-page-hidden.is-search-gathered:not(.is-search-hidden):not(.is-minimized) {
+    animation: none;
+  }
 }
 
 .terminal-pane.has-find-match::after {

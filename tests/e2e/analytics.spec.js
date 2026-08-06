@@ -88,6 +88,45 @@ test.describe("Terminal interaction analytics", () => {
     expect(afterPause - paused.focusMs).toBeLessThan(25);
   });
 
+  test("does not count clicking an assistant composer as terminal activity", async () => {
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      endTerminalAnalyticsFocus();
+      window.__analyticsBeforeClickTest = JSON.parse(JSON.stringify(state.analytics));
+      state.analytics = emptyTerminalAnalytics();
+      ensureTerminalAnalyticsRecord(terminal);
+      terminal.aiAssistantTuiProvider = "copilot";
+      saveTerminalAnalytics();
+    });
+    const input = page.locator(".xterm-helper-textarea").first();
+    await input.click();
+    await page.waitForTimeout(1100);
+
+    const clicked = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      return {
+        focusMs: state.analytics.terminals[terminal.id].focusMs,
+        focusedTerminalId: state.analyticsRuntime.focusedTerminalId
+      };
+    });
+    expect(clicked).toEqual({ focusMs: 0, focusedTerminalId: null });
+
+    await page.keyboard.type("x");
+    await page.waitForTimeout(250);
+    await page.locator("#settingsSearch").focus();
+    expect(await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      return state.analytics.terminals[terminal.id].focusMs;
+    })).toBeGreaterThan(0);
+    await page.evaluate(() => {
+      endTerminalAnalyticsFocus();
+      state.analytics = window.__analyticsBeforeClickTest;
+      delete window.__analyticsBeforeClickTest;
+      saveTerminalAnalytics();
+      renderTerminalAnalytics();
+    });
+  });
+
   test("tracks each terminal separately", async () => {
     await page.evaluate(() => addTerminal({ title: "Analytics secondary" }));
     await expect(page.locator(".terminal-pane")).toHaveCount(2);

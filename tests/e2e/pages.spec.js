@@ -100,6 +100,23 @@ test.describe("Pages and the quick switcher", () => {
       .toBe(paneCount);
   }
 
+  // A live shell repaints over synthetic text written straight into its pane
+  // (PSReadLine redraws the prompt region), so a search test that seeds a marker
+  // has to confirm the marker actually stuck before it searches for it.
+  async function seedMarker(terminalId, marker) {
+    await expect
+      .poll(async () => page.evaluate(async ({ id, text }) => {
+        const terminal = state.terminals.get(id);
+        const buffer = terminal.term.buffer.active;
+        for (let row = 0; row < buffer.length; row += 1) {
+          if ((buffer.getLine(row)?.translateToString(true) || "").includes(text)) return true;
+        }
+        await new Promise((resolve) => terminal.term.write(`${text}\r\n`, resolve));
+        return false;
+      }, { id: terminalId, text: marker }), { timeout: 15000 })
+      .toBe(true);
+  }
+
   const perPage = () =>
     page.evaluate(() => state.pages.map((p) => `${p.name}=${terminalsOnPage(p.id).length}`));
 
@@ -207,7 +224,7 @@ test.describe("Pages and the quick switcher", () => {
     await doomedTab.click({ button: "right" });
 
     const items = page.locator("#contextMenu .ctx-item");
-    await expect(items).toContainText(["Rename…", "New page", "Close page", "Close all"]);
+    await expect(items).toContainText(["Rename…", "New page", "Close page", "Close other pages", "Close all"]);
     await expect(items.filter({ hasText: "Close Doomed" })).toHaveCount(0);
     await items.filter({ hasText: "Close page" }).click();
     await expect(page.locator("#pageCloseOverlay")).toBeVisible();
@@ -250,6 +267,37 @@ test.describe("Pages and the quick switcher", () => {
     await page.locator(".pager-chip").click({ button: "right" });
     await expect(page.locator("#contextMenu .ctx-item", { hasText: "Close all" })).toBeVisible();
     await expect(page.locator("#contextMenu .ctx-item", { hasText: "Close page" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  });
+
+  test("Close other pages keeps the right-clicked page and relocates the rest", async () => {
+    await reset(2);
+    // Three pages, and the page that survives is deliberately not the active one.
+    const [keeper, other] = await page.evaluate(() => {
+      const ids = [addPage({ name: "Keeper", activate: false }), addPage({ name: "Other", activate: false })];
+      moveTerminalToPage([...state.terminals.keys()][0], ids[1]);
+      return ids;
+    });
+
+    await page.locator(`.pager-chip[data-page-id="${keeper}"]`).click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Close other pages" }).click();
+
+    await expect(page.locator("#pageCloseOverlay")).toBeVisible();
+    await expect(page.locator("#pageCloseTitle")).toHaveText("Close other pages?");
+    await expect(page.locator("#pageCloseText")).toContainText("Keeper");
+    await page.locator("#pageCloseMove").click();
+
+    // Only the right-clicked page survives, it becomes active, and no session is killed.
+    await expect(page.locator(".pager-chip")).toHaveCount(1);
+    await expect(page.locator(".pager-name")).toHaveText("Keeper");
+    await expect(page.locator(`.pager-chip[data-page-id="${other}"]`)).toHaveCount(0);
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    expect(await perPage()).toEqual(["Keeper=2"]);
+    expect(await page.evaluate(() => state.activePageId)).toBe(keeper);
+
+    // A single remaining page has no others to close.
+    await page.locator(".pager-chip").click({ button: "right" });
+    await expect(page.locator("#contextMenu .ctx-item", { hasText: "Close other pages" })).toHaveCount(0);
     await page.keyboard.press("Escape");
   });
 
@@ -646,6 +694,131 @@ test.describe("Pages and the quick switcher", () => {
 
     await page.evaluate((id) => toggleZoomPane(id), arrangement.ids[0]);
     expect(await visibleCount()).toBe(2);
+  });
+
+  // A match on another page is only useful if you can actually see it, so the
+  // search borrows those panes onto the current stage and badges them with the
+  // page they belong to.
+  test("borrows matching panes from other pages while a search is running", async () => {
+    await reset(3);
+    const arrangement = await page.evaluate(async () => {
+      const ids = [...state.terminals.keys()];
+      const second = addPage({ name: "Second", activate: false });
+      moveTerminalToPage(ids[2], second);
+      setActivePage("page-1");
+      return { ids, second };
+    });
+    await seedMarker(arrangement.ids[0], "ZEBRAFISH here");
+    await seedMarker(arrangement.ids[2], "ZEBRAFISH there");
+    const pane = (id) => page.locator(`.terminal-pane[data-id="${id}"]`);
+    const badge = pane(arrangement.ids[2]).locator(".pane-page-tag");
+
+    await page.locator("#terminalSearchInput").fill("ZEBRAFISH");
+    await expect(page.locator("#terminalHost")).toHaveClass(/is-search-gathering/);
+    await expect(pane(arrangement.ids[0])).toBeVisible();
+    await expect(pane(arrangement.ids[1])).toBeHidden();
+    // Off-page, but pulled onto this stage and labelled with its own page.
+    await expect(pane(arrangement.ids[2])).toBeVisible();
+    await expect(badge).toBeVisible();
+    await expect(badge.locator(".pane-page-tag-name")).toHaveText("Second");
+    await expect(page.locator("#terminalSearchCount")).toContainText("2 pages");
+
+    // Narrowing the scope sends the borrowed pane home and offers it back.
+    await page.evaluate(() => setSearchAcrossPages(false));
+    await expect(pane(arrangement.ids[2])).toBeHidden();
+    await expect(page.locator("#terminalHost")).not.toHaveClass(/is-search-gathering/);
+    await expect(badge).toBeHidden();
+    await expect(page.locator("#findAllReveal .find-all-reveal-count")).toHaveText("1");
+    await page.evaluate(() => setSearchAcrossPages(true));
+    await expect(pane(arrangement.ids[2])).toBeVisible();
+
+    // Clearing the search hands every borrowed pane back to its own page.
+    await page.evaluate(() => clearTerminalSearch());
+    await expect(pane(arrangement.ids[2])).toBeHidden();
+    await expect(pane(arrangement.ids[1])).toBeVisible();
+    await expect(badge).toBeHidden();
+  });
+
+  // The find-all bar floats over the stage. Left to sit on the pane header row
+  // it swallows clicks on the badge that is the only way back to a borrowed
+  // pane's own page — and the bar is exactly what produced that pane.
+  test("keeps pane headers clear of the floating find-all bar", async () => {
+    await reset(3);
+    const arrangement = await page.evaluate(async () => {
+      const ids = [...state.terminals.keys()];
+      const second = addPage({ name: "Second", activate: false });
+      moveTerminalToPage(ids[2], second);
+      setActivePage("page-1");
+      return { ids, second };
+    });
+    await seedMarker(arrangement.ids[2], "MARMOSET there");
+
+    await page.evaluate(() => openFindAll());
+    await expect(page.locator(".stage")).toHaveClass(/is-find-all-open/);
+    await page.locator("#findAllInput").fill("MARMOSET");
+
+    const badge = page.locator(`.terminal-pane[data-id="${arrangement.ids[2]}"] .pane-page-tag`);
+    await expect(badge).toBeVisible();
+
+    const headerUnderBar = await page.evaluate(() => {
+      const bar = document.querySelector("#findAllBar").getBoundingClientRect();
+      return [...document.querySelectorAll(".terminal-pane")]
+        .filter((candidate) => candidate.getBoundingClientRect().width > 0)
+        .some((candidate) => {
+          const head = candidate.querySelector(".pane-bar").getBoundingClientRect();
+          return head.top < bar.bottom && head.bottom > bar.top && head.left < bar.right && head.right > bar.left;
+        });
+    });
+    expect(headerUnderBar).toBe(false);
+
+    // Playwright's actionability check fails if anything covers the badge, so
+    // this proves the click genuinely reaches it and not the bar above.
+    await badge.click();
+    await expect.poll(() => page.evaluate(() => state.activePageId)).toBe(arrangement.second);
+
+    await page.evaluate(() => {
+      setActivePage("page-1");
+      closeFindAll();
+    });
+    await expect(page.locator(".stage")).not.toHaveClass(/is-find-all-open/);
+    // The reserved space is given back, so the stage is not permanently short.
+    expect(await page.evaluate(() => getComputedStyle(document.querySelector("#terminalHost")).paddingTop))
+      .toBe(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--stage-pad").trim()));
+  });
+
+  // Right-clicking a selection must never hide the terminal it was made in,
+  // even when that terminal is the only one without a second occurrence.
+  test("searches every terminal for a selection and keeps the invoking pane", async () => {
+    await reset(3);
+    const ids = await page.evaluate(async () => {
+      const keys = [...state.terminals.keys()];
+      const second = addPage({ name: "Second", activate: false });
+      moveTerminalToPage(keys[2], second);
+      setActivePage("page-1");
+      return keys;
+    });
+    await seedMarker(ids[1], "KESTREL nest");
+    await seedMarker(ids[2], "KESTREL flight");
+    const pane = (id) => page.locator(`.terminal-pane[data-id="${id}"]`);
+
+    const started = await page.evaluate((tid) => {
+      const terminal = state.terminals.get(tid);
+      return searchAllTerminalsForSelection(terminal, "  KESTREL  \nignored second line");
+    }, ids[0]);
+    expect(started).toBe(true);
+
+    await expect(page.locator("#terminalSearchInput")).toHaveValue("KESTREL");
+    // Exempt: the pane the menu was opened from has no match of its own.
+    await expect(pane(ids[0])).toBeVisible();
+    await expect(pane(ids[1])).toBeVisible();
+    await expect(pane(ids[2])).toBeVisible();
+    await expect(pane(ids[2]).locator(".pane-page-tag")).toBeVisible();
+
+    // Editing the query by hand drops the exemption.
+    await page.locator("#terminalSearchInput").fill("KESTREL");
+    await expect(pane(ids[0])).toBeHidden();
+    await page.evaluate(() => clearTerminalSearch());
+    await expect(pane(ids[0])).toBeVisible();
   });
 
   test("switching pages promotes a visible terminal to primary", async () => {

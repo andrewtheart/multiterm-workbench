@@ -304,6 +304,7 @@ test.describe("Settings panel verification", () => {
       provider: "copilot"
     });
     expect(await page.locator("#copilotTitleModel option").allTextContents()).toEqual([
+      "Auto (provider default)",
       "Claude Opus 4.6 - 128K tokens",
       "Claude Sonnet 4.6 - 128K tokens"
     ]);
@@ -313,6 +314,56 @@ test.describe("Settings panel verification", () => {
       "Extended - 128K tokens"
     ]);
     await expect(page.locator("#aiTitleProviderStatus")).toContainText("2 models");
+  });
+
+  // Providers return one flat list mixing vendors, so the picker groups it by
+  // family and opens on Auto rather than whichever model happened to sort first.
+  test("groups AI models by family and defaults to Auto", async () => {
+    await page.evaluate(() => {
+      state.aiProviders = [
+        {
+          id: "copilot",
+          name: "GitHub Copilot",
+          available: true,
+          models: [
+            { id: "grok-code-fast-1", name: "Grok Code Fast 1", efforts: [], maxContextTokens: 128000 },
+            { id: "gpt-5.4", name: "GPT-5.4", efforts: [], maxContextTokens: 128000 },
+            { id: "claude-opus-4-8[1m]", name: "Claude Opus 4.8 (1M)", efforts: [], maxContextTokens: 1000000 },
+            { id: "claude-haiku-4.6", name: "Claude Haiku 4.6", efforts: [], maxContextTokens: 128000 },
+            { id: "mai-ds-r1", name: "MAI DS R1", efforts: [], maxContextTokens: 128000 },
+            { id: "custom-house-model", name: "Custom House Model", efforts: [], maxContextTokens: 32000 }
+          ]
+        },
+        { id: "claude", name: "Claude", available: false, status: "Claude is not installed.", models: [] }
+      ];
+      state.settings.aiTitleProvider = "copilot";
+      state.settings.copilotTitleModel = "no-longer-offered";
+      syncAiTitleControls();
+    });
+
+    // Groups alphabetical with the catch-all last; models alphabetical inside.
+    expect(await page.evaluate(() => [...document.querySelectorAll("#copilotTitleModel optgroup")]
+      .map((group) => `${group.label}: ${[...group.children].map((option) => option.value).join(",")}`)))
+      .toEqual([
+        "Anthropic Claude: claude-haiku-4.6,claude-opus-4-8[1m]",
+        "Microsoft MAI: mai-ds-r1",
+        "OpenAI GPT: gpt-5.4",
+        "xAI Grok: grok-code-fast-1",
+        "Other models: custom-house-model"
+      ]);
+    // Auto is the ungrouped first entry and the fallback for a retired model.
+    expect(await page.evaluate(() => document.querySelector("#copilotTitleModel").firstElementChild.outerHTML))
+      .toBe('<option value="">Auto (provider default)</option>');
+    expect(await setting("copilotTitleModel")).toBe("");
+    expect(await page.locator("#copilotTitleEffort option").allTextContents()).toEqual(["Provider default"]);
+    expect(await setting("copilotTitleEffort")).toBe("none");
+    expect(await setting("copilotTitleContext")).toBe("default");
+    expect(await page.evaluate(() => ({
+      effort: defaultSettings.copilotTitleEffort,
+      model: defaultSettings.copilotTitleModel,
+      sessionEffort: defaultSettings.aiSessionEffort,
+      sessionModel: defaultSettings.aiSessionModel
+    }))).toEqual({ effort: "none", model: "", sessionEffort: "none", sessionModel: "" });
   });
 
   test("first-run AI setup persists separate operation defaults", async () => {
@@ -446,6 +497,7 @@ test.describe("Settings panel verification", () => {
       ["#copyOnSelect", "copyOnSelect"],
       ["#highlightInputPrompts", "highlightInputPrompts"],
       ["#notifyActivity", "notifyActivity"],
+      ["#notifyQuestions", "notifyQuestions"],
       ["#notifySilence", "notifySilence"],
       ["#bellNotify", "bellNotify"]
     ]) {
@@ -468,6 +520,13 @@ test.describe("Settings panel verification", () => {
     expect(await setting("copilotImportContextKb")).toBe(1024);
     expect(await page.locator("#copilotImportContextKb").inputValue()).toBe("1024");
     await set("#copilotImportContextKb", "64", "change");
+    await set("#copilotSessionSearchContextKb", "1536", "change");
+    expect(await setting("copilotSessionSearchContextKb")).toBe(1536);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).copilotSessionSearchContextKb)).toBe(1536);
+    await set("#copilotSessionSearchContextKb", "99999", "change");
+    expect(await setting("copilotSessionSearchContextKb")).toBe(16384);
+    expect(await page.locator("#copilotSessionSearchContextKb").inputValue()).toBe("16384");
+    await set("#copilotSessionSearchContextKb", "1024", "change");
 
     await page.evaluate(() => {
       window.__settingsOriginalUpdateRequest = requestLatestRelease;

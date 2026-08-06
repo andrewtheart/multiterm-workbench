@@ -169,6 +169,8 @@ test.describe("Surface context menu", () => {
       "New Administrator terminal",
       "Run script\u2026",
       "Run GitHub Copilot",
+      "Resume GitHub Copilot session\u2026",
+      "Change working directory\u2026",
       "New Command Prompt terminal",
       "Find in all terminals\u2026",
       "Broadcast command\u2026",
@@ -183,7 +185,7 @@ test.describe("Surface context menu", () => {
 
     // Anything that only means something for one terminal must not appear: there
     // is no terminal under the pointer to copy from, clear, restart or close.
-    for (const label of ["Copy all output", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to", "Resume GitHub Copilot session\u2026"]) {
+    for (const label of ["Copy all output", "Select all", "Clear", "Restart", "Split (duplicate)", "Cycle color", "Move to"]) {
       await expect(menu.locator(".ctx-item", { hasText: label })).toHaveCount(0);
     }
     await expect(menu.locator('[data-customization-id="terminal.paste"]')).toHaveCount(0);
@@ -194,6 +196,57 @@ test.describe("Surface context menu", () => {
 
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
+  });
+
+  // Focusing the stage is the browser's default action for the very press that
+  // opens this menu, and that focus deselects the terminal. Rows scoped to a
+  // terminal were left permanently disabled, then dead once enabled, because the
+  // menu also restores stage focus before running an action.
+  test("acts on the terminal that was active when the workspace menu opened", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await trimPanes(page, 1);
+
+    const activeId = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      setActiveTerminal(terminal.id);
+      return terminal.id;
+    });
+
+    const menu = await openSurfaceMenu(page);
+    expect(await page.evaluate(() => state.activeId)).toBe(activeId);
+
+    const row = menu.locator(".ctx-item", { hasText: "Change working directory\u2026" }).first();
+    await expect(row).not.toHaveAttribute("aria-disabled", "true");
+    await row.click();
+
+    await expect(page.locator("#cwdChangeOverlay")).toBeVisible();
+    expect(await page.evaluate(() => cwdChange.terminalId)).toBe(activeId);
+
+    await page.locator("#cwdChangeCancel").click();
+    await expect(page.locator("#cwdChangeOverlay")).toBeHidden();
+  });
+
+  // Deselecting on blank surface is the primary button's job, so that path has
+  // to keep working after the secondary button stopped triggering it.
+  test("still deselects the active terminal on a primary click on blank surface", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await trimPanes(page, 1);
+
+    await setNative(page, "#layoutMode", "columns", "change");
+    await setNative(page, "#columnCount", "6", "input");
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+    await page.evaluate(() => setActiveTerminal([...state.terminals.keys()][0]));
+
+    const point = await findBlankPoint(page);
+    expect(point, "the layout must leave blank surface to click").not.toBeNull();
+    await page.mouse.click(point.x, point.y);
+
+    await expect.poll(() => page.evaluate(() => state.activeId)).toBeNull();
+    await expect(page.locator(".terminal-pane.is-active")).toHaveCount(0);
   });
 
   test("opens all-terminal statistics from the blank surface", async ({ page }) => {

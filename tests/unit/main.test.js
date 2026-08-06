@@ -1165,6 +1165,11 @@ describe("registerScriptPicker (via onReady)", () => {
     return call && call[1];
   }
 
+  function folderHandler() {
+    const call = electron.ipcMain.handle.mock.calls.find(([e]) => e === "multiterm:pick-folder");
+    return call && call[1];
+  }
+
   it("does not register a handler when ipcMain.handle is unavailable", async () => {
     electron.ipcMain.handle = undefined;
     await bootReady();
@@ -1197,6 +1202,31 @@ describe("registerScriptPicker (via onReady)", () => {
 
     electron.dialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [] });
     await expect(handler(event)).resolves.toBeNull();
+  });
+
+  it("opens a directory picker at a valid requested path", async () => {
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    electron.dialog.showOpenDialog = vi.fn(async () => ({ canceled: false, filePaths: ["C:\\work"] }));
+    await bootReady();
+
+    await expect(folderHandler()(trustedIpcEvent(), "C:\\work")).resolves.toBe("C:\\work");
+    expect(electron.dialog.showOpenDialog).toHaveBeenCalledWith(
+      main.getMainWindow(),
+      expect.objectContaining({
+        defaultPath: path.resolve("C:\\work"),
+        properties: ["openDirectory"],
+        title: "Select a working directory"
+      })
+    );
+  });
+
+  it("omits an invalid initial folder and returns null when cancelled", async () => {
+    vi.spyOn(fs, "statSync").mockImplementation(() => { throw new Error("missing"); });
+    electron.dialog.showOpenDialog = vi.fn(async () => ({ canceled: true, filePaths: [] }));
+    await bootReady();
+
+    await expect(folderHandler()(trustedIpcEvent(), "C:\\missing")).resolves.toBeNull();
+    expect(electron.dialog.showOpenDialog.mock.calls[0][1]).not.toHaveProperty("defaultPath");
   });
 });
 

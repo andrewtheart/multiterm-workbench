@@ -88,6 +88,8 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
     const page = await electronApp.firstWindow();
     await expect(page).toHaveTitle("MultiTerm Workbench");
     await page.waitForFunction(() => document.querySelector("#statusConn")?.textContent === "Connected");
+    await page.waitForFunction(() => Boolean(state.activeId && state.terminals.has(state.activeId)));
+    const terminalId = await page.evaluate(() => state.activeId);
     await page.evaluate(() => {
       state.settings.rightClickAction = "menu";
       state.settings.copyOnSelect = false;
@@ -95,8 +97,8 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
 
     let geometry = null;
     await expect.poll(async () => {
-      geometry = await page.evaluate(async (text) => {
-        const terminal = state.terminals.get(state.activeId);
+      geometry = await page.evaluate(async ({ text, terminalId }) => {
+        const terminal = state.terminals.get(terminalId);
         const term = terminal.term;
         await new Promise((resolve) => term.write(`\x1b[?1003h\x1b[?1006h\r\n${text}\r\n`, resolve));
         await new Promise((resolve) => window.setTimeout(resolve, 250));
@@ -115,7 +117,7 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
           };
         }
         return null;
-      }, marker);
+      }, { text: marker, terminalId });
       return geometry;
     }).not.toBeNull();
 
@@ -125,7 +127,7 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
     await page.mouse.up({ button: "left" });
 
     await expect.poll(() =>
-      page.evaluate(() => state.terminals.get(state.activeId).term.getSelection())
+      page.evaluate((id) => state.terminals.get(id)?.term.getSelection(), terminalId)
     ).toBe(marker);
 
     await page.mouse.click(geometry.endX, geometry.y, { button: "right" });

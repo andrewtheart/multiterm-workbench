@@ -97,7 +97,7 @@ layouts from auto-fit grids to a free-form canvas.
     </td>
     <td align="center" width="33%">
       <h3>🔔 Activity and input alerts</h3>
-      Highlight terminals waiting for input and optionally notify when background panes become active, fall silent, or ring the terminal bell, so long-running work does not need constant watching.
+      Highlight terminals waiting for input and independently alert on Copilot or Claude question forms, background activity, silence, or the terminal bell, with global defaults and per-terminal overrides.
     </td>
   </tr>
   <tr>

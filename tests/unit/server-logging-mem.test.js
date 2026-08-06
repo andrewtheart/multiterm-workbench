@@ -388,6 +388,109 @@ describe("pickScript", () => {
   });
 });
 
+describe("working directory picker and validation", () => {
+  function fakePicker() {
+    const handlers = {};
+    return {
+      stdout: { on: (event, fn) => { handlers[`stdout:${event}`] = fn; } },
+      on: (event, fn) => { handlers[event] = fn; },
+      emitStdout: (text) => handlers["stdout:data"](Buffer.from(text)),
+      emitClose: () => handlers.close(),
+      emitError: (error) => handlers.error(error)
+    };
+  }
+
+  it("returns a selected folder from the Windows STA picker", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    const picker = fakePicker();
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(picker);
+    const client = fakeClient();
+
+    server.pickFolder(client, { requestId: "folder-1", cwd: "C:\\work" });
+    picker.emitStdout("C:\\work\\repo");
+    picker.emitClose();
+
+    expect(spawn.mock.calls[0][0]).toBe("powershell.exe");
+    expect(spawn.mock.calls[0][1]).toContain("-STA");
+    expect(spawn.mock.calls[0][2].env.MT_PICK_DIR).toBe("C:\\work");
+    expect(client.send).toHaveBeenCalledWith({ type: "folderPicked", requestId: "folder-1", path: "C:\\work\\repo" });
+  });
+
+  it("answers null exactly once when the folder picker errors and closes", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
+    const picker = fakePicker();
+    vi.spyOn(childProcess, "spawn").mockReturnValue(picker);
+    const client = fakeClient();
+
+    server.pickFolder(client, { requestId: "folder-2", cwd: "C:\\work" });
+    picker.emitError(new Error("cancelled"));
+    picker.emitClose();
+
+    expect(client.send).toHaveBeenCalledTimes(1);
+    expect(client.send).toHaveBeenCalledWith({ type: "folderPicked", requestId: "folder-2", path: null });
+  });
+
+  it("validates and resolves a host directory", async () => {
+    vi.spyOn(fs.promises, "stat").mockResolvedValue({ isDirectory: () => true });
+    const client = fakeClient();
+
+    await server.validateDirectory(client, { requestId: "host-1", path: "C:\\work", shell: "pwsh" });
+
+    expect(client.send).toHaveBeenCalledWith({
+      type: "directoryValidation",
+      requestId: "host-1",
+      kind: "host",
+      valid: true,
+      path: expect.stringMatching(/work$/i),
+      error: ""
+    });
+  });
+
+  it("converts and validates a WSL path without shell interpolation", async () => {
+    setPlatform("win32");
+    const execFile = vi.fn((file, args, _options, callback) => {
+      callback(null, args.includes("wslpath") ? "/mnt/c/work & safe\n" : "", "");
+    });
+    const client = fakeClient();
+
+    await server.validateDirectory(client, {
+      requestId: "wsl-1",
+      path: "C:\\work & safe",
+      shell: "wsl",
+      distro: "Ubuntu"
+    }, execFile);
+
+    expect(execFile.mock.calls.map((call) => call[1])).toEqual([
+      ["--distribution", "Ubuntu", "--exec", "wslpath", "-a", "-u", "C:\\work & safe"],
+      ["--distribution", "Ubuntu", "--exec", "test", "-d", "/mnt/c/work & safe"]
+    ]);
+    expect(client.send).toHaveBeenCalledWith({
+      type: "directoryValidation",
+      requestId: "wsl-1",
+      kind: "wsl",
+      valid: true,
+      path: "/mnt/c/work & safe",
+      error: ""
+    });
+  });
+
+  it("rejects missing, inaccessible, and control-bearing paths", async () => {
+    const invalid = fakeClient();
+    await server.validateDirectory(invalid, { requestId: "bad-1", path: "bad\npath", shell: "pwsh" });
+    expect(invalid.send.mock.calls[0][0]).toEqual(expect.objectContaining({ valid: false, kind: "host" }));
+
+    vi.spyOn(fs.promises, "stat").mockRejectedValue(new Error("missing"));
+    const missing = fakeClient();
+    await server.validateDirectory(missing, { requestId: "bad-2", path: "C:\\missing", shell: "pwsh" });
+    expect(missing.send.mock.calls[0][0]).toEqual(expect.objectContaining({
+      valid: false,
+      error: "That directory does not exist or is not accessible."
+    }));
+  });
+});
+
 describe("prepared text tools", () => {
   function fakeProcess() {
     const handlers = {};

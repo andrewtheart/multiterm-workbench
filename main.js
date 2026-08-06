@@ -707,7 +707,9 @@ async function onReady() {
 // Native "browse for a script" dialog for the renderer's run-script feature.
 function registerScriptPicker() {
   if (!ipcMain || typeof ipcMain.handle !== "function") return;
-  try { ipcMain.removeHandler("multiterm:pick-script"); } catch { /* no existing handler */ }
+  for (const channel of ["multiterm:pick-script", "multiterm:pick-folder"]) {
+    try { ipcMain.removeHandler(channel); } catch { /* no existing handler */ }
+  }
   ipcMain.handle("multiterm:pick-script", async (event) => {
     assertTrustedIpcSender(event);
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -719,6 +721,24 @@ function registerScriptPicker() {
         { name: "Batch", extensions: ["bat", "cmd"] },
         { name: "All files", extensions: ["*"] }
       ]
+    });
+    if (!result || result.canceled || !Array.isArray(result.filePaths) || result.filePaths.length === 0) {
+      return null;
+    } else {
+      return result.filePaths[0];
+    }
+  });
+  ipcMain.handle("multiterm:pick-folder", async (event, initialDirectory) => {
+    assertTrustedIpcSender(event);
+    let defaultPath;
+    try {
+      const candidate = path.resolve(String(initialDirectory || "").trim());
+      if (fs.statSync(candidate).isDirectory()) defaultPath = candidate;
+    } catch { /* start in the native dialog's default location */ }
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "Select a working directory",
+      properties: ["openDirectory"],
+      ...(defaultPath ? { defaultPath } : {})
     });
     if (!result || result.canceled || !Array.isArray(result.filePaths) || result.filePaths.length === 0) {
       return null;

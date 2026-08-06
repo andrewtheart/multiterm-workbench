@@ -36,6 +36,7 @@
     <script defer src="vendor/lucide.js"></script>
     <script defer src="input-detection.js"></script>
     <script defer src="terminal-messaging.js"></script>
+    <script defer src="syntax-highlight.js"></script>
     <script defer src="automations.js"></script>
     <script defer src="app.js"></script>
   </head>
@@ -349,6 +350,11 @@
               <input id="scrollOnOutput" type="checkbox">
               <span>Scroll on output</span>
             </label>
+
+            <label class="toggle-row">
+              <input id="searchAcrossPages" type="checkbox">
+              <span title="Terminal searches borrow matching panes from other pages onto the current stage, badged with the page they belong to.">Search across pages</span>
+            </label>
           </section>
 
           <section class="control-section">
@@ -365,13 +371,13 @@
             <label class="control-row">
               <span>Interactive model</span>
               <select id="aiSessionModel">
-                <option value="">Provider default</option>
+                <option value="">Auto (provider default)</option>
               </select>
             </label>
             <label class="control-row">
               <span>Interactive effort</span>
               <select id="aiSessionEffort">
-                <option value="medium">Medium</option>
+                <option value="none">Provider default</option>
               </select>
             </label>
             <label class="control-row">
@@ -398,13 +404,13 @@
             <label class="control-row">
               <span>Model</span>
               <select id="copilotTitleModel">
-                <option value="claude-opus-4.6">claude-opus-4.6</option>
+                <option value="">Auto (provider default)</option>
               </select>
             </label>
             <label class="control-row">
               <span>Thinking effort</span>
               <select id="copilotTitleEffort">
-                <option value="none">None</option>
+                <option value="none">Provider default</option>
                 <option value="minimal">Minimal</option>
                 <option value="low">Low</option>
                 <option value="medium">Medium</option>
@@ -416,7 +422,7 @@
             <label class="control-row">
               <span>Context window</span>
               <select id="copilotTitleContext">
-                <option value="default">Default</option>
+                <option value="default">Provider default</option>
                 <option value="long_context">Long context</option>
               </select>
             </label>
@@ -482,6 +488,10 @@
               <span title="Maximum recent user and assistant transcript copied into a temporary context file when continuing a VS Code or Visual Studio Copilot session in the CLI.">Imported Copilot context (KB)</span>
               <input id="copilotImportContextKb" type="number" min="8" max="1024" step="8" inputmode="numeric">
             </label>
+            <label class="control-row">
+              <span title="Total metadata and transcript context available to one AI search across the complete local Copilot session catalog.">AI session search context (KB)</span>
+              <input id="copilotSessionSearchContextKb" type="number" min="64" max="16384" step="64" inputmode="numeric">
+            </label>
             <label class="toggle-row">
               <input id="bellNotify" type="checkbox">
               <span>Bell notifications</span>
@@ -497,6 +507,10 @@
             <label class="toggle-row">
               <input id="notifyActivity" type="checkbox">
               <span>Activity notifications</span>
+            </label>
+            <label class="toggle-row">
+              <input id="notifyQuestions" type="checkbox">
+              <span>Question alerts</span>
             </label>
             <label class="toggle-row">
               <input id="notifySilence" type="checkbox">
@@ -618,6 +632,15 @@
             <i data-lucide="search"></i>
             <input id="findAllInput" class="pane-find-input find-all-input" type="text" spellcheck="false" autocomplete="off" placeholder="Find in all terminals" aria-label="Find in all terminals">
             <span id="findAllCount" class="pane-find-count find-all-count">0/0</span>
+            <button id="findAllReveal" type="button" class="find-all-reveal" data-findall="reveal" hidden>
+              <i data-lucide="layers"></i>
+              <span><span class="find-all-reveal-count">0</span> on other pages</span>
+              <span class="find-all-reveal-action">Show</span>
+            </button>
+            <button id="findAllScope" type="button" class="find-all-scope" data-findall="scope" aria-pressed="true" title="Matches on other pages are shown here. Select to search this page only.">
+              <i data-lucide="layers"></i>
+              <span class="find-all-scope-label">All pages</span>
+            </button>
             <button type="button" class="pane-find-btn" data-findall="prev" title="Previous match (Shift+Enter)" aria-label="Previous match">
               <i data-lucide="chevron-up"></i>
             </button>
@@ -809,6 +832,9 @@
             <i data-lucide="search" aria-hidden="true"></i>
             <input id="copilotResumeSearch" type="search" placeholder="Search source, title, repository, folder, branch, or ID" autocomplete="off" spellcheck="false" aria-label="Search AI assistant sessions">
           </label>
+          <button id="copilotResumeAiSearch" class="icon-button copilot-resume-ai" type="button" title="Search sessions with GitHub Copilot" aria-label="Search sessions with GitHub Copilot" aria-pressed="false">
+            <i class="ai-title-glyph" data-lucide="sparkles"></i>
+          </button>
           <button id="copilotResumeRefresh" class="secondary-action" type="button">
             <i data-lucide="refresh-cw"></i>
             <span>Refresh</span>
@@ -819,6 +845,46 @@
           <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>Continue in the selected assistant</span>
         </div>
         <div id="copilotResumeList" class="copilot-resume-list" role="list"></div>
+      </div>
+    </div>
+
+    <div id="cwdChangeOverlay" class="palette-overlay" hidden>
+      <div class="palette cwd-change" role="dialog" aria-modal="true" aria-labelledby="cwdChangeTitle" aria-describedby="cwdChangeStatus">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="folder-input"></i></span>
+            <div>
+              <h2 id="cwdChangeTitle">Change working directory</h2>
+              <p id="cwdChangeTarget">Choose a folder for the selected terminal.</p>
+            </div>
+          </div>
+          <button id="cwdChangeClose" class="icon-button" type="button" title="Close" aria-label="Close working directory dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="cwd-change-body">
+          <div class="cwd-change-current">
+            <span id="cwdChangeSource">Last known terminal path</span>
+            <code id="cwdChangeCurrent">Unknown</code>
+          </div>
+          <label class="cwd-change-field">
+            <span>Working directory</span>
+            <span class="cwd-change-input-row">
+              <input id="cwdChangeInput" type="text" spellcheck="false" autocomplete="off" placeholder="Enter or browse for a folder">
+              <button id="cwdChangeBrowse" class="icon-button" type="button" title="Browse for a folder" aria-label="Browse for a folder">
+                <i data-lucide="folder-open"></i>
+              </button>
+            </span>
+          </label>
+          <p id="cwdChangeStatus" class="cwd-change-status" role="status">Enter a directory to continue.</p>
+        </div>
+        <div class="cwd-change-actions">
+          <button id="cwdChangeCancel" class="secondary-action" type="button">Cancel</button>
+          <button id="cwdChangeSend" class="primary-action" type="button" disabled>
+            <i data-lucide="send"></i>
+            <span>Send</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -970,7 +1036,7 @@
           </div>
           <div class="ai-setup-fields">
             <label><span>Provider</span><select id="aiSetupTitleProvider"><option value="none">Disabled</option></select></label>
-            <label><span>Model</span><select id="aiSetupTitleModel"><option value="">Provider default</option></select></label>
+            <label><span>Model</span><select id="aiSetupTitleModel"><option value="">Auto (provider default)</option></select></label>
             <label><span>Thinking effort</span><select id="aiSetupTitleEffort"><option value="none">Provider default</option></select></label>
             <label><span>Context</span><select id="aiSetupTitleContext"><option value="default">Provider default</option></select></label>
           </div>
@@ -982,7 +1048,7 @@
           </div>
           <div class="ai-setup-fields">
             <label><span>Provider</span><select id="aiSetupSessionProvider"><option value="none">Disabled</option></select></label>
-            <label><span>Model</span><select id="aiSetupSessionModel"><option value="">Provider default</option></select></label>
+            <label><span>Model</span><select id="aiSetupSessionModel"><option value="">Auto (provider default)</option></select></label>
             <label><span>Thinking effort</span><select id="aiSetupSessionEffort"><option value="none">Provider default</option></select></label>
             <label><span>Context</span><select id="aiSetupSessionContext"><option value="default">Provider default</option></select></label>
           </div>
@@ -1197,10 +1263,25 @@
               </select>
             </label>
           </div>
-          <label id="messageTextRow" class="message-field">
-            <span>Message</span>
-            <textarea id="messageText" rows="3" spellcheck="true" placeholder="Enter a command, handoff, summary, task, or result"></textarea>
-          </label>
+          <div id="messageTextRow" class="message-field message-code-field">
+            <div class="message-field-head">
+              <span id="messageTextLabel">Message</span>
+              <label class="message-code-language">
+                <span>Syntax</span>
+                <select id="messageLanguage" aria-label="Message syntax highlighting">
+                  <option value="auto">Auto (target shell)</option>
+                  <option value="powershell">PowerShell</option>
+                  <option value="batch">Batch / cmd</option>
+                  <option value="shell">Shell</option>
+                  <option value="text">Plain text</option>
+                </select>
+              </label>
+            </div>
+            <div id="messageTextEditor" class="code-editor">
+              <pre id="messageTextHighlight" class="code-editor-paint" aria-hidden="true"></pre>
+              <textarea id="messageText" class="code-editor-input" rows="4" spellcheck="false" autocomplete="off" wrap="soft" aria-labelledby="messageTextLabel" placeholder="Enter a command, handoff, summary, task, or result"></textarea>
+            </div>
+          </div>
           <label id="messagePathRow" class="message-field" hidden>
             <span>Path</span>
             <input id="messagePath" type="text" spellcheck="false" autocomplete="off" placeholder="C:\path\to\artifact">
@@ -1475,6 +1556,17 @@
         </div>
       </div>
       <div class="terminal-notification-options">
+        <div class="terminal-notification-row" data-notification-channel="question">
+          <span class="terminal-notification-label">
+            <i data-lucide="circle-help"></i>
+            <strong>Questions</strong>
+          </span>
+          <div class="terminal-notification-segments" role="radiogroup" aria-label="Question alerts">
+            <button type="button" role="radio" data-notification-value="global">Global</button>
+            <button type="button" role="radio" data-notification-value="on">On</button>
+            <button type="button" role="radio" data-notification-value="off">Off</button>
+          </div>
+        </div>
         <div class="terminal-notification-row" data-notification-channel="activity">
           <span class="terminal-notification-label">
             <i data-lucide="activity"></i>
@@ -1534,6 +1626,10 @@
               <i data-lucide="shield"></i>
               <span>ADMIN</span>
             </span>
+            <button type="button" class="pane-page-tag" hidden title="This terminal lives on another page">
+              <i data-lucide="layers"></i>
+              <span class="pane-page-tag-name"></span>
+            </button>
             <button type="button" class="pane-notification-compact" data-action="notifications-compact" title="Notifications for this terminal" aria-label="Notifications for this terminal" aria-haspopup="dialog" aria-expanded="false">
               <i data-lucide="bell"></i>
             </button>

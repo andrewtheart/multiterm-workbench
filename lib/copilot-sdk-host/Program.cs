@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using GitHub.Copilot;
+using GitHub.Copilot.Rpc;
 
 namespace MultiTerm.CopilotSdkHost
 {
@@ -17,16 +18,26 @@ namespace MultiTerm.CopilotSdkHost
         public string Prompt { get; set; }
     }
 
+    // Usage travels as flat scalars because the bridge parses this response with
+    // its own flat JSON reader.
     internal sealed class HostResponse
     {
         public bool Ok { get; set; }
         public string Error { get; set; }
         public string Text { get; set; }
         public object Models { get; set; }
+        public double UsageAiCredits { get; set; }
+        public double UsagePremiumRequests { get; set; }
+        public long UsageInputTokens { get; set; }
+        public long UsageOutputTokens { get; set; }
+        public long UsageCacheReadTokens { get; set; }
+        public long UsageCacheWriteTokens { get; set; }
     }
 
     internal static class Program
     {
+        private const double NanoAiUnitsPerCredit = 1000000000d;
+
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
             PropertyNameCaseInsensitive = true,
@@ -96,13 +107,17 @@ namespace MultiTerm.CopilotSdkHost
                     return 0;
                 }
 
-                if (!String.Equals(request.Operation, "title", StringComparison.OrdinalIgnoreCase))
+                bool titleOperation = String.Equals(request.Operation, "title", StringComparison.OrdinalIgnoreCase);
+                bool searchOperation = String.Equals(request.Operation, "search", StringComparison.OrdinalIgnoreCase);
+                if (!titleOperation && !searchOperation)
                 {
                     throw new InvalidOperationException("Unsupported SDK host operation.");
                 }
 
+                // An empty model is the renderer's "Auto" choice: fall back to the first
+                // model the account still has enabled rather than pinning a model id.
                 ModelInfo selected = models.FirstOrDefault(model =>
-                    String.Equals(model.Id, request.Model, StringComparison.Ordinal) &&
+                    (String.IsNullOrEmpty(request.Model) || String.Equals(model.Id, request.Model, StringComparison.Ordinal)) &&
                     (model.Policy == null || !String.Equals(model.Policy.State, "disabled", StringComparison.OrdinalIgnoreCase)));
                 if (selected == null) throw new InvalidOperationException("The selected GitHub Copilot model is not available for this account.");
 
@@ -119,7 +134,7 @@ namespace MultiTerm.CopilotSdkHost
                     EnableSkills = false,
                     ExcludedTools = new List<string> { "builtin:*", "mcp:*", "custom:*" },
                     InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
-                    Model = request.Model,
+                    Model = selected.Id,
                     SkillDirectories = new List<string>(),
                     SkipCustomInstructions = true,
                     SkipEmbeddingRetrieval = true
@@ -149,8 +164,12 @@ namespace MultiTerm.CopilotSdkHost
                     {
                         await session.SendAsync(new MessageOptions { Prompt = request.Prompt ?? String.Empty }).ConfigureAwait(false);
                         Task finished = await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromMinutes(3))).ConfigureAwait(false);
-                        if (finished != completion.Task) throw new TimeoutException("GitHub Copilot title generation timed out.");
-                        WriteResponse(new HostResponse { Ok = true, Text = await completion.Task.ConfigureAwait(false) });
+                        if (finished != completion.Task) throw new TimeoutException(
+                            searchOperation
+                                ? "GitHub Copilot session search timed out."
+                                : "GitHub Copilot title generation timed out.");
+                        string text = await completion.Task.ConfigureAwait(false);
+                        WriteResponse(await BuildCompletionResponseAsync(session, text).ConfigureAwait(false));
                     }
                 }
                 finally
@@ -165,6 +184,40 @@ namespace MultiTerm.CopilotSdkHost
             }
             return 0;
         }
+
+        // Usage is telemetry about a completed operation, so a metrics failure must
+        // never turn a successful title or search into an error.
+        // GHCP001: the SDK ships its usage types as evaluation-only, and this is the
+        // only supported way to read per-session token and credit cost.
+#pragma warning disable GHCP001
+        private static async Task<HostResponse> BuildCompletionResponseAsync(CopilotSession session, string text)
+        {
+            var response = new HostResponse { Ok = true, Text = text };
+            try
+            {
+                UsageGetMetricsResult metrics = await session.Rpc.Usage.GetMetricsAsync(CancellationToken.None).ConfigureAwait(false);
+                if (metrics == null) return response;
+                if (metrics.ModelMetrics != null)
+                {
+                    foreach (UsageMetricsModelMetric model in metrics.ModelMetrics.Values)
+                    {
+                        if (model == null || model.Usage == null) continue;
+                        response.UsageInputTokens += Math.Max(0L, model.Usage.InputTokens);
+                        response.UsageOutputTokens += Math.Max(0L, model.Usage.OutputTokens);
+                        response.UsageCacheReadTokens += Math.Max(0L, model.Usage.CacheReadTokens);
+                        response.UsageCacheWriteTokens += Math.Max(0L, model.Usage.CacheWriteTokens);
+                    }
+                }
+                response.UsageAiCredits = Math.Max(0d, metrics.TotalNanoAiu.GetValueOrDefault()) / NanoAiUnitsPerCredit;
+                response.UsagePremiumRequests = Math.Max(0d, metrics.TotalPremiumRequestCost);
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine("Could not read GitHub Copilot usage metrics: " + error.Message);
+            }
+            return response;
+        }
+#pragma warning restore GHCP001
 
         private static string FriendlyError(Exception error)
         {

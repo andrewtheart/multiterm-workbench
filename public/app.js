@@ -21,7 +21,7 @@ const WORKSPACE_ZOOM_BOUNDS = { min: 50, max: 150, step: 5, fallback: 100 };
 
 const defaultSettings = {
   aiSessionContext: "default",
-  aiSessionEffort: "medium",
+  aiSessionEffort: "none",
   aiSessionModel: "",
   aiSessionProvider: "copilot",
   aiSetupCompleted: false,
@@ -34,12 +34,13 @@ const defaultSettings = {
   columns: 2,
   compactChrome: false,
   copilotImportContextKb: 64,
+  copilotSessionSearchContextKb: 1024,
   copilotTitleContext: "default",
   copilotTitleContextKb: 16,
-  copilotTitleEffort: "medium",
+  copilotTitleEffort: "none",
   copilotTitleMaxWords: 8,
   copilotTitleMinWords: 2,
-  copilotTitleModel: "claude-opus-4.6",
+  copilotTitleModel: "",
   copyOnSelect: false,
   ctrlVPaste: true,
   cursorBlink: true,
@@ -59,6 +60,7 @@ const defaultSettings = {
   minWidth: 420,
   maxInstallerSizeMb: 256,
   notifyActivity: false,
+  notifyQuestions: false,
   notifySilence: false,
   outputBacklogKb: 1024,
   outputCoalesceMs: 8,
@@ -74,6 +76,7 @@ const defaultSettings = {
   scrollOnOutput: false,
   scrollback: 20000,
   scrollbackInfinite: false,
+  searchAcrossPages: true,
   sidecarHidden: false,
   silenceSeconds: 10,
   snippets: [
@@ -92,6 +95,7 @@ const defaultSettings = {
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
 const TERMINAL_NOTIFICATION_SETTINGS = Object.freeze({
   activity: "notifyActivity",
+  question: "notifyQuestions",
   idle: "notifySilence",
   bell: "bellNotify"
 });
@@ -103,6 +107,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   aiSessionProvider: "ai assistant session provider interactive cli github copilot claude launch",
   aiTitleProvider: "ai assistant provider github copilot claude terminal title suggestions",
   aiProvidersRefresh: "ai assistant provider refresh rescan detect installed authentication models",
+  copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
   fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
@@ -136,6 +141,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   scrollbackLines: "terminal history output buffer retention lines backscroll transcript",
   scrollbackInfinite: "unlimited infinite terminal history output buffer no limit scrollback",
   scrollOnOutput: "follow tail auto scroll autoscroll bottom new output terminal",
+  searchAcrossPages: "search find filter across every all pages other page gather collect borrow reveal results matches global workspace scope",
   outputCoalesceMs: "performance output batching batch coalesce grouping bridge chunks messages latency throttle delay milliseconds pty",
   outputBacklogKb: "performance output buffer queue backlog burst memory ram renderer pending kilobytes kb",
   maxInstallerSizeMb: "updater update download installer package maximum max size limit ceiling security megabytes mb",
@@ -148,6 +154,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copyOnSelect: "selection selected highlight mouse clipboard copy automatically auto",
   highlightInputPrompts: "awaiting input prompt prompts question questions badge glow attention detect detection interactive highlight",
   notifyActivity: "activity busy background output notification notifications alert alerts terminal change",
+  notifyQuestions: "question questions ask asking answer choice form copilot claude notification notifications alert alerts input",
   notifySilence: "idle quiet silence inactivity completion done notification notifications alert alerts terminal",
   silenceSeconds: "idle quiet silence inactivity timeout delay seconds threshold completion",
   startupCommand: "startup cmd command run execute launch new terminal initialization init shell profile",
@@ -205,6 +212,7 @@ const COPILOT_CLEAR_PROMPT = "\x15";
 const COPILOT_RESUME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AI_MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+\-\[\]]{0,159}$/;
 const terminalMessaging = window.TerminalMessaging;
+const syntaxHighlight = window.SyntaxHighlight;
 const automationApi = window.MultiTermAutomations;
 
 // xterm reports focus changes back to the shell as data when the application
@@ -392,6 +400,9 @@ const elements = {
   findAllBar: document.querySelector("#findAllBar"),
   findAllInput: document.querySelector("#findAllInput"),
   findAllCount: document.querySelector("#findAllCount"),
+  findAllReveal: document.querySelector("#findAllReveal"),
+  findAllScope: document.querySelector("#findAllScope"),
+  searchAcrossPages: document.querySelector("#searchAcrossPages"),
   broadcastBar: document.querySelector("#broadcastBar"),
   broadcastClose: document.querySelector("#broadcastClose"),
   broadcastEnter: document.querySelector("#broadcastEnter"),
@@ -410,6 +421,7 @@ const elements = {
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
+  copilotSessionSearchContextKb: document.querySelector("#copilotSessionSearchContextKb"),
   copilotTitleContext: document.querySelector("#copilotTitleContext"),
   copilotTitleContextKb: document.querySelector("#copilotTitleContextKb"),
   copilotTitleEffort: document.querySelector("#copilotTitleEffort"),
@@ -417,6 +429,7 @@ const elements = {
   copilotTitleMinWords: document.querySelector("#copilotTitleMinWords"),
   copilotTitleModel: document.querySelector("#copilotTitleModel"),
   copilotResumeClose: document.querySelector("#copilotResumeClose"),
+  copilotResumeAiSearch: document.querySelector("#copilotResumeAiSearch"),
   copilotResumeDescription: document.querySelector("#copilotResumeDescription"),
   copilotResumeList: document.querySelector("#copilotResumeList"),
   copilotResumeOverlay: document.querySelector("#copilotResumeOverlay"),
@@ -424,6 +437,16 @@ const elements = {
   copilotResumeSearch: document.querySelector("#copilotResumeSearch"),
   copilotResumeStatus: document.querySelector("#copilotResumeStatus"),
   copilotSessionsToggle: document.querySelector("#copilotSessionsToggle"),
+  cwdChangeBrowse: document.querySelector("#cwdChangeBrowse"),
+  cwdChangeCancel: document.querySelector("#cwdChangeCancel"),
+  cwdChangeClose: document.querySelector("#cwdChangeClose"),
+  cwdChangeCurrent: document.querySelector("#cwdChangeCurrent"),
+  cwdChangeInput: document.querySelector("#cwdChangeInput"),
+  cwdChangeOverlay: document.querySelector("#cwdChangeOverlay"),
+  cwdChangeSend: document.querySelector("#cwdChangeSend"),
+  cwdChangeSource: document.querySelector("#cwdChangeSource"),
+  cwdChangeStatus: document.querySelector("#cwdChangeStatus"),
+  cwdChangeTarget: document.querySelector("#cwdChangeTarget"),
   contextMenu: document.querySelector("#contextMenu"),
   contextSubmenu: document.querySelector("#contextSubmenu"),
   controlPanel: document.querySelector(".control-panel"),
@@ -485,6 +508,7 @@ const elements = {
   terminalConnectorLabel: document.querySelector("#terminalConnectorLabel"),
   terminalConnectorSend: document.querySelector("#terminalConnectorSend"),
   messageKind: document.querySelector("#messageKind"),
+  messageLanguage: document.querySelector("#messageLanguage"),
   messageLinkAdd: document.querySelector("#messageLinkAdd"),
   messagePath: document.querySelector("#messagePath"),
   messagePathRow: document.querySelector("#messagePathRow"),
@@ -494,9 +518,11 @@ const elements = {
   messageStatusRow: document.querySelector("#messageStatusRow"),
   messageTarget: document.querySelector("#messageTarget"),
   messageText: document.querySelector("#messageText"),
+  messageTextHighlight: document.querySelector("#messageTextHighlight"),
   messageTextRow: document.querySelector("#messageTextRow"),
   maxInstallerSizeMb: document.querySelector("#maxInstallerSizeMb"),
   notifyActivity: document.querySelector("#notifyActivity"),
+  notifyQuestions: document.querySelector("#notifyQuestions"),
   notifySilence: document.querySelector("#notifySilence"),
   outputBacklogKb: document.querySelector("#outputBacklogKb"),
   outputCoalesceMs: document.querySelector("#outputCoalesceMs"),
@@ -748,7 +774,7 @@ const state = {
   copilotCwdHistory: loadCopilotCwdHistory(),
   pendingPageClose: null,
   prepareEditor: { closeTimer: 0, lineNumbersFrame: 0, mode: "copy", resizeObserver: null, returnFocus: null, sourceTerminalId: null, validating: false, wordWrap: true },
-  findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false },
+  findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false, exemptId: null, gathered: [] },
   appElevated: false,
   broadcastScope: "all",
   manualLayouts: loadManualLayouts(),
@@ -947,6 +973,10 @@ function bindControls() {
     state.settings.copilotImportContextKb,
     elements.copilotImportContextKb
   );
+  state.settings.copilotSessionSearchContextKb = clampCopilotSessionSearchContextKb(
+    state.settings.copilotSessionSearchContextKb,
+    elements.copilotSessionSearchContextKb
+  );
   syncAiSessionSettings();
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
@@ -958,6 +988,7 @@ function bindControls() {
   elements.scrollbackLines.value = state.settings.scrollback;
   elements.scrollbackInfinite.checked = state.settings.scrollbackInfinite;
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
+  elements.searchAcrossPages.checked = state.settings.searchAcrossPages;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
   elements.pageCloseAction.value = normalizePageCloseAction(state.settings.pageCloseAction);
@@ -968,6 +999,7 @@ function bindControls() {
     elements.maxInstallerSizeMb
   );
   elements.notifyActivity.checked = state.settings.notifyActivity;
+  elements.notifyQuestions.checked = state.settings.notifyQuestions;
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
@@ -993,7 +1025,11 @@ function bindControls() {
   });
   elements.copilotResumeClose.addEventListener("click", closeCopilotResume);
   elements.copilotResumeRefresh.addEventListener("click", refreshCopilotSessions);
-  elements.copilotResumeSearch.addEventListener("input", renderCopilotSessions);
+  elements.copilotResumeAiSearch.addEventListener("click", searchCopilotSessionsWithAi);
+  elements.copilotResumeSearch.addEventListener("input", () => {
+    clearCopilotAiSearch();
+    renderCopilotSessions();
+  });
   elements.copilotResumeSearch.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -1013,6 +1049,26 @@ function bindControls() {
     if (event.key === "Escape") {
       event.preventDefault();
       closeCopilotResume();
+    }
+  });
+  elements.cwdChangeClose.addEventListener("click", closeCwdChange);
+  elements.cwdChangeCancel.addEventListener("click", closeCwdChange);
+  elements.cwdChangeBrowse.addEventListener("click", browseCwdChange);
+  elements.cwdChangeSend.addEventListener("click", submitCwdChange);
+  elements.cwdChangeInput.addEventListener("input", scheduleCwdValidation);
+  elements.cwdChangeInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !elements.cwdChangeSend.disabled) {
+      event.preventDefault();
+      submitCwdChange();
+    }
+  });
+  elements.cwdChangeOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.cwdChangeOverlay) closeCwdChange();
+  });
+  elements.cwdChangeOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeCwdChange();
     }
   });
   elements.closeAllTerminals.addEventListener("click", closeAllTerminals);
@@ -1079,7 +1135,7 @@ function bindControls() {
   elements.workspaceDelete.addEventListener("click", () => deleteWorkspace(elements.workspaceSelect.value));
   elements.terminalSearchInput.addEventListener("input", () => {
     state.terminalSearch = elements.terminalSearchInput.value;
-    applyTerminalSearch();
+    applyTerminalSearch({ exemptId: null });
   });
   elements.terminalSearchInput.addEventListener("keydown", (event) => {
     // Same navigation contract as the find bars: Enter walks the matches the
@@ -1122,6 +1178,7 @@ function bindControls() {
   bindSetting(elements.ctrlVPaste, "ctrlVPaste", "change", (_, element) => element.checked);
   bindSetting(elements.cleanCopilotClipboard, "cleanCopilotClipboard", "change", (_, element) => element.checked);
   bindSetting(elements.copilotImportContextKb, "copilotImportContextKb", "change", clampCopilotImportContextKb);
+  bindSetting(elements.copilotSessionSearchContextKb, "copilotSessionSearchContextKb", "change", clampCopilotSessionSearchContextKb);
   bindSetting(elements.aiSessionProvider, "aiSessionProvider", "change", normalizeAiProviderId);
   bindSetting(elements.aiSessionModel, "aiSessionModel", "change", normalizeAiSessionModel);
   bindSetting(elements.aiSessionEffort, "aiSessionEffort", "change", normalizeAiSessionEffort);
@@ -1148,6 +1205,7 @@ function bindControls() {
   bindSetting(elements.terminalInboxCapacity, "terminalInboxCapacity", "change", clampTerminalInboxCapacity);
   bindSetting(elements.maxInstallerSizeMb, "maxInstallerSizeMb", "change", normalizeInstallerSizeMb);
   bindSetting(elements.notifyActivity, "notifyActivity", "change", (_, element) => element.checked);
+  bindSetting(elements.notifyQuestions, "notifyQuestions", "change", (_, element) => element.checked);
   bindSetting(elements.notifySilence, "notifySilence", "change", (_, element) => element.checked);
   bindSetting(elements.silenceSeconds, "silenceSeconds", "change", Number);
   bindSetting(elements.startupCommand, "startupCommand", "change", (value) => value);
@@ -1190,7 +1248,7 @@ function bindControls() {
     }
   });
 
-  for (const notifyToggle of [elements.notifyActivity, elements.notifySilence]) {
+  for (const notifyToggle of [elements.notifyActivity, elements.notifyQuestions, elements.notifySilence]) {
     notifyToggle.addEventListener("change", () => {
       if (notifyToggle.checked && "Notification" in window && Notification.permission === "default") {
         Notification.requestPermission();
@@ -1206,6 +1264,10 @@ function bindControls() {
     }
   });
   renderSnippets();
+
+  elements.searchAcrossPages.addEventListener("change", () => {
+    setSearchAcrossPages(elements.searchAcrossPages.checked);
+  });
 
   elements.bellNotify.addEventListener("change", () => {
     state.settings.bellNotify = elements.bellNotify.checked;
@@ -1269,6 +1331,7 @@ const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
 const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
 const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 };
 const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
+const COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS = { min: 64, max: 16384, fallback: 1024 };
 const COPILOT_TITLE_CONTEXT_KB_BOUNDS = { min: 4, max: 24, fallback: 16 };
 const COPILOT_TITLE_WORD_BOUNDS = { min: 1, max: 20 };
 const COPILOT_TITLE_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -1303,6 +1366,10 @@ function clampTerminalInboxCapacity(value, element) {
 
 function clampCopilotImportContextKb(value, element) {
   return clampSettingNumber(value, element, COPILOT_IMPORT_CONTEXT_KB_BOUNDS);
+}
+
+function clampCopilotSessionSearchContextKb(value, element = elements.copilotSessionSearchContextKb) {
+  return clampSettingNumber(value, element, COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS);
 }
 
 function normalizeAiProviderId(value) {
@@ -1420,14 +1487,31 @@ function formatAiTokenCount(value) {
   return tokens > 0 ? String(tokens) : "";
 }
 
+// Choices carrying a `group` are wrapped in a real <optgroup>, so the native
+// select, the enhanced combobox and assistive tech all read the same structure.
+// Ungrouped choices stay at the top level, which is how "Auto" keeps its place
+// above every family.
 function setAiSelectOptions(select, choices, selectedValue) {
-  select.replaceChildren(...choices.map((choice) => {
+  const nodes = [];
+  let currentGroup = null;
+  for (const choice of choices) {
     const option = document.createElement("option");
     option.value = choice.value;
     option.textContent = choice.label;
     option.disabled = Boolean(choice.disabled);
-    return option;
-  }));
+    if (!choice.group) {
+      currentGroup = null;
+      nodes.push(option);
+      continue;
+    }
+    if (currentGroup?.label !== choice.group) {
+      currentGroup = document.createElement("optgroup");
+      currentGroup.label = choice.group;
+      nodes.push(currentGroup);
+    }
+    currentGroup.append(option);
+  }
+  select.replaceChildren(...nodes);
   select.value = choices.some((choice) => choice.value === selectedValue)
     ? selectedValue
     : choices.find((choice) => !choice.disabled)?.value || choices[0]?.value || "";
@@ -1438,6 +1522,54 @@ function setAiSelectOptions(select, choices, selectedValue) {
 function aiModelLabel(model) {
   const limit = formatAiTokenCount(model.maxContextTokens || model.maxPromptTokens);
   return `${model.name || model.id}${limit ? ` - ${limit} tokens` : ""}`;
+}
+
+// Providers hand back one flat list mixing several vendors, which is why the
+// picker used to open on whichever model happened to sort first. Models are
+// bucketed by family so the list reads as "Anthropic Claude / OpenAI GPT / ..."
+// instead of one long alphabetical run. The first pattern that matches wins, so
+// the more specific families are listed before the broad ones.
+const AI_MODEL_FAMILIES = [
+  { label: "Anthropic Claude", pattern: /claude|opus|sonnet|haiku/i },
+  { label: "OpenAI GPT", pattern: /^(?:gpt|chatgpt|o\d)|openai|codex/i },
+  { label: "xAI Grok", pattern: /grok/i },
+  { label: "Microsoft MAI", pattern: /(?:^|[^a-z])mai(?:[^a-z]|$)|phi-?\d/i },
+  { label: "Google Gemini", pattern: /gemini|gemma/i },
+  { label: "Meta Llama", pattern: /llama/i },
+  { label: "DeepSeek", pattern: /deepseek/i },
+  { label: "Mistral", pattern: /mistral|codestral|magistral|devstral/i },
+  { label: "Qwen", pattern: /qwen/i },
+  // Providers can expose their own router as a model; it is not a family, but
+  // it reads badly filed under "Other models" next to our own Auto entry.
+  { label: "Automatic selection", pattern: /^auto\b/i }
+];
+const AI_MODEL_FAMILY_OTHER = "Other models";
+
+function aiModelFamily(model) {
+  const haystack = `${model?.id || ""} ${model?.name || ""}`;
+  return AI_MODEL_FAMILIES.find((family) => family.pattern.test(haystack))?.label || AI_MODEL_FAMILY_OTHER;
+}
+
+// "Auto" is deliberately the first, ungrouped entry and the value the settings
+// fall back to: it sends no model at all, so each provider applies its own
+// current default instead of MultiTerm pinning a model that ages badly.
+function aiModelChoices(models) {
+  const grouped = new Map();
+  for (const model of models) {
+    const family = aiModelFamily(model);
+    if (!grouped.has(family)) grouped.set(family, []);
+    grouped.get(family).push({ group: family, label: aiModelLabel(model), value: model.id });
+  }
+  const families = [...grouped.keys()].sort((left, right) => {
+    if (left === AI_MODEL_FAMILY_OTHER) return right === AI_MODEL_FAMILY_OTHER ? 0 : 1;
+    if (right === AI_MODEL_FAMILY_OTHER) return -1;
+    return left.localeCompare(right);
+  });
+  const choices = [{ label: "Auto (provider default)", value: "" }];
+  for (const family of families) {
+    choices.push(...grouped.get(family).sort((left, right) => left.label.localeCompare(right.label)));
+  }
+  return choices;
 }
 
 function syncAiTitleControls() {
@@ -1467,8 +1599,8 @@ function syncAiTitleControls() {
   const provider = aiProviderById(state.settings.aiTitleProvider);
   const available = aiProviderAvailableFor(provider, "title") && Array.isArray(provider.models) && provider.models.length > 0;
   if (!available) {
-    const savedModel = state.settings.copilotTitleModel || defaultSettings.copilotTitleModel;
-    setAiSelectOptions(elements.copilotTitleModel, [{ value: savedModel, label: savedModel }], savedModel);
+    const savedModel = state.settings.copilotTitleModel || "";
+    setAiSelectOptions(elements.copilotTitleModel, [{ value: savedModel, label: savedModel || "Auto (provider default)" }], savedModel);
     setAiSelectOptions(elements.copilotTitleEffort, [{ value: state.settings.copilotTitleEffort, label: "Provider default" }], state.settings.copilotTitleEffort);
     setAiSelectOptions(elements.copilotTitleContext, [{ value: "default", label: "Provider default" }], "default");
     elements.copilotTitleModel.disabled = true;
@@ -1486,7 +1618,7 @@ function syncAiTitleControls() {
   elements.copilotTitleContext.disabled = false;
   state.settings.copilotTitleModel = setAiSelectOptions(
     elements.copilotTitleModel,
-    provider.models.map((model) => ({ value: model.id, label: aiModelLabel(model) })),
+    aiModelChoices(provider.models),
     state.settings.copilotTitleModel
   );
   const model = aiTitleModel();
@@ -1681,6 +1813,16 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "folderPicked") {
+    resolveBridgeRequest(message, message.path || null);
+    return;
+  }
+
+  if (message.type === "directoryValidation") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
   if (message.type === "preparedSaved" || message.type === "prepareValidation") {
     resolveBridgeRequest(message, message);
     return;
@@ -1702,6 +1844,11 @@ function handleBridgeMessage(message) {
   }
 
   if (message.type === "copilotSessions" || message.type === "claudeSessions" || message.type === "copilotSessionContext" || message.type === "terminalTitleSuggestion") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "copilotSessionSearch") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -2161,7 +2308,10 @@ function addTerminal(options = {}) {
     contextSelection: "",
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
+    cwdQuery: null,
     awaitingInput: false,
+    awaitingInputCategory: "",
+    awaitingQuestion: false,
     autoQueueCompletionMarker: "",
     autoQueueDispatching: false,
     autoQueueOutputEvidence: "",
@@ -2193,6 +2343,8 @@ function addTerminal(options = {}) {
     pendingCommandEnter: options.pendingCommandEnter !== false,
     pendingPaste: typeof options.pendingPaste === "string" ? options.pendingPaste : null,
     pendingPasteEnter: Boolean(options.pendingPasteEnter),
+    pendingCwdChange: options.pendingCwdChange && typeof options.pendingCwdChange === "object" ? options.pendingCwdChange : null,
+    pendingCwdTimer: 0,
     pendingHandoff: options.pendingHandoff && typeof options.pendingHandoff === "object" ? options.pendingHandoff : null,
     pendingOutput: [],
     pendingOutputBytes: 0,
@@ -2296,7 +2448,10 @@ function addTerminal(options = {}) {
     }
   });
 
-  term.onKey(() => recordTerminalAnalyticsKeystroke(terminal));
+  term.onKey(() => {
+    beginTerminalAnalyticsFocus(terminal);
+    recordTerminalAnalyticsKeystroke(terminal);
+  });
 
   term.onResize(({ cols, rows }) => {
     queueResize(terminal, cols, rows);
@@ -2332,7 +2487,6 @@ function addTerminal(options = {}) {
 
   term.element?.addEventListener("focusin", () => {
     setActiveTerminal(id);
-    beginTerminalAnalyticsFocus(terminal);
   });
   term.element?.addEventListener("focusout", () => {
     window.setTimeout(() => {
@@ -2495,7 +2649,23 @@ function bindWorkspaceBackgroundZoom() {
     event.preventDefault();
     focusWorkspaceBackground();
   };
-  elements.stage.addEventListener("focus", clearTerminalFocus);
+  // Focusing the stage is the browser's default action for *any* button press on
+  // blank space, including the secondary press that opens the workspace menu.
+  // Deselecting there would leave that menu's terminal-scoped rows permanently
+  // disabled, so only a primary press (handled above) may clear the selection.
+  let secondaryPointerPress = false;
+  const endSecondaryPointerPress = () => {
+    secondaryPointerPress = false;
+  };
+  elements.stage.addEventListener("pointerdown", (event) => {
+    secondaryPointerPress = event.button !== 0;
+  }, true);
+  window.addEventListener("pointerup", endSecondaryPointerPress, true);
+  window.addEventListener("pointercancel", endSecondaryPointerPress, true);
+  elements.stage.addEventListener("focus", () => {
+    if (secondaryPointerPress) return;
+    clearTerminalFocus();
+  });
   elements.stage.addEventListener("pointerdown", focusBackgroundFromPointer);
   elements.stage.addEventListener("click", focusBackgroundFromPointer);
 
@@ -2849,7 +3019,7 @@ function terminalNotificationOverrideValue(terminal, channel) {
 }
 
 function terminalNotificationSummary(terminal) {
-  const labels = { activity: "Activity", idle: "Idle", bell: "Bell" };
+  const labels = { activity: "Activity", question: "Questions", idle: "Idle", bell: "Bell" };
   return Object.keys(TERMINAL_NOTIFICATION_SETTINGS).map((channel) => {
     const override = terminal?.notificationOverrides?.[channel];
     if (typeof override === "boolean") return `${labels[channel]}: ${override ? "On" : "Off"}`;
@@ -2891,6 +3061,7 @@ function renderTerminalNotificationFlyout() {
   elements.terminalNotificationSubtitle.textContent = terminal.titleInput.value || "Terminal";
   elements.terminalNotificationGlobalSummary.textContent = [
     `Global: Activity ${state.settings.notifyActivity ? "on" : "off"}`,
+    `Questions ${state.settings.notifyQuestions ? "on" : "off"}`,
     `Idle ${state.settings.notifySilence ? "on" : "off"} (${Math.max(2, Number(state.settings.silenceSeconds) || 10)}s)`,
     `Bell ${state.settings.bellNotify ? "on" : "off"}`
   ].join(" / ");
@@ -3110,6 +3281,14 @@ function bindPaneControls(terminal) {
   compactNotifications.addEventListener("click", () => {
     setActiveTerminal(terminal.id);
     toggleTerminalNotificationFlyout(terminal, compactNotifications);
+  });
+
+  // The badge only appears on a pane a search borrowed from another page, and it
+  // is the way back to where that terminal actually lives.
+  terminal.pane.querySelector(".pane-page-tag").addEventListener("click", () => {
+    setActivePage(terminal.pageId, { focus: false });
+    setActiveTerminal(terminal.id);
+    revealTerminal(terminal);
   });
 
   paneActions.addEventListener("dragstart", (event) => {
@@ -3881,6 +4060,8 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.promptTimer);
   window.clearTimeout(terminal.autoQueueTimer);
   terminal.autoQueueTimer = 0;
+  window.clearTimeout(terminal.pendingCwdTimer);
+  terminal.pendingCwdTimer = 0;
   window.clearTimeout(terminal.handoffScanTimer);
   window.clearTimeout(terminal.handoffDeliveryTimer);
   terminal.handoffScanTimer = 0;
@@ -4262,7 +4443,7 @@ function liveWebglRendererCount() {
 function isWebglVisibleCandidate(terminal) {
   const hidden = terminal.minimized
     || terminal.pane.classList.contains("is-search-hidden")
-    || !isOnActivePage(terminal);
+    || (!isOnActivePage(terminal) && !terminal.pane.classList.contains("is-search-gathered"));
   if (hidden) return false;
   const zoomed = effectiveZoomedId();
   return !zoomed || zoomed === terminal.id;
@@ -4456,6 +4637,9 @@ function flushAllTerminalOutput() {
 function writeTerminal(terminal, data) {
   terminal.term.write(data);
   terminal.outputRevision += 1;
+  if (terminal.cwdQuery) {
+    terminal.cwdQuery.output = `${terminal.cwdQuery.output}${stripTerminalControlCodes(data)}`.slice(-16384);
+  }
   if (terminal.autoQueueCompletionMarker) {
     terminal.autoQueueOutputEvidence = `${terminal.autoQueueOutputEvidence}${stripTerminalControlCodes(data)}`.slice(-32768);
   }
@@ -4465,6 +4649,7 @@ function writeTerminal(terminal, data) {
   handleOutputNotifications(terminal);
   scheduleInputPromptCheck(terminal);
   scheduleAutomaticQueueCheck(terminal);
+  schedulePendingCwdChange(terminal);
   scheduleTerminalHandoffScan(terminal);
   scheduleTerminalHandoffDelivery(terminal);
   if (state.settings.scrollOnOutput) terminal.term.scrollToBottom();
@@ -4549,6 +4734,9 @@ function effectiveScrollback() {
 // job here is only to decide *which* line to inspect and pass the caret context.
 const promptDetector = (typeof window !== "undefined" && window.InputPromptDetector) || {
   aiAssistantTuiProvider: () => "",
+  classifyAiAssistantQuestion: () => null,
+  classifyInputPrompt: () => null,
+  classifyInputPromptBlock: () => null,
   isAiAssistantPromptReady: () => false,
   isCopilotPromptReady: () => false,
   isCopilotTui: () => false,
@@ -4744,21 +4932,29 @@ function dispatchAutomaticQueueItem(terminal) {
 // like a question or choice, flag the pane so it stands out.
 function scheduleInputPromptCheck(terminal) {
   window.clearTimeout(terminal.promptTimer);
-  if (!state.settings.highlightInputPrompts) {
-    setAwaitingInput(terminal, false);
+  if (!state.settings.highlightInputPrompts && !terminalNotificationEnabled(terminal, "question")) {
+    setAwaitingInput(terminal, false, "");
     return;
   }
   terminal.promptTimer = window.setTimeout(() => evaluateInputPrompt(terminal), 500);
 }
 
 function evaluateInputPrompt(terminal) {
-  if (!state.settings.highlightInputPrompts || terminal.status === "exited") {
-    setAwaitingInput(terminal, false);
+  if ((!state.settings.highlightInputPrompts && !terminalNotificationEnabled(terminal, "question")) || terminal.status === "exited") {
+    setAwaitingInput(terminal, false, "");
     return;
   }
   const buffer = terminal.term.buffer.active;
-  if (!buffer || buffer.type === "alternate") {
-    setAwaitingInput(terminal, false);
+  if (!buffer) {
+    setAwaitingInput(terminal, false, "");
+    return;
+  }
+  const activeLines = activeBufferLines(terminal);
+  const assistantProvider = terminal.aiAssistantTuiProvider
+    || promptDetector.aiAssistantTuiProvider(activeLines);
+  if (assistantProvider) terminal.aiAssistantTuiProvider = assistantProvider;
+  if (buffer.type === "alternate" && !assistantProvider) {
+    setAwaitingInput(terminal, false, "");
     return;
   }
   const cursorRow = buffer.baseY + buffer.cursorY;
@@ -4774,16 +4970,25 @@ function evaluateInputPrompt(terminal) {
   // The caret sits at the end of the prompt when a program is genuinely blocked
   // waiting for the user; if it's mid-line the program is likely still drawing.
   const cursorAtLineEnd = row !== cursorRow || buffer.cursorX >= line.length;
-  const singleFlag = promptDetector.looksLikeInputPrompt(line, { cursorAtLineEnd });
+  const single = typeof promptDetector.classifyInputPrompt === "function"
+    ? promptDetector.classifyInputPrompt(line, { cursorAtLineEnd })
+    : promptDetector.looksLikeInputPrompt(line, { cursorAtLineEnd }) ? { category: "generic" } : null;
   // Many interactive prompts (an agent asking a "Question" with a numbered list,
   // a wizard menu, …) span several lines, so no single parked line is enough.
   // Scan a small window of the most recent lines together as a fallback.
-  let blockFlag = false;
-  if (!singleFlag && typeof promptDetector.looksLikeInputPromptBlock === "function") {
-    const window = readBufferWindow(buffer, cursorRow, PROMPT_WINDOW_ROWS);
-    blockFlag = promptDetector.looksLikeInputPromptBlock(window, { cursorAtLineEnd });
-  }
-  setAwaitingInput(terminal, singleFlag || blockFlag);
+  const promptWindow = readBufferWindow(buffer, cursorRow, PROMPT_WINDOW_ROWS);
+  const assistantQuestion = typeof promptDetector.classifyAiAssistantQuestion === "function"
+    ? promptDetector.classifyAiAssistantQuestion(promptWindow, assistantProvider)
+    : null;
+  const block = !single && typeof promptDetector.classifyInputPromptBlock === "function"
+    ? promptDetector.classifyInputPromptBlock(promptWindow, { cursorAtLineEnd })
+    : null;
+  const classification = assistantQuestion || single || block;
+  setAwaitingInput(
+    terminal,
+    state.settings.highlightInputPrompts && Boolean(classification),
+    classification?.category || ""
+  );
 }
 
 // How many rows above the caret the multi-line block scanner considers. Large
@@ -4805,12 +5010,19 @@ function readBufferLine(buffer, row) {
   return line ? line.translateToString(true).replace(/\s+$/, "") : "";
 }
 
-function setAwaitingInput(terminal, awaiting) {
+function setAwaitingInput(terminal, awaiting, category = "") {
   const next = Boolean(awaiting);
+  const nextQuestion = category === "question";
+  const wasQuestion = Boolean(terminal.awaitingQuestion);
+  terminal.awaitingInputCategory = category;
+  terminal.awaitingQuestion = nextQuestion;
+  if (nextQuestion && !wasQuestion && terminalNotificationEnabled(terminal, "question")) {
+    notifyDesktop(`Question in ${terminal.titleInput.value || "terminal"}`, terminal);
+  }
   if (terminal.awaitingInput === next) return;
   terminal.awaitingInput = next;
   terminal.pane.classList.toggle("is-awaiting-input", next);
-  if (next && terminal.id !== state.activeId) {
+  if (next && !nextQuestion && terminal.id !== state.activeId) {
     toast(`\u2328 ${terminal.titleInput.value || "Terminal"} needs input`, "info", 3000);
   }
 }
@@ -4901,13 +5113,15 @@ function terminalMetadataMatches(terminal, query) {
 // nothing to show, and brings them straight back — already highlighted — as
 // soon as a keystroke makes them match again.
 function applyTerminalSearch(options = {}) {
+  const { exemptId, ...passOptions } = options;
   if (state.terminalSearch) {
     // All three search surfaces drive each terminal's single search addon, so
     // the live filter takes the highlight session over from the find bars.
     closeAnyFind({ restoreFocus: false });
     closeFindAll({ restoreFocus: false });
   }
-  runSearchPass(state.terminalSearch, { filter: true, ...options });
+  if (exemptId !== undefined) state.findAll.exemptId = exemptId;
+  runSearchPass(state.terminalSearch, { filter: true, ...passOptions });
   rebalanceWebglRenderers();
 }
 
@@ -4928,6 +5142,7 @@ function updateTerminalSearchVisibility(terminal) {
     setTerminalSearchHidden(terminal, false);
     return;
   }
+  if (terminal.id === state.findAll.exemptId) return;
   rebuildTerminalSearchText(terminal);
   if (setTerminalSearchHidden(terminal, !terminal.searchText.includes(query))) {
     scheduleTerminalSearchRefresh();
@@ -5205,11 +5420,15 @@ function applySettings() {
     terminal.term.options.scrollback = effectiveScrollback();
     applyManualLayout(terminal, ensureManualLayout(terminal.id));
     updateTerminalNotificationButton(terminal);
+    scheduleInputPromptCheck(terminal);
     scheduleFit(terminal);
   }
   if (!elements.terminalNotificationFlyout.hidden) renderTerminalNotificationFlyout();
   if (!state.settings.highlightInputPrompts) {
-    for (const terminal of state.terminals.values()) setAwaitingInput(terminal, false);
+    for (const terminal of state.terminals.values()) {
+      const keepQuestion = terminal.awaitingQuestion && terminalNotificationEnabled(terminal, "question");
+      setAwaitingInput(terminal, false, keepQuestion ? "question" : "");
+    }
   }
   updateLayoutMetrics();
   updateStatusBar();
@@ -5879,11 +6098,12 @@ function reconcileTerminalAnalyticsFocus() {
     endTerminalAnalyticsFocus();
     return;
   }
-  const terminal = [...state.terminals.values()].find((candidate) => (
-    candidate.term.element?.contains(document.activeElement)
-  ));
-  if (terminal) beginTerminalAnalyticsFocus(terminal);
-  else endTerminalAnalyticsFocus();
+  const focusedTerminal = state.analyticsRuntime.focusedTerminalId
+    ? state.terminals.get(state.analyticsRuntime.focusedTerminalId)
+    : null;
+  if (!focusedTerminal?.term.element?.contains(document.activeElement)) {
+    endTerminalAnalyticsFocus();
+  }
 }
 
 function removeTerminalAnalyticsRecord(terminal) {
@@ -7086,6 +7306,12 @@ function getCommands() {
     { label: "Restart active terminal", hint: "Ctrl+Shift+R", run: restartActiveSession },
     { label: "Find in active terminal", hint: "Ctrl+F", run: openFindActive },
     { label: "Find in all terminals", hint: "Ctrl+Shift+F", run: openFindAll },
+    {
+      label: state.settings.searchAcrossPages
+        ? "Search scope: this page only"
+        : "Search scope: all pages",
+      run: toggleSearchAcrossPages
+    },
     { label: "Clear active terminal", hint: "Ctrl+Shift+L", run: clearActiveTerminal },
     { label: "Copy active output", hint: "Ctrl+Shift+C", run: copyActiveTerminal },
     { label: "Cycle active terminal color", run: () => state.activeId && cyclePaneColor(state.terminals.get(state.activeId)) },
@@ -7105,6 +7331,7 @@ function getCommands() {
     { label: "Browse & run script in active terminal\u2026", run: () => browseAndRunScript(state.activeId) },
     { label: "Open active terminal folder", run: () => state.activeId && revealTerminalCwd(state.terminals.get(state.activeId)) },
     { label: "New terminal in active folder", run: () => { const active = state.activeId && state.terminals.get(state.activeId); if (active) addTerminal({ reveal: true, runStartup: true, cwd: active.cwd, title: active.titleInput.value }); } },
+    { label: "Change active terminal working directory\u2026", run: () => openCwdChange(state.activeId) },
     { label: "Toggle logging for active terminal", run: () => state.activeId && toggleLogging(state.terminals.get(state.activeId)) },
     { label: "Cycle broadcast scope", run: () => { toggleBroadcastScope(); toast(`Broadcast: ${broadcastScopeLabel()}`, "info", 1600); } },
     { label: "Next terminal", run: () => cycleTerminal(1) },
@@ -7388,11 +7615,15 @@ function attachTmuxSession(candidate) {
 const COPILOT_SESSION_PAGE_SIZE = 80;
 const COPILOT_SESSION_SOURCES = new Set(["claude", "cli", "vscode", "visualstudio"]);
 const copilotResume = {
+  aiKeys: null,
+  aiQuery: "",
+  aiSearching: false,
   closeTimer: 0,
   generation: 0,
   newTerminal: false,
   provider: "copilot",
   sessions: [],
+  suspended: false,
   terminalId: null,
   visibleLimit: COPILOT_SESSION_PAGE_SIZE
 };
@@ -7406,12 +7637,20 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
   copilotResume.terminalId = terminal?.id || null;
   copilotResume.newTerminal = Boolean(newTerminal);
   copilotResume.provider = provider;
+  copilotResume.aiKeys = null;
+  copilotResume.aiQuery = "";
+  copilotResume.aiSearching = false;
   copilotResume.sessions = [];
+  copilotResume.suspended = false;
   copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
   copilotResume.generation += 1;
   window.clearTimeout(copilotResume.closeTimer);
   copilotResume.closeTimer = 0;
   const name = aiAssistantName(provider);
+  elements.copilotResumeAiSearch.hidden = provider !== "copilot";
+  elements.copilotResumeAiSearch.disabled = provider !== "copilot";
+  elements.copilotResumeAiSearch.classList.remove("is-loading");
+  elements.copilotResumeAiSearch.setAttribute("aria-pressed", "false");
   document.querySelector("#copilotResumeTitle").textContent = `Resume ${name} session`;
   elements.copilotResumeDescription.textContent = copilotResume.newTerminal
     ? `Choose local ${name} history to continue in a new MultiTerm terminal.`
@@ -7428,6 +7667,7 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
 
 function closeCopilotResume() {
   copilotResume.generation += 1;
+  copilotResume.suspended = false;
   window.clearTimeout(copilotResume.closeTimer);
   elements.copilotResumeOverlay.classList.remove("is-open");
   copilotResume.closeTimer = window.setTimeout(() => {
@@ -7436,6 +7676,23 @@ function closeCopilotResume() {
   }, 150);
   const terminal = state.terminals.get(copilotResume.terminalId);
   if (terminal) terminal.term.focus();
+}
+
+function suspendCopilotResume() {
+  window.clearTimeout(copilotResume.closeTimer);
+  copilotResume.suspended = true;
+  elements.copilotResumeOverlay.classList.remove("is-open");
+  elements.copilotResumeOverlay.hidden = true;
+}
+
+function restoreCopilotResume() {
+  if (!copilotResume.suspended) return;
+  copilotResume.suspended = false;
+  elements.copilotResumeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.copilotResumeOverlay.classList.add("is-open");
+    elements.copilotResumeSearch.focus();
+  });
 }
 
 function normalizeCopilotSession(candidate) {
@@ -7459,6 +7716,7 @@ function normalizeCopilotSession(candidate) {
 async function refreshCopilotSessions() {
   const generation = ++copilotResume.generation;
   const provider = copilotResume.provider;
+  clearCopilotAiSearch();
   const name = aiAssistantName(provider);
   elements.copilotResumeRefresh.disabled = true;
   elements.copilotResumeStatus.textContent = provider === "claude"
@@ -7496,7 +7754,9 @@ function copilotSourceLabel(source) {
 function renderCopilotSessions() {
   const query = normalizeSearchText(elements.copilotResumeSearch.value);
   const queryTokens = query.split(/\s+/).filter(Boolean);
-  const filtered = query
+  const filtered = copilotResume.aiKeys
+    ? copilotResume.sessions.filter((session) => copilotResume.aiKeys.has(session.key))
+    : query
     ? copilotResume.sessions.filter((session) => {
       const corpus = normalizeSearchText([
         copilotSourceLabel(session.source), session.name, session.repository, session.branch, session.cwd, session.id
@@ -7510,7 +7770,9 @@ function renderCopilotSessions() {
   if (filtered.length === 0) {
     const empty = document.createElement("div");
     empty.className = "copilot-resume-empty";
-    empty.textContent = copilotResume.sessions.length === 0
+    empty.textContent = copilotResume.aiKeys
+      ? "Copilot found no sessions matching that request."
+      : copilotResume.sessions.length === 0
       ? `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`
       : "No sessions match this search.";
     elements.copilotResumeList.append(empty);
@@ -7576,28 +7838,89 @@ function renderCopilotSessions() {
   }
 
   if (copilotResume.sessions.length > 0) {
-    elements.copilotResumeStatus.textContent = query
+    elements.copilotResumeStatus.textContent = copilotResume.aiKeys
+      ? `${shown.length} of ${filtered.length} AI match${filtered.length === 1 ? "" : "es"}`
+      : query
       ? `${shown.length} shown, ${filtered.length} matching, ${copilotResume.sessions.length} total`
       : `${shown.length} of ${copilotResume.sessions.length} resumable session${copilotResume.sessions.length === 1 ? "" : "s"}`;
   }
+}
+
+function clearCopilotAiSearch() {
+  copilotResume.aiKeys = null;
+  copilotResume.aiQuery = "";
+  elements.copilotResumeAiSearch?.setAttribute("aria-pressed", "false");
+}
+
+async function searchCopilotSessionsWithAi() {
+  const query = elements.copilotResumeSearch.value.trim();
+  if (copilotResume.provider !== "copilot" || copilotResume.aiSearching) return false;
+  if (!query) {
+    elements.copilotResumeStatus.textContent = "Describe the sessions you want Copilot to find.";
+    elements.copilotResumeSearch.focus();
+    return false;
+  }
+  if (copilotResume.sessions.length === 0) {
+    elements.copilotResumeStatus.textContent = "There are no local sessions to search.";
+    return false;
+  }
+  const generation = copilotResume.generation;
+  copilotResume.aiSearching = true;
+  elements.copilotResumeAiSearch.disabled = true;
+  elements.copilotResumeAiSearch.classList.add("is-loading");
+  elements.copilotResumeStatus.textContent = "Copilot is searching the complete local session catalog…";
+  const response = await requestBridge({
+    type: "searchCopilotSessions",
+    query,
+    contextKb: Number(state.settings.copilotSessionSearchContextKb),
+    model: state.settings.aiSessionModel,
+    effort: state.settings.aiSessionEffort,
+    context: state.settings.aiSessionContext
+  }, { timeout: 180000 });
+  if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return false;
+  copilotResume.aiSearching = false;
+  elements.copilotResumeAiSearch.disabled = false;
+  elements.copilotResumeAiSearch.classList.remove("is-loading");
+  if (response?.error || !Array.isArray(response?.keys)) {
+    clearCopilotAiSearch();
+    elements.copilotResumeStatus.textContent = response?.error || "Copilot could not search these sessions.";
+    return false;
+  }
+  const allowed = new Set(copilotResume.sessions.map((session) => session.key));
+  copilotResume.aiKeys = new Set(response.keys.filter((key) => allowed.has(key)));
+  copilotResume.aiQuery = query;
+  elements.copilotResumeAiSearch.setAttribute("aria-pressed", "true");
+  copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
+  renderCopilotSessions();
+  return true;
 }
 
 function powerShellLiteral(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function openCopilotSessionTerminal(session, command, cwd = session.cwd, provider = copilotResume.provider) {
+function openCopilotSessionTerminal(session, command, cwd = session.cwd, provider = copilotResume.provider, pendingCwdChange = null) {
   return addTerminal({
     reveal: true,
     runStartup: true,
     shell: "pwsh",
     cwd: cwd || undefined,
+    pendingCwdChange,
     title: `${aiAssistantName(provider)} \u00b7 ${copilotSessionTitle(session)}`,
     pendingCommand: command
   });
 }
 
-async function resumeCopilotSession(session) {
+function sameHostDirectory(left, right) {
+  const normalize = (value) => String(value || "")
+    .trim()
+    .replace(/[\\/]+$/, "")
+    .replace(/\//g, "\\")
+    .toLowerCase();
+  return Boolean(normalize(left)) && normalize(left) === normalize(right);
+}
+
+async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
   const id = String(session?.id || "");
   const provider = copilotResume.provider;
   const terminal = state.terminals.get(copilotResume.terminalId);
@@ -7605,11 +7928,41 @@ async function resumeCopilotSession(session) {
     toast(`That terminal or ${aiAssistantName(provider)} session is no longer available`, "warn", 2400);
     return false;
   }
+  if (copilotResume.newTerminal && !confirmedCwd) {
+    return openResumeCwdChange(session);
+  }
   if (copilotResume.newTerminal && (session.source === "cli" || session.source === "claude")) {
     const command = buildAiAssistantCommand({ provider, resumeId: id });
-    if (!command) return false;
+    if (!command) {
+      restoreCopilotResume();
+      return false;
+    }
+    if (provider === "claude" && !session.cwd) {
+      toast("Claude cannot resume because its saved project folder is unavailable", "error", 3600);
+      restoreCopilotResume();
+      return false;
+    }
+    let launchCwd = session.cwd || confirmedCwd;
+    if (session.cwd) {
+      const original = await requestBridge({
+        type: "validateDirectory",
+        path: session.cwd,
+        shell: "powershell",
+        distro: ""
+      }, { timeout: 20000 });
+      if (original?.valid && original.path) {
+        launchCwd = original.path;
+      } else if (provider === "claude") {
+        toast("Claude cannot resume because its original project folder is unavailable", "error", 3600);
+        restoreCopilotResume();
+        return false;
+      } else {
+        launchCwd = confirmedCwd;
+      }
+    }
+    const relocate = sameHostDirectory(launchCwd, confirmedCwd) ? null : { path: confirmedCwd, provider };
     closeCopilotResume();
-    openCopilotSessionTerminal(session, command, session.cwd, provider);
+    openCopilotSessionTerminal(session, command, launchCwd, provider, relocate);
     return true;
   }
   if (copilotResume.newTerminal) {
@@ -7622,12 +7975,13 @@ async function resumeCopilotSession(session) {
     if (generation !== copilotResume.generation) return false;
     if (!response?.contextPath || response.error) {
       toast(response?.error || "Could not import that Copilot session", "error", 3200);
+      restoreCopilotResume();
       return false;
     }
     const source = copilotSourceLabel(session.source);
     const prompt = `Continue the imported ${source} Copilot session. Read the context file at ${response.contextPath} first, continue from where it stopped, and ask what to do next if the final task is unclear.`;
     closeCopilotResume();
-    openCopilotSessionTerminal(session, `copilot --yolo -i ${powerShellLiteral(prompt)}`, response.cwd || session.cwd);
+    openCopilotSessionTerminal(session, `copilot --yolo -i ${powerShellLiteral(prompt)}`, confirmedCwd);
     return true;
   }
   closeCopilotResume();
@@ -8276,14 +8630,16 @@ function restartActiveSession() {
 
 /* ---------------- In-terminal find --------------- */
 
+// One flat translucent fill per match, in the light blue editors use for find
+// results. No border: the addon renders `matchBorder` as a DOM outline a pixel
+// outside the renderer-painted fill, which reads as a second box around every
+// match rather than as one highlight.
 const findDecorations = {
   decorations: {
-    matchBackground: "#ffd75f",
-    matchBorder: "#ffd75f",
-    matchOverviewRuler: "#ffd75f",
-    activeMatchBackground: "#f0b35a",
-    activeMatchBorder: "#f0b35a",
-    activeMatchColorOverviewRuler: "#f0b35a"
+    matchBackground: "#58a6ff59",
+    matchOverviewRuler: "#58a6ff",
+    activeMatchBackground: "#58a6ffb3",
+    activeMatchColorOverviewRuler: "#58a6ff"
   }
 };
 
@@ -8413,6 +8769,10 @@ function bindFindAll() {
   const bar = elements.findAllBar;
   if (!bar) return;
 
+  // The bar wraps to a second row on narrow windows and grows when the
+  // "on other pages" offer appears, so the reserved space follows its real box.
+  new ResizeObserver(syncFindAllInset).observe(bar);
+
   elements.findAllInput.addEventListener("input", () => {
     runFindAll(elements.findAllInput.value);
   });
@@ -8433,8 +8793,12 @@ function bindFindAll() {
     const kind = button.dataset.findall;
     if (kind === "next") findAllNav(1);
     else if (kind === "prev") findAllNav(-1);
+    else if (kind === "scope") toggleSearchAcrossPages();
+    else if (kind === "reveal") setSearchAcrossPages(true);
     else if (kind === "close") closeFindAll();
   });
+
+  updateSearchScopeControls();
 }
 
 function openFindAll() {
@@ -8446,6 +8810,7 @@ function openFindAll() {
   closeAnyFind();
   state.findAll.active = true;
   elements.findAllBar.hidden = false;
+  syncFindAllInset();
 
   const active = state.activeId ? state.terminals.get(state.activeId) : null;
   const selection = active?.term.getSelection();
@@ -8454,13 +8819,33 @@ function openFindAll() {
   }
   elements.findAllInput.focus();
   elements.findAllInput.select();
+  updateSearchScopeControls();
   runFindAll(elements.findAllInput.value);
+}
+
+// The bar floats above the stage, so without reserved space it sits on top of
+// the pane header row and swallows clicks meant for its controls — including the
+// page badge on a pane this very search borrowed from another page.
+function syncFindAllInset() {
+  const bar = elements.findAllBar;
+  const stage = elements.stage;
+  if (!bar || !stage) return;
+  const open = bar.hidden === false;
+  stage.classList.toggle("is-find-all-open", open);
+  if (!open) {
+    stage.style.removeProperty("--find-all-inset");
+    return;
+  }
+  const barRect = bar.getBoundingClientRect();
+  const stageRect = stage.getBoundingClientRect();
+  stage.style.setProperty("--find-all-inset", `${Math.round(barRect.bottom - stageRect.top) + 8}px`);
 }
 
 function closeFindAll({ restoreFocus = true } = {}) {
   if (!state.findAll.active && elements.findAllBar?.hidden !== false) return;
   state.findAll.active = false;
   if (elements.findAllBar) elements.findAllBar.hidden = true;
+  syncFindAllInset();
   for (const terminal of state.terminals.values()) {
     terminal.searchAddon?.clearDecorations();
     terminal.pane.classList.remove("has-find-match");
@@ -8470,6 +8855,8 @@ function closeFindAll({ restoreFocus = true } = {}) {
   state.findAll.li = -1;
   state.findAll.query = "";
   state.findAll.filter = false;
+  state.findAll.exemptId = null;
+  applySearchGathering([]);
   const active = state.activeId ? state.terminals.get(state.activeId) : null;
   if (restoreFocus) active?.term.focus();
 }
@@ -8497,23 +8884,31 @@ function runSearchPass(rawQuery, { filter = false, preserveNav = false } = {}) {
     state.findAll.order = [];
     state.findAll.ti = 0;
     state.findAll.li = -1;
+    state.findAll.exemptId = null;
+    applySearchGathering([]);
     refreshFindAllCount();
     return;
   }
 
   const order = [];
+  const offPage = [];
   for (const terminal of orderedTerminals()) {
     const matched = searchTerminalPane(terminal, query);
     terminal.pane.classList.toggle("has-find-match", matched);
     if (matched) order.push(terminal.id);
-    if (!filter) continue;
 
     // A pane also survives the filter when its title/cwd/shell/status match,
     // which is how the header search has always narrowed down to a terminal by
-    // name rather than by output.
-    setTerminalSearchHidden(terminal, !(matched || terminalMetadataMatches(terminal, query)));
+    // name rather than by output. The pane the search was launched from is
+    // always kept so the user never loses the terminal they were looking at.
+    const kept = matched
+      || terminal.id === state.findAll.exemptId
+      || (filter && terminalMetadataMatches(terminal, query));
+    if (kept && !isOnActivePage(terminal) && !terminal.minimized) offPage.push(terminal.id);
+    if (filter) setTerminalSearchHidden(terminal, !kept);
   }
   state.findAll.order = order;
+  applySearchGathering(offPage);
   // A refresh triggered by live output keeps the user's place in the match
   // list; a new query always restarts from the top.
   if (!preserveNav || state.findAll.ti >= order.length) {
@@ -8522,6 +8917,140 @@ function runSearchPass(rawQuery, { filter = false, preserveNav = false } = {}) {
   }
   refreshFindAllCount();
 }
+
+/* ------- Cross-page results ------- */
+
+// A match on another page used to be unreachable: the pane stayed display:none,
+// so the counter promised results the stage never showed and navigation landed
+// on nothing. Matching panes from other pages are instead borrowed onto the
+// current stage for the duration of the search, each wearing a badge naming the
+// page it belongs to, and are handed straight back when the search ends.
+function isSearchGathering() {
+  return state.findAll.gathered.length > 0;
+}
+
+function applySearchGathering(ids) {
+  const gathered = new Set(state.settings.searchAcrossPages ? ids : []);
+  const wasGathering = isSearchGathering();
+  let changed = false;
+  for (const terminal of state.terminals.values()) {
+    const gather = gathered.has(terminal.id);
+    if (terminal.pane.classList.contains("is-search-gathered") === gather) continue;
+    terminal.pane.classList.toggle("is-search-gathered", gather);
+    updateTerminalPageBadge(terminal, gather);
+    if (gather) scheduleFit(terminal);
+    changed = true;
+  }
+  state.findAll.gathered = [...gathered];
+  elements.host.classList.toggle("is-search-gathering", gathered.size > 0);
+  if (changed) {
+    // A maximized pane hides every sibling, so a zoom must stand down while
+    // borrowed results are on screen or the gathering would be invisible.
+    if (wasGathering !== isSearchGathering()) applyZoom();
+    rebalanceWebglRenderers();
+    scheduleTerminalConnections();
+  }
+  updateSearchScopeControls();
+}
+
+function updateTerminalPageBadge(terminal, gathered) {
+  const badge = terminal.pane.querySelector(".pane-page-tag");
+  if (!badge) return;
+  badge.hidden = !gathered;
+  if (!gathered) return;
+  const name = pageName(terminal.pageId) || "another page";
+  badge.querySelector(".pane-page-tag-name").textContent = name;
+  badge.title = `This terminal lives on ${name}. Select to open that page.`;
+  badge.setAttribute("aria-label", badge.title);
+}
+
+function searchPageCount() {
+  const pages = new Set();
+  for (const id of state.findAll.order) {
+    const terminal = state.terminals.get(id);
+    if (terminal) pages.add(terminal.pageId);
+  }
+  return pages.size;
+}
+
+// Off-page matches the user has opted out of seeing: the number behind the
+// "Show" affordance, so the offer is only made when there is something to show.
+function hiddenPageMatchCount() {
+  if (state.settings.searchAcrossPages) return 0;
+  let count = 0;
+  for (const id of state.findAll.order) {
+    const terminal = state.terminals.get(id);
+    if (terminal && !isOnActivePage(terminal) && !terminal.minimized) count += 1;
+  }
+  return count;
+}
+
+function updateSearchScopeControls() {
+  const toggle = elements.findAllScope;
+  if (!toggle) return;
+  const across = Boolean(state.settings.searchAcrossPages);
+  toggle.setAttribute("aria-pressed", String(across));
+  toggle.title = across
+    ? "Matches on other pages are shown here. Select to search this page only."
+    : "Only this page is shown. Select to include matches from every page.";
+  toggle.setAttribute("aria-label", toggle.title);
+  const label = toggle.querySelector(".find-all-scope-label");
+  if (label) label.textContent = across ? "All pages" : "This page";
+  if (elements.searchAcrossPages) elements.searchAcrossPages.checked = across;
+
+  const hidden = hiddenPageMatchCount();
+  const offer = elements.findAllReveal;
+  if (!offer) return;
+  offer.hidden = hidden === 0;
+  const count = offer.querySelector(".find-all-reveal-count");
+  if (count) count.textContent = String(hidden);
+}
+
+function setSearchAcrossPages(enabled) {
+  const next = Boolean(enabled);
+  if (state.settings.searchAcrossPages === next) return;
+  state.settings.searchAcrossPages = next;
+  saveSettings();
+  if (state.findAll.query) runSearchPass(state.findAll.query, { filter: state.findAll.filter, preserveNav: true });
+  else updateSearchScopeControls();
+}
+
+function toggleSearchAcrossPages() {
+  setSearchAcrossPages(!state.settings.searchAcrossPages);
+}
+
+// xterm searches one buffer line at a time, so a multi-line selection can only
+// ever match through its first line; the rest would guarantee zero results.
+const SEARCH_SELECTION_MAX = 200;
+
+function searchSelectionQuery(selection) {
+  return String(selection || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.slice(0, SEARCH_SELECTION_MAX) || "";
+}
+
+function searchSelectionPreview(selection) {
+  const query = searchSelectionQuery(selection);
+  return query.length > 32 ? `${query.slice(0, 32)}\u2026` : query;
+}
+
+// Right-click search: the selected text becomes the workspace filter, so every
+// terminal without it drops out of the stage. The pane the menu was opened from
+// is exempt — losing the terminal you just right-clicked would be the one thing
+// the gesture must never do — and matches parked on other pages are borrowed in.
+function searchAllTerminalsForSelection(terminal, selection) {
+  const query = searchSelectionQuery(selection);
+  if (!query) return false;
+  if (blockFullscreenSurfaceAction("search all terminals")) return false;
+  elements.terminalSearchInput.value = query;
+  state.terminalSearch = query;
+  applyTerminalSearch({ exemptId: terminal.id });
+  setActiveTerminal(terminal.id);
+  return true;
+}
+
 
 // Highlight every match in this pane without scrolling, then drop the
 // active-match emphasis so nothing looks "current" until the user navigates.
@@ -8533,6 +9062,11 @@ function searchTerminalPane(terminal, query) {
   terminal.searchAddon.clearDecorations();
   terminal.searchAddon.findNext(query, { ...findDecorations, incremental: true, noScroll: true });
   terminal.searchAddon.clearActiveDecoration();
+  // The addon also *selects* the match it lands on, and clearActiveDecoration
+  // does not undo that. Left behind, the theme's selection colour paints under
+  // the match decoration and the term wears two overlapping highlights. The
+  // snapshot has to go with it or the TUI-selection restorer reinstates it.
+  forgetTerminalSelection(terminal);
   return (terminal.lastFindCount || 0) > 0;
 }
 
@@ -8542,7 +9076,9 @@ function searchTerminalPane(terminal, query) {
 function reconcileFilterVisibility(terminal) {
   const query = normalizeSearchText(state.findAll.query);
   if (!query) return false;
-  const visible = (terminal.lastFindCount || 0) > 0 || terminalMetadataMatches(terminal, query);
+  const visible = (terminal.lastFindCount || 0) > 0
+    || terminal.id === state.findAll.exemptId
+    || terminalMetadataMatches(terminal, query);
   return setTerminalSearchHidden(terminal, !visible);
 }
 
@@ -8593,6 +9129,11 @@ function findAllNav(direction) {
 
   const terminal = state.terminals.get(order[ti]);
   if (!terminal?.searchAddon) return;
+  // A match that was not borrowed onto this stage lives on another page, so go
+  // there instead of highlighting a pane nobody can see.
+  if (!isOnActivePage(terminal) && !terminal.pane.classList.contains("is-search-gathered")) {
+    setActivePage(terminal.pageId, { focus: false });
+  }
   setActiveTerminal(terminal.id);
   terminal.pane.scrollIntoView({ block: "nearest", inline: "nearest" });
   // When entering a pane fresh, reset the selection so findNext/findPrevious
@@ -8633,10 +9174,11 @@ function findAllCountLabel() {
     pos += state.findAll.li + 1;
   }
 
-  const paneLabel = `${panes} pane${panes === 1 ? "" : "s"}`;
+  const pages = searchPageCount();
+  const paneLabel = `${panes} pane${panes === 1 ? "" : "s"}${pages > 1 ? ` \u00b7 ${pages} pages` : ""}`;
   return pos > 0
-    ? `${pos}/${total} · ${paneLabel}`
-    : `${total} · ${paneLabel}`;
+    ? `${pos}/${total} \u00b7 ${paneLabel}`
+    : `${total} \u00b7 ${paneLabel}`;
 }
 
 /* ---------------- Broadcast command bar --------------- */
@@ -8752,6 +9294,9 @@ function toggleZoomPane(id) {
 function effectiveZoomedId() {
   const terminal = state.zoomedId ? state.terminals.get(state.zoomedId) : null;
   if (!terminal || terminal.minimized || !isOnActivePage(terminal)) return null;
+  // Borrowed cross-page results would be hidden behind a maximized pane, so the
+  // zoom is suspended (not forgotten) until the search ends.
+  if (isSearchGathering()) return null;
   return terminal.id;
 }
 
@@ -8859,7 +9404,8 @@ function modifiedEnterSequence(terminal, event) {
 }
 
 function updateTerminalCwd(terminal, dir) {
-  const clean = String(dir || "").trim().replace(/\//g, "\\");
+  const raw = String(dir || "").trim();
+  const clean = cwdTerminalShell(terminal) === "wsl" ? raw : raw.replace(/\//g, "\\");
   if (!clean) return;
   terminal.cwd = clean;
   refreshTerminalSearchText(terminal);
@@ -8873,6 +9419,314 @@ function revealTerminalCwd(terminal) {
     return;
   }
   revealPath(terminal.cwd);
+}
+
+const cwdChange = {
+  closeTimer: 0,
+  mode: "terminal",
+  readinessTimer: 0,
+  returnFocus: null,
+  resumeSession: null,
+  terminalId: null,
+  validPath: "",
+  validationGeneration: 0,
+  validationTimer: 0
+};
+
+function cwdTerminalShell(terminal) {
+  const shell = String(terminal?.shell || "").trim().toLowerCase();
+  if (shell === "wsl" || shell.includes("tmux")) return "wsl";
+  if (shell === "cmd" || shell.includes("command prompt")) return "cmd";
+  return "powershell";
+}
+
+function cwdTerminalProvider(terminal) {
+  if (terminal?.aiAssistantTuiProvider === "copilot" || terminal?.aiAssistantTuiProvider === "claude") {
+    return terminal.aiAssistantTuiProvider;
+  }
+  const lines = activeBufferLines(terminal);
+  return promptDetector.aiAssistantTuiProvider(lines)
+    || (promptDetector.isCopilotTui(lines) ? "copilot" : "");
+}
+
+function cwdChangeReadiness(terminal) {
+  const readiness = terminalExecutionReadiness(terminal);
+  const provider = cwdTerminalProvider(terminal);
+  if (provider) return { mode: provider, ready: readiness.mode === provider && readiness.ready };
+  return { mode: cwdTerminalShell(terminal), ready: readiness.mode === "shell" && readiness.ready };
+}
+
+function cwdProviderCapability(mode) {
+  if (mode !== "claude") return { available: true, status: "" };
+  const provider = aiProviderById("claude");
+  return {
+    available: provider?.cwdChangeAvailable === true,
+    status: provider?.cwdChangeStatus || "Refresh AI assistant status to verify Claude /cd support."
+  };
+}
+
+function setCwdChangeStatus(text, tone = "") {
+  elements.cwdChangeStatus.textContent = text;
+  if (tone) elements.cwdChangeStatus.dataset.tone = tone;
+  else delete elements.cwdChangeStatus.dataset.tone;
+}
+
+function updateCwdChangeReadyState() {
+  window.clearTimeout(cwdChange.readinessTimer);
+  if (elements.cwdChangeOverlay.hidden) return;
+  if (cwdChange.mode === "resume") {
+    const session = cwdChange.resumeSession;
+    const changed = Boolean(session && cwdChange.validPath && !sameHostDirectory(session.cwd, cwdChange.validPath));
+    const capability = changed ? cwdProviderCapability(copilotResume.provider) : { available: true, status: "" };
+    const missingClaudeProject = copilotResume.provider === "claude" && !session?.cwd;
+    elements.cwdChangeSend.disabled = !cwdChange.validPath || !capability.available || missingClaudeProject;
+    if (missingClaudeProject) {
+      setCwdChangeStatus("Claude cannot resume because its saved project folder is unavailable.", "error");
+    } else if (!capability.available) {
+      setCwdChangeStatus(capability.status, "error");
+    } else if (cwdChange.validPath) {
+      setCwdChangeStatus("Ready to resume in this working directory.", "ready");
+    }
+    return;
+  }
+  const terminal = state.terminals.get(cwdChange.terminalId);
+  if (!terminal || terminal.status === "exited") {
+    cwdChange.validPath = "";
+    elements.cwdChangeSend.disabled = true;
+    setCwdChangeStatus("The selected terminal is no longer available.", "error");
+    return;
+  }
+  const readiness = cwdChangeReadiness(terminal);
+  const capability = cwdProviderCapability(readiness.mode);
+  elements.cwdChangeSend.disabled = !cwdChange.validPath || !readiness.ready || !capability.available;
+  if (!cwdChange.validPath) {
+    // Validation owns the status text while the path is unresolved.
+  } else if (!capability.available) {
+    setCwdChangeStatus(capability.status, "error");
+  } else if (!readiness.ready) {
+    setCwdChangeStatus("Waiting for an idle terminal or assistant prompt\u2026", "waiting");
+  } else {
+    setCwdChangeStatus(`Ready to change ${terminal.titleInput.value || "this terminal"}.`, "ready");
+  }
+  cwdChange.readinessTimer = window.setTimeout(updateCwdChangeReadyState, 300);
+}
+
+function openCwdChange(terminalOrId, returnFocus = document.activeElement) {
+  const terminal = typeof terminalOrId === "string"
+    ? state.terminals.get(terminalOrId)
+    : terminalOrId;
+  if (!terminal) {
+    toast("Select a terminal first", "info", 1800);
+    return false;
+  }
+  cwdChange.mode = "terminal";
+  cwdChange.resumeSession = null;
+  cwdChange.terminalId = terminal.id;
+  cwdChange.returnFocus = returnFocus;
+  cwdChange.validPath = "";
+  cwdChange.validationGeneration += 1;
+  window.clearTimeout(cwdChange.closeTimer);
+  window.clearTimeout(cwdChange.readinessTimer);
+  window.clearTimeout(cwdChange.validationTimer);
+  elements.cwdChangeTarget.textContent = terminal.titleInput.value || "Selected terminal";
+  elements.cwdChangeSource.textContent = cwdTerminalProvider(terminal)
+    ? "Last known assistant path"
+    : "Last known terminal path";
+  elements.cwdChangeCurrent.textContent = terminal.cwd || "Unknown";
+  elements.cwdChangeInput.value = terminal.cwd || "";
+  elements.cwdChangeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.cwdChangeOverlay.classList.add("is-open");
+    elements.cwdChangeInput.focus();
+    elements.cwdChangeInput.select();
+  });
+  scheduleCwdValidation();
+  updateCwdChangeReadyState();
+  queryLiveCwdForDialog(terminal, terminal.cwd || "");
+  refreshIcons(elements.cwdChangeOverlay);
+  return true;
+}
+
+function openResumeCwdChange(session) {
+  if (!session || !copilotResume.newTerminal) return false;
+  suspendCopilotResume();
+  cwdChange.mode = "resume";
+  cwdChange.resumeSession = session;
+  cwdChange.terminalId = null;
+  cwdChange.returnFocus = elements.copilotResumeSearch;
+  cwdChange.validPath = "";
+  cwdChange.validationGeneration += 1;
+  window.clearTimeout(cwdChange.closeTimer);
+  window.clearTimeout(cwdChange.readinessTimer);
+  window.clearTimeout(cwdChange.validationTimer);
+  elements.cwdChangeTarget.textContent = `Resume ${copilotSessionTitle(session)}`;
+  elements.cwdChangeSource.textContent = "Saved session path";
+  elements.cwdChangeCurrent.textContent = session.cwd || "Unavailable";
+  elements.cwdChangeInput.value = session.cwd || "";
+  elements.cwdChangeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.cwdChangeOverlay.classList.add("is-open");
+    elements.cwdChangeInput.focus();
+    elements.cwdChangeInput.select();
+  });
+  scheduleCwdValidation();
+  refreshIcons(elements.cwdChangeOverlay);
+  return true;
+}
+
+function closeCwdChange({ restoreResume = cwdChange.mode === "resume" } = {}) {
+  const shouldRestoreResume = restoreResume;
+  cwdChange.validationGeneration += 1;
+  cwdChange.validPath = "";
+  window.clearTimeout(cwdChange.readinessTimer);
+  window.clearTimeout(cwdChange.validationTimer);
+  elements.cwdChangeOverlay.classList.remove("is-open");
+  cwdChange.closeTimer = window.setTimeout(() => {
+    elements.cwdChangeOverlay.hidden = true;
+  }, 150);
+  const terminal = state.terminals.get(cwdChange.terminalId);
+  if (terminal) terminal.cwdQuery = null;
+  const returnFocus = cwdChange.returnFocus;
+  cwdChange.terminalId = null;
+  cwdChange.mode = "terminal";
+  cwdChange.resumeSession = null;
+  cwdChange.returnFocus = null;
+  if (shouldRestoreResume) restoreCopilotResume();
+  else if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+  else terminal?.term.focus();
+}
+
+function scheduleCwdValidation() {
+  cwdChange.validPath = "";
+  elements.cwdChangeSend.disabled = true;
+  window.clearTimeout(cwdChange.validationTimer);
+  const value = elements.cwdChangeInput.value.trim();
+  if (!value) {
+    setCwdChangeStatus("Enter a directory to continue.");
+    return;
+  }
+  setCwdChangeStatus("Checking directory\u2026");
+  cwdChange.validationTimer = window.setTimeout(validateCwdChange, 180);
+}
+
+async function validateCwdChange() {
+  const generation = ++cwdChange.validationGeneration;
+  const terminal = state.terminals.get(cwdChange.terminalId);
+  const requestedPath = elements.cwdChangeInput.value.trim();
+  if ((!terminal && cwdChange.mode !== "resume") || !requestedPath) return;
+  const response = await requestBridge({
+    type: "validateDirectory",
+    path: requestedPath,
+    shell: terminal ? cwdTerminalShell(terminal) : "powershell",
+    distro: terminal?.tmux?.distro || ""
+  }, { timeout: 20000 });
+  if (generation !== cwdChange.validationGeneration || elements.cwdChangeOverlay.hidden) return;
+  if (!response?.valid || !response.path) {
+    cwdChange.validPath = "";
+    elements.cwdChangeSend.disabled = true;
+    // A missing response means the bridge never answered, which says nothing
+    // about the directory -- blaming the path there sends people off checking a
+    // folder that was fine all along.
+    setCwdChangeStatus(response?.error || bridgeSilenceReason("checked"), "error");
+    return;
+  }
+  cwdChange.validPath = response.path;
+  if (elements.cwdChangeInput.value.trim() !== response.path) elements.cwdChangeInput.value = response.path;
+  updateCwdChangeReadyState();
+}
+
+function bridgeSilenceReason(verb) {
+  return state.socketReady
+    ? `The MultiTerm bridge did not answer, so the directory was not ${verb}.`
+    : `MultiTerm is not connected to its bridge, so the directory cannot be ${verb}.`;
+}
+
+async function browseCwdChange() {
+  const current = elements.cwdChangeInput.value.trim();
+  let selected = null;
+  try {
+    selected = window.multiterm?.pickFolder
+      ? await window.multiterm.pickFolder(current)
+      : await requestBridge({ type: "pickFolder", cwd: current }, { timeout: 300000 });
+  } catch {
+    selected = null;
+  }
+  if (!selected || elements.cwdChangeOverlay.hidden) return;
+  elements.cwdChangeInput.value = selected;
+  scheduleCwdValidation();
+}
+
+function quotePowerShellPath(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function quotePosixPath(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function buildCwdChangeCommand(terminal, terminalPath) {
+  const provider = cwdTerminalProvider(terminal);
+  if (provider === "copilot") return `/cwd ${terminalPath}`;
+  if (provider === "claude") return `/cd ${terminalPath}`;
+  const shell = cwdTerminalShell(terminal);
+  if (shell === "wsl") return `cd -- ${quotePosixPath(terminalPath)}`;
+  if (shell === "cmd") return `cd /d "${String(terminalPath).replace(/%/g, "^%")}"`;
+  return `Set-Location -LiteralPath ${quotePowerShellPath(terminalPath)}`;
+}
+
+function submitCwdChange() {
+  if (cwdChange.mode === "resume") {
+    const session = cwdChange.resumeSession;
+    const confirmedCwd = cwdChange.validPath;
+    if (!session || !confirmedCwd || elements.cwdChangeSend.disabled) return false;
+    closeCwdChange({ restoreResume: false });
+    resumeCopilotSession(session, { confirmedCwd });
+    return true;
+  }
+  const terminal = state.terminals.get(cwdChange.terminalId);
+  if (!terminal || !cwdChange.validPath || elements.cwdChangeSend.disabled) return false;
+  const readiness = cwdChangeReadiness(terminal);
+  if (!readiness.ready || !cwdProviderCapability(readiness.mode).available) return false;
+  const command = buildCwdChangeCommand(terminal, cwdChange.validPath);
+  const provider = readiness.mode === "copilot" || readiness.mode === "claude";
+  if (provider) sendBridge({ type: "input", id: terminal.id, data: COPILOT_CLEAR_PROMPT });
+  sendBridge({ type: "input", id: terminal.id, data: command });
+  sendBridge({ type: "input", id: terminal.id, data: terminalEnterSequence(terminal) });
+  terminal.cwd = cwdChange.validPath;
+  refreshTerminalSearchText(terminal);
+  updateStatusBar();
+  closeCwdChange();
+  window.requestAnimationFrame(() => terminal.term.focus());
+  return true;
+}
+
+function schedulePendingCwdChange(terminal) {
+  window.clearTimeout(terminal?.pendingCwdTimer);
+  if (!terminal?.pendingCwdChange || terminal.status !== "live") return;
+  const pending = terminal.pendingCwdChange;
+  const readiness = terminalExecutionReadiness(terminal);
+  if (readiness.mode !== pending.provider || !readiness.ready) {
+    terminal.pendingCwdTimer = window.setTimeout(() => schedulePendingCwdChange(terminal), 300);
+    return;
+  }
+  const capability = cwdProviderCapability(pending.provider);
+  if (!capability.available) {
+    terminal.pendingCwdChange = null;
+    toast(capability.status, "error", 3600);
+    return;
+  }
+  terminal.pendingCwdChange = null;
+  terminal.pendingCwdTimer = 0;
+  sendBridge({ type: "input", id: terminal.id, data: COPILOT_CLEAR_PROMPT });
+  sendBridge({
+    type: "input",
+    id: terminal.id,
+    data: pending.provider === "claude" ? `/cd ${pending.path}` : `/cwd ${pending.path}`
+  });
+  sendBridge({ type: "input", id: terminal.id, data: terminalEnterSequence(terminal) });
+  terminal.cwd = pending.path;
+  refreshTerminalSearchText(terminal);
+  updateStatusBar();
 }
 
 // Only the bridge can open Explorer; the browser cannot reach the file system.
@@ -9435,6 +10289,10 @@ function terminalsOnPage(pageId) {
   return [...state.terminals.values()].filter((terminal) => terminal.pageId === pageId);
 }
 
+function terminalsNotOnPage(pageId) {
+  return [...state.terminals.values()].filter((terminal) => terminal.pageId !== pageId);
+}
+
 function terminalsOnActivePage() {
   return terminalsOnPage(state.activePageId);
 }
@@ -9465,6 +10323,11 @@ function setActivePage(id, options = {}) {
 
   state.activePageId = id;
   applyPageVisibility();
+  // Which panes count as "borrowed from another page" changes the moment the
+  // active page does, so a live search recomputes against the new page.
+  if (state.findAll.query) {
+    runSearchPass(state.findAll.query, { filter: state.findAll.filter, preserveNav: true });
+  }
   renderPager();
   updateMinimizedDock();
   savePages();
@@ -9535,15 +10398,42 @@ function requestCloseAllPages() {
   return resetAllPages(action);
 }
 
+function requestCloseOtherPages(id) {
+  if (state.pages.length <= 1 || !pageById(id)) {
+    toast("No other pages to close", "info", 1800);
+    return false;
+  }
+  if (terminalsNotOnPage(id).length === 0) return closeOtherPages(id);
+
+  const action = normalizePageCloseAction(state.settings.pageCloseAction);
+  if (action === "ask") {
+    openPageCloseConfirm({ kind: "others", pageId: id });
+    return false;
+  }
+  return closeOtherPages(id, { terminalAction: action });
+}
+
 function openPageCloseConfirm(request) {
   state.pendingPageClose = request;
   const closingAll = request.kind === "all";
+  const closingOthers = request.kind === "others";
   const page = closingAll ? null : pageById(request.pageId);
-  const count = closingAll ? state.terminals.size : terminalsOnPage(request.pageId).length;
-  elements.pageCloseTitle.textContent = closingAll ? "Close all pages?" : "Close page?";
+  const count = closingAll
+    ? state.terminals.size
+    : closingOthers
+      ? terminalsNotOnPage(request.pageId).length
+      : terminalsOnPage(request.pageId).length;
+  const otherPages = closingOthers ? state.pages.length - 1 : 0;
+  elements.pageCloseTitle.textContent = closingAll
+    ? "Close all pages?"
+    : closingOthers
+      ? "Close other pages?"
+      : "Close page?";
   elements.pageCloseText.textContent = closingAll
     ? `The ${count} terminal${count === 1 ? "" : "s"} across all pages can be moved to one new Page 1 or closed with the pages.`
-    : `“${page?.name || "This page"}” contains ${count} terminal${count === 1 ? "" : "s"}. Move ${count === 1 ? "it" : "them"} to a neighbouring page or close ${count === 1 ? "it" : "them"} with the page.`;
+    : closingOthers
+      ? `Closing the other ${otherPages} page${otherPages === 1 ? "" : "s"} affects ${count} terminal${count === 1 ? "" : "s"}. Move ${count === 1 ? "it" : "them"} to “${page?.name || "this page"}” or close ${count === 1 ? "it" : "them"} with the pages.`
+      : `“${page?.name || "This page"}” contains ${count} terminal${count === 1 ? "" : "s"}. Move ${count === 1 ? "it" : "them"} to a neighbouring page or close ${count === 1 ? "it" : "them"} with the page.`;
   elements.pageCloseRemember.checked = false;
   elements.pageCloseOverlay.hidden = false;
   window.requestAnimationFrame(() => {
@@ -9572,6 +10462,7 @@ function choosePageCloseAction(action) {
   }
   closePageCloseConfirm();
   if (request.kind === "all") resetAllPages(action);
+  else if (request.kind === "others") closeOtherPages(request.pageId, { terminalAction: action });
   else removePage(request.pageId, { terminalAction: action });
 }
 
@@ -9602,6 +10493,52 @@ function resetAllPages(terminalAction) {
   updateTerminalActions();
   window.requestAnimationFrame(() => fitAllTerminals());
   toast(terminalAction === "close" ? "Closed all pages and terminals" : "Closed all pages — moved terminals to Page 1", "info");
+  return true;
+}
+
+// Keeps one page and discards the rest. Terminals elsewhere are moved onto the kept
+// page unless the caller asked for them to be closed.
+function closeOtherPages(keepId, options = {}) {
+  const keep = pageById(keepId);
+  if (!keep || state.pages.length <= 1) return false;
+
+  const closedPages = state.pages.length - 1;
+  const affected = terminalsNotOnPage(keepId);
+  const terminalAction = normalizePageCloseAction(options.terminalAction);
+
+  if (terminalAction === "close") {
+    for (const terminal of affected) removeTerminal(terminal.id);
+    if (terminalsNotOnPage(keepId).length > 0) {
+      toast("Could not close every terminal on the other pages", "error", 3200);
+      return false;
+    }
+  } else {
+    for (const terminal of affected) terminal.pageId = keepId;
+  }
+
+  state.pages = [keep];
+  state.activePageId = keepId;
+  applyPageVisibility();
+  renderPager();
+  savePages();
+  saveTerminalPages();
+  saveSessionSnapshot();
+  applyZoom();
+  updateTerminalActions();
+  window.requestAnimationFrame(() => fitAllTerminals());
+
+  log.info("pages", `Closed ${closedPages} other page(s), kept ${keep.name}`, {
+    closedTerminals: terminalAction === "close" ? affected.length : 0,
+    movedTerminals: terminalAction === "close" ? 0 : affected.length
+  });
+  toast(
+    affected.length > 0
+      ? terminalAction === "close"
+        ? `Closed ${closedPages} page${closedPages === 1 ? "" : "s"} and ${affected.length} terminal${affected.length === 1 ? "" : "s"}`
+        : `Closed ${closedPages} page${closedPages === 1 ? "" : "s"} — moved ${affected.length} terminal${affected.length === 1 ? "" : "s"} to “${keep.name}”`
+      : `Closed ${closedPages} page${closedPages === 1 ? "" : "s"}`,
+    "info"
+  );
   return true;
 }
 
@@ -10031,6 +10968,7 @@ function bindPager() {
     items.push({ separator: true });
     if (state.pages.length > 1) {
       items.push({ label: "Close page", icon: "x", danger: true, run: () => requestPageClose(page.id) });
+      items.push({ label: "Close other pages", icon: "x-square", danger: true, run: () => requestCloseOtherPages(page.id) });
     }
     items.push({ label: "Close all", icon: "trash-2", danger: true, run: requestCloseAllPages });
     renderContextMenu(items);
@@ -10220,6 +11158,10 @@ function syncControlsFromSettings() {
     state.settings.copilotImportContextKb,
     elements.copilotImportContextKb
   );
+  state.settings.copilotSessionSearchContextKb = clampCopilotSessionSearchContextKb(
+    state.settings.copilotSessionSearchContextKb,
+    elements.copilotSessionSearchContextKb
+  );
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
@@ -10240,6 +11182,7 @@ function syncControlsFromSettings() {
     elements.maxInstallerSizeMb
   );
   elements.notifyActivity.checked = state.settings.notifyActivity;
+  elements.notifyQuestions.checked = state.settings.notifyQuestions;
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
@@ -10247,6 +11190,7 @@ function syncControlsFromSettings() {
   renderSnippets();
   updateBroadcastEnterToggle();
   refreshComboboxes();
+  updateSearchScopeControls();
 }
 
 /* ---------------- Per-terminal color labels --------------- */
@@ -12820,6 +13764,28 @@ function updateMessageComposerFields() {
   elements.messageStatus.required = kind === "status";
 }
 
+// The composer's message box is a real textarea with the highlighted copy of its
+// own text painted underneath, so editing, IME, undo and accessibility stay
+// native while the tokens follow whatever shell the message is headed for.
+function messageComposerLanguage() {
+  const requested = elements.messageLanguage.value;
+  if (requested !== "auto") return requested;
+  return syntaxHighlight.languageForShell(state.terminals.get(elements.messageTarget.value)?.shell);
+}
+
+function repaintMessageComposer() {
+  elements.messageTextHighlight.innerHTML = syntaxHighlight.highlight(
+    elements.messageText.value,
+    messageComposerLanguage()
+  );
+  syncMessageComposerScroll();
+}
+
+function syncMessageComposerScroll() {
+  elements.messageTextHighlight.scrollTop = elements.messageText.scrollTop;
+  elements.messageTextHighlight.scrollLeft = elements.messageText.scrollLeft;
+}
+
 function setMessageComposerError(message = "") {
   elements.messageComposerError.textContent = message;
   elements.messageComposerError.hidden = !message;
@@ -12952,6 +13918,7 @@ async function sendComposedTerminalMessage() {
   elements.messageText.value = "";
   elements.messagePath.value = "";
   elements.messageStatus.value = "";
+  repaintMessageComposer();
   toast("Terminal message sent", "success", 1800);
   return true;
 }
@@ -12984,6 +13951,7 @@ function openTerminalMessages(sourceId = null, targetId = null) {
     : null;
   refreshMessageRoutes(sourceId, targetId);
   updateMessageComposerFields();
+  repaintMessageComposer();
   setMessageComposerError();
   document.querySelector(".app-shell").inert = true;
   elements.terminalMessagesOverlay.hidden = false;
@@ -13081,14 +14049,32 @@ function bindTerminalMessages() {
     }
   });
   elements.messageSource.addEventListener("change", () => refreshMessageRoutes(elements.messageSource.value));
-  elements.messageTarget.addEventListener("change", updateMessageLinkAction);
+  elements.messageTarget.addEventListener("change", () => {
+    updateMessageLinkAction();
+    repaintMessageComposer();
+  });
   elements.messageKind.addEventListener("change", updateMessageComposerFields);
+  elements.messageLanguage.addEventListener("change", repaintMessageComposer);
   elements.messageLinkAdd.addEventListener("click", addSelectedTerminalLink);
   elements.messageSend.addEventListener("click", sendComposedTerminalMessage);
+  elements.messageText.addEventListener("input", repaintMessageComposer);
+  elements.messageText.addEventListener("scroll", syncMessageComposerScroll);
   elements.messageText.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && event.ctrlKey && !event.isComposing) {
       event.preventDefault();
       sendComposedTerminalMessage();
+      return;
+    }
+    // Tab indents rather than leaving the field, which is what a code editor owes
+    // you; Shift+Tab keeps the escape route out of the composer.
+    if (event.key === "Tab" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.isComposing) {
+      event.preventDefault();
+      event.stopPropagation();
+      const field = elements.messageText;
+      const start = field.selectionStart;
+      const end = field.selectionEnd;
+      field.setRangeText("  ", start, end, "end");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
     }
   });
   elements.terminalMessagesList.addEventListener("click", (event) => {
@@ -14492,6 +15478,16 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { group: "Find & context", groupId: "find-context" },
     { label: "Find\u2026", hint: "Ctrl+F", icon: "search", shortcutId: "terminal.find", run: () => openFind(terminal) },
     { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", shortcutId: "terminal.find-all", run: openFindAll },
+    {
+      label: hasSelection
+        ? `Search all terminals for \u201c${searchSelectionPreview(selection)}\u201d`
+        : "Search all terminals for selection",
+      icon: "text-search",
+      shortcutId: "terminal.search-selection",
+      title: "Keeps only the terminals containing the selected text, this one included, and borrows matching panes from other pages",
+      disabled: !hasSelection,
+      run: () => searchAllTerminalsForSelection(terminal, selection)
+    },
     { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", shortcutId: "terminal.clear", run: () => clearTerminal(terminal.id) },
     { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", shortcutId: "terminal.zoom", run: () => toggleZoomPane(terminal.id) },
     { label: "Terminal statistics\u2026", icon: "activity", shortcutId: "terminal.statistics", run: () => openStatistics(terminal.id) },
@@ -14501,6 +15497,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { group: "Tools & automation", groupId: "tools-automation" },
     { label: "Open folder", icon: "folder-open", shortcutId: "terminal.open-folder", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd }) },
+    { label: "Change working directory\u2026", icon: "folder-input", shortcutId: "terminal.change-cwd", run: () => openCwdChange(terminal) },
     {
       label: `Run ${assistantName}`,
       icon: "bot",
@@ -14689,6 +15686,10 @@ function buildSurfaceContextMenu() {
   const hasTerminals = state.terminals.size > 0;
   const minimized = [...state.terminals.values()].filter((terminal) => terminal.minimized).length;
   const newTerminal = (options) => addTerminal({ reveal: true, runStartup: true, ...options });
+  // Running a row restores focus to whatever owned it when the menu opened,
+  // which for this menu is the stage — and focusing the stage deselects the
+  // terminal. So terminal-scoped rows bind the target chosen at open time.
+  const invokedTerminalId = state.activeId;
 
   renderContextMenu([
     { label: "New terminal", hint: "Ctrl+T", icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
@@ -14705,6 +15706,22 @@ function buildSurfaceContextMenu() {
         : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
       disabled: !aiAssistantAvailable(),
       run: launchAiAssistant
+    },
+    {
+      label: `Resume ${aiAssistantName()} session\u2026`,
+      icon: "history",
+      title: aiAssistantAvailable()
+        ? `Choose a local ${aiAssistantName()} session and continue it in a new terminal`
+        : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
+      disabled: !aiAssistantAvailable(),
+      run: () => openCopilotResume(null, { newTerminal: true })
+    },
+    {
+      label: "Change working directory\u2026",
+      icon: "folder-input",
+      title: invokedTerminalId ? "Change the active terminal's working directory" : "Select a terminal first",
+      disabled: !invokedTerminalId,
+      run: () => openCwdChange(invokedTerminalId)
     },
     { separator: true },
     { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", cwd: here || undefined }) },
@@ -16826,7 +17843,21 @@ function enhanceSelect(select) {
     }
 
     box.index = query ? 0 : Math.max(0, box.items.findIndex((o) => o.value === select.value));
+    let renderedGroup = null;
     box.items.forEach((o, i) => {
+      // Group headers are list rows rather than list items, so keyboard
+      // navigation still walks only the selectable options in box.items.
+      const group = o.parentElement instanceof HTMLOptGroupElement ? o.parentElement.label : null;
+      if (group !== renderedGroup) {
+        renderedGroup = group;
+        if (group) {
+          const heading = document.createElement("li");
+          heading.className = "combobox-group";
+          heading.setAttribute("role", "presentation");
+          heading.textContent = group;
+          list.append(heading);
+        }
+      }
       const li = document.createElement("li");
       li.className = `combobox-option${i === box.index ? " is-active" : ""}`;
       if (showsLayoutGlyph) li.append(createLayoutModeGlyph(o.value));
@@ -16851,8 +17882,11 @@ function enhanceSelect(select) {
   };
 
   const highlight = () => {
-    [...list.children].forEach((li, i) => li.classList.toggle("is-active", i === box.index));
-    list.children[box.index]?.scrollIntoView({ block: "nearest" });
+    // Group headings share the list with options, so index by the option rows
+    // only — box.index counts selectable entries.
+    const options = list.querySelectorAll(".combobox-option");
+    options.forEach((li, i) => li.classList.toggle("is-active", i === box.index));
+    options[box.index]?.scrollIntoView({ block: "nearest" });
   };
 
   const move = (delta) => {
@@ -17204,8 +18238,8 @@ function syncAiSessionControls() {
     : "Choose an available interactive AI assistant in Settings";
   elements.copilotSessionsToggle.setAttribute("aria-label", elements.copilotSessionsToggle.title);
   if (!available) {
-    const savedModel = state.settings.aiSessionModel || "default";
-    setAiSelectOptions(elements.aiSessionModel, [{ value: savedModel, label: savedModel === "default" ? "Provider default" : savedModel }], savedModel);
+    const savedModel = state.settings.aiSessionModel || "";
+    setAiSelectOptions(elements.aiSessionModel, [{ value: savedModel, label: savedModel || "Auto (provider default)" }], savedModel);
     setAiSelectOptions(elements.aiSessionEffort, [{ value: state.settings.aiSessionEffort, label: "Provider default" }], state.settings.aiSessionEffort);
     setAiSelectOptions(elements.aiSessionContext, [{ value: "default", label: "Provider default" }], "default");
     elements.aiSessionModel.disabled = true;
@@ -17223,7 +18257,7 @@ function syncAiSessionControls() {
   elements.aiSessionContext.disabled = false;
   state.settings.aiSessionModel = setAiSelectOptions(
     elements.aiSessionModel,
-    provider.models.map((model) => ({ value: model.id, label: aiModelLabel(model) })),
+    aiModelChoices(provider.models),
     state.settings.aiSessionModel
   );
   const model = provider.models.find((candidate) => candidate.id === state.settings.aiSessionModel);
@@ -17319,7 +18353,7 @@ function syncAiSetupProfile(kind) {
   if (!available) {
     draft.provider = "none";
     controls.provider.value = "none";
-    draft.model = setAiSelectOptions(controls.model, [{ value: "", label: "Provider default" }], "");
+    draft.model = setAiSelectOptions(controls.model, [{ value: "", label: "Auto (provider default)" }], "");
     draft.effort = setAiSelectOptions(controls.effort, [{ value: "none", label: "Provider default" }], "none");
     draft.context = setAiSelectOptions(controls.context, [{ value: "default", label: "Provider default" }], "default");
     controls.model.disabled = true;
@@ -17333,7 +18367,7 @@ function syncAiSetupProfile(kind) {
   controls.context.disabled = false;
   draft.model = setAiSelectOptions(
     controls.model,
-    provider.models.map((model) => ({ value: model.id, label: aiModelLabel(model) })),
+    aiModelChoices(provider.models),
     draft.model
   );
   const model = provider.models.find((candidate) => candidate.id === draft.model);
@@ -17481,4 +18515,70 @@ function shouldAutomaticallyRefreshAiProviders() {
 
 function announceRendererPresence() {
   sendBridge({ type: "rendererPresence", visible: document.visibilityState === "visible" });
+}
+
+function parseCwdQueryOutput(value) {
+  const lines = String(value || "")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[│┃║┆┇┊┋╭╮╯╰─━]+/g, " ").trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const labelled = lines[index].match(/(?:current\s+working\s+directory|working\s+directory|current\s+directory|cwd)\s*[:=]?\s*(.+)$/i);
+    const candidate = (labelled ? labelled[1] : lines[index])
+      .replace(/^[`'"]+|[`'"]+$/g, "")
+      .trim();
+    if (/^[A-Za-z]:\\[^<>"\r\n]*$/.test(candidate) || /^\\\\[^\\]+\\[^\\]+/.test(candidate)) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function queryCopilotCwd(terminal, timeoutMs = 3500) {
+  const readiness = cwdChangeReadiness(terminal);
+  if (!terminal || readiness.mode !== "copilot" || !readiness.ready) return Promise.resolve("");
+  const query = { output: "", startRevision: terminal.outputRevision };
+  terminal.cwdQuery = query;
+  sendBridge({ type: "input", id: terminal.id, data: COPILOT_CLEAR_PROMPT });
+  sendBridge({ type: "input", id: terminal.id, data: "/cwd" });
+  sendBridge({ type: "input", id: terminal.id, data: terminalEnterSequence(terminal) });
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      if (terminal.cwdQuery === query) terminal.cwdQuery = null;
+      resolve(value);
+    };
+    const inspect = () => {
+      if (!state.terminals.has(terminal.id) || terminal.cwdQuery !== query) {
+        finish("");
+        return;
+      }
+      const hasFreshOutput = terminal.outputRevision > query.startRevision;
+      const path = hasFreshOutput ? parseCwdQueryOutput(query.output) : "";
+      const readyAgain = terminalExecutionReadiness(terminal);
+      if (path && readyAgain.mode === "copilot" && readyAgain.ready) {
+        finish(path);
+      } else if (performance.now() - started >= timeoutMs) {
+        finish("");
+      } else {
+        window.setTimeout(inspect, 100);
+      }
+    };
+    window.setTimeout(inspect, 100);
+  });
+}
+
+async function queryLiveCwdForDialog(terminal, fallbackPath) {
+  if (cwdTerminalProvider(terminal) !== "copilot") return;
+  const livePath = await queryCopilotCwd(terminal);
+  if (!livePath
+      || elements.cwdChangeOverlay.hidden
+      || cwdChange.terminalId !== terminal.id
+      || elements.cwdChangeInput.value.trim() !== fallbackPath) return;
+  terminal.cwd = livePath;
+  elements.cwdChangeSource.textContent = "Live Copilot session path";
+  elements.cwdChangeCurrent.textContent = livePath;
+  elements.cwdChangeInput.value = livePath;
+  scheduleCwdValidation();
 }

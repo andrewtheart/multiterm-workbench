@@ -34,6 +34,12 @@ contextBridge.exposeInMainWorld("multiterm", {
   // Opens a native file picker and resolves to the chosen script path, or
   // null if the user cancelled.
   pickScript: () => ipcRenderer.invoke("multiterm:pick-script"),
+  // Opens a native directory picker without exposing filesystem APIs to the
+  // renderer. The initial path is advisory and validated by the main process.
+  pickFolder: (initialDirectory) => ipcRenderer.invoke(
+    "multiterm:pick-folder",
+    String(initialDirectory || "")
+  ),
 
   // The main process asks before closing the window (tray-docking flow). The
   // renderer decides via a modal and replies with respondClose.

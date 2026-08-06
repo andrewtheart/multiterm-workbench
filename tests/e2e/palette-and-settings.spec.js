@@ -86,6 +86,7 @@ const STATIC_LABELS = [
   "Browse & run script in active terminal\u2026",
   "Open active terminal folder",
   "New terminal in active folder",
+  "Change active terminal working directory\u2026",
   "Toggle logging for active terminal",
   "Cycle broadcast scope",
   "Next terminal",
@@ -1274,6 +1275,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
         ["#copyOnSelect", "copyOnSelect"],
         ["#highlightInputPrompts", "highlightInputPrompts"],
         ["#notifyActivity", "notifyActivity"],
+        ["#notifyQuestions", "notifyQuestions"],
         ["#notifySilence", "notifySilence"]
       ];
       for (const [sel, key] of toggles) {
