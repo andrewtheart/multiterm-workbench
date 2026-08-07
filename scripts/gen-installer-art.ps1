@@ -135,15 +135,8 @@ try {
         try {
             $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
             $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-            $graphics.Clear($surface)
-            $accentBrush = [System.Drawing.SolidBrush]::new($accent)
-            try {
-                $graphics.FillRectangle($accentBrush, 0, 0, 256, 8)
-                $graphics.DrawImage($icon, 36, 36, 184, 184)
-            }
-            finally {
-                $accentBrush.Dispose()
-            }
+            $graphics.Clear([System.Drawing.Color]::Transparent)
+            $graphics.DrawImage($icon, 0, 0, 256, 256)
         }
         finally {
             $graphics.Dispose()

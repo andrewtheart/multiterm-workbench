@@ -55,11 +55,12 @@ function New-MtBitmap {
 
   # Prompt chevron ">" (teal).
   $chev = New-Object System.Drawing.Drawing2D.GraphicsPath
-  $chev.AddLines(@(
+  [System.Drawing.PointF[]]$chevronPoints = @(
     (New-Object System.Drawing.PointF([float]($s * 0.320), [float]($s * 0.352))),
     (New-Object System.Drawing.PointF([float]($s * 0.492), [float]($s * 0.500))),
     (New-Object System.Drawing.PointF([float]($s * 0.320), [float]($s * 0.648)))
-  ))
+  )
+  $chev.AddLines($chevronPoints)
   $penChev = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 121, 215, 189), [float]($s * 0.086))
   $penChev.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
   $penChev.EndCap = [System.Drawing.Drawing2D.LineCap]::Round

@@ -31,6 +31,17 @@ describe("modern installer UI", () => {
     expect(releaseBuild).toContain("gen-installer-art.ps1");
   });
 
+  it("keeps the installer header icon transparent outside the terminal square", () => {
+    const smallArtwork = artScript.slice(
+      artScript.indexOf("$small = [System.Drawing.Bitmap]::new"),
+      artScript.indexOf("Save-Png -Bitmap $small", artScript.indexOf("$small = [System.Drawing.Bitmap]::new"))
+    );
+    expect(smallArtwork).toContain("$graphics.Clear([System.Drawing.Color]::Transparent)");
+    expect(smallArtwork).toContain("$graphics.DrawImage($icon, 0, 0, 256, 256)");
+    expect(smallArtwork).not.toContain("FillRectangle");
+    expect(smallArtwork).not.toContain("$surface");
+  });
+
   // Every integration ships enabled; the editor extensions carry an explicit
   // experimental label because they change another IDE's installed state.
   it("enables every integration by default and marks the editor extensions experimental", () => {
