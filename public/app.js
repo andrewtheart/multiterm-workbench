@@ -12677,15 +12677,6 @@ function renderPager() {
     label.textContent = page.name;
     chip.append(label);
 
-    const edit = document.createElement("span");
-    edit.className = "pager-edit";
-    edit.dataset.pageEdit = page.id;
-    edit.setAttribute("role", "button");
-    edit.setAttribute("aria-label", `Rename ${page.name}`);
-    edit.title = "Rename page";
-    edit.innerHTML = '<i data-lucide="pencil"></i>';
-    chip.append(edit);
-
     const badge = document.createElement("span");
     badge.className = "pager-count";
     badge.textContent = String(count);
@@ -12702,6 +12693,15 @@ function renderPager() {
       park.querySelector(".pager-parked-count").textContent = String(parked);
       chip.append(park);
     }
+
+    const edit = document.createElement("span");
+    edit.className = "pager-edit";
+    edit.dataset.pageEdit = page.id;
+    edit.setAttribute("role", "button");
+    edit.setAttribute("aria-label", `Rename ${page.name}`);
+    edit.title = "Rename page";
+    edit.innerHTML = '<i data-lucide="pencil"></i>';
+    chip.append(edit);
 
     const canClose = state.pages.length > 1;
     const close = document.createElement("span");
@@ -17648,42 +17648,6 @@ function buildSurfaceContextMenu() {
 
   renderContextMenu([
     { label: "New terminal", hint: "Ctrl+T", icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
-    {
-      label: `This page: ${layoutModeLabel(effectivePageLayout())}`,
-      icon: "layout-grid",
-      title: "Layout for this page only, until MultiTerm restarts",
-      submenu: [
-        {
-          label: `Follow global (${layoutModeLabel(state.settings.layout)})`,
-          icon: "globe",
-          disabled: !pageLayoutOverrides.has(state.activePageId),
-          run: () => setPageLayoutOverride(null)
-        },
-        ...LAYOUT_MODE_OPTIONS.map(([label, value]) => ({
-          label,
-          icon: value === effectivePageLayout() ? "check" : "square",
-          run: () => setPageLayoutOverride(value)
-        }))
-      ]
-    },
-    {
-      label: `This page zoom: ${effectivePageZoom()}%`,
-      icon: "zoom-in",
-      title: "Workspace zoom for this page only, until MultiTerm restarts",
-      submenu: [
-        {
-          label: `Follow global (${normalizeWorkspaceZoom(state.settings.workspaceZoom)}%)`,
-          icon: "globe",
-          disabled: !pageZoomOverrides.has(state.activePageId),
-          run: () => setPageZoomOverride(null)
-        },
-        ...[50, 67, 80, 90, 100, 110, 125, 150, 175, 200].map((value) => ({
-          label: `${value}%`,
-          icon: value === effectivePageZoom() ? "check" : "square",
-          run: () => setPageZoomOverride(value)
-        }))
-      ]
-    },
     { label: "New terminal here", icon: "folder-plus", title: here || undefined, disabled: !here, run: () => newTerminal({ cwd: here }) },
     { label: "Paste and execute", icon: "clipboard-check", title: "Pastes clipboard text and immediately presses Enter", run: pasteAndExecute },
     { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ cwd: here || undefined, runStartup: true }) },
@@ -17745,6 +17709,42 @@ function buildSurfaceContextMenu() {
     ...(minimized
       ? [{ label: `Restore ${minimized} minimized terminal${minimized === 1 ? "" : "s"}`, icon: "maximize-2", run: restoreAllTerminals }]
       : []),
+    {
+      label: `This page: ${layoutModeLabel(effectivePageLayout())}`,
+      icon: "layout-grid",
+      title: "Layout for this page only, until MultiTerm restarts",
+      submenu: [
+        {
+          label: `Follow global (${layoutModeLabel(state.settings.layout)})`,
+          icon: "globe",
+          disabled: !pageLayoutOverrides.has(state.activePageId),
+          run: () => setPageLayoutOverride(null)
+        },
+        ...LAYOUT_MODE_OPTIONS.map(([label, value]) => ({
+          label,
+          icon: value === effectivePageLayout() ? "check" : "square",
+          run: () => setPageLayoutOverride(value)
+        }))
+      ]
+    },
+    {
+      label: `This page zoom: ${effectivePageZoom()}%`,
+      icon: "zoom-in",
+      title: "Workspace zoom for this page only, until MultiTerm restarts",
+      submenu: [
+        {
+          label: `Follow global (${normalizeWorkspaceZoom(state.settings.workspaceZoom)}%)`,
+          icon: "globe",
+          disabled: !pageZoomOverrides.has(state.activePageId),
+          run: () => setPageZoomOverride(null)
+        },
+        ...[50, 67, 80, 90, 100, 110, 125, 150, 175, 200].map((value) => ({
+          label: `${value}%`,
+          icon: value === effectivePageZoom() ? "check" : "square",
+          run: () => setPageZoomOverride(value)
+        }))
+      ]
+    },
     { label: "Fit all terminals", icon: "maximize", disabled: !hasTerminals, run: fitAllTerminals },
     { label: "Reset layout", icon: "rotate-ccw", run: resetLayout },
     { separator: true },

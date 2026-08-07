@@ -89,8 +89,13 @@ test.describe("Per-page layout and zoom", () => {
     await expect(page.locator("#contextMenu")).toBeVisible();
     const labels = await page.evaluate(() => [...document.querySelectorAll("#contextMenu .ctx-item")]
       .map((el) => el.textContent.trim()));
-    expect(labels.some((label) => label.includes("This page: Spotlight"))).toBe(true);
-    expect(labels.some((label) => label.includes("This page zoom: 125%"))).toBe(true);
+    const layoutIndex = labels.findIndex((label) => label.includes("This page: Spotlight"));
+    const zoomIndex = labels.findIndex((label) => label.includes("This page zoom: 125%"));
+    const openFolderIndex = labels.findIndex((label) => label === "Open folder");
+    const fitIndex = labels.findIndex((label) => label === "Fit all terminals");
+    expect(layoutIndex).toBeGreaterThan(openFolderIndex);
+    expect(zoomIndex).toBe(layoutIndex + 1);
+    expect(fitIndex).toBe(zoomIndex + 1);
     await page.keyboard.press("Escape");
   });
 

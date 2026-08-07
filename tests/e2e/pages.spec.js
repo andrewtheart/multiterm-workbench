@@ -133,12 +133,20 @@ test.describe("Pages and the quick switcher", () => {
     await expect(chips.nth(0)).toHaveClass(/is-active/);
     await expect(chips.nth(1)).not.toHaveClass(/is-active/);
 
+    await page.evaluate(() => minimizeTerminal([...state.terminals.keys()][0]));
+    await expect(chips.nth(0).locator(".pager-parked")).toBeVisible();
+    expect(await chips.nth(0).evaluate((tab) => {
+      const editControl = tab.querySelector(".pager-edit");
+      return editControl.previousElementSibling === tab.querySelector(".pager-parked")
+        && editControl.nextElementSibling === tab.querySelector(".pager-close");
+    })).toBe(true);
+
     const edit = chips.nth(1).locator(".pager-edit");
     await expect(edit).toBeVisible();
     await expect(edit).toHaveAttribute("role", "button");
     await expect(edit).toHaveAttribute("aria-label", "Rename Builds");
     expect(await chips.nth(1).evaluate((tab) => (
-      tab.querySelector(".pager-name").nextElementSibling === tab.querySelector(".pager-edit")
+      tab.querySelector(".pager-close").previousElementSibling === tab.querySelector(".pager-edit")
     ))).toBe(true);
 
     await edit.click();
