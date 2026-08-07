@@ -375,7 +375,18 @@
                 <option value="claude">Claude</option>
               </select>
             </label>
-            <p id="aiSessionProviderStatus" class="settings-note" role="status">Provider status has not been checked.</p>
+            <div class="ai-provider-status-row">
+              <p id="aiSessionProviderStatus" class="settings-note" role="status">Provider status has not been checked.</p>
+              <div class="ai-provider-status-actions">
+                <button id="aiCopilotSetup" class="ai-provider-setup" type="button" hidden>
+                  <i data-lucide="download"></i>
+                  <span>Set up Copilot</span>
+                </button>
+                <button id="aiProvidersRefresh" class="icon-button" type="button" title="Refresh AI providers" aria-label="Refresh AI providers">
+                  <i data-lucide="refresh-cw"></i>
+                </button>
+              </div>
+            </div>
             <label class="control-row">
               <span>Interactive model</span>
               <select id="aiSessionModel">
@@ -403,12 +414,7 @@
                 <option value="claude">Claude</option>
               </select>
             </label>
-            <div class="ai-provider-status-row">
-              <p id="aiTitleProviderStatus" class="settings-note" role="status">Provider status has not been checked.</p>
-              <button id="aiProvidersRefresh" class="icon-button" type="button" title="Refresh AI providers" aria-label="Refresh AI providers">
-                <i data-lucide="refresh-cw"></i>
-              </button>
-            </div>
+            <p id="aiTitleProviderStatus" class="settings-note" role="status">Provider status has not been checked.</p>
             <label class="control-row">
               <span>Model</span>
               <select id="copilotTitleModel">
@@ -1282,6 +1288,17 @@
           </div>
         </header>
         <p id="aiSetupStatus" class="ai-setup-status" role="status">Checking installed providers…</p>
+        <div id="aiSetupCopilotGuide" class="ai-setup-guide" hidden>
+          <i data-lucide="terminal"></i>
+          <div>
+            <strong>GitHub Copilot CLI</strong>
+            <span id="aiSetupCopilotText"></span>
+          </div>
+          <button id="aiSetupCopilotAction" type="button">
+            <i data-lucide="download"></i>
+            <span>Install and sign in</span>
+          </button>
+        </div>
         <section class="ai-setup-operation" aria-labelledby="aiSetupTitleOperation">
           <div class="ai-setup-operation-head">
             <i data-lucide="text-cursor-input"></i>

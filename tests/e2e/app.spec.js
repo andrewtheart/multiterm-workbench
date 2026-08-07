@@ -139,6 +139,9 @@ test.describe("MultiTerm Workbench UI", () => {
           return {
             add: bounds("#addTerminal"),
             toggle: bounds("#toggleHeaderTop"),
+            shellWidth: document.querySelector(".shell-field").getBoundingClientRect().width,
+            cwdWidth: document.querySelector("#cwdInput").getBoundingClientRect().width,
+            searchWidth: document.querySelector("#terminalSearchInput").getBoundingClientRect().width,
             clusterRight: document.querySelector(".action-cluster").getBoundingClientRect().right,
             viewportWidth: window.innerWidth,
             scrollWidth: document.documentElement.scrollWidth
@@ -158,6 +161,11 @@ test.describe("MultiTerm Workbench UI", () => {
         expect(layout.toggle.right, `${width}px collapse precedes add`).toBeLessThan(layout.add.left);
         expect(Math.abs(layout.add.right - layout.clusterRight), `${width}px add is rightmost`).toBeLessThan(0.5);
         expect(layout.scrollWidth, `${width}px document width`).toBeLessThanOrEqual(layout.viewportWidth);
+        if (width === 1680) {
+          expect(layout.shellWidth, "wide desktop shell width").toBeGreaterThanOrEqual(190);
+          expect(layout.cwdWidth, "wide desktop CWD width").toBeGreaterThanOrEqual(230);
+          expect(layout.searchWidth, "wide desktop search width").toBeGreaterThanOrEqual(210);
+        }
       }
     } finally {
       await page.setViewportSize({ width: 1280, height: 720 });

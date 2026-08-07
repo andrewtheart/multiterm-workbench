@@ -381,6 +381,11 @@ MultiTerm launches the provider's visible unrestricted TUI command in a terminal
 so the provider can act with that user's normal account and filesystem authority.
 Provider authentication, subscription, and model availability are runtime facts;
 installer executable detection is only a first-launch preference hint.
+The guided Copilot setup runs the official WinGet package installation and
+`/login` command in a visible user terminal. GitHub owns the interactive browser
+or device authentication flow; MultiTerm does not request, capture, persist, or
+forward its credentials, device codes, or tokens. Capability polling observes
+only the SDK's resulting authenticated/available status.
 
 ### Argument and path handling lessons
 

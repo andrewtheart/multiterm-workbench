@@ -116,6 +116,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   aiSessionEffort: "ai assistant session thinking reasoning effort interactive cli",
   aiSessionModel: "ai assistant session model interactive cli github copilot claude",
   aiSessionProvider: "ai assistant session provider interactive cli github copilot claude launch",
+  aiCopilotSetup: "ai assistant github copilot cli install setup login sign in winget",
   aiTitleProvider: "ai assistant provider github copilot claude terminal title suggestions",
   aiProvidersRefresh: "ai assistant provider refresh rescan detect installed authentication models",
   copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
@@ -352,7 +353,11 @@ const themes = {
 
 const elements = {
   addTerminal: document.querySelector("#addTerminal"),
+  aiCopilotSetup: document.querySelector("#aiCopilotSetup"),
   aiProvidersRefresh: document.querySelector("#aiProvidersRefresh"),
+  aiSetupCopilotAction: document.querySelector("#aiSetupCopilotAction"),
+  aiSetupCopilotGuide: document.querySelector("#aiSetupCopilotGuide"),
+  aiSetupCopilotText: document.querySelector("#aiSetupCopilotText"),
   aiSetupOverlay: document.querySelector("#aiSetupOverlay"),
   aiSetupSave: document.querySelector("#aiSetupSave"),
   aiSetupSessionContext: document.querySelector("#aiSetupSessionContext"),
@@ -858,7 +863,7 @@ const state = {
   aiProviderBootstrap: null,
   aiProviderDiscovery: { generation: 0, initializeUpdatesAfterSetup: false, loading: false },
   aiProviders: [],
-  aiSetup: { draft: null, returnFocus: null },
+  aiSetup: { draft: null, guided: null, returnFocus: null },
   analytics: loadTerminalAnalytics(),
   analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
   automations: loadAutomationStore(initialSettings.automationHistoryLimit),
@@ -1214,7 +1219,8 @@ function bindControls() {
   elements.aboutOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.aboutOverlay) closeAbout();
   });
-  elements.aiProvidersRefresh.addEventListener("click", refreshAiProviders);
+  elements.aiCopilotSetup.addEventListener("click", startCopilotGuidedSetup);
+  elements.aiProvidersRefresh.addEventListener("click", () => refreshAiProviders());
   elements.shortcutsClose.addEventListener("click", closeShortcuts);
   elements.shortcutsOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.shortcutsOverlay) closeShortcuts();
@@ -2127,7 +2133,13 @@ function handleBridgeMessage(message) {
       const withEnter = terminal.pendingCommandEnter;
       terminal.pendingCommand = null;
       if (pending) {
-        window.setTimeout(() => sendBridge({ type: "input", id: terminal.id, data: `${pending}${withEnter ? "\r" : ""}` }), 500);
+        window.setTimeout(() => {
+          const sent = sendBridge({ type: "input", id: terminal.id, data: `${pending}${withEnter ? "\r" : ""}` });
+          if (sent && terminal.copilotSetupLoginPending) {
+            terminal.copilotSetupLoginRequiredRevision = terminal.outputRevision + 1;
+            scheduleCopilotSetupLogin(terminal);
+          }
+        }, 500);
       }
     }
     if (terminal.pendingPaste) {
@@ -2464,6 +2476,9 @@ function addTerminal(options = {}) {
     awaitingInput: false,
     awaitingInputCategory: "",
     awaitingQuestion: false,
+    copilotSetupLoginPending: Boolean(options.pendingCopilotLogin),
+    copilotSetupLoginRequiredRevision: 0,
+    copilotSetupLoginTimer: 0,
     autoQueueCompletionMarker: "",
     autoQueueDispatching: false,
     autoQueueOutputEvidence: "",
@@ -4982,6 +4997,8 @@ function disposeTerminal(terminal) {
   cancelAutoTitle(terminal);
   window.clearTimeout(terminal.autoQueueTimer);
   terminal.autoQueueTimer = 0;
+  window.clearTimeout(terminal.copilotSetupLoginTimer);
+  terminal.copilotSetupLoginTimer = 0;
   window.clearTimeout(terminal.pendingCwdTimer);
   terminal.pendingCwdTimer = 0;
   window.clearTimeout(terminal.handoffScanTimer);
@@ -5012,6 +5029,7 @@ function disposeTerminal(terminal) {
   }
   terminal.pane.remove();
   state.terminals.delete(id);
+  if (state.aiSetup.guided?.terminalId === id) scheduleCopilotGuidedProviderCheck(0);
   delete state.manualLayouts[id];
   updateMinimizedDock();
 }
@@ -5571,6 +5589,7 @@ function writeTerminal(terminal, data) {
   handleOutputNotifications(terminal);
   scheduleInputPromptCheck(terminal);
   scheduleAutomaticQueueCheck(terminal);
+  scheduleCopilotSetupLogin(terminal);
   schedulePendingCwdChange(terminal);
   scheduleTerminalHandoffScan(terminal);
   scheduleTerminalHandoffDelivery(terminal);
@@ -5789,6 +5808,25 @@ function scheduleAutomaticQueueCheck(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
   terminal.autoQueueTimer = window.setTimeout(() => {
     terminal.autoQueueTimer = 0;
     dispatchAutomaticQueueItem(terminal);
+  }, delay);
+}
+
+function scheduleCopilotSetupLogin(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
+  window.clearTimeout(terminal?.copilotSetupLoginTimer);
+  if (!terminal?.copilotSetupLoginPending || terminal.status !== "live") return;
+  terminal.copilotSetupLoginTimer = window.setTimeout(() => {
+    terminal.copilotSetupLoginTimer = 0;
+    if (terminal.outputRevision < terminal.copilotSetupLoginRequiredRevision) return;
+    const readiness = terminalExecutionReadiness(terminal);
+    if (!readiness.ready || readiness.mode !== "copilot") return;
+    if (!pasteIntoSpecificTerminal(terminal, "/login")) return;
+    terminal.copilotSetupLoginPending = false;
+    scheduleTerminalEnter(terminal, {
+      sequence: COPILOT_TUI_ENTER,
+      onComplete: (sent) => {
+        if (sent) toast("Continue the GitHub sign-in shown in this terminal", "info", 3200);
+      }
+    });
   }, delay);
 }
 
@@ -20299,7 +20337,7 @@ function normalizeWorkspaceZoom(value) {
     : WORKSPACE_ZOOM_BOUNDS.fallback;
 }
 
-async function refreshAiProviders() {
+async function refreshAiProviders(options = {}) {
   const generation = ++state.aiProviderDiscovery.generation;
   state.aiProviderDiscovery.loading = true;
   elements.aiTitleProviderStatus.textContent = "Checking local AI providers...";
@@ -20315,7 +20353,8 @@ async function refreshAiProviders() {
     : "No signed-in AI provider is currently available.";
   syncAiSessionControls();
   syncAiTitleControls();
-  openAiSetup();
+  updateCopilotSetupActions();
+  if (options?.openSetup !== false) openAiSetup();
   return state.aiProviders;
 }
 
@@ -20516,6 +20555,99 @@ function updateAiSetupStatus() {
     : "No AI provider is installed and signed in. Both operations can remain disabled.";
 }
 
+function copilotSetupPrompt() {
+  const provider = aiProviderById("copilot");
+  if (provider?.interactiveAvailable) return null;
+  if (provider?.cliInstalled !== true) {
+    return {
+      action: provider?.authenticated ? "Install Copilot CLI" : "Install and sign in",
+      detail: "Interactive assistant sessions need the GitHub Copilot CLI. MultiTerm can install it with WinGet in a visible terminal."
+    };
+  }
+  if (provider?.authenticated !== true) {
+    return {
+      action: "Sign in to Copilot CLI",
+      detail: "The CLI is installed but this Windows account still needs its one-time GitHub sign-in."
+    };
+  }
+  return null;
+}
+
+function updateCopilotSetupActions() {
+  const prompt = copilotSetupPrompt();
+  for (const button of [elements.aiCopilotSetup, elements.aiSetupCopilotAction]) {
+    button.hidden = !prompt;
+    if (prompt) button.querySelector("span").textContent = prompt.action;
+  }
+  elements.aiSetupCopilotGuide.hidden = !prompt;
+  elements.aiSetupCopilotText.textContent = prompt?.detail || "";
+}
+
+const COPILOT_SETUP_COMMAND = "$ErrorActionPreference = 'Stop'; if (-not (Get-Command copilot -ErrorAction SilentlyContinue)) { if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'WinGet is required to install GitHub Copilot CLI.' }; winget.exe install --id GitHub.Copilot --exact --source winget --accept-package-agreements --accept-source-agreements; if ($LASTEXITCODE -ne 0) { throw \"WinGet exited with code $LASTEXITCODE.\" }; $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }; if (-not (Get-Command copilot -ErrorAction SilentlyContinue)) { throw 'GitHub Copilot CLI is installed, but this terminal cannot find it yet. Open a new terminal and run copilot.' }; copilot";
+
+function closeAiSetupForGuidedSetup() {
+  elements.aiSetupOverlay.classList.remove("is-open");
+  elements.aiSetupOverlay.hidden = true;
+  elements.appShell.inert = false;
+  state.aiSetup.draft = null;
+  state.aiSetup.returnFocus = null;
+}
+
+function startCopilotGuidedSetup() {
+  if (state.aiSetup.guided) return false;
+  const prompt = copilotSetupPrompt();
+  if (!prompt) return false;
+  const provider = aiProviderById("copilot");
+  const terminal = addTerminal({
+    pendingCommand: COPILOT_SETUP_COMMAND,
+    pendingCopilotLogin: provider?.authenticated !== true,
+    reveal: true,
+    runStartup: false,
+    shell: "pwsh",
+    title: "GitHub Copilot setup"
+  });
+  state.aiSetup.guided = { checking: false, terminalId: terminal.id, timer: 0 };
+  closeAiSetupForGuidedSetup();
+  toast("Follow the GitHub Copilot setup in the new terminal", "info", 3200);
+  scheduleCopilotGuidedProviderCheck(2500);
+  return true;
+}
+
+function scheduleCopilotGuidedProviderCheck(delay = 5000) {
+  const guided = state.aiSetup.guided;
+  if (!guided) return;
+  window.clearTimeout(guided.timer);
+  guided.timer = window.setTimeout(checkCopilotGuidedSetup, delay);
+}
+
+async function checkCopilotGuidedSetup() {
+  const guided = state.aiSetup.guided;
+  if (!guided || guided.checking) return;
+  guided.checking = true;
+  await refreshAiProviders({ openSetup: false });
+  if (state.aiSetup.guided !== guided) return;
+  guided.checking = false;
+  const provider = aiProviderById("copilot");
+  if (provider?.interactiveAvailable) {
+    window.clearTimeout(guided.timer);
+    state.aiSetup.guided = null;
+    if (!state.settings.aiSetupCompleted) {
+      state.aiProviderBootstrap = { version: 1, provider: "copilot" };
+      openAiSetup();
+    }
+    toast("GitHub Copilot CLI is ready", "success", 2400);
+    return;
+  }
+  const terminal = state.terminals.get(guided.terminalId);
+  if (!terminal || terminal.status === "exited") {
+    state.aiSetup.guided = null;
+    if (!state.settings.aiSetupCompleted) openAiSetup();
+    toast("GitHub Copilot setup did not finish. Review the terminal output and try again.", "warn", 3600);
+    return;
+  }
+  scheduleCopilotGuidedProviderCheck();
+}
+
 function openAiSetup() {
   if (state.settings.aiSetupCompleted || navigator.webdriver || !elements.aiSetupOverlay?.hidden) return;
   const bootstrapProvider = state.aiProviderBootstrap?.provider;
@@ -20546,6 +20678,7 @@ function openAiSetup() {
   syncAiSetupProfile("title");
   syncAiSetupProfile("session");
   updateAiSetupStatus();
+  updateCopilotSetupActions();
   elements.appShell.inert = true;
   elements.aiSetupOverlay.hidden = false;
   requestAnimationFrame(() => {
@@ -20604,6 +20737,7 @@ function bindAiSetup() {
       if (state.aiSetup.draft) state.aiSetup.draft[kind].context = controls.context.value;
     });
   }
+  elements.aiSetupCopilotAction.addEventListener("click", startCopilotGuidedSetup);
   elements.aiSetupSave.addEventListener("click", saveAiSetup);
   elements.aiSetupOverlay.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") return;

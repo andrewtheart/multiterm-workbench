@@ -433,6 +433,213 @@ test.describe("Settings panel verification", () => {
     await page.evaluate(() => { delete navigator.webdriver; });
   });
 
+  test("guides a missing Copilot CLI through a visible PowerShell setup terminal", async () => {
+    const result = await page.evaluate(() => {
+      Object.defineProperty(navigator, "webdriver", { configurable: true, value: false });
+      state.settings.aiSetupCompleted = false;
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        authenticated: false,
+        cliInstalled: false,
+        available: false,
+        titleAvailable: false,
+        interactiveAvailable: false,
+        models: []
+      }];
+      openAiSetup();
+      const action = elements.aiSetupCopilotAction.textContent.trim();
+      const detail = elements.aiSetupCopilotText.textContent;
+      const settingsAction = elements.aiCopilotSetup.textContent.trim();
+      const settingsActionHidden = elements.aiCopilotSetup.hidden;
+      const originalAddTerminal = addTerminal;
+      let options = null;
+      addTerminal = (value) => {
+        options = value;
+        return { id: "guided-copilot-test" };
+      };
+      try {
+        startCopilotGuidedSetup();
+        window.clearTimeout(state.aiSetup.guided.timer);
+        return {
+          action,
+          detail,
+          options,
+          overlayHidden: elements.aiSetupOverlay.hidden,
+          settingsAction,
+          settingsActionHidden,
+          shellInert: elements.appShell.inert
+        };
+      } finally {
+        state.aiSetup.guided = null;
+        addTerminal = originalAddTerminal;
+        delete navigator.webdriver;
+      }
+    });
+
+    expect(result.action).toBe("Install and sign in");
+    expect(result.settingsAction).toBe("Install and sign in");
+    expect(result.settingsActionHidden).toBe(false);
+    expect(result.detail).toContain("install it with WinGet in a visible terminal");
+    expect(result.options).toMatchObject({
+      pendingCopilotLogin: true,
+      reveal: true,
+      runStartup: false,
+      shell: "pwsh",
+      title: "GitHub Copilot setup"
+    });
+    expect(result.options.pendingCommand).toContain("winget.exe install --id GitHub.Copilot --exact");
+    expect(result.options.pendingCommand).toContain("GetEnvironmentVariable('Path', 'User')");
+    expect(result.options.pendingCommand).toMatch(/; copilot$/);
+    expect(result.overlayHidden).toBe(true);
+    expect(result.shellInert).toBe(false);
+  });
+
+  test("installs a missing Copilot CLI without repeating an existing account login", async () => {
+    const result = await page.evaluate(() => {
+      state.settings.aiSetupCompleted = true;
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        authenticated: true,
+        cliInstalled: false,
+        available: true,
+        titleAvailable: true,
+        interactiveAvailable: false,
+        models: [{ id: "gpt-test", name: "GPT Test", efforts: [], maxPromptTokens: 64000, maxContextTokens: 64000 }]
+      }];
+      updateCopilotSetupActions();
+      const action = elements.aiCopilotSetup.textContent.trim();
+      const originalAddTerminal = addTerminal;
+      let options = null;
+      addTerminal = (value) => {
+        options = value;
+        return { id: "guided-copilot-install-only-test" };
+      };
+      try {
+        startCopilotGuidedSetup();
+        window.clearTimeout(state.aiSetup.guided.timer);
+        return { action, options };
+      } finally {
+        state.aiSetup.guided = null;
+        addTerminal = originalAddTerminal;
+      }
+    });
+
+    expect(result.action).toBe("Install Copilot CLI");
+    expect(result.options.pendingCopilotLogin).toBe(false);
+    expect(result.options.pendingCommand).toContain("winget.exe install --id GitHub.Copilot --exact");
+  });
+
+  test("submits Copilot login only after the Copilot composer is ready", async () => {
+    const result = await page.evaluate(async () => {
+      const originalPaste = pasteIntoSpecificTerminal;
+      const originalReadiness = terminalExecutionReadiness;
+      const originalSendBridge = sendBridge;
+      const pasted = [];
+      const sent = [];
+      let mode = "shell";
+      const terminal = {
+        copilotSetupLoginPending: true,
+        copilotSetupLoginRequiredRevision: 1,
+        copilotSetupLoginTimer: 0,
+        id: "copilot-login-mode-test",
+        outputRevision: 2,
+        status: "live"
+      };
+      state.terminals.set(terminal.id, terminal);
+      pasteIntoSpecificTerminal = (_terminal, text) => {
+        pasted.push(text);
+        return true;
+      };
+      terminalExecutionReadiness = () => ({ mode, ready: true });
+      sendBridge = (message) => {
+        sent.push(message);
+        return true;
+      };
+      try {
+        scheduleCopilotSetupLogin(terminal, 0);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const shellPasteCount = pasted.length;
+        mode = "copilot";
+        scheduleCopilotSetupLogin(terminal, 0);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return {
+          loginPending: terminal.copilotSetupLoginPending,
+          pasted,
+          sent,
+          shellPasteCount
+        };
+      } finally {
+        window.clearTimeout(terminal.copilotSetupLoginTimer);
+        state.terminals.delete(terminal.id);
+        pasteIntoSpecificTerminal = originalPaste;
+        terminalExecutionReadiness = originalReadiness;
+        sendBridge = originalSendBridge;
+      }
+    });
+
+    expect(result.shellPasteCount).toBe(0);
+    expect(result.pasted).toEqual(["/login"]);
+    expect(result.loginPending).toBe(false);
+    expect(result.sent).toContainEqual(expect.objectContaining({ data: "\u001b[13u" }));
+  });
+
+  test("returns to Copilot defaults when guided setup becomes ready", async () => {
+    const result = await page.evaluate(async () => {
+      Object.defineProperty(navigator, "webdriver", { configurable: true, value: false });
+      const originalRefresh = refreshAiProviders;
+      state.settings.aiSetupCompleted = false;
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        authenticated: false,
+        cliInstalled: true,
+        available: false,
+        titleAvailable: false,
+        interactiveAvailable: false,
+        models: []
+      }];
+      state.aiSetup.guided = { checking: false, terminalId: "guided-ready-test", timer: 0 };
+      state.terminals.set("guided-ready-test", { id: "guided-ready-test", status: "live" });
+      refreshAiProviders = async () => {
+        state.aiProviders = [{
+          id: "copilot",
+          name: "GitHub Copilot",
+          authenticated: true,
+          cliInstalled: true,
+          available: true,
+          titleAvailable: true,
+          interactiveAvailable: true,
+          models: [{ id: "gpt-test", name: "GPT Test", efforts: [], maxPromptTokens: 64000, maxContextTokens: 64000 }]
+        }];
+        return state.aiProviders;
+      };
+      try {
+        await checkCopilotGuidedSetup();
+        return {
+          guided: state.aiSetup.guided,
+          overlayHidden: elements.aiSetupOverlay.hidden,
+          sessionProvider: elements.aiSetupSessionProvider.value,
+          titleProvider: elements.aiSetupTitleProvider.value
+        };
+      } finally {
+        refreshAiProviders = originalRefresh;
+        state.terminals.delete("guided-ready-test");
+        delete navigator.webdriver;
+      }
+    });
+
+    expect(result).toEqual({
+      guided: null,
+      overlayHidden: false,
+      sessionProvider: "copilot",
+      titleProvider: "copilot"
+    });
+    await page.locator("#aiSetupSave").click();
+    await expect(page.locator("#aiSetupOverlay")).toBeHidden();
+  });
+
   test("keeps SDK-backed Copilot titles available without offering a missing interactive CLI", async () => {
     const result = await page.evaluate(() => {
       state.aiProviders = [{

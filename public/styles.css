@@ -548,8 +548,8 @@ body:not(.header-hidden) .chrome-controls #toggleHeader {
   align-items: end;
   display: grid;
   gap: 10px;
-  grid-template-columns: minmax(100px, 170px) minmax(140px, 300px) minmax(120px, 260px) max-content;
-  width: min(1100px, 100%);
+  grid-template-columns: minmax(100px, 220px) minmax(140px, 380px) minmax(120px, 340px) max-content;
+  width: min(1340px, 100%);
 }
 
 .field {
@@ -836,6 +836,23 @@ body.sidecar-hidden .control-panel {
   display: grid;
   gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.ai-provider-status-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.ai-provider-setup {
+  font-size: 11px;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.ai-provider-setup[hidden],
+.ai-setup-guide[hidden] {
+  display: none;
 }
 
 .ai-provider-status-row .icon-button {
@@ -5741,6 +5758,44 @@ body[data-pager-placement="right"] .pager-add {
   margin: 14px 0 2px;
 }
 
+.ai-setup-guide {
+  align-items: center;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin: 12px 0 4px;
+  padding: 12px;
+}
+
+.ai-setup-guide > svg {
+  color: var(--primary);
+  height: 18px;
+  width: 18px;
+}
+
+.ai-setup-guide > div {
+  display: grid;
+  gap: 3px;
+}
+
+.ai-setup-guide strong {
+  font-size: 12px;
+}
+
+.ai-setup-guide span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.ai-setup-guide button {
+  min-height: 34px;
+  white-space: nowrap;
+}
+
 .ai-setup-operation {
   border-top: 1px solid var(--border);
   padding: 16px 0;
@@ -5800,6 +5855,15 @@ body[data-pager-placement="right"] .pager-add {
 
   .ai-setup-fields {
     grid-template-columns: 1fr;
+  }
+
+  .ai-setup-guide {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ai-setup-guide button {
+    grid-column: 1 / -1;
+    width: 100%;
   }
 }
 
