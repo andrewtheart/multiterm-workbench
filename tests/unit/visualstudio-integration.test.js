@@ -53,6 +53,11 @@ describe("Visual Studio integration", () => {
     expect(installScript).toContain('"/uninstall:$extensionId"');
     expect(installScript).toContain("-Wait -PassThru");
     expect(installScript).toContain("$process.ExitCode");
+    expect(installScript).toContain("[switch]$BackgroundWorker");
+    expect(installScript).toContain("Write-IntegrationState -Status 'pending'");
+    expect(installScript).toContain("-BackgroundWorker");
+    expect(installScript).toContain("continuing in the background");
+    expect(installScript).toContain("is already updating");
     expect(installScript).toContain("MultiTerm\\Integrations");
     expect(installScript).toContain("$legacyStateFile");
     expect(installer).toContain('Name: "visualstudioextension"');
