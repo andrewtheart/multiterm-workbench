@@ -2931,6 +2931,7 @@ function bindTerminalSelectionHandling(terminal) {
   if (!element) return;
 
   bindTuiDragSelection(terminal, element);
+  bindWorkspaceZoomXtermPointerCorrection(terminal);
 
   const captureContextSelection = () => {
     const liveSelection = terminal.term.getSelection();
@@ -2975,6 +2976,51 @@ function bindTerminalSelectionHandling(terminal) {
       terminal.selectionSnapshot = selection;
       terminal.selectionSnapshotPosition = terminal.term.getSelectionPosition() || null;
     }
+  }, true);
+}
+
+// xterm maps mouse distance through its unscaled cell dimensions. The terminal
+// host is transform-scaled for workspace zoom, so normalize native selection
+// events back into xterm's logical coordinate space before its handlers run.
+function bindWorkspaceZoomXtermPointerCorrection(terminal) {
+  let active = false;
+
+  const correct = (event) => {
+    const scale = workspaceZoomScale();
+    const screen = terminal.term.element?.querySelector(".xterm-screen");
+    if (scale === 1 || !screen) return;
+    const rect = screen.getBoundingClientRect();
+    Object.defineProperties(event, {
+      clientX: { configurable: true, value: rect.left + ((event.clientX - rect.left) / scale) },
+      clientY: { configurable: true, value: rect.top + ((event.clientY - rect.top) / scale) }
+    });
+  };
+
+  const finish = (event) => {
+    if (!active) return;
+    correct(event);
+    active = false;
+    document.removeEventListener("mousemove", correct, true);
+    document.removeEventListener("mouseup", finish, true);
+    window.removeEventListener("blur", cancel, true);
+  };
+
+  const cancel = () => {
+    active = false;
+    document.removeEventListener("mousemove", correct, true);
+    document.removeEventListener("mouseup", finish, true);
+    window.removeEventListener("blur", cancel, true);
+  };
+
+  // The mouse-aware TUI drag handler is registered first and stops propagation
+  // when it owns a gesture. Everything reaching this listener belongs to xterm.
+  terminal.pane.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || workspaceZoomScale() === 1 || !event.target.closest(".xterm")) return;
+    active = true;
+    correct(event);
+    document.addEventListener("mousemove", correct, true);
+    document.addEventListener("mouseup", finish, true);
+    window.addEventListener("blur", cancel, true);
   }, true);
 }
 
@@ -12842,9 +12888,10 @@ function bindPager() {
     if (!page) return;
     const items = [
       { label: "Rename\u2026", icon: "pencil", run: () => startPageRename(chip) },
+      { separator: true, spacious: true },
       { label: "New page", icon: "plus", run: () => addPage() }
     ];
-    items.push({ separator: true });
+    items.push({ separator: true, spacious: true });
     if (state.pages.length > 1) {
       items.push({ label: "Close page", icon: "x", danger: true, run: () => requestPageClose(page.id) });
       items.push({ label: "Close other pages", icon: "x-square", danger: true, run: () => requestCloseOtherPages(page.id) });
@@ -14076,23 +14123,30 @@ function createAutomationActionRow(action = {}) {
 
   const targetLabel = document.createElement("label");
   const targetCaption = document.createElement("span");
-  targetCaption.textContent = "Terminal";
+  targetCaption.textContent = "Destination";
   const target = document.createElement("select");
   target.className = "automation-action-target";
   target.required = true;
   for (const name of automationTerminalOptions(action.targetName || "")) {
     const option = document.createElement("option");
-    option.value = name;
+    option.value = `terminal:${target.options.length}`;
+    option.dataset.targetMode = "terminal";
+    option.dataset.targetName = name;
     option.textContent = name;
     target.append(option);
   }
-  if (!target.options.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "No live terminals";
-    target.append(option);
-  }
-  target.value = action.targetName || target.options[0].value;
+  const newTerminalOption = document.createElement("option");
+  newTerminalOption.value = "new";
+  newTerminalOption.dataset.targetMode = "new";
+  newTerminalOption.textContent = "New terminal";
+  target.append(newTerminalOption);
+  const selectedTarget = action.targetMode === "new"
+    ? newTerminalOption
+    : [...target.options].find((option) => (
+      option.dataset.targetMode === "terminal"
+      && automationApi.terminalName(option.dataset.targetName) === automationApi.terminalName(action.targetName)
+    ));
+  (selectedTarget || target.options[0]).selected = true;
   targetLabel.append(targetCaption, target);
 
   const commandLabel = document.createElement("label");
@@ -14156,12 +14210,16 @@ function readAutomationEditorRule(existing = null) {
   const intervalMinutes = value * (elements.automationIntervalUnit.value === "hours" ? 60 : 1);
   const days = [...elements.automationDays.querySelectorAll("[data-day][aria-pressed='true']")]
     .map((button) => Number(button.dataset.day));
-  const actions = [...elements.automationActionList.querySelectorAll(".automation-action-row")].map((row) => ({
-    command: row.querySelector(".automation-action-command").value,
-    id: row.dataset.actionId,
-    submit: row.querySelector(".automation-action-delivery").value === "run",
-    targetName: row.querySelector(".automation-action-target").value
-  }));
+  const actions = [...elements.automationActionList.querySelectorAll(".automation-action-row")].map((row) => {
+    const target = row.querySelector(".automation-action-target").selectedOptions[0];
+    return {
+      command: row.querySelector(".automation-action-command").value,
+      id: row.dataset.actionId,
+      submit: row.querySelector(".automation-action-delivery").value === "run",
+      targetMode: target?.dataset.targetMode || "terminal",
+      targetName: target?.dataset.targetName || ""
+    };
+  });
   return automationApi.normalizeRule({
     actions,
     createdAt: existing?.createdAt || new Date().toISOString(),
@@ -14557,6 +14615,12 @@ function resolveAutomationTerminal(targetName) {
   return { error: matches.length > 1 ? `More than one live terminal is named ${targetName}` : `No live terminal is named ${targetName}` };
 }
 
+function resolveAutomationActionTarget(action) {
+  if (action.targetMode !== "new") return resolveAutomationTerminal(action.targetName);
+  const terminal = addTerminal({ runStartup: true });
+  return terminal ? { launched: true, terminal } : { error: "Could not open a new terminal" };
+}
+
 function pendingAutomationStage(terminal) {
   return state.automations.pendingStages.find((entry) => entry.targetId === terminal.id) || null;
 }
@@ -14590,7 +14654,7 @@ function queueAutomationStage(terminal, command, rule, options = {}) {
 function runAutomationRule(rule, options = {}) {
   let queued = 0;
   for (const [actionIndex, action] of rule.actions.entries()) {
-    const resolution = resolveAutomationTerminal(action.targetName);
+    const resolution = resolveAutomationActionTarget(action);
     if (!resolution.terminal) {
       addAutomationHistory("blocked", rule.name, resolution.error, rule.id);
       continue;
@@ -14604,11 +14668,12 @@ function runAutomationRule(rule, options = {}) {
       addAutomationHistory(
         "queued",
         rule.name,
-        `${action.submit ? "Run" : "Stage"} in ${resolution.terminal.titleInput.value}`,
+        `${action.submit ? "Run" : "Stage"} in ${resolution.launched ? "new terminal " : ""}${resolution.terminal.titleInput.value}`,
         rule.id
       );
     } else {
-      addAutomationHistory("failed", rule.name, `Could not queue action for ${action.targetName}`, rule.id);
+      const destination = action.targetMode === "new" ? "a new terminal" : action.targetName;
+      addAutomationHistory("failed", rule.name, `Could not queue action for ${destination}`, rule.id);
     }
   }
   if (options.manual && queued) toast(`Queued ${queued} automation action${queued === 1 ? "" : "s"}`, "success", 1800);
@@ -18767,7 +18832,7 @@ function renderContextMenu(items, {
     }
     if (item.separator) {
       const sep = document.createElement("div");
-      sep.className = "ctx-sep";
+      sep.className = `ctx-sep${item.spacious ? " is-spacious" : ""}`;
       itemContainer.append(sep);
       continue;
     }

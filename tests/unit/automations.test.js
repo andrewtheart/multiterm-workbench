@@ -19,6 +19,20 @@ function rule(overrides = {}) {
 }
 
 describe("automations model", () => {
+  it("normalizes new-terminal targets while preserving legacy named targets", () => {
+    expect(automations.normalizeAction({
+      command: "npm test",
+      id: "action-newterm1",
+      targetMode: "new",
+      targetName: "Old terminal"
+    })).toMatchObject({ targetMode: "new", targetName: "" });
+    expect(automations.normalizeAction({
+      command: "npm test",
+      id: "action-legacy1",
+      targetName: "Tests"
+    })).toMatchObject({ targetMode: "terminal", targetName: "Tests" });
+  });
+
   it("normalizes rules and keeps malformed persisted rules disabled or discarded", () => {
     const store = automations.normalizeStore({
       paused: true,

@@ -63,11 +63,13 @@
     const source = value && typeof value === "object" ? value : {};
     const command = typeof source.command === "string" ? source.command.trim() : "";
     if (!command || command.length > MAX_COMMAND_LENGTH) return null;
+    const targetMode = source.targetMode === "new" ? "new" : "terminal";
     return {
       command,
       id: identifier(source.id) || `action-${index + 1}`,
       submit: source.submit !== false,
-      targetName: text(source.targetName, 160)
+      targetMode,
+      targetName: targetMode === "new" ? "" : text(source.targetName, 160)
     };
   }
 

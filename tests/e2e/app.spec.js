@@ -689,6 +689,66 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect.poll(() => page.evaluate(() => state.activeId)).not.toBeNull();
   });
 
+  test("keeps native terminal drag selection aligned at workspace zoom", async () => {
+    const originalViewport = page.viewportSize();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const terminalId = await page.evaluate(() => addTerminal({ reveal: true }).id);
+    const pane = page.locator(`.terminal-pane[data-id="${terminalId}"]`);
+    await expect(pane).toBeVisible();
+
+    const dragMarker = async (zoom) => {
+      await page.evaluate(({ id, value }) => {
+        setWorkspaceZoom(value);
+        state.terminals.get(id).term.clearSelection();
+      }, { id: terminalId, value: zoom });
+      await page.waitForTimeout(300);
+      await page.evaluate((id) => new Promise((resolve) => {
+        state.terminals.get(id).term.write("\x1b[2J\x1b[H0123ZEBRA89", resolve);
+      }), terminalId);
+      const geometry = await page.evaluate((id) => {
+        const terminal = state.terminals.get(id);
+        const rect = terminal.term.element.querySelector(".xterm-screen").getBoundingClientRect();
+        const cell = terminal.term._core._renderService.dimensions.css.cell;
+        const scale = workspaceZoomScale();
+        return {
+          cellHeight: cell.height * scale,
+          cellWidth: cell.width * scale,
+          left: rect.left,
+          top: rect.top
+        };
+      }, terminalId);
+      await page.mouse.move(
+        geometry.left + geometry.cellWidth * 4.1,
+        geometry.top + geometry.cellHeight * 0.5
+      );
+      await page.mouse.down();
+      await page.mouse.move(
+        geometry.left + geometry.cellWidth * 8.9,
+        geometry.top + geometry.cellHeight * 0.5,
+        { steps: 6 }
+      );
+      await page.mouse.up();
+      return page.evaluate((id) => {
+        const terminal = state.terminals.get(id);
+        return {
+          selection: terminal.term.getSelection(),
+          startColumn: terminal.term.getSelectionPosition()?.start.x
+        };
+      }, terminalId);
+    };
+
+    try {
+      expect(await dragMarker(80)).toMatchObject({ startColumn: 4, selection: expect.stringMatching(/^Z/) });
+      expect(await dragMarker(120)).toMatchObject({ startColumn: 4, selection: expect.stringMatching(/^Z/) });
+    } finally {
+      await page.evaluate((id) => {
+        removeTerminal(id);
+        setWorkspaceZoom(100);
+      }, terminalId);
+      await page.setViewportSize(originalViewport);
+    }
+  });
+
   test("status-bar memory readout stays collapsed until the chip is hovered", async () => {
     const chip = page.locator("#statusMem");
     const value = page.locator("#statusMemText");

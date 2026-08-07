@@ -7177,6 +7177,10 @@ body[data-pager-placement="right"] .pager-add {
   margin: 6px 6px;
 }
 
+.ctx-sep.is-spacious {
+  margin-block: 16px;
+}
+
 /* The hover submenu reuses the context-menu shell but floats just above it and
    stays compact, ellipsising long commands (each row's title carries the full
    text). */

@@ -170,7 +170,7 @@ Open **Automations** from the workflow button in the header or the command palet
 
 ### Scheduled terminal work
 
-Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. Destinations use terminal names, so give scheduled terminals distinct titles.
+Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. A destination can be a named live terminal or **New terminal**. Named destinations should have distinct titles. **New terminal** opens a fresh terminal for that action each time the schedule runs, then applies the selected delivery mode when its shell is ready.
 
 Each action has an explicit delivery mode:
 

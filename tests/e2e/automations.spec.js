@@ -45,6 +45,7 @@ test.describe("Automation Studio", () => {
     await page.locator(".automation-action-delivery").selectOption("stage");
     await page.locator("#automationActionAdd").click();
     await page.locator(".automation-action-row").nth(1).locator(".automation-action-command").fill("git status");
+    await page.locator(".automation-action-row").nth(1).locator(".automation-action-target").selectOption("new");
     await page.locator("#automationSave").click();
 
     await expect(page.locator(".automation-rule-row")).toHaveCount(1);
@@ -54,6 +55,7 @@ test.describe("Automation Studio", () => {
     expect(stored.rules[0]).toMatchObject({ enabled: true, name: "Morning checks" });
     expect(stored.rules[0].actions).toHaveLength(2);
     expect(stored.rules[0].actions[0]).toMatchObject({ command: "npm test", submit: false, targetName: "Tests" });
+    expect(stored.rules[0].actions[1]).toMatchObject({ command: "git status", targetMode: "new", targetName: "" });
 
     await page.locator(".automation-rule-state").click();
     await expect(page.locator(".automation-rule-state")).toHaveText("Off");
@@ -341,6 +343,63 @@ test.describe("Automation Studio", () => {
       delete window.__automationInputFrames;
       delete window.__automationOriginalReadiness;
       delete window.__automationOriginalSend;
+    });
+  });
+
+  test("launches a new terminal destination and runs its action when ready", async ({ page }) => {
+    const token = "automation-new-terminal-target";
+    await expect.poll(() => page.evaluate(() => (
+      state.socketReady && [...state.terminals.values()].every((terminal) => terminal.status === "live")
+    ))).toBe(true);
+    const result = await page.evaluate((commandToken) => {
+      const existingIds = new Set(state.terminals.keys());
+      window.__automationNewTerminalOriginalReadiness = terminalExecutionReadiness;
+      window.__automationNewTerminalOriginalSend = state.socket.send;
+      window.__automationNewTerminalFrames = [];
+      terminalExecutionReadiness = () => ({ mode: "shell", ready: true });
+      state.socket.send = (payload) => {
+        const frame = JSON.parse(payload);
+        if (frame.type === "input") window.__automationNewTerminalFrames.push(frame);
+        return window.__automationNewTerminalOriginalSend.call(state.socket, payload);
+      };
+      const rule = automationApi.normalizeRule({
+        actions: [{
+          command: `Write-Output '${commandToken}'`,
+          id: "action-newterm1",
+          submit: true,
+          targetMode: "new"
+        }],
+        enabled: true,
+        id: "automation-newterm1",
+        name: "New terminal action",
+        trigger: { intervalMinutes: 60, mode: "interval", type: "schedule" }
+      });
+      const queued = runAutomationRule(rule, { manual: true });
+      const target = [...state.terminals.values()].find((terminal) => !existingIds.has(terminal.id));
+      return {
+        history: state.automations.history.at(-1),
+        queued,
+        targetId: target?.id,
+        targetTitle: target?.titleInput.value
+      };
+    }, token);
+
+    expect(result.queued).toBe(1);
+    expect(result.targetId).toBeTruthy();
+    expect(result.history).toMatchObject({ detail: `Run in new terminal ${result.targetTitle}`, status: "queued" });
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await expect.poll(() => page.evaluate(({ commandToken, targetId }) => (
+      window.__automationNewTerminalFrames
+        .filter((frame) => frame.id === targetId && (frame.data.includes(commandToken) || frame.data === "\r"))
+        .map((frame) => frame.data)
+    ), { commandToken: token, targetId: result.targetId })).toEqual([`Write-Output '${token}'`, "\r"]);
+
+    await page.evaluate(() => {
+      state.socket.send = window.__automationNewTerminalOriginalSend;
+      terminalExecutionReadiness = window.__automationNewTerminalOriginalReadiness;
+      delete window.__automationNewTerminalFrames;
+      delete window.__automationNewTerminalOriginalReadiness;
+      delete window.__automationNewTerminalOriginalSend;
     });
   });
 

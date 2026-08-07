@@ -285,6 +285,12 @@ test.describe("Pages and the quick switcher", () => {
     await doomedTab.click({ button: "right" });
 
     const items = page.locator("#contextMenu .ctx-item");
+    const firstThree = await items.evaluateAll((rows) => rows.slice(0, 3).map((row) => {
+      const rect = row.getBoundingClientRect();
+      return { top: rect.top, bottom: rect.bottom };
+    }));
+    expect(firstThree[1].top - firstThree[0].bottom).toBeGreaterThanOrEqual(28);
+    expect(firstThree[2].top - firstThree[1].bottom).toBeGreaterThanOrEqual(28);
     await expect(items).toContainText(["Rename…", "New page", "Close page", "Close other pages", "Close all"]);
     await expect(items.filter({ hasText: "Close Doomed" })).toHaveCount(0);
     await items.filter({ hasText: "Close page" }).click();

@@ -677,7 +677,7 @@
 <h2 id="automations">Automations</h2>
 <p>Open <strong>Automations</strong> from the workflow button in the header or the command palette. The Studio separates <strong>Schedules</strong>, <strong>Handoff routes</strong>, and <strong>Activity</strong> so recurring commands and terminal-to-terminal work remain visible and reviewable.</p>
 <h3 id="scheduled-terminal-work">Scheduled terminal work</h3>
-<p>Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. Destinations use terminal names, so give scheduled terminals distinct titles.</p>
+<p>Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. A destination can be a named live terminal or <strong>New terminal</strong>. Named destinations should have distinct titles. <strong>New terminal</strong> opens a fresh terminal for that action each time the schedule runs, then applies the selected delivery mode when its shell is ready.</p>
 <p>Each action has an explicit delivery mode:</p>
 <ul>
 <li><strong>Run when ready</strong> uses the existing automatic command queue and presses Enter only after a regular shell prompt or empty Copilot or Claude prompt is confirmed.</li>
