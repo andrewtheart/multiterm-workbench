@@ -74,6 +74,50 @@ test.describe("Copy and prepare editor", () => {
     await expect(page.locator("#prepareOverlay")).toBeHidden();
   });
 
+  test("copies a terminal selection with Ctrl+C and interrupts on the third rapid press", async () => {
+    const marker = `ctrl-c-selection-${Date.now()}`;
+    await page.evaluate(async (text) => {
+      const terminal = [...state.terminals.values()][0];
+      await new Promise((resolve) => terminal.term.write(`\r\n${text}`, resolve));
+      const buffer = terminal.term.buffer.active;
+      for (let row = buffer.length - 1; row >= 0; row -= 1) {
+        const line = buffer.getLine(row)?.translateToString(true) || "";
+        const column = line.indexOf(text);
+        if (column < 0) continue;
+        terminal.term.select(column, row, text.length);
+        break;
+      }
+      terminal.term.focus();
+      window.__ctrlCFrames = [];
+      window.__ctrlCOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__ctrlCFrames.push(JSON.parse(payload));
+    }, marker);
+
+    await page.keyboard.down("Control");
+    await page.keyboard.press("c");
+    await page.keyboard.up("Control");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(marker);
+    expect(await page.evaluate(() => window.__ctrlCFrames
+      .filter((frame) => frame.type === "input" && frame.data === "\x03"))).toEqual([]);
+
+    await page.evaluate(() => forgetTerminalSelection([...state.terminals.values()][0]));
+    await page.waitForTimeout(750);
+    await page.keyboard.down("Control");
+    await page.keyboard.press("c");
+    await page.keyboard.press("c");
+    await page.keyboard.press("c");
+    await page.keyboard.up("Control");
+    await expect.poll(() => page.evaluate(() => window.__ctrlCFrames
+      .filter((frame) => frame.type === "input" && frame.data === "\x03")
+      .map((frame) => frame.data))).toEqual(["\x03"]);
+
+    await page.evaluate(() => {
+      state.socket.send = window.__ctrlCOriginalSend;
+      delete window.__ctrlCFrames;
+      delete window.__ctrlCOriginalSend;
+    });
+  });
+
   test("uses a centered toolbar and symmetrical footer tracks", async () => {
     await openEditor("Write-Host balanced");
     const geometry = await page.locator(".prepare-editor").evaluate((dialog) => {
@@ -308,6 +352,7 @@ test.describe("Copy and prepare editor", () => {
     await page.locator("#prepareSend").click();
     await expect(page.locator("#prepareTerminalFlyout")).toBeVisible();
     await expect(page.locator("#prepareTerminalList button")).toHaveCount(2);
+    await expect(page.locator("#prepareTerminalSearch")).toBeFocused();
     await page.locator("#prepareTerminalList button:not(.prepare-terminal-new)").click();
 
     const data = await page.evaluate(() => {
@@ -331,6 +376,14 @@ test.describe("Copy and prepare editor", () => {
     await page.locator("#prepareSend").click();
     const options = page.locator("#prepareTerminalList button");
     await expect(options).toHaveCount(9);
+    const search = page.locator("#prepareTerminalSearch");
+    await expect(search).toBeFocused();
+    await search.fill("Picker target 6");
+    await expect(options).toHaveCount(2);
+    await expect(options.first()).toContainText("Picker target 6");
+    await search.fill("");
+    await expect(options).toHaveCount(9);
+    await search.press("ArrowDown");
     await expect(options.first()).toBeFocused();
 
     await options.first().press("ArrowUp");
@@ -368,6 +421,8 @@ test.describe("Copy and prepare editor", () => {
     const create = page.locator("#prepareTerminalList .prepare-terminal-new");
     await expect(create).toContainText("New terminal");
     await expect(create).toContainText("Prepared page");
+    await expect(create.locator("xpath=preceding-sibling::*[1]")).toHaveAttribute("role", "separator");
+    expect(await create.evaluate((element) => element === element.parentElement.lastElementChild)).toBe(true);
     await create.click();
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
     await expect.poll(() => page.evaluate(() => window.__prepareFrames
@@ -404,6 +459,31 @@ test.describe("Copy and prepare editor", () => {
       removeTerminal(terminalId);
       removePage(pageId);
     }, { terminalId: result.terminalId, pageId: currentPageId });
+  });
+
+  test("turns the Send button into a direct new-terminal action while Alt is held", async () => {
+    await openEditor("Write-Output alt-target");
+    const send = page.locator("#prepareSend");
+    await expect(send).toContainText("Send to terminal");
+
+    await page.keyboard.down("Alt");
+    await expect(send).toContainText("Send to new terminal");
+    await expect(page.locator("#prepareSendChevron")).toBeHidden();
+    await page.keyboard.up("Alt");
+    await expect(send).toContainText("Send to terminal");
+
+    const before = await page.locator(".terminal-pane").count();
+    await page.keyboard.down("Alt");
+    await send.click();
+    await page.keyboard.up("Alt");
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
+    await expect(page.locator("#prepareTerminalFlyout")).toBeHidden();
+
+    await page.evaluate(() => {
+      const created = [...state.terminals.values()].at(-1);
+      removeTerminal(created.id);
+    });
+    await page.locator("#prepareClose").click();
   });
 
   test("stays usable in a narrow window", async () => {

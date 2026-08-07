@@ -1449,11 +1449,15 @@
             <div class="prepare-send-wrap">
               <button id="prepareSend" class="secondary-action" type="button" aria-haspopup="menu" aria-expanded="false">
                 <i data-lucide="send"></i>
-                <span>Send to terminal</span>
-                <i data-lucide="chevron-down"></i>
+                <span id="prepareSendLabel">Send to terminal</span>
+                <i id="prepareSendChevron" class="prepare-send-chevron" data-lucide="chevron-down"></i>
               </button>
               <div id="prepareTerminalFlyout" class="prepare-terminal-flyout" role="menu" hidden>
                 <p>Insert without pressing Enter</p>
+                <label class="prepare-terminal-search">
+                  <i data-lucide="search" aria-hidden="true"></i>
+                  <input id="prepareTerminalSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search terminals" aria-label="Search terminal destinations" role="combobox" aria-autocomplete="list" aria-controls="prepareTerminalList" aria-expanded="true">
+                </label>
                 <div id="prepareTerminalList"></div>
               </div>
             </div>

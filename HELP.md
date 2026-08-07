@@ -309,7 +309,7 @@ Press <kbd>Ctrl+Shift+B</kbd> to compose text once and send it to several termin
 
 ### Clipboard behavior
 
-MultiTerm supports copy-on-select, <kbd>Ctrl+Shift+C</kbd>, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.
+MultiTerm supports copy-on-select, <kbd>Ctrl+C</kbd> or <kbd>Ctrl+Shift+C</kbd> for selected terminal text, <kbd>Ctrl+Shift+V</kbd>, optional <kbd>Ctrl+V</kbd> paste, right-click paste modes, and Copilot CLI clipboard cleanup. To interrupt the current terminal command, keep Ctrl held and press C three times in rapid succession. Copied File Explorer items are pasted as file paths. Images copied from tools such as Snipping Tool are saved temporarily as PNG files and pasted as paths so Copilot CLI can attach them as prompt context. Configure clipboard behaviors in Settings.
 
 Choose **Paste and execute** directly below **Paste** in a terminal's right-click menu to paste clipboard text using terminal paste semantics and then press Enter. The blank-workspace right-click menu offers the same action. If no terminal has keyboard focus, MultiTerm opens one on the current page and runs the clipboard text after its shell is ready.
 
@@ -329,7 +329,7 @@ After editing, choose one of these actions:
 
 - **Save file** or <kbd>Ctrl+S</kbd> opens Save As with a suggested script extension for the selected language.
 - **Save snippet** stores a single prepared command under the name you enter.
-- **Send to terminal** inserts the text into a chosen live terminal using terminal paste semantics without appending Enter, or opens a new terminal on the current page and inserts it when the shell is ready. In the destination list, Up/Down wraps through results, Home/End jumps to the edges, and Page Up/Page Down moves five results at a time.
+- **Send to terminal** opens a searchable list of live destinations and inserts the text using terminal paste semantics without appending Enter. **New terminal** stays at the bottom after a divider and opens one on the current page before inserting the text. In the destination list, Up/Down wraps through results, Home/End jumps to the edges, and Page Up/Page Down moves five results at a time. Hold Alt to temporarily turn the button into **Send to new terminal** and run that action directly.
 - **Copy** places the prepared text on the clipboard.
 
 ![Cleaned PowerShell text with successful syntax validation, a script file name, and live terminal destinations](public/help-images/copy-prepare-save-send.png)

@@ -648,12 +648,14 @@ const elements = {
   prepareSaveFile: document.querySelector("#prepareSaveFile"),
   prepareSaveSnippet: document.querySelector("#prepareSaveSnippet"),
   prepareSend: document.querySelector("#prepareSend"),
+  prepareSendLabel: document.querySelector("#prepareSendLabel"),
   prepareSnippetName: document.querySelector("#prepareSnippetName"),
   prepareSource: document.querySelector("#prepareSource"),
   prepareStatus: document.querySelector("#prepareStatus"),
   prepareTitle: document.querySelector("#prepareTitle"),
   prepareTerminalFlyout: document.querySelector("#prepareTerminalFlyout"),
   prepareTerminalList: document.querySelector("#prepareTerminalList"),
+  prepareTerminalSearch: document.querySelector("#prepareTerminalSearch"),
   prepareText: document.querySelector("#prepareText"),
   prepareUndo: document.querySelector("#prepareUndo"),
   prepareValidate: document.querySelector("#prepareValidate"),
@@ -867,7 +869,7 @@ const state = {
   closeRequestSource: "window",
   copilotCwdHistory: loadCopilotCwdHistory(),
   pendingPageClose: null,
-  prepareEditor: { closeTimer: 0, lineNumbersFrame: 0, mode: "copy", resizeObserver: null, returnFocus: null, sourceTerminalId: null, validating: false, wordWrap: true },
+  prepareEditor: { altSendNewTerminal: false, closeTimer: 0, lineNumbersFrame: 0, mode: "copy", resizeObserver: null, returnFocus: null, sourceTerminalId: null, validating: false, wordWrap: true },
   findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false, exemptId: null, gathered: [] },
   appElevated: false,
   broadcastScope: "all",
@@ -2454,6 +2456,8 @@ function addTerminal(options = {}) {
     color: savedMeta?.color || options.color || session.color || null,
     copilotCwd: normalizeCopilotCwdEntry(savedMeta?.copilotCwd ?? options.copilotCwd),
     contextSelection: "",
+    ctrlCCount: 0,
+    ctrlCLastAt: 0,
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
     cwdQuery: null,
@@ -2690,8 +2694,16 @@ function addTerminal(options = {}) {
   return terminal;
 }
 
+const RAPID_CTRL_C_INTERVAL_MS = 700;
+
 function bindTerminalKeyHandling(terminal) {
   terminal.term.element?.addEventListener("keydown", (event) => {
+    const isPlainCtrlC = event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyC";
+    if (!isPlainCtrlC) {
+      terminal.ctrlCCount = 0;
+      terminal.ctrlCLastAt = 0;
+    }
+
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyA") {
       event.preventDefault();
       event.stopPropagation();
@@ -2699,10 +2711,25 @@ function bindTerminalKeyHandling(terminal) {
       return;
     }
 
-    if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyC") {
+    if (isPlainCtrlC) {
       event.preventDefault();
       event.stopPropagation();
-      sendBridge({ type: "input", id: terminal.id, data: "\x03" });
+      if (event.repeat) return;
+
+      const now = performance.now();
+      terminal.ctrlCCount = now - terminal.ctrlCLastAt <= RAPID_CTRL_C_INTERVAL_MS
+        ? terminal.ctrlCCount + 1
+        : 1;
+      terminal.ctrlCLastAt = now;
+      if (terminal.ctrlCCount === 3) {
+        terminal.ctrlCCount = 0;
+        terminal.ctrlCLastAt = 0;
+        sendBridge({ type: "input", id: terminal.id, data: "\x03" });
+        return;
+      }
+
+      const selection = terminal.term.getSelection() || terminal.selectionSnapshot;
+      if (selection) copyTerminalOutput(terminal.id, selection);
       return;
     }
 
@@ -7977,6 +8004,20 @@ function setPrepareEditorMode(mode) {
   refreshIcons(elements.prepareCopy);
 }
 
+function setPrepareSendToNewTerminal(enabled) {
+  const active = Boolean(enabled);
+  state.prepareEditor.altSendNewTerminal = active;
+  elements.prepareSend.classList.toggle("is-new-terminal", active);
+  elements.prepareSendLabel.textContent = active ? "Send to new terminal" : "Send to terminal";
+  elements.prepareSend.title = active ? "Open a new terminal and insert without Enter" : "";
+  if (active) {
+    togglePrepareTerminalFlyout(false);
+    elements.prepareSend.removeAttribute("aria-haspopup");
+  } else {
+    elements.prepareSend.setAttribute("aria-haspopup", "menu");
+  }
+}
+
 function openPrepareEditor(text, sourceTerminalId = null, mode = "copy") {
   if (!elements.prepareOverlay || typeof text !== "string" || !text) return;
   window.clearTimeout(state.prepareEditor.closeTimer);
@@ -8002,8 +8043,10 @@ function openPrepareEditor(text, sourceTerminalId = null, mode = "copy") {
   elements.prepareFind.value = "";
   elements.prepareReplace.value = "";
   elements.prepareFindBar.hidden = true;
+  elements.prepareTerminalSearch.value = "";
   elements.prepareTerminalFlyout.hidden = true;
   elements.prepareSend.setAttribute("aria-expanded", "false");
+  setPrepareSendToNewTerminal(false);
   elements.prepareIssues.hidden = true;
   elements.prepareIssues.textContent = "";
   setPrepareValidation("Not checked");
@@ -8024,6 +8067,7 @@ function closePrepareEditor({ restoreFocus = true } = {}) {
   state.prepareEditor.returnFocus = null;
   state.prepareEditor.sourceTerminalId = null;
   state.prepareEditor.validating = false;
+  setPrepareSendToNewTerminal(false);
   elements.prepareOverlay.classList.remove("is-open");
   window.clearTimeout(state.prepareEditor.closeTimer);
   state.prepareEditor.closeTimer = window.setTimeout(() => {
@@ -8338,8 +8382,46 @@ async function savePreparedFile() {
 }
 
 function renderPrepareTerminalFlyout() {
-  const terminals = [...state.terminals.values()].filter((terminal) => terminal.status === "live");
+  const query = elements.prepareTerminalSearch.value.trim().toLocaleLowerCase();
+  const terminals = [...state.terminals.values()].filter((terminal) => {
+    if (terminal.status !== "live") return false;
+    if (!query) return true;
+    const searchable = [
+      terminal.titleInput.value,
+      terminal.pid ? `PID ${terminal.pid}` : "starting",
+      terminal.shell,
+      terminal.cwd,
+      pageName(terminal.pageId)
+    ].filter(Boolean).join(" ").toLocaleLowerCase();
+    return searchable.includes(query);
+  });
   elements.prepareTerminalList.textContent = "";
+  if (terminals.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "prepare-terminal-empty";
+    empty.textContent = query ? "No matching terminals" : "No live terminals";
+    elements.prepareTerminalList.append(empty);
+  } else {
+    for (const terminal of terminals) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.role = "menuitem";
+      const name = document.createElement("span");
+      name.textContent = terminal.titleInput.value || "Terminal";
+      const meta = document.createElement("span");
+      meta.className = "prepare-terminal-meta";
+      meta.textContent = terminal.pid ? `PID ${terminal.pid}` : "starting";
+      button.append(name, meta);
+      button.addEventListener("click", () => sendPreparedTextToTerminal(terminal.id));
+      elements.prepareTerminalList.append(button);
+    }
+  }
+
+  const divider = document.createElement("div");
+  divider.className = "prepare-terminal-divider";
+  divider.role = "separator";
+  elements.prepareTerminalList.append(divider);
+
   const createButton = document.createElement("button");
   createButton.type = "button";
   createButton.role = "menuitem";
@@ -8352,45 +8434,37 @@ function renderPrepareTerminalFlyout() {
   createButton.append(createName, createMeta);
   createButton.addEventListener("click", sendPreparedTextToNewTerminal);
   elements.prepareTerminalList.append(createButton);
-  if (terminals.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "prepare-terminal-empty";
-    empty.textContent = "No other live terminals";
-    elements.prepareTerminalList.append(empty);
-    return;
-  }
-  for (const terminal of terminals) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.role = "menuitem";
-    const name = document.createElement("span");
-    name.textContent = terminal.titleInput.value || "Terminal";
-    const meta = document.createElement("span");
-    meta.className = "prepare-terminal-meta";
-    meta.textContent = terminal.pid ? `PID ${terminal.pid}` : "starting";
-    button.append(name, meta);
-    button.addEventListener("click", () => sendPreparedTextToTerminal(terminal.id));
-    elements.prepareTerminalList.append(button);
-  }
 }
 
 function togglePrepareTerminalFlyout(force) {
   const open = force === undefined ? elements.prepareTerminalFlyout.hidden : Boolean(force);
-  if (open) renderPrepareTerminalFlyout();
+  if (open) {
+    elements.prepareTerminalSearch.value = "";
+    renderPrepareTerminalFlyout();
+  }
   elements.prepareTerminalFlyout.hidden = !open;
   elements.prepareSend.setAttribute("aria-expanded", String(open));
-  if (open) elements.prepareTerminalList.querySelector("button")?.focus();
+  if (open) elements.prepareTerminalSearch.focus();
 }
 
 function navigatePrepareTerminalFlyout(event) {
+  if (event.key === "Enter" && event.target === elements.prepareTerminalSearch) {
+    const first = elements.prepareTerminalList.querySelector("button:not(.prepare-terminal-new):not([disabled])");
+    if (first) {
+      event.preventDefault();
+      first.click();
+    }
+    return;
+  }
   const keys = new Set(["ArrowDown", "ArrowUp", "End", "Home", "PageDown", "PageUp"]);
   if (!keys.has(event.key)) return;
   const options = [...elements.prepareTerminalList.querySelectorAll("button:not([disabled])")];
   if (options.length === 0) return;
   event.preventDefault();
-  const current = Math.max(0, options.indexOf(document.activeElement));
+  const current = options.indexOf(document.activeElement);
   let next = current;
-  if (event.key === "ArrowDown") next = (current + 1) % options.length;
+  if (current < 0) next = event.key === "ArrowUp" || event.key === "End" ? options.length - 1 : 0;
+  else if (event.key === "ArrowDown") next = (current + 1) % options.length;
   else if (event.key === "ArrowUp") next = (current - 1 + options.length) % options.length;
   else if (event.key === "Home") next = 0;
   else if (event.key === "End") next = options.length - 1;
@@ -8489,10 +8563,20 @@ function bindPrepareEditor() {
   elements.prepareCopy.addEventListener("click", runPreparePrimaryAction);
   elements.prepareSaveSnippet.addEventListener("click", savePreparedSnippet);
   elements.prepareSaveFile.addEventListener("click", savePreparedFile);
-  elements.prepareSend.addEventListener("click", () => togglePrepareTerminalFlyout());
-  elements.prepareTerminalList.addEventListener("keydown", navigatePrepareTerminalFlyout);
+  elements.prepareSend.addEventListener("click", (event) => {
+    if (event.altKey || state.prepareEditor.altSendNewTerminal) sendPreparedTextToNewTerminal();
+    else togglePrepareTerminalFlyout();
+  });
+  elements.prepareTerminalSearch.addEventListener("input", renderPrepareTerminalFlyout);
+  elements.prepareTerminalFlyout.addEventListener("keydown", navigatePrepareTerminalFlyout);
   state.prepareEditor.resizeObserver = createPrepareResizeObserver();
   elements.prepareOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Alt" && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      setPrepareSendToNewTerminal(true);
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -8513,6 +8597,14 @@ function bindPrepareEditor() {
       event.preventDefault();
       first.focus();
     }
+  });
+  elements.prepareOverlay.addEventListener("keyup", (event) => {
+    if (event.key !== "Alt") return;
+    event.preventDefault();
+    setPrepareSendToNewTerminal(false);
+  });
+  window.addEventListener("blur", () => {
+    if (!elements.prepareOverlay.hidden) setPrepareSendToNewTerminal(false);
   });
 }
 
