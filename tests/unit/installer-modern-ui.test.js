@@ -34,7 +34,7 @@ describe("modern installer UI", () => {
   // Every integration ships enabled; the editor extensions carry an explicit
   // experimental label because they change another IDE's installed state.
   it("enables every integration by default and marks the editor extensions experimental", () => {
-    const tasks = installerSection("[Tasks]", "[Files]");
+    const tasks = installerSection("[Tasks]", "[InstallDelete]");
     expect(tasks).not.toMatch(/Flags:[^\r\n]*unchecked/);
     expect(installer).toMatch(/Name: "vscodeextension";[^\r\n]*Visual Studio Code extension \(experimental\)/);
     expect(installer).toMatch(/Name: "visualstudioextension";[^\r\n]*Visual Studio extension \(experimental\)/);
@@ -42,13 +42,23 @@ describe("modern installer UI", () => {
     expect(installer).toContain("the editor extensions are experimental");
   });
 
-  it("checks both editor helper start and exit failures as the original user", () => {
+  // Package names carry the version, so without this an upgrade leaves the old
+  // .vsix beside the new one and the helpers cannot tell which to install.
+  it("removes previously installed editor packages before copying new ones", () => {
+    const cleanup = installerSection("[InstallDelete]", "[Files]");
+    expect(cleanup).toContain('Type: files; Name: "{app}\\VSCode\\*.vsix"');
+    expect(cleanup).toContain('Type: files; Name: "{app}\\VisualStudio\\*.vsix"');
+  });
+
+  it("reports editor helper start and exit failures without aborting the install", () => {
     const runner = installerSection("procedure RunEditorIntegration(", "procedure UpdateEditorIntegrations;");
     expect(runner).toContain("ExecAsOriginalUser(");
     expect(runner).toContain("if not ExecAsOriginalUser(");
     expect(runner).toContain("Setup could not start the ' + EditorName + ' integration helper.");
     expect(runner).toContain("if ResultCode <> 0 then");
-    expect(runner).toContain("integration helper failed with exit code");
+    expect(runner).toContain("integration could not be updated (exit code");
+    // These tasks ship enabled, so an experimental extra must never abort Setup.
+    expect(runner).not.toContain("RaiseException");
   });
 
   it("installs selected editor integrations and removes recorded deselected integrations", () => {
@@ -58,7 +68,7 @@ describe("modern installer UI", () => {
     expect(update).toContain("else if VSCodeIntegrationStateExists then");
     expect(update).toMatch(/VSCode\\Install-VSCodeIntegration\.ps1'[\s\S]*?' -Uninstall'/);
     expect(update).toContain("if WizardIsTaskSelected('visualstudioextension') then");
-    expect(update).toContain("VisualStudioRestartNotice := True;");
+    expect(update).toContain("VisualStudioRestartNotice := VisualStudioIntegrationStateExists;");
     expect(update).toContain("else if VisualStudioIntegrationStateExists then");
     expect(update).toMatch(/VisualStudio\\Install-VisualStudioIntegration\.ps1'[\s\S]*?' -Uninstall'/);
   });

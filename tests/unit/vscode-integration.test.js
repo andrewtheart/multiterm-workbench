@@ -109,6 +109,15 @@ describe("VS Code integration", () => {
     expect(installer).toContain("if ResultCode <> 0 then");
   });
 
+  it("skips instead of failing when VS Code is absent", () => {
+    // The task ships enabled, so this helper runs on machines without VS Code.
+    // A throw here exits 1 and aborts the whole MultiTerm installation.
+    expect(installScript).toContain("if (-not $code) {");
+    expect(installScript).toContain("skipping the MultiTerm extension.");
+    expect(installScript).toContain("exit 0");
+    expect(installScript).not.toContain("Visual Studio Code was not found. Install VS Code");
+  });
+
   it("reads current VS Code state and records whether a reload is needed", () => {
     expect(installer).toContain("function VSCodeIntegrationStateExists: Boolean;");
     expect(installer).toContain("{localappdata}\\MultiTerm\\Integrations\\VSCodeIntegrationInstalled.json");

@@ -70,4 +70,13 @@ describe("Visual Studio integration", () => {
     expect(releaseBuild).toContain("integrations\\visualstudio\\build.ps1");
     expect(releaseBuild).toContain("VisualStudioManifestPath");
   });
+
+  it("skips instead of failing when Visual Studio is absent", () => {
+    // The task ships enabled, so this helper runs on machines without Visual
+    // Studio. A throw here exits 1 and aborts the whole MultiTerm installation.
+    expect(installScript).toContain("skipping the MultiTerm extension.");
+    expect(installScript).toContain("exit 0");
+    expect(installScript).not.toContain("throw 'Visual Studio 2022 or later was not found.'");
+    expect(installer).toContain("VisualStudioRestartNotice := VisualStudioIntegrationStateExists;");
+  });
 });

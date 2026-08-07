@@ -28,7 +28,13 @@ function Find-VSIXInstaller {
 
 $vsixInstaller = Find-VSIXInstaller
 if (-not $vsixInstaller -or -not (Test-Path -LiteralPath $vsixInstaller -PathType Leaf)) {
-    throw 'Visual Studio 2022 or later was not found.'
+    # Enabled by default, so absence of Visual Studio is an ordinary outcome and
+    # must never abort the MultiTerm installation.
+    if ($Uninstall.IsPresent) {
+        Remove-Item -LiteralPath $stateFile, $legacyStateFile -Force -ErrorAction SilentlyContinue
+    }
+    Write-Output 'Visual Studio 2022 or later was not found; skipping the MultiTerm extension.'
+    exit 0
 }
 
 if ($Uninstall.IsPresent) {
@@ -44,9 +50,11 @@ if ($Uninstall.IsPresent) {
     return
 }
 
-$packages = @(Get-ChildItem -LiteralPath $integrationDirectory -Filter '*.vsix' -File)
-if ($packages.Count -ne 1) {
-    throw "Expected exactly one MultiTerm Visual Studio package in $integrationDirectory; found $($packages.Count)."
+# Upgrades from before the installer pruned old packages can leave several
+# version-stamped .vsix files here; the newest is the one being installed.
+$packages = @(Get-ChildItem -LiteralPath $integrationDirectory -Filter '*.vsix' -File | Sort-Object LastWriteTime -Descending)
+if ($packages.Count -eq 0) {
+    throw "Expected a MultiTerm Visual Studio package in $integrationDirectory; found none."
 }
 
 $packageArgument = '"{0}"' -f $packages[0].FullName

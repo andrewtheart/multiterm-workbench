@@ -108,15 +108,25 @@ exit /b %MT_CODE_EXIT%
             Should Throw "VS Code could not uninstall andrewtheart.multiterm-workbench (exit code 7)."
     }
 
-    It "rejects zero and multiple VSIX packages" {
+    It "rejects a missing VSIX package" {
         Remove-Item -LiteralPath (Join-Path $integrationPath "multiterm-test.vsix")
         { & $scriptPath -AppPath $appPath -EditorProcessName "MultiTermNoSuchEditor" } |
-            Should Throw "Expected exactly one MultiTerm VS Code package"
+            Should Throw "found none"
+    }
 
-        Set-Content -LiteralPath (Join-Path $integrationPath "first.vsix") -Value "one"
-        Set-Content -LiteralPath (Join-Path $integrationPath "second.vsix") -Value "two"
-        { & $scriptPath -AppPath $appPath -EditorProcessName "MultiTermNoSuchEditor" } |
-            Should Throw "found 2"
+    It "installs the newest package when an upgrade left older ones behind" {
+        # Package names carry the version, so upgrades accumulate them in {app}\VSCode.
+        Set-Content -LiteralPath (Join-Path $integrationPath "multiterm-old.vsix") -Value "old"
+        $newest = Join-Path $integrationPath "multiterm-new.vsix"
+        Set-Content -LiteralPath $newest -Value "new"
+        (Get-Item -LiteralPath $newest).LastWriteTime = (Get-Date).AddMinutes(10)
+
+        & $scriptPath -AppPath $appPath -EditorProcessName "MultiTermNoSuchEditor"
+
+        $LASTEXITCODE | Should Be 0
+        (Get-Content -LiteralPath $codeLog -Raw) | Should Match "multiterm-new.vsix"
+        $state = Get-Content -LiteralPath (Join-Path $localAppData "MultiTerm\Integrations\VSCodeIntegrationInstalled.json") -Raw | ConvertFrom-Json
+        $state.package | Should Be "multiterm-new.vsix"
     }
 
     It "propagates an install command failure" {
@@ -126,10 +136,30 @@ exit /b %MT_CODE_EXIT%
             Should Throw "VS Code could not install multiterm-test.vsix (exit code 9)."
     }
 
-    It "reports when no VS Code command can be found" {
+    It "skips without failing when no VS Code command can be found" {
+        # The installer task ships enabled, so this helper runs on machines that
+        # never asked for it. A non-zero exit here aborts the whole installation.
         Remove-Item -LiteralPath (Join-Path $binPath "code.cmd")
 
-        { & $scriptPath -AppPath $appPath -EditorProcessName "MultiTermNoSuchEditor" } |
-            Should Throw "Visual Studio Code was not found"
+        & $scriptPath -AppPath $appPath -EditorProcessName "MultiTermNoSuchEditor"
+
+        $LASTEXITCODE | Should Be 0
+        Test-Path -LiteralPath $codeLog | Should Be $false
+        Test-Path -LiteralPath (Join-Path $localAppData "MultiTerm\Integrations\VSCodeIntegrationInstalled.json") | Should Be $false
+    }
+
+    It "clears stale state when uninstalling after VS Code is gone" {
+        $statePath = Join-Path $localAppData "MultiTerm\Integrations\VSCodeIntegrationInstalled.json"
+        $legacyStatePath = Join-Path $integrationPath "VSCodeIntegrationInstalled.json"
+        New-Item -ItemType Directory -Path (Split-Path $statePath -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $statePath -Value "{}"
+        Set-Content -LiteralPath $legacyStatePath -Value "{}"
+        Remove-Item -LiteralPath (Join-Path $binPath "code.cmd")
+
+        & $scriptPath -AppPath $appPath -Uninstall -EditorProcessName "MultiTermNoSuchEditor"
+
+        $LASTEXITCODE | Should Be 0
+        Test-Path -LiteralPath $statePath | Should Be $false
+        Test-Path -LiteralPath $legacyStatePath | Should Be $false
     }
 }

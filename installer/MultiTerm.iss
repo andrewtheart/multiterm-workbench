@@ -86,8 +86,16 @@ Name: "vscodeextension"; Description: "Visual Studio Code extension (experimenta
 Name: "visualstudioextension"; Description: "Visual Studio extension (experimental) - adds 'Open in MultiTerm' to Solution Explorer and Tools"; GroupDescription: "Editor extensions (experimental; clear a box to skip or remove one):"
 Name: "systempath"; Description: "Add MultiTerm to the system PATH (enables the 'multiterm' command)"; GroupDescription: "Command-line integration (machine-wide Program Files installs only):"; Check: IsProtectedSystemPathInstall
 
+[InstallDelete]
+; Package filenames carry the version, so an upgrade would otherwise leave the
+; previous release's .vsix beside the new one and the helpers could not tell
+; which package to install.
+Type: files; Name: "{app}\VSCode\*.vsix"
+Type: files; Name: "{app}\VisualStudio\*.vsix"
+
 [Files]
 Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepoRoot}\Focus-BridgeTerminal.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; Setup extracts the current launcher before replacing files so upgrades can
 ; gracefully stop every running instance, including instances from older installs.
 Source: "{#RepoRoot}\{#MyScriptFile}"; Flags: dontcopy
@@ -162,6 +170,7 @@ var
   ClaudeCliDetected: Boolean;
   VSCodeReloadNotice: Boolean;
   VisualStudioRestartNotice: Boolean;
+  EditorIntegrationProblem: String;
 
 function PreferArm64PromptLibraryFiles: Boolean;
 begin
@@ -253,6 +262,9 @@ begin
     if VisualStudioRestartNotice then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 + #13#10 +
         'The Visual Studio extension is installed and will load the next time Visual Studio starts.';
+    if EditorIntegrationProblem <> '' then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 +
+        EditorIntegrationProblem;
   end;
 end;
 
@@ -351,6 +363,9 @@ begin
     '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
     ScriptPath + '" -AppPath "' + ExpandConstant('{app}') + '"' + ExtraArguments;
   WizardForm.StatusLabel.Caption := 'Updating the ' + EditorName + ' integration...';
+  // These editor extensions are experimental and ship enabled, so they run on
+  // machines that never asked for them. Never abort a MultiTerm installation
+  // over one: record the problem and report it on the final page instead.
   if not ExecAsOriginalUser(
     ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     Arguments,
@@ -359,12 +374,15 @@ begin
     ewWaitUntilTerminated,
     ResultCode
   ) then
-    RaiseException('Setup could not start the ' + EditorName + ' integration helper.');
+  begin
+    EditorIntegrationProblem := EditorIntegrationProblem + #13#10 +
+      'Setup could not start the ' + EditorName + ' integration helper.';
+    Exit;
+  end;
   if ResultCode <> 0 then
-    RaiseException(
-      'The ' + EditorName + ' integration helper failed with exit code ' +
-      IntToStr(ResultCode) + '.'
-    );
+    EditorIntegrationProblem := EditorIntegrationProblem + #13#10 +
+      'The ' + EditorName + ' integration could not be updated (exit code ' +
+      IntToStr(ResultCode) + '). MultiTerm itself installed normally.';
 end;
 
 procedure UpdateEditorIntegrations;
@@ -392,7 +410,7 @@ begin
       'VisualStudio\Install-VisualStudioIntegration.ps1',
       ''
     );
-    VisualStudioRestartNotice := True;
+    VisualStudioRestartNotice := VisualStudioIntegrationStateExists;
   end
   else if VisualStudioIntegrationStateExists then
     RunEditorIntegration(

@@ -33,7 +33,14 @@ function Find-VSCodeCommand {
 
 $code = Find-VSCodeCommand
 if (-not $code) {
-    throw "Visual Studio Code was not found. Install VS Code or add code.cmd to PATH, then retry."
+    # These tasks ship enabled, so most machines run this helper without ever
+    # having asked for it. "No VS Code here" is an ordinary outcome, not a
+    # failure, and must never abort the MultiTerm installation.
+    if ($Uninstall.IsPresent) {
+        Remove-Item -LiteralPath $stateFile, $legacyStateFile -Force -ErrorAction SilentlyContinue
+    }
+    Write-Output 'Visual Studio Code was not found; skipping the MultiTerm extension.'
+    exit 0
 }
 $editorWasRunning = $null -ne (Get-Process -Name $EditorProcessName -ErrorAction SilentlyContinue | Select-Object -First 1)
 
@@ -50,9 +57,11 @@ if ($Uninstall.IsPresent) {
     return
 }
 
-$packages = @(Get-ChildItem -LiteralPath $integrationDirectory -Filter "*.vsix" -File)
-if ($packages.Count -ne 1) {
-    throw "Expected exactly one MultiTerm VS Code package in $integrationDirectory; found $($packages.Count)."
+# Upgrades from before the installer pruned old packages can leave several
+# version-stamped .vsix files here; the newest is the one being installed.
+$packages = @(Get-ChildItem -LiteralPath $integrationDirectory -Filter "*.vsix" -File | Sort-Object LastWriteTime -Descending)
+if ($packages.Count -eq 0) {
+    throw "Expected a MultiTerm VS Code package in $integrationDirectory; found none."
 }
 
 & $code --install-extension $packages[0].FullName --force
