@@ -146,9 +146,6 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -N
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ""{app}\Watchdog\MultiTerm-Watchdog.ps1"""; WorkingDir: "{app}\Watchdog"; Flags: runhidden nowait; Tasks: watchdog; StatusMsg: "Starting the MultiTerm watchdog..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Install -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: systempath; Check: IsProtectedSystemPathInstall; StatusMsg: "Adding MultiTerm to the system PATH..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Uninstall -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveSystemPath; StatusMsg: "Removing MultiTerm from the system PATH..."
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateInstallCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: explorercontext; MinVersion: 10.0.22000; StatusMsg: "Trusting the MultiTerm Explorer package..."
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"""; Flags: runhidden waituntilterminated runasoriginaluser; Tasks: explorercontext; StatusMsg: "Adding MultiTerm to File Explorer..."
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Tasks: explorercontext; Check: ShouldRollbackExplorerCertificate; MinVersion: 10.0.22000; StatusMsg: "Rolling back the MultiTerm Explorer package certificate..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext'); StatusMsg: "Removing MultiTerm from File Explorer..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; StatusMsg: "Removing the MultiTerm Explorer package certificate..."
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -FinalizeUninstall"; Flags: runhidden waituntilterminated runasoriginaluser; Check: not WizardIsTaskSelected('explorercontext')
@@ -171,6 +168,7 @@ var
   VSCodeReloadNotice: Boolean;
   VisualStudioRestartNotice: Boolean;
   EditorIntegrationProblem: String;
+  ExplorerIntegrationProblem: String;
 
 function PreferArm64PromptLibraryFiles: Boolean;
 begin
@@ -265,6 +263,9 @@ begin
     if EditorIntegrationProblem <> '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 +
         EditorIntegrationProblem;
+    if ExplorerIntegrationProblem <> '' then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 +
+        ExplorerIntegrationProblem;
   end;
 end;
 
@@ -420,10 +421,76 @@ begin
     );
 end;
 
+function IsWindows11OrLater: Boolean;
+var
+  Version: TWindowsVersion;
+begin
+  GetWindowsVersionEx(Version);
+  Result := (Version.Major > 10) or
+    ((Version.Major = 10) and (Version.Build >= 22000));
+end;
+
+procedure UpdateExplorerIntegration;
+var
+  ResultCode: Integer;
+  CertificateTrusted: Boolean;
+  ExtraArguments: String;
+  ScriptPath: String;
+  Arguments: String;
+begin
+  if not WizardIsTaskSelected('explorercontext') then
+    Exit;
+
+  CertificateTrusted := True;
+  ExtraArguments := '';
+  if IsWindows11OrLater then
+  begin
+    WizardForm.StatusLabel.Caption := 'Trusting the MultiTerm Explorer package...';
+    CertificateTrusted := ShellExec(
+      'runas',
+      ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateInstallCommand}',
+      '',
+      SW_HIDE,
+      ewWaitUntilTerminated,
+      ResultCode
+    ) and (ResultCode = 0);
+    if not CertificateTrusted then
+    begin
+      ExtraArguments := ' -ClassicOnly';
+      ExplorerIntegrationProblem := #13#10 +
+        'Administrator approval for the Windows 11 File Explorer menu was declined or failed. ' +
+        'MultiTerm installed normally and added the classic File Explorer menu instead.';
+      Log('Explorer certificate trust was declined or failed; installing classic verbs only.');
+    end;
+  end;
+
+  ScriptPath := ExpandConstant('{app}\Explorer\Install-ExplorerIntegration.ps1');
+  Arguments :=
+    '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
+    ScriptPath + '" -AppPath "' + ExpandConstant('{app}') + '"' + ExtraArguments;
+  WizardForm.StatusLabel.Caption := 'Adding MultiTerm to File Explorer...';
+  if not ExecAsOriginalUser(
+    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    Arguments,
+    ExpandConstant('{app}'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then
+    ExplorerIntegrationProblem := #13#10 +
+      'Setup could not start the optional File Explorer integration helper. MultiTerm itself installed normally.'
+  else if ResultCode <> 0 then
+    ExplorerIntegrationProblem := #13#10 +
+      'The optional File Explorer integration could not be installed (exit code ' +
+      IntToStr(ResultCode) + '). MultiTerm itself installed normally.';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    UpdateExplorerIntegration;
     UpdateEditorIntegrations;
     if not WizardSilent then
       WriteAiProviderBootstrap;

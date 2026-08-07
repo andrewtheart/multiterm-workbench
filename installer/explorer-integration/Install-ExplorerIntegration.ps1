@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$AppPath,
     [switch]$Uninstall,
-    [switch]$FinalizeUninstall
+    [switch]$FinalizeUninstall,
+    [switch]$ClassicOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,7 +91,7 @@ for ($index = 0; $index -lt $VerbKeys.Count; $index += 1) {
 
 # Windows 10 uses only the classic verbs. Windows 11 additionally needs a signed
 # sparse package and IExplorerCommand registration to appear in the modern menu.
-if ([Environment]::OSVersion.Version.Build -ge 22000) {
+if (-not $ClassicOnly.IsPresent -and [Environment]::OSVersion.Version.Build -ge 22000) {
     $nativeArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     $architecture = switch -Regex ($nativeArchitecture) {
         '^ARM64$' { 'arm64'; break }

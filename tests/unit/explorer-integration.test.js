@@ -24,9 +24,20 @@ describe("File Explorer integration", () => {
     expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Flags: checkedonce/);
     expect(installer).not.toMatch(/Name: "explorercontext"[^\r\n]+Check:/);
     expect(installer).not.toMatch(/Tasks: explorercontext[^\r\n]+Check: not IsAdminInstallMode/);
-    expect(installer).toContain("Tasks: explorercontext");
+    expect(installer).toContain("if not WizardIsTaskSelected('explorercontext') then");
     expect(installer).toContain("not WizardIsTaskSelected('explorercontext')");
-    expect(installer).toContain("runasoriginaluser");
+    expect(installer).toMatch(/runasoriginaluser|ExecAsOriginalUser/);
+  });
+
+  it("does not abort Setup when optional Explorer elevation is declined", () => {
+    expect(installer).toContain("procedure UpdateExplorerIntegration;");
+    expect(installer).toContain("CertificateTrusted := ShellExec(");
+    expect(installer).toContain("if not CertificateTrusted then");
+    expect(installer).toContain("ExtraArguments := ' -ClassicOnly'");
+    expect(installer).toContain("Administrator approval for the Windows 11 File Explorer menu was declined or failed");
+    expect(installer).toContain("MultiTerm installed normally and added the classic File Explorer menu instead.");
+    expect(installScript).toContain("[switch]$ClassicOnly");
+    expect(installScript).toContain("if (-not $ClassicOnly.IsPresent -and [Environment]::OSVersion.Version.Build -ge 22000)");
   });
 
   it("registers classic folder and folder-background verbs", () => {
