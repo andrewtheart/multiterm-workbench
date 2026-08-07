@@ -144,6 +144,8 @@ describe("PowerShell bridge control dashboard", () => {
 
   it("waits for graceful shutdown before replacing installed files", () => {
     expect(bridgeScript).toContain("[switch]$RequireStopped");
+    expect(bridgeScript).toContain('$portWasSpecified = $PSBoundParameters.ContainsKey("Port")');
+    expect(bridgeScript).not.toContain('$PSBoundParameters.ContainsKey("Port") -or');
     expect(bridgeScript).toContain("function Wait-MultiTermProcessExit");
     expect(bridgeScript).toContain("function Wait-MultiTermEndpointExit");
     expect(bridgeScript).toContain("Could not gracefully stop all MultiTerm instances");

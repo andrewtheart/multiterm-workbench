@@ -30,7 +30,7 @@ param(
     [string]$OpenFolder = ""
 )
 
-$portWasSpecified = $PSBoundParameters.ContainsKey("Port") -or -not [string]::IsNullOrWhiteSpace($env:PORT)
+$portWasSpecified = $PSBoundParameters.ContainsKey("Port")
 $useAutomaticPort = $NewInstance.IsPresent
 if ($Port -le 0) {
   if ($env:PORT) {
@@ -5476,11 +5476,14 @@ namespace MultiTerm.PowerShellBridge
         private void ListCopilotSessions(BridgeClient client, Dictionary<string, string> message)
         {
             string requestId = Json.Get(message, "requestId");
+            bool cliOnly = String.Equals(Json.Get(message, "source"), "cli", StringComparison.OrdinalIgnoreCase);
             ThreadPool.QueueUserWorkItem(delegate(object ignored)
             {
                 try
                 {
-                    List<CopilotSessionMetadata> sessions = this.ReadAllCopilotSessions();
+                    List<CopilotSessionMetadata> sessions = cliOnly
+                        ? ReadCopilotSessions()
+                        : this.ReadAllCopilotSessions();
                     StringBuilder payload = new StringBuilder("[");
                     for (int index = 0; index < sessions.Count; index++)
                     {
