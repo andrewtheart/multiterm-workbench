@@ -37,12 +37,15 @@ const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), 
 
   // A killed bridge leaves its record behind, and Windows hands that PID to some
   // unrelated process. "The PID exists" then keeps the record alive forever and
-  // every poll warns the user about a bridge that died long ago.
-  it("prunes a stale record whose PID no longer owns the registered port", () => {
-    expect(watchdog).toContain("function Test-BridgeOwnsPort");
-    expect(watchdog).toContain("[int]$_.OwningProcess -eq $ProcessId");
+  // every poll warns the user about a bridge that died long ago. Ownership
+  // cannot be tied to the bridge PID though: the installed bridge serves through
+  // HttpListener, so http.sys owns the socket and a PID match would prune every
+  // healthy installed bridge.
+  it("prunes a record whose registered port has no listener left", () => {
+    expect(watchdog).toContain("function Test-BridgePortHasListener");
+    expect(watchdog).not.toContain("[int]$_.OwningProcess -eq $ProcessId");
     expect(watchdog).toMatch(
-      /if \(\$null -eq \$bridgeProcess -or -not \(Test-BridgeOwnsPort -ProcessId \$recordPid -Port \$recordPort\)\) \{[\s\S]{0,200}?Remove-Item -LiteralPath \$file\.FullName/
+      /if \(\$null -eq \$bridgeProcess -or -not \(Test-BridgePortHasListener -Port \$recordPort\)\) \{[\s\S]{0,200}?Remove-Item -LiteralPath \$file\.FullName/
     );
     // Get-NetTCPConnection throws rather than returning nothing when no row
     // matches, so filtering by port in the cmdlet would make "nothing is
@@ -51,7 +54,7 @@ const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), 
     expect(watchdog).toContain("Get-NetTCPConnection -State Listen -ErrorAction Stop");
     expect(watchdog).not.toContain("Get-NetTCPConnection -LocalPort $Port");
     expect(watchdog).toContain("$onPort = @($listeners | Where-Object { [int]$_.LocalPort -eq $Port })");
-    expect(watchdog).toMatch(/if \(\$onPort\.Count -eq 0\) \{\s*return \$false/);
+    expect(watchdog).toContain("return $onPort.Count -gt 0");
   });
 
   it("warns about command termination and requests protected graceful shutdown", () => {

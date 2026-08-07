@@ -58,12 +58,14 @@ function Test-LoopbackInstanceUri {
   return $Uri.Host -in @("127.0.0.1", "localhost", "::1")
 }
 
-# A record only describes a live bridge while its PID still owns the port it
-# registered. Windows recycles PIDs, so "that PID exists" alone keeps a dead
-# bridge's record alive forever and turns every poll into a false health alarm.
-function Test-BridgeOwnsPort {
+# A record only describes a live bridge while something still listens on the port
+# it registered. Ownership cannot be pinned to the bridge PID: the installed
+# bridge serves through HttpListener, so http.sys (PID 4) owns the socket rather
+# than the bridge itself. Windows also recycles PIDs, so "that PID exists" alone
+# would keep a dead bridge's record alive forever and turn every poll into a
+# false health alarm.
+function Test-BridgePortHasListener {
   param(
-    [int]$ProcessId,
     [int]$Port
   )
 
@@ -73,15 +75,12 @@ function Test-BridgeOwnsPort {
     # "the TCP table is unreadable". A machine always has some listener.
     $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
   } catch {
-    # Without the TCP table we cannot disprove ownership, so leave the record be
-    # and let the health check decide.
+    # Without the TCP table we cannot disprove the record, so leave it be and let
+    # the health check decide.
     return $true
   }
   $onPort = @($listeners | Where-Object { [int]$_.LocalPort -eq $Port })
-  if ($onPort.Count -eq 0) {
-    return $false
-  }
-  return [bool]($onPort | Where-Object { [int]$_.OwningProcess -eq $ProcessId })
+  return $onPort.Count -gt 0
 }
 
 function Get-WatchdogBrush {
@@ -398,7 +397,7 @@ try {
         $key = [string]$recordPid
         $seen[$key] = $true
         $bridgeProcess = Get-Process -Id $recordPid -ErrorAction SilentlyContinue
-        if ($null -eq $bridgeProcess -or -not (Test-BridgeOwnsPort -ProcessId $recordPid -Port $recordPort)) {
+        if ($null -eq $bridgeProcess -or -not (Test-BridgePortHasListener -Port $recordPort)) {
           Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
           $states.Remove($key)
           continue
