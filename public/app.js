@@ -12671,6 +12671,10 @@ function renderPager() {
     list.append(chip);
   }
   refreshIcons();
+  window.requestAnimationFrame(() => {
+    const active = list.querySelector(".pager-chip.is-active");
+    if (active?.isConnected) active.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 }
 
 // Renames in place so the chip does not jump around while you type.
@@ -12711,6 +12715,20 @@ function startPageRename(chip) {
 function bindPager() {
   const list = elements.pagerList;
   if (!list) return;
+
+  list.addEventListener("wheel", (event) => {
+    if (isVerticalPager() || list.scrollWidth <= list.clientWidth) return;
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (!delta) return;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 24
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+        ? list.clientWidth
+        : 1;
+    const before = list.scrollLeft;
+    list.scrollLeft += delta * scale;
+    if (list.scrollLeft !== before) event.preventDefault();
+  }, { passive: false });
 
   list.addEventListener("click", (event) => {
     if (suppressPageClick) {
@@ -18757,14 +18775,28 @@ function renderContextMenu(items, {
     const el = document.createElement("div");
     el.className = `ctx-item${item.danger ? " danger" : ""}${item.info ? " ctx-info" : ""}${item.customizationHidden ? " is-customization-hidden" : ""}`;
     if (item.shortcutId) el.dataset.shortcutId = item.shortcutId;
+    let customizationDragHandle = null;
     if (customizable && item.customizationId && item.customizationSectionId) {
       el.dataset.customizationId = item.customizationId;
       el.dataset.customizationSectionId = item.customizationSectionId;
-      el.draggable = true;
-      el.addEventListener("dragstart", (event) => {
+      customizationDragHandle = document.createElement("button");
+      customizationDragHandle.type = "button";
+      customizationDragHandle.className = "ctx-item-drag-handle ctx-customization-control";
+      customizationDragHandle.draggable = true;
+      customizationDragHandle.tabIndex = -1;
+      customizationDragHandle.title = `Drag to move ${item.label}`;
+      customizationDragHandle.setAttribute("aria-label", customizationDragHandle.title);
+      const dragIcon = document.createElement("i");
+      dragIcon.dataset.lucide = "grip-vertical";
+      customizationDragHandle.append(dragIcon);
+      customizationDragHandle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      customizationDragHandle.addEventListener("dragstart", (event) => {
         startContextCustomizationDrag(event, item, el);
       });
-      el.addEventListener("dragend", finishContextCustomizationDrag);
+      customizationDragHandle.addEventListener("dragend", finishContextCustomizationDrag);
       el.addEventListener("contextmenu", (event) => showContextCustomizationMenu(event, item));
     } else if (item.headerAction && item.headerActionTerminalId) {
       el.dataset.headerAction = item.headerAction;
@@ -18838,6 +18870,7 @@ function renderContextMenu(items, {
         field.append(history);
       }
       el.append(field);
+      if (customizationDragHandle) el.append(customizationDragHandle);
       itemContainer.append(el);
       continue;
     }
@@ -18868,6 +18901,7 @@ function renderContextMenu(items, {
         label.append(action);
       }
       el.append(label);
+      if (customizationDragHandle) el.append(customizationDragHandle);
       itemContainer.append(el);
       continue;
     }
@@ -18951,6 +18985,7 @@ function renderContextMenu(items, {
       }
       el.append(accessories);
     }
+    if (customizationDragHandle) el.append(customizationDragHandle);
 
     if (actionable) {
       el.id = `ctx-item-${rowId++}`;

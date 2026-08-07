@@ -84,6 +84,55 @@ test.describe("Automation Studio", () => {
     }
   });
 
+  test("keeps schedule controls contained and shows only the selected routes panel", async ({ page }) => {
+    try {
+      await page.setViewportSize({ width: 1037, height: 768 });
+      await page.evaluate(() => addTerminal({ title: "Consumer" }));
+      await expect.poll(() => page.evaluate(() => (
+        [...state.terminals.values()].length === 2
+        && [...state.terminals.values()].every((terminal) => terminal.status === "live")
+      ))).toBe(true);
+      await page.evaluate(() => {
+        const [source, target] = [...state.terminals.values()];
+        addTerminalLink(source.id, target.id, { handoffEnabled: true });
+      });
+
+      await page.locator("#automationsToggle").click();
+      await page.locator("#automationNew").click();
+      const scheduleGeometry = await page.locator("#automationEditor").evaluate((editor) => {
+        const editorRect = editor.getBoundingClientRect();
+        const controls = [...editor.querySelectorAll(".automation-action-row input, .automation-action-row select, .automation-action-row button")];
+        return {
+          clientWidth: editor.clientWidth,
+          controlsInside: controls.every((control) => control.getBoundingClientRect().right <= editorRect.right + 1),
+          scrollWidth: editor.scrollWidth
+        };
+      });
+      expect(scheduleGeometry.scrollWidth).toBeLessThanOrEqual(scheduleGeometry.clientWidth);
+      expect(scheduleGeometry.controlsInside).toBe(true);
+
+      await page.locator("[data-automation-view='routes']").click();
+      await expect(page.locator("#automationSchedulesView")).toBeHidden();
+      await expect(page.locator("#automationRoutesView")).toBeVisible();
+      await expect(page.locator(".automation-route-row")).toHaveCount(1);
+      await expect(page.locator(".automation-route-copy strong")).toHaveText("Tests → Consumer");
+      const panelGeometry = await page.locator("#automationRoutesView").evaluate((panel) => {
+        const panelRect = panel.getBoundingClientRect();
+        const dialogRect = panel.closest(".automation-studio").getBoundingClientRect();
+        return {
+          bottom: panelRect.bottom,
+          dialogBottom: dialogRect.bottom,
+          dialogRight: dialogRect.right,
+          right: panelRect.right
+        };
+      });
+      expect(panelGeometry.right).toBeLessThanOrEqual(panelGeometry.dialogRight);
+      expect(panelGeometry.bottom).toBeLessThanOrEqual(panelGeometry.dialogBottom);
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 720 });
+    }
+  });
+
   test("pauses globally and applies the visible activity retention setting", async ({ page }) => {
     await page.locator("#automationsToggle").click();
     await page.locator("#automationsPause").click();
@@ -102,6 +151,45 @@ test.describe("Automation Studio", () => {
     await expect(page.locator(".automation-activity-copy strong")).toHaveText(["Three", "Two"]);
     expect(await page.evaluate(() => state.settings.automationHistoryLimit)).toBe(2);
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.automations")).history)).toHaveLength(2);
+  });
+
+  test("keeps Activity chrome fixed while schedule and handoff rows scroll", async ({ page }) => {
+    await page.locator("#automationsToggle").click();
+    await page.locator("[data-automation-view='activity']").click();
+    const before = await page.locator("#automationActivityView").evaluate((panel) => ({
+      panelHeight: panel.clientHeight,
+      sectionHeight: panel.querySelector(".automation-section-head").getBoundingClientRect().height
+    }));
+
+    await page.evaluate(() => {
+      state.automations.history = Array.from({ length: 80 }, (_, index) => ({
+        automationId: index % 2 ? `schedule-${index}` : null,
+        detail: `Event ${index}`,
+        id: `history-${index}`,
+        occurredAt: new Date(Date.now() - index * 1000).toISOString(),
+        status: index % 3 ? "completed" : "staged",
+        title: index % 2 ? `Schedule ${index}` : `Producer → Consumer ${index}`
+      }));
+      renderAutomationActivity();
+    });
+
+    await expect(page.locator(".automation-activity-row")).toHaveCount(80);
+    const after = await page.locator("#automationActivityView").evaluate((panel) => {
+      const section = panel.querySelector(".automation-section-head");
+      const list = panel.querySelector("#automationActivityList");
+      return {
+        listClientHeight: list.clientHeight,
+        listScrollHeight: list.scrollHeight,
+        panelHeight: panel.clientHeight,
+        panelScrollHeight: panel.scrollHeight,
+        sectionHeight: section.getBoundingClientRect().height
+      };
+    });
+    expect(after.panelHeight).toBe(before.panelHeight);
+    expect(after.sectionHeight).toBe(before.sectionHeight);
+    expect(after.panelScrollHeight).toBe(after.panelHeight);
+    expect(after.listClientHeight).toBeLessThan(after.listScrollHeight);
+    expect(after.listClientHeight).toBeLessThan(after.panelHeight);
   });
 
   test("honors zero activity retention when the renderer reloads", async ({ page }) => {

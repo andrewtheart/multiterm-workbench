@@ -3113,7 +3113,7 @@ test.describe("Renderer coverage completion", () => {
 
       betaGroup.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true }));
       alphaGroup.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true }));
-      alphaOne.dispatchEvent(new DragEvent("dragstart", {
+      alphaOne.querySelector(".ctx-item-drag-handle").dispatchEvent(new DragEvent("dragstart", {
         bubbles: true,
         cancelable: true,
         dataTransfer: new DataTransfer()

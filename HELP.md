@@ -42,7 +42,7 @@ The terminal context menu organizes these actions into two columns of named grou
 
 Customize that menu directly:
 
-- drag an action to reorder it within a section or move it into another section;
+- drag the grip at the right edge of an action to reorder it within a section or move it into another section; the rest of the row remains click-only;
 - drag the grip beside a section heading to move the entire section;
 - select a section heading to rename it;
 - open a section's **...** menu to rename or remove it (its actions move to the nearest remaining section);

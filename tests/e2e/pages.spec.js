@@ -160,6 +160,67 @@ test.describe("Pages and the quick switcher", () => {
     })).toBe(true);
   });
 
+  test("contains long horizontal page lists and scrolls them without visible chrome", async () => {
+    await reset(0);
+    try {
+      await page.setViewportSize({ width: 900, height: 700 });
+      await page.evaluate(() => {
+        setPagerPlacement("bottom");
+        let newest = state.activePageId;
+        for (let index = 2; index <= 30; index += 1) {
+          newest = addPage({ name: `Long page ${index}`, activate: false });
+        }
+        setActivePage(newest, { focus: false });
+      });
+
+      await expect(page.locator(".pager-chip")).toHaveCount(30);
+      await expect.poll(() => page.evaluate(() => {
+        const active = elements.pagerList.querySelector(".pager-chip.is-active").getBoundingClientRect();
+        const list = elements.pagerList.getBoundingClientRect();
+        return active.left >= list.left && active.right <= list.right + 1;
+      })).toBe(true);
+
+      const geometry = await page.evaluate(() => {
+        const listStyle = getComputedStyle(elements.pagerList);
+        const webkitScrollbar = getComputedStyle(elements.pagerList, "::-webkit-scrollbar");
+        return {
+          appWidth: elements.appShell.getBoundingClientRect().width,
+          bodyWidth: document.body.getBoundingClientRect().width,
+          clientWidth: elements.pagerList.clientWidth,
+          documentWidth: document.documentElement.scrollWidth,
+          overflowX: listStyle.overflowX,
+          scrollWidth: elements.pagerList.scrollWidth,
+          scrollbarDisplay: webkitScrollbar.display,
+          scrollbarWidth: listStyle.scrollbarWidth,
+          viewportWidth: innerWidth
+        };
+      });
+      expect(geometry.scrollWidth).toBeGreaterThan(geometry.clientWidth);
+      expect(geometry.overflowX).toBe("auto");
+      expect(geometry.scrollbarWidth).toBe("none");
+      expect(geometry.scrollbarDisplay).toBe("none");
+      expect(geometry.appWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+      expect(geometry.bodyWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+      expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth);
+
+      const verticalWheel = await page.evaluate(() => {
+        elements.pagerList.scrollLeft = 0;
+        elements.pagerList.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 180 }));
+        return elements.pagerList.scrollLeft;
+      });
+      expect(verticalWheel).toBeGreaterThan(0);
+
+      const horizontalWheel = await page.evaluate(() => {
+        elements.pagerList.scrollLeft = 0;
+        elements.pagerList.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 140 }));
+        return elements.pagerList.scrollLeft;
+      });
+      expect(horizontalWheel).toBeGreaterThan(0);
+    } finally {
+      await page.setViewportSize({ width: 1400, height: 900 });
+    }
+  });
+
   test("opens a new page with quick key 1 and shows close controls on proper tabs", async () => {
     await reset(1);
     await page.evaluate(() => elements.pagerList.dispatchEvent(new MouseEvent("contextmenu", {

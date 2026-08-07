@@ -61,6 +61,14 @@ test.describe("Automatic terminal title suggestions", () => {
     await expect(pane.locator(".pane-title-review")).toBeHidden();
     await expect(pane.locator(".pane-title")).toHaveValue(before);
     expect(before).not.toBe("deploy pipeline");
+    const unreadAnimation = await pane.locator(".pane-title-generate .ai-title-glyph").evaluate((icon) => {
+      const style = getComputedStyle(icon);
+      return {
+        fillMode: style.animationFillMode,
+        iterationCount: style.animationIterationCount
+      };
+    });
+    expect(unreadAnimation).toEqual({ fillMode: "forwards", iterationCount: "3" });
 
     await pane.locator(".pane-title-generate").click();
     await expect(pane.locator(".pane-title-generate")).toBeHidden();

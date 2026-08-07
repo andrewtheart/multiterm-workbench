@@ -484,7 +484,24 @@ test.describe("Surface context menu", () => {
     const favoritesId = await favorites.getAttribute("data-section-id");
     expect(favoritesId).toMatch(/^custom:/);
 
-    await menu.locator('[data-customization-id="terminal.select-all"]').dragTo(
+    const selectAll = menu.locator('[data-customization-id="terminal.select-all"]');
+    await expect(selectAll).not.toHaveAttribute("draggable", "true");
+    await expect(selectAll.locator(".ctx-item-drag-handle")).toHaveAttribute("draggable", "true");
+    const initialClipboardIds = await itemIds("clipboard");
+    const rowDragStarted = await page.evaluate(() => {
+      const source = elements.contextMenu.querySelector('[data-customization-id="terminal.select-all"]');
+      const target = elements.contextMenu.querySelector('[data-customization-id="terminal.restart"]');
+      const transfer = new DataTransfer();
+      source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      const started = ctxCustomizationDrag !== null;
+      target.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      source.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: transfer }));
+      return started;
+    });
+    expect(rowDragStarted).toBe(false);
+    expect(await itemIds("clipboard")).toEqual(initialClipboardIds);
+
+    await selectAll.locator(".ctx-item-drag-handle").dragTo(
       menu.locator('[data-customization-id="terminal.copy"]'),
       { targetPosition: { x: 8, y: 2 } }
     );
@@ -498,7 +515,7 @@ test.describe("Surface context menu", () => {
       "terminal.paste-execute"
     ]);
 
-    await menu.locator('[data-customization-id="terminal.paste"]').dragTo(
+    await menu.locator('[data-customization-id="terminal.paste"] .ctx-item-drag-handle').dragTo(
       menu.locator('[data-customization-id="terminal.restart"]'),
       { targetPosition: { x: 8, y: 2 } }
     );
@@ -510,7 +527,7 @@ test.describe("Surface context menu", () => {
     expect(sessionIds.indexOf("terminal.paste")).toBeLessThan(sessionIds.indexOf("terminal.restart"));
 
     await page.evaluate((sectionId) => {
-      const source = elements.contextMenu.querySelector('[data-customization-id="terminal.notes"]');
+      const source = elements.contextMenu.querySelector('[data-customization-id="terminal.notes"] .ctx-item-drag-handle');
       const body = elements.contextMenu.querySelector(`.ctx-group[data-section-id="${sectionId}"] .ctx-group-body`);
       const transfer = new DataTransfer();
       source.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
@@ -599,7 +616,8 @@ test.describe("Surface context menu", () => {
     await menu.locator(".ctx-group-title-input").press("Enter");
     temporary = menu.locator(".ctx-group.is-custom-section").filter({ hasText: "Temporary action" });
     const actionSectionId = await temporary.getAttribute("data-section-id");
-    await menu.locator('[data-customization-id="terminal.notes"]').dragTo(temporary.locator(".ctx-group-body"));
+    await menu.locator('[data-customization-id="terminal.notes"] .ctx-item-drag-handle')
+      .dragTo(temporary.locator(".ctx-group-body"));
     await expect(temporary.locator(".ctx-item")).toHaveCount(1);
     await temporary.locator(".ctx-group-header").hover();
     await temporary.locator(".ctx-section-actions").click();
