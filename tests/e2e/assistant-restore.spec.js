@@ -97,6 +97,54 @@ test.describe("Assistant session restore", () => {
     await expect(page.locator("#assistantRestoreOverlay")).toBeHidden();
   });
 
+  test("opens restored terminals before Copilot catalog discovery completes", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(async () => {
+      closeAllTerminals();
+      const originalRequestBridge = requestBridge;
+      const originalSendBridge = sendBridge;
+      let resolveCatalog;
+      let requestedSource = "";
+      let sentCommand = "";
+      requestBridge = (message, options) => {
+        if (message.type !== "listCopilotSessions") return originalRequestBridge(message, options);
+        requestedSource = message.source || "";
+        return new Promise((resolve) => { resolveCatalog = resolve; });
+      };
+      sendBridge = (message) => {
+        if (message.type === "input" && String(message.data || "").includes("--resume")) {
+          sentCommand = message.data;
+        }
+        return originalSendBridge(message);
+      };
+      try {
+        const restoring = restoreAssistantSessions([
+          { id: "gone-1", title: "crashed task", cwd: "D:\\multiTerm", provider: "copilot", shell: "pwsh" }
+        ]);
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const [terminal] = [...state.terminals.values()];
+        const openedBeforeCatalog = Boolean(terminal);
+        resolveCatalog({ sessions: [{
+          id: "12345678-1234-4123-8123-123456789abc",
+          cwd: "D:\\multiTerm",
+          updatedAt: "2026-08-06T12:00:00Z"
+        }] });
+        await restoring;
+        return {
+          openedBeforeCatalog,
+          resumeCommand: terminal?.pendingCommand || sentCommand,
+          source: requestedSource
+        };
+      } finally {
+        requestBridge = originalRequestBridge;
+        sendBridge = originalSendBridge;
+      }
+    });
+    expect(result.openedBeforeCatalog).toBe(true);
+    expect(result.resumeCommand).toContain("--resume \"12345678-1234-4123-8123-123456789abc\"");
+    expect(result.source).toBe("cli");
+  });
+
   test("never opens the dialog when the setting is off", async ({ page }) => {
     await ready(page);
     const opened = await page.evaluate(async () => {

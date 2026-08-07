@@ -5762,6 +5762,83 @@ body[data-pager-placement="right"] .pager-add {
   margin-bottom: 8px;
 }
 
+/* Suppressions are created from a pane's own menu, so this list exists purely
+   as the way back: a rule keyed to a title has no pane to right-click once the
+   terminal it was created from is gone. */
+.auto-title-suppressions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auto-title-suppressions[hidden] {
+  display: none;
+}
+
+.auto-title-suppressions-head {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.auto-title-suppression-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.auto-title-suppression-row {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+}
+
+.auto-title-suppression-row i {
+  color: var(--muted);
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.auto-title-suppression-label {
+  color: var(--text);
+  flex: 1;
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auto-title-suppression-resume {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 2px 6px;
+}
+
+.auto-title-suppression-resume:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.auto-title-suppression-resume i {
+  color: inherit;
+  display: block;
+  height: 14px;
+  width: 14px;
+}
+
 .snippet-row {
   display: flex;
   gap: 6px;
@@ -7878,7 +7955,6 @@ body.is-pane-resizing {
 }
 
 .pane-title-generate,
-.pane-title-hint,
 .pane-title-review button {
   background: transparent;
   border-color: transparent;
@@ -7887,6 +7963,7 @@ body.is-pane-resizing {
   flex: 0 0 26px;
   min-height: 26px;
   padding: 0;
+  position: relative;
   width: 26px;
 }
 
@@ -7895,35 +7972,51 @@ body.is-pane-resizing {
   color: var(--primary);
 }
 
-/* An unread suggestion has to read as a notification, not as another button. */
-.pane-title-hint {
+/* One button carries every state, so an unread suggestion is a badge on it
+   rather than a second, near-identical sparkles icon beside it. */
+.pane-title-generate.has-suggestion {
   color: var(--primary);
-  position: relative;
 }
 
-.pane-title-hint[hidden] {
-  display: none;
-}
-
-.pane-title-hint::after {
+.pane-title-generate.has-suggestion::after {
   background: var(--primary);
   border-radius: 50%;
   content: "";
   height: 6px;
   position: absolute;
-  right: 3px;
-  top: 3px;
+  right: 1px;
+  top: 1px;
   width: 6px;
 }
 
-.pane-title-hint:hover,
-.pane-title-hint:focus-visible {
+.pane-title-generate.has-suggestion:hover,
+.pane-title-generate.has-suggestion:focus-visible {
   background: color-mix(in srgb, var(--primary) 18%, transparent);
   color: var(--primary);
 }
 
-.pane-title-hint > svg {
+.pane-title-generate.has-suggestion .ai-title-glyph {
   animation: ai-title-pulse 1600ms var(--ease-standard) infinite alternate;
+}
+
+/* Paused reads as the same control switched off: a muted timer-off glyph, the
+   way a muted bell reads elsewhere. A slash pseudo-element is not an option
+   here — ::before is the global button state layer and ::after is the badge. */
+.pane-title-generate.is-suppressed {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* .pane-title-wrap svg paints every glyph in this row primary, so the paused
+   glyph has to say otherwise on the svg itself. */
+.pane-title-generate.is-suppressed svg {
+  color: var(--muted);
+}
+
+/* The review row replaces this button, and the global `button` display rule
+   beats the user-agent [hidden] rule, so say it explicitly. */
+.pane-title-generate[hidden] {
+  display: none;
 }
 
 .pane-title-generate.is-loading {
@@ -8449,10 +8542,10 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
   display: none;
 }
 
-/* The suggest button costs the title 26px it only needs on demand. The unread
-   suggestion badge is a notification, so it is deliberately not included. */
+/* The suggest button costs the title 26px it only needs on demand. An unread
+   suggestion is a notification, so that state deliberately stays put. */
 body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-active)
-  .pane-title-generate {
+  .pane-title-generate:not(.has-suggestion) {
   display: none;
 }
 

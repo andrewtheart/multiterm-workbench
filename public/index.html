@@ -454,6 +454,15 @@
               <span title="Minutes before each automatic suggestion, in order. The gaps widen so a long-lived terminal does not keep making AI requests; the last value repeats.">Suggestion delays (minutes)</span>
               <input id="autoTitleSchedule" type="text" spellcheck="false" autocomplete="off" placeholder="5, 60, 120, 240">
             </label>
+            <div id="autoTitleSuppressionRow" class="auto-title-suppressions" hidden>
+              <div class="auto-title-suppressions-head">
+                <span title="Terminals, process ids and titles that automatic suggestions skip. Add them by right-clicking the suggest-title icon on a pane.">Automatic titles paused for</span>
+                <button id="autoTitleSuppressionsClear" class="icon-button" type="button" title="Resume automatic titles everywhere" aria-label="Resume automatic titles everywhere">
+                  <i data-lucide="rotate-ccw"></i>
+                </button>
+              </div>
+              <div id="autoTitleSuppressionList" class="auto-title-suppression-list"></div>
+            </div>
             <label class="control-row">
               <span title="When MultiTerm starts and finds assistant sessions that did not survive a close or crash, reopen them with the assistant resumed.">Resume assistant sessions on relaunch</span>
               <select id="resumeAssistantSessions">
@@ -1885,11 +1894,8 @@
               <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
               <span class="pane-title-display" aria-hidden="true"></span>
             </span>
-            <button type="button" class="pane-title-generate" title="Suggest a title with AI" aria-label="Suggest a terminal title with AI">
+            <button type="button" class="pane-title-generate" title="Suggest a title with AI. Right-click to pause automatic titles." aria-label="Suggest a terminal title with AI">
               <i class="ai-title-glyph" data-lucide="sparkles"></i>
-            </button>
-            <button type="button" class="pane-title-hint" hidden title="A new title suggestion is ready" aria-label="Review the suggested terminal title">
-              <i data-lucide="sparkles"></i>
             </button>
             <span class="pane-title-review" hidden>
               <button type="button" class="pane-title-accept" title="Use suggested title" aria-label="Use suggested terminal title"><i data-lucide="check"></i></button>

@@ -34,6 +34,9 @@ const defaultSettings = {
   headerActionsRevealOnHover: false,
   resumeAssistantSessions: "ask",
   autoTitleSchedule: "5, 60, 120, 240, 360, 720, 1440, 2160",
+  // Terminals, process ids and titles that automatic suggestions skip. Built
+  // from the pane's own suggest-title menu, never from the settings panel.
+  autoTitleSuppressions: [],
   automationHistoryLimit: 200,
   bellNotify: false,
   worktreeSharedRoot: "",
@@ -142,6 +145,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotTitleMinWords: "copilot title minimum words length short concise",
   autoTitleSuggestions: "automatic periodic background terminal title suggestions ai copilot rename",
   autoTitleSchedule: "automatic title interval minutes backoff schedule frequency how often rename delay",
+  autoTitleSuppressionsClear: "automatic title pause paused suppress suppressed stop skip exclude ignore terminal pid process title rename resume everywhere clear",
   resumeAssistantSessions: "resume restore copilot claude sessions relaunch restart crash recover reopen tui",
   headerActionsRevealOnHover: "header actions buttons hide reveal hover show on hover terminal title space room icons",
   copilotTitleMaxWords: "copilot title maximum words length short concise",
@@ -490,6 +494,9 @@ const elements = {
   copilotTitleModel: document.querySelector("#copilotTitleModel"),
   autoTitleSuggestions: document.querySelector("#autoTitleSuggestions"),
   autoTitleSchedule: document.querySelector("#autoTitleSchedule"),
+  autoTitleSuppressionRow: document.querySelector("#autoTitleSuppressionRow"),
+  autoTitleSuppressionList: document.querySelector("#autoTitleSuppressionList"),
+  autoTitleSuppressionsClear: document.querySelector("#autoTitleSuppressionsClear"),
   workspaceEmpty: document.querySelector("#workspaceEmpty"),
   workspaceEmptyRestore: document.querySelector("#workspaceEmptyRestore"),
   workspaceEmptyHint: document.querySelector("#workspaceEmptyHint"),
@@ -1291,6 +1298,7 @@ function bindControls() {
   bindSetting(elements.copilotTitleMaxWords, "copilotTitleMaxWords", "change", clampCopilotTitleMaxWords);
   bindSetting(elements.autoTitleSuggestions, "autoTitleSuggestions", "change", (_, element) => element.checked);
   bindSetting(elements.autoTitleSchedule, "autoTitleSchedule", "change", normalizeAutoTitleSchedule);
+  elements.autoTitleSuppressionsClear?.addEventListener("click", clearAutoTitleSuppressions);
   bindSetting(elements.resumeAssistantSessions, "resumeAssistantSessions", "change", normalizeResumeAssistantSessions);
   bindSetting(elements.headerActionsRevealOnHover, "headerActionsRevealOnHover", "change", (_, element) => element.checked);
   bindSetting(elements.keepSessionsOnClose, "keepSessionsOnClose", "change", (_, element) => element.checked);
@@ -1552,12 +1560,14 @@ function syncCopilotTitleSettings() {
   state.settings.copilotTitleMinWords = clampCopilotTitleMinWords(state.settings.copilotTitleMinWords);
   state.settings.copilotTitleMaxWords = clampCopilotTitleMaxWords(state.settings.copilotTitleMaxWords);
   state.settings.autoTitleSchedule = normalizeAutoTitleSchedule(state.settings.autoTitleSchedule);
+  state.settings.autoTitleSuppressions = normalizeAutoTitleSuppressions(state.settings.autoTitleSuppressions);
   state.settings.resumeAssistantSessions = normalizeResumeAssistantSessions(state.settings.resumeAssistantSessions);
   elements.aiTitleProvider.value = state.settings.aiTitleProvider;
   elements.resumeAssistantSessions.value = state.settings.resumeAssistantSessions;
   elements.headerActionsRevealOnHover.checked = state.settings.headerActionsRevealOnHover === true;
   elements.autoTitleSuggestions.checked = state.settings.autoTitleSuggestions;
   elements.autoTitleSchedule.value = state.settings.autoTitleSchedule;
+  renderAutoTitleSuppressions();
   elements.copilotTitleEffort.value = state.settings.copilotTitleEffort;
   elements.copilotTitleContext.value = state.settings.copilotTitleContext;
   if (state.aiProviders.length > 0) syncAiTitleControls();
@@ -2062,6 +2072,7 @@ function handleBridgeMessage(message) {
     recoverStaleTerminalArtifacts(known);
     pruneTerminalLinks();
     pruneTerminalAnalyticsRecords();
+    pruneAutoTitleSuppressions();
     requestTerminalMessages();
     reviewLostAssistantSessions(known);
     startAssistantSessionRecording();
@@ -2091,6 +2102,9 @@ function handleBridgeMessage(message) {
       terminal.pane.classList.add("is-admin");
     }
     setTerminalStatus(terminal, `pid ${message.pid}`, "live");
+    // The PID only exists now, so a pause keyed to it can only take effect here.
+    scheduleAutoTitle(terminal);
+    updateTerminalTitleGenerateButton(terminal);
     log.info("session", `Session live: ${terminal.titleInput.value}`, { id: message.id, pid: message.pid });
     updateTerminalSearchVisibility(terminal);
     scheduleFit(terminal);
@@ -2391,7 +2405,6 @@ function addTerminal(options = {}) {
   const titleInput = pane.querySelector(".pane-title");
   const titleDisplay = pane.querySelector(".pane-title-display");
   const titleGenerate = pane.querySelector(".pane-title-generate");
-  const titleHint = pane.querySelector(".pane-title-hint");
   const titleReview = pane.querySelector(".pane-title-review");
   const status = pane.querySelector(".pane-status");
   const term = new Terminal({
@@ -2510,7 +2523,6 @@ function addTerminal(options = {}) {
     titleDisplay,
     titleGenerate,
     titleGenerationToken: 0,
-    titleHint,
     titleInput,
     titleOriginal: "",
     titleReview,
@@ -2537,6 +2549,7 @@ function addTerminal(options = {}) {
   updateTerminalNotificationButton(terminal);
   bindPaneDrag(terminal);
   scheduleAutoTitle(terminal);
+  updateTerminalTitleGenerateButton(terminal);
   bindPaneResize(terminal);
   bindPaneQuickQueue(terminal);
   bindTerminalHandoffGrips(terminal);
@@ -3455,8 +3468,18 @@ function bindPaneControls(terminal) {
     terminal.titleInput.blur();
   });
 
-  terminal.titleGenerate.addEventListener("click", () => generateTerminalTitle(terminal));
-  terminal.titleHint.addEventListener("click", () => revealTerminalTitleSuggestion(terminal));
+  // One button, three jobs: reveal a suggestion that is already waiting, ask for
+  // a new one otherwise, and offer the pause scopes on right-click.
+  terminal.titleGenerate.addEventListener("click", () => {
+    if (terminalTitleSuggestionPending(terminal)) revealTerminalTitleSuggestion(terminal);
+    else generateTerminalTitle(terminal);
+  });
+  terminal.titleGenerate.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveTerminal(terminal.id);
+    showAutoTitleSuppressionMenu(terminal);
+  });
   terminal.titleReview.querySelector(".pane-title-accept").addEventListener("click", () => acceptTerminalTitleSuggestion(terminal));
   terminal.titleReview.querySelector(".pane-title-reject").addEventListener("click", () => rejectTerminalTitleSuggestion(terminal));
 
@@ -3547,6 +3570,7 @@ function bindPaneControls(terminal) {
 
 function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   if (!terminal) return;
+  const wasSuppressed = autoTitleSuppressed(terminal);
   clearTerminalTitleSuggestion(terminal);
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : terminalShellTitle(terminal.shell);
   terminal.titleInput.value = title;
@@ -3563,6 +3587,11 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   updateTerminalConnectionViews();
   updateMinimizedDock();
   updateTerminalNotificationButton(terminal);
+  // A title-keyed pause starts or stops applying the moment the title changes.
+  // Only a change of state may touch the timer: a shell that repaints its title
+  // would otherwise keep restarting the ladder and no suggestion would ever run.
+  if (autoTitleSuppressed(terminal) !== wasSuppressed) scheduleAutoTitle(terminal);
+  updateTerminalTitleGenerateButton(terminal);
   if (terminalNotificationFlyoutId === terminal.id) renderTerminalNotificationFlyout();
   saveSessionSnapshot();
   if (notifyBridge) sendBridge({ type: "title", id: terminal.id, title });
@@ -3615,6 +3644,7 @@ function scheduleAutoTitle(terminal) {
   cancelAutoTitle(terminal);
   if (!terminal || !state.settings.autoTitleSuggestions) return;
   if (state.settings.aiTitleProvider === "none") return;
+  if (autoTitleSuppressed(terminal)) return;
   const schedule = parseAutoTitleSchedule(state.settings.autoTitleSchedule);
   terminal.autoTitleTimer = window.setTimeout(() => {
     terminal.autoTitleTimer = 0;
@@ -3625,6 +3655,9 @@ function scheduleAutoTitle(terminal) {
 async function runAutoTitle(terminal) {
   if (!terminal || state.terminals.get(terminal.id) !== terminal) return;
   if (!state.settings.autoTitleSuggestions || state.settings.aiTitleProvider === "none") return;
+  // A title-keyed pause can start matching between the timer being set and it
+  // firing, so the rules are checked again here rather than only at schedule time.
+  if (autoTitleSuppressed(terminal)) return;
   // Advance the ladder even when a run is skipped, so an idle or busy terminal
   // cannot hold the schedule at five minutes forever.
   terminal.autoTitleStep += 1;
@@ -3638,7 +3671,330 @@ async function runAutoTitle(terminal) {
 }
 
 function rescheduleAllAutoTitles() {
-  for (const terminal of state.terminals.values()) scheduleAutoTitle(terminal);
+  for (const terminal of state.terminals.values()) {
+    scheduleAutoTitle(terminal);
+    updateTerminalTitleGenerateButton(terminal);
+  }
+}
+
+/* ------- Pausing automatic titles for a terminal, PID or title ------- */
+
+// Rules are kept in settings rather than per-terminal state so a pause outlives
+// the pane it was made from: a PID rule has to survive a reload, and a title
+// rule has to apply to terminals that do not exist yet.
+const AUTO_TITLE_SUPPRESSION_KINDS = ["terminal", "pid", "title"];
+const AUTO_TITLE_SUPPRESSION_LIMIT = 200;
+
+function autoTitleTitleKey(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeAutoTitleSuppression(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (!AUTO_TITLE_SUPPRESSION_KINDS.includes(raw.kind)) return null;
+  const value = String(raw.value ?? "").trim();
+  if (!value) return null;
+  if (raw.kind === "pid" && !/^\d+$/.test(value)) return null;
+  const label = typeof raw.label === "string" ? raw.label.trim() : "";
+  return {
+    kind: raw.kind,
+    value: value.slice(0, 400),
+    label: label.slice(0, 200),
+    createdAt: typeof raw.createdAt === "string" && raw.createdAt ? raw.createdAt : new Date().toISOString()
+  };
+}
+
+function autoTitleSuppressionKey(rule) {
+  return `${rule.kind}:${rule.kind === "title" ? autoTitleTitleKey(rule.value) : rule.value}`;
+}
+
+function normalizeAutoTitleSuppressions(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const rules = [];
+  for (const raw of value) {
+    const rule = normalizeAutoTitleSuppression(raw);
+    if (!rule) continue;
+    const key = autoTitleSuppressionKey(rule);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push(rule);
+    if (rules.length >= AUTO_TITLE_SUPPRESSION_LIMIT) break;
+  }
+  return rules;
+}
+
+function autoTitleSuppressionRules() {
+  if (!Array.isArray(state.settings.autoTitleSuppressions)) {
+    state.settings.autoTitleSuppressions = [];
+  }
+  return state.settings.autoTitleSuppressions;
+}
+
+function autoTitleSuppressionMatches(rule, terminal) {
+  if (!rule || !terminal) return false;
+  if (rule.kind === "terminal") return rule.value === terminal.id;
+  if (rule.kind === "pid") return terminal.pid != null && String(terminal.pid) === rule.value;
+  return autoTitleTitleKey(terminal.titleInput?.value) === autoTitleTitleKey(rule.value);
+}
+
+function autoTitleSuppressionsFor(terminal) {
+  if (!terminal) return [];
+  return autoTitleSuppressionRules().filter((rule) => autoTitleSuppressionMatches(rule, terminal));
+}
+
+function autoTitleSuppressed(terminal) {
+  return autoTitleSuppressionsFor(terminal).length > 0;
+}
+
+// Reads as the tail of a sentence ("Resume for …", "Paused for …").
+function autoTitleSuppressionScopeLabel(rule) {
+  if (rule.kind === "terminal") return rule.label ? `this terminal (${rule.label})` : "this terminal";
+  if (rule.kind === "pid") return `PID ${rule.value}`;
+  return `titles matching "${rule.value}"`;
+}
+
+function autoTitleSuppressionDescription(rule) {
+  if (rule.kind === "terminal") return rule.label ? `Terminal "${rule.label}"` : "One terminal";
+  if (rule.kind === "pid") return rule.label ? `PID ${rule.value} (${rule.label})` : `PID ${rule.value}`;
+  return `Titles matching "${rule.value}"`;
+}
+
+function autoTitleSuppressionIcon(kind) {
+  if (kind === "terminal") return "square-terminal";
+  if (kind === "pid") return "hash";
+  return "type";
+}
+
+function applyAutoTitleSuppressions() {
+  for (const terminal of state.terminals.values()) {
+    // A suggestion that arrived before the pause was made would otherwise sit on
+    // the pane forever, since nothing else clears an unrevealed one.
+    if (autoTitleSuppressed(terminal) && terminalTitleSuggestionPending(terminal)) {
+      clearTerminalTitleSuggestion(terminal);
+    }
+    scheduleAutoTitle(terminal);
+    updateTerminalTitleGenerateButton(terminal);
+  }
+  renderAutoTitleSuppressions();
+}
+
+function addAutoTitleSuppression(rule) {
+  const normalized = normalizeAutoTitleSuppression(rule);
+  if (!normalized) {
+    toast("That pause rule could not be created", "error", 2400);
+    return false;
+  }
+  const key = autoTitleSuppressionKey(normalized);
+  const rules = autoTitleSuppressionRules().filter((entry) => autoTitleSuppressionKey(entry) !== key);
+  rules.unshift(normalized);
+  state.settings.autoTitleSuppressions = rules.slice(0, AUTO_TITLE_SUPPRESSION_LIMIT);
+  saveSettings();
+  applyAutoTitleSuppressions();
+  toast(`Automatic titles paused for ${autoTitleSuppressionDescription(normalized).toLowerCase()}`, "info", 2600);
+  return true;
+}
+
+function removeAutoTitleSuppression(rule) {
+  const normalized = normalizeAutoTitleSuppression(rule);
+  if (!normalized) return false;
+  const key = autoTitleSuppressionKey(normalized);
+  const rules = autoTitleSuppressionRules();
+  const remaining = rules.filter((entry) => autoTitleSuppressionKey(entry) !== key);
+  if (remaining.length === rules.length) return false;
+  state.settings.autoTitleSuppressions = remaining;
+  saveSettings();
+  applyAutoTitleSuppressions();
+  toast(`Automatic titles resumed for ${autoTitleSuppressionDescription(normalized).toLowerCase()}`, "success", 2600);
+  return true;
+}
+
+function clearAutoTitleSuppressions() {
+  if (autoTitleSuppressionRules().length === 0) return;
+  state.settings.autoTitleSuppressions = [];
+  saveSettings();
+  applyAutoTitleSuppressions();
+  toast("Automatic titles resumed everywhere", "success", 2400);
+}
+
+// Terminal and PID rules name something that no longer exists once its session
+// is gone, so they are dropped when the bridge has told us every session it has.
+// A title rule is deliberately kept: it is meant to outlive its terminal.
+function pruneAutoTitleSuppressions() {
+  const rules = autoTitleSuppressionRules();
+  const livePids = new Set();
+  for (const terminal of state.terminals.values()) {
+    if (terminal.pid != null) livePids.add(String(terminal.pid));
+  }
+  const remaining = rules.filter((rule) => {
+    if (rule.kind === "terminal") return state.terminals.has(rule.value);
+    if (rule.kind === "pid") return livePids.has(rule.value);
+    return true;
+  });
+  if (remaining.length !== rules.length) {
+    state.settings.autoTitleSuppressions = remaining;
+    saveSettings();
+  }
+  applyAutoTitleSuppressions();
+}
+
+function terminalTitleSuggestionPending(terminal) {
+  return Boolean(terminal?.titleSuggestion) && terminal.titleReview?.hidden !== false;
+}
+
+// The glyph keeps the ai-title-glyph class so the loading animation still finds
+// it after lucide swaps the placeholder for an <svg>.
+function setTerminalTitleGenerateIcon(button, iconName) {
+  if (!button || button.dataset.titleIcon === iconName) return;
+  const icon = document.createElement("i");
+  icon.className = "ai-title-glyph";
+  icon.dataset.lucide = iconName;
+  button.replaceChildren(icon);
+  button.dataset.titleIcon = iconName;
+  refreshIcons(button);
+}
+
+function updateTerminalTitleGenerateButton(terminal) {
+  const button = terminal?.titleGenerate;
+  if (!button) return;
+  const pending = terminalTitleSuggestionPending(terminal);
+  const paused = autoTitleSuppressionsFor(terminal);
+  // A request in flight owns the glyph: swapping it for the paused icon
+  // mid-request would animate the wrong thing.
+  const showPaused = !pending && paused.length > 0 && !button.classList.contains("is-loading");
+  button.classList.toggle("has-suggestion", pending);
+  button.classList.toggle("is-suppressed", showPaused);
+  setTerminalTitleGenerateIcon(button, showPaused ? "timer-off" : "sparkles");
+  const name = terminal.titleInput?.value || "terminal";
+  if (pending) {
+    button.title = `Suggested title: ${terminal.titleSuggestion}`;
+    button.setAttribute("aria-label", `Review the suggested title for ${name}: ${terminal.titleSuggestion}`);
+    return;
+  }
+  const pausedFor = paused.map(autoTitleSuppressionScopeLabel).join(", ");
+  button.title = paused.length > 0
+    ? `Suggest a title with AI. Automatic titles are paused for ${pausedFor}. Right-click to resume.`
+    : "Suggest a title with AI. Right-click to pause automatic titles.";
+  button.setAttribute("aria-label", paused.length > 0
+    ? `Suggest a title for ${name} with AI. Automatic titles are paused for ${pausedFor}.`
+    : `Suggest a title for ${name} with AI`);
+}
+
+function renderAutoTitleSuppressions() {
+  const list = elements.autoTitleSuppressionList;
+  const row = elements.autoTitleSuppressionRow;
+  if (!list || !row) return;
+  const rules = autoTitleSuppressionRules();
+  row.hidden = rules.length === 0;
+  list.textContent = "";
+  for (const rule of rules) {
+    const entry = document.createElement("div");
+    entry.className = "auto-title-suppression-row";
+    entry.dataset.suppressionKey = autoTitleSuppressionKey(rule);
+
+    const icon = document.createElement("i");
+    icon.dataset.lucide = autoTitleSuppressionIcon(rule.kind);
+
+    const label = document.createElement("span");
+    label.className = "auto-title-suppression-label";
+    label.textContent = autoTitleSuppressionDescription(rule);
+    label.title = label.textContent;
+
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.className = "auto-title-suppression-resume";
+    resume.title = `Resume automatic titles for ${autoTitleSuppressionDescription(rule).toLowerCase()}`;
+    resume.setAttribute("aria-label", resume.title);
+    const resumeIcon = document.createElement("i");
+    resumeIcon.dataset.lucide = "play";
+    resume.append(resumeIcon);
+    resume.addEventListener("click", () => removeAutoTitleSuppression(rule));
+
+    entry.append(icon, label, resume);
+    list.append(entry);
+  }
+  refreshIcons(row);
+  invalidateSettingsSearchItem(row);
+}
+
+// Anchored under the suggest button because every choice here is about that
+// button's automatic counterpart, and the pane header has room below it.
+function showAutoTitleSuppressionMenu(terminal) {
+  if (!terminal) return;
+  const matches = autoTitleSuppressionsFor(terminal);
+  const matched = new Set(matches.map(autoTitleSuppressionKey));
+  const title = (terminal.titleInput?.value || "").trim();
+  const items = [];
+
+  items.push({
+    info: true,
+    icon: matches.length > 0 ? "pause" : "sparkles",
+    label: matches.length > 0 ? "Automatic titles are paused" : "Automatic titles are on",
+    title: matches.length > 0
+      ? `Paused for ${matches.map(autoTitleSuppressionScopeLabel).join(", ")}`
+      : "Suggestions arrive on the schedule in Settings and wait for your approval."
+  });
+  items.push({ separator: true });
+
+  for (const rule of matches) {
+    items.push({
+      icon: "play",
+      label: `Resume for ${autoTitleSuppressionScopeLabel(rule)}`,
+      run: () => removeAutoTitleSuppression(rule)
+    });
+  }
+  if (matches.length > 0) items.push({ separator: true });
+
+  if (!matched.has(autoTitleSuppressionKey({ kind: "terminal", value: terminal.id }))) {
+    items.push({
+      icon: "square-terminal",
+      label: "Pause for this terminal",
+      title: "This pane only. The pause is forgotten when the session is gone.",
+      run: () => addAutoTitleSuppression({ kind: "terminal", value: terminal.id, label: title })
+    });
+  }
+
+  if (terminal.pid == null) {
+    items.push({ info: true, icon: "hash", label: "No PID for this terminal yet" });
+  } else if (!matched.has(autoTitleSuppressionKey({ kind: "pid", value: String(terminal.pid) }))) {
+    items.push({
+      icon: "hash",
+      label: `Pause for PID ${terminal.pid}`,
+      title: "This exact process. A restarted session gets a new PID and is titled again.",
+      run: () => addAutoTitleSuppression({ kind: "pid", value: String(terminal.pid), label: title })
+    });
+  }
+
+  if (title && !matched.has(autoTitleSuppressionKey({ kind: "title", value: title }))) {
+    items.push({
+      icon: "type",
+      label: `Pause for titles matching "${title}"`,
+      title: "Any terminal with this exact title, now or later.",
+      run: () => addAutoTitleSuppression({ kind: "title", value: title, label: title })
+    });
+  }
+
+  items.push({ separator: true });
+  items.push({
+    icon: "text-cursor-input",
+    input: true,
+    // The caption column is narrow, so this label has to stay about as short as
+    // the other input rows in this menu.
+    label: "Pause title",
+    placeholder: "Exact terminal title",
+    run: (value) => addAutoTitleSuppression({ kind: "title", value, label: value })
+  });
+  items.push({ separator: true });
+  items.push({
+    icon: "sparkles",
+    label: "Suggest a title now",
+    title: "A pause only stops automatic suggestions; asking for one still works.",
+    run: () => generateTerminalTitle(terminal)
+  });
+
+  renderContextMenu(items);
+  const rect = terminal.titleGenerate.getBoundingClientRect();
+  showBuiltContextMenu(rect.left, rect.bottom + 4, { returnFocus: terminal.titleGenerate });
 }
 
 const ASSISTANT_SESSION_LIMIT = 40;
@@ -3717,34 +4073,53 @@ async function restoreAssistantSessions(rows) {
   // The record cannot hold the CLI's own session id, so match the newest
   // catalog entry for that folder and genuinely resume it.
   const catalogs = new Map();
-  let restored = 0;
+  const launches = [];
   for (const row of rows) {
-    let catalog = catalogs.get(row.provider);
-    if (!catalog) {
-      const response = await requestBridge({
+    if (row.provider !== "copilot" && row.provider !== "claude") continue;
+    let catalogPromise = catalogs.get(row.provider);
+    if (!catalogPromise) {
+      const request = {
         type: row.provider === "claude" ? "listClaudeSessions" : "listCopilotSessions"
-      }, { timeout: 30000 });
-      catalog = Array.isArray(response?.sessions) ? response.sessions : [];
-      catalogs.set(row.provider, catalog);
+      };
+      if (row.provider === "copilot") request.source = "cli";
+      catalogPromise = requestBridge(request, { timeout: 30000 }).then((response) =>
+        Array.isArray(response?.sessions) ? response.sessions : []
+      );
+      catalogs.set(row.provider, catalogPromise);
     }
-    const match = catalog
-      .filter((session) => session?.id && sameHostDirectory(session.cwd || "", row.cwd))
-      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
-    const command = buildAiAssistantCommand({
-      provider: row.provider,
-      resumeId: match?.id || ""
-    });
-    if (!command) continue;
-    addTerminal({
+    const terminal = addTerminal({
       reveal: true,
       runStartup: false,
       title: row.title || "",
       shell: row.shell || undefined,
-      cwd: row.cwd || undefined,
-      pendingCommand: command,
-      pendingCommandEnter: true
+      cwd: row.cwd || undefined
     });
+    if (terminal) launches.push({ catalogPromise, row, terminal });
+  }
+  if (launches.length > 0) {
+    toast(`Opening ${launches.length} assistant session${launches.length === 1 ? "" : "s"}...`, "info", 2400);
+  }
+  let restored = 0;
+  await Promise.all(launches.map(async ({ catalogPromise, row, terminal }) => {
+    const catalog = await catalogPromise;
+    const match = catalog
+      .filter((session) => session?.id && sameHostDirectory(session.cwd || "", row.cwd))
+      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+    const command = safeTerminalCommand(buildAiAssistantCommand({
+      provider: row.provider,
+      resumeId: match?.id || ""
+    }));
+    if (!command || state.terminals.get(terminal.id) !== terminal) return;
+    if (terminal.status === "live") {
+      sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
+    } else {
+      terminal.pendingCommand = command;
+      terminal.pendingCommandEnter = true;
+    }
     restored += 1;
+  }));
+  if (launches.length > 0) {
+    window.requestAnimationFrame(() => launches[0].terminal.term.focus());
   }
   saveAssistantSessionRecord();
   if (restored > 0) {
@@ -3832,7 +4207,6 @@ function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
   terminal.titleGenerate.classList.remove("is-loading");
   terminal.titleGenerate.hidden = false;
   terminal.titleReview.hidden = true;
-  terminal.titleHint.hidden = true;
   terminal.titleInput.readOnly = false;
   terminal.pane.classList.remove("has-title-suggestion");
   if (restoreOriginal && terminal.titleOriginal) {
@@ -3841,17 +4215,16 @@ function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
   }
   terminal.titleOriginal = "";
   terminal.titleSuggestion = "";
+  updateTerminalTitleGenerateButton(terminal);
 }
 
 // An automatic suggestion only offers itself; it must never rename a terminal
-// the user is watching without being asked.
+// the user is watching without being asked. The suggest button carries the
+// waiting state as a badge rather than a second button appearing beside it.
 function showTerminalTitleSuggestion(terminal, title, { auto = false } = {}) {
   terminal.titleSuggestion = title;
   if (auto) {
-    terminal.titleHint.hidden = false;
-    terminal.titleHint.title = `Suggested title: ${title}`;
-    terminal.titleHint.setAttribute("aria-label", `Review suggested terminal title: ${title}`);
-    refreshIcons(terminal.titleHint);
+    updateTerminalTitleGenerateButton(terminal);
     return;
   }
   revealTerminalTitleSuggestion(terminal);
@@ -3860,7 +4233,6 @@ function showTerminalTitleSuggestion(terminal, title, { auto = false } = {}) {
 function revealTerminalTitleSuggestion(terminal) {
   const title = terminal?.titleSuggestion;
   if (!title) return;
-  terminal.titleHint.hidden = true;
   terminal.titleOriginal = terminal.titleInput.value;
   terminal.titleInput.value = title;
   setTerminalTitleDisplay(terminal, title);
@@ -3868,6 +4240,7 @@ function revealTerminalTitleSuggestion(terminal) {
   terminal.titleGenerate.hidden = true;
   terminal.titleReview.hidden = false;
   terminal.pane.classList.add("has-title-suggestion");
+  updateTerminalTitleGenerateButton(terminal);
   refreshIcons(terminal.titleReview);
   terminal.titleReview.querySelector(".pane-title-accept").focus({ preventScroll: true });
 }
@@ -3909,6 +4282,7 @@ async function generateTerminalTitle(terminal, { auto = false } = {}) {
   const token = terminal.titleGenerationToken;
   terminal.titleGenerate.disabled = true;
   terminal.titleGenerate.classList.add("is-loading");
+  setTerminalTitleGenerateIcon(terminal.titleGenerate, "sparkles");
   const response = await requestBridge({
     type: "generateTerminalTitle",
     provider: state.settings.aiTitleProvider,
@@ -3929,6 +4303,7 @@ async function generateTerminalTitle(terminal, { auto = false } = {}) {
   terminal.titleGenerate.classList.remove("is-loading");
   if (!response?.title) {
     report(response?.error || "The selected AI provider could not suggest a title", "error", 3200);
+    updateTerminalTitleGenerateButton(terminal);
     return false;
   }
   showTerminalTitleSuggestion(terminal, response.title, { auto });
@@ -6731,6 +7106,7 @@ function loadSettings() {
     const settings = { ...defaultSettings, ...JSON.parse(localStorage.getItem("multiterm.settings") || "{}") };
     settings.headerActionDragScope = normalizeHeaderActionDragScope(settings.headerActionDragScope);
     settings.headerActionsInMenu = normalizeHeaderActionsInMenu(settings.headerActionsInMenu);
+    settings.autoTitleSuppressions = normalizeAutoTitleSuppressions(settings.autoTitleSuppressions);
     settings.pageCloseAction = normalizePageCloseAction(settings.pageCloseAction);
     settings.titleFontScale = normalizeTitleFontScale(settings.titleFontScale);
     settings.workspaceZoom = normalizeWorkspaceZoom(settings.workspaceZoom);
