@@ -1170,7 +1170,8 @@ test.describe("Settings panel — every control has its expected effect", () => 
         { sel: "#rowCount", value: "4", css: "--fixed-rows", cssVal: "4", out: "#rowCountValue", outText: "4" },
         { sel: "#paneHeight", value: "360", css: "--pane-height", cssVal: "360px", out: "#paneHeightValue", outText: "360px" },
         { sel: "#focusWidth", value: "70", css: "--focus-width", cssVal: "70%", out: "#focusWidthValue", outText: "70%" },
-        { sel: "#paneGap", value: "12", css: "--pane-gap", cssVal: "12px", out: "#paneGapValue", outText: "12px" }
+        { sel: "#paneGap", value: "12", css: "--pane-gap", cssVal: "12px", out: "#paneGapValue", outText: "12px" },
+        { sel: "#paneGap", value: "50", css: "--pane-gap", cssVal: "50px", out: "#paneGapValue", outText: "50px" }
       ];
       for (const c of cases) {
         await setNative(c.sel, c.value, "input");

@@ -815,10 +815,16 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(menu).toBeVisible();
     await expect(menu.locator(".ctx-item")).toHaveText([
       "Notifications\u2026",
+      "Notes & command queue",
+      "Minimize",
+      "Maximize",
       "Move left",
       "Move right",
+      "Find\u2026Ctrl+F",
+      "Clear",
+      "Copy output",
       "Cycle label color",
-      "Find…Ctrl+F",
+      "RestartCtrl+Shift+R",
       "Duplicate"
     ]);
     await menu.locator(".ctx-item", { hasText: "Notifications" }).click();
@@ -851,24 +857,34 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(beforeDuplicate + 1);
   });
 
-  test("keeps find and duplicate in the overflow menu when panes are wide", async () => {
+  test("keeps secondary actions in the overflow menu when panes are wide", async () => {
     await setNative("#columnCount", "1", "input");
 
     const firstPane = page.locator(".terminal-pane").first();
     await expect(firstPane).not.toHaveClass(/is-narrow/);
-    // The hamburger is always available; find/duplicate always live inside it.
+    // The hamburger and notifications are always available; the rest of the row
+    // either lives in the menu by default or waits for a hover.
     await expect(firstPane.locator('[data-action="more"]')).toBeVisible();
-    for (const action of ["move-left", "move-right", "color"]) {
-      await expect(firstPane.locator(`[data-action="${action}"]`)).toBeVisible();
-    }
-    for (const action of ["find", "duplicate"]) {
+    await expect(firstPane.locator('[data-action="notifications"]')).toBeVisible();
+    await expect(firstPane.locator('[data-action="close"]')).toBeVisible();
+    for (const action of ["move-left", "move-right", "color", "find", "duplicate", "clear", "copy", "restart"]) {
       await expect(firstPane.locator(`[data-action="${action}"]`)).toBeHidden();
     }
-    await expect(firstPane.locator('[data-action="notifications"]')).toBeVisible();
+    // Reveal-on-hover is opt-in, so the rest of the row stays painted.
+    await expect(firstPane.locator('[data-action="maximize"]')).toBeVisible();
 
     await firstPane.locator('[data-action="more"]').click();
     const menu = page.locator("#contextMenu");
-    await expect(menu.locator(".ctx-item")).toHaveText(["Find…Ctrl+F", "Duplicate"]);
+    await expect(menu.locator(".ctx-item")).toHaveText([
+      "Move left",
+      "Move right",
+      "Find\u2026Ctrl+F",
+      "Clear",
+      "Copy output",
+      "Cycle label color",
+      "RestartCtrl+Shift+R",
+      "Duplicate"
+    ]);
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
   });
@@ -876,6 +892,14 @@ test.describe("MultiTerm Workbench UI", () => {
   test("customizes terminal header actions by drag scope and remembers the choice", async () => {
     await setNative("#columnCount", "1", "input");
     await setNative("#headerActionDragScope", "ask", "change");
+    // This test is about drag scope, so start from a header that still holds the
+    // draggable actions and keep the row painted rather than hover-revealed.
+    await page.evaluate(() => {
+      state.settings.headerActionsInMenu = ["find", "duplicate"];
+      state.settings.headerActionsRevealOnHover = false;
+      applySettings();
+      for (const terminal of state.terminals.values()) applyHeaderActionPlacement(terminal);
+    });
 
     const panes = page.locator(".terminal-pane");
     if ((await panes.count()) < 2) await page.locator("#addTerminal").click();

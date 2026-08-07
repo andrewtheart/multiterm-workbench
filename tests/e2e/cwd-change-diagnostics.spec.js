@@ -4,17 +4,24 @@ const { test, expect } = require("../support/renderer-coverage");
 // not answer -- including when the socket was down -- which sends people off
 // checking a folder that was never the problem.
 test.describe("Change working directory diagnostics", () => {
+  // Every spec shares one bridge, so whatever pane happened to be active could
+  // already be exiting by the time validation runs -- which surfaces as "The
+  // selected terminal is no longer available" rather than a directory verdict.
+  // Own the terminal instead of borrowing state.activeId.
   const openDialog = async (page) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
-    await page.evaluate(async () => {
-      while (state.terminals.size < 1) {
-        addTerminal({ reveal: true });
-        await new Promise((resolve) => setTimeout(resolve, 500));
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      openCwdChange(state.activeId);
+    await page.evaluate(() => {
+      closeAllTerminals();
+      addTerminal({ reveal: true });
     });
+    // The dialog refuses a terminal that is missing or already exited, so wait
+    // for the bridge to actually bring this one up before opening it.
+    await expect.poll(() => page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      return terminal ? terminal.status : "none";
+    }), { timeout: 30000 }).toBe("live");
+    await page.evaluate(() => openCwdChange([...state.terminals.keys()][0]));
     await expect(page.locator("#cwdChangeOverlay")).toBeVisible();
   };
 

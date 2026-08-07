@@ -671,6 +671,7 @@ namespace MultiTerm.PowerShellBridge
         private static readonly Terminal.Gui.Attribute WarningAttribute = Terminal.Gui.Attribute.Make(Color.BrightRed, Color.Gray);
         private static readonly Terminal.Gui.Attribute IconAttribute = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Gray);
         private static readonly Terminal.Gui.Attribute HelpAttribute = Terminal.Gui.Attribute.Make(Color.Black, Color.Gray);
+        private static readonly Terminal.Gui.Attribute BridgeIdAttribute = Terminal.Gui.Attribute.Make(Color.White, Color.Blue);
         private static readonly string[] HelpLines = new string[]
         {
             "Up/Down  Select",
@@ -684,6 +685,7 @@ namespace MultiTerm.PowerShellBridge
 
         public DashboardNoticeView()
         {
+            this.BridgeId = String.Empty;
             this.CanFocus = false;
             this.ColorScheme = new ColorScheme()
             {
@@ -693,6 +695,8 @@ namespace MultiTerm.PowerShellBridge
                 HotFocus = BackgroundAttribute
             };
         }
+
+        public string BridgeId { get; set; }
 
         public override void Redraw(Rect bounds)
         {
@@ -711,23 +715,35 @@ namespace MultiTerm.PowerShellBridge
                 driver.AddStr(NStack.ustring.Make(new String(' ', width)));
             }
 
+            int bannerRows = 0;
+            string identifier = String.IsNullOrEmpty(this.BridgeId) ? "BRIDGE-???" : this.BridgeId;
+            string bannerText = identifier.Length > width ? identifier.Substring(0, width) : identifier;
+            int leading = Math.Max(0, (width - bannerText.Length) / 2);
+            this.Move(0, 0, false);
+            driver.SetAttribute(BridgeIdAttribute);
+            driver.AddStr(NStack.ustring.Make(
+                new String(' ', leading)
+                + bannerText
+                + new String(' ', Math.Max(0, width - leading - bannerText.Length))));
+            bannerRows = Math.Min(height, 2);
+
             int warningWidth = Math.Max(1, width - 3);
             List<string> warningLines = DashboardLogView.WrapText(Warning, warningWidth);
             driver.SetAttribute(WarningAttribute);
-            for (int row = 0; row < warningLines.Count && row < height; row++)
+            for (int row = 0; row < warningLines.Count && row + bannerRows < height; row++)
             {
-                this.Move(0, row, false);
+                this.Move(0, row + bannerRows, false);
                 driver.AddStr(DashboardLogView.Clip(warningLines[row], warningWidth));
             }
 
-            if (width >= 2)
+            if (width >= 2 && bannerRows < height)
             {
-                this.Move(width - 2, 0, false);
+                this.Move(width - 2, bannerRows, false);
                 driver.SetAttribute(IconAttribute);
                 driver.AddStr(NStack.ustring.Make("!"));
             }
 
-            int helpRow = Math.Max(warningLines.Count + 1, height - HelpLines.Length);
+            int helpRow = Math.Max(warningLines.Count + bannerRows + 1, height - HelpLines.Length);
             driver.SetAttribute(HelpAttribute);
             foreach (string line in HelpLines)
             {
@@ -774,9 +790,11 @@ namespace MultiTerm.PowerShellBridge
         private string lastSessionSignature;
         private string lastSessionDetails;
         private string lastStatusText;
+        private string bridgeId;
 
         public BridgeConsoleDashboard(
             string instanceUrl,
+            string bridgeId,
             Func<List<DashboardSessionInfo>> getSessions,
             Func<int> getRendererClients,
             Action<string> terminateSession,
@@ -784,6 +802,7 @@ namespace MultiTerm.PowerShellBridge
             Action stopBridge)
         {
             this.instanceUrl = instanceUrl;
+            this.bridgeId = String.IsNullOrEmpty(bridgeId) ? "BRIDGE-???" : bridgeId;
             this.getSessions = getSessions;
             this.getRendererClients = getRendererClients;
             this.terminateSession = terminateSession;
@@ -800,7 +819,9 @@ namespace MultiTerm.PowerShellBridge
 
             try
             {
-                Console.Title = "MultiTerm Bridge Control Console - " + this.instanceUrl;
+                // The id leads so it survives the truncation a Windows Terminal
+                // tab applies, and so UI automation can match the tab by name.
+                Console.Title = this.bridgeId + " - MultiTerm Bridge Control Console - " + this.instanceUrl;
             }
             catch
             {
@@ -894,7 +915,7 @@ namespace MultiTerm.PowerShellBridge
         {
             this.window = new Window()
             {
-                Title = "MultiTerm Bridge Control Console",
+                Title = this.bridgeId + " - MultiTerm Bridge Control Console",
                 X = 0,
                 Y = 0,
                 Width = Dim.Fill(),
@@ -911,6 +932,7 @@ namespace MultiTerm.PowerShellBridge
             };
             DashboardNoticeView notice = new DashboardNoticeView()
             {
+                BridgeId = this.bridgeId,
                 X = 0,
                 Y = 0,
                 Width = Dim.Fill(),
@@ -1547,6 +1569,9 @@ namespace MultiTerm.PowerShellBridge
         private HttpListener listener;
         private BridgeConsoleDashboard consoleDashboard;
         private string instanceFilePath;
+        private string bridgeIdClaimPath;
+
+        internal string BridgeId { get; private set; }
         private volatile bool stopping;
         private volatile bool watchdogSuppressed;
 
@@ -1649,6 +1674,7 @@ namespace MultiTerm.PowerShellBridge
             {
                 BridgeConsoleDashboard dashboard = new BridgeConsoleDashboard(
                     this.Url,
+                    this.BridgeId,
                     this.DashboardSessions,
                     this.RendererClientCount,
                     delegate(string id)
@@ -1757,6 +1783,7 @@ namespace MultiTerm.PowerShellBridge
 
         private void RegisterInstance()
         {
+            this.ClaimBridgeId();
             try
             {
                 string directory = Path.Combine(
@@ -1769,6 +1796,7 @@ namespace MultiTerm.PowerShellBridge
                 string temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 string state = "{\"app\":\"MultiTerm Workbench\",\"pid\":" + processId
                     + ",\"bridgeType\":\"installed\""
+                    + ",\"bridgeId\":" + Json.Quote(this.BridgeId)
                     + ",\"port\":" + this.port
                     + ",\"url\":" + Json.Quote(this.Url)
                     + ",\"startedAt\":" + Json.Quote(DateTime.UtcNow.ToString("o"))
@@ -1788,8 +1816,590 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
+        private static string BridgeIdDirectory()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MultiTerm", "BridgeIds");
+        }
+
+        internal static string FormatBridgeId(int number)
+        {
+            return "BRIDGE-" + number.ToString("000", CultureInfo.InvariantCulture);
+        }
+
+        private const int MaxAssistantSessions = 40;
+        private const int MaxAssistantSessionBytes = 64 * 1024;
+
+        // Kept per bridge id so a relaunched instance reads back exactly the
+        // sessions its own predecessor lost, not another live instance's.
+        private string AssistantSessionPath()
+        {
+            if (string.IsNullOrEmpty(this.BridgeId))
+            {
+                return null;
+            }
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MultiTerm", "AssistantSessions", this.BridgeId + ".json");
+        }
+
+        private string ReadAssistantSessionsJson()
+        {
+            string path = this.AssistantSessionPath();
+            if (path == null || !File.Exists(path))
+            {
+                return "[]";
+            }
+            try
+            {
+                string raw = File.ReadAllText(path);
+                int start = raw.IndexOf("\"sessions\"", StringComparison.Ordinal);
+                if (start < 0)
+                {
+                    return "[]";
+                }
+                int open = raw.IndexOf('[', start);
+                int close = raw.LastIndexOf(']');
+                if (open < 0 || close <= open)
+                {
+                    return "[]";
+                }
+                return raw.Substring(open, close - open + 1);
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "Could not read recorded assistant sessions: " + error.Message);
+                return "[]";
+            }
+        }
+
+        private void WriteAssistantSessions(string sessionsJson)
+        {
+            string path = this.AssistantSessionPath();
+            if (path == null)
+            {
+                return;
+            }
+            if (sessionsJson != null && sessionsJson.Length > MaxAssistantSessionBytes)
+            {
+                this.Log("warn", "Refused an oversized assistant session record.");
+                return;
+            }
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                StringBuilder builder = new StringBuilder();
+                builder.Append("{\"savedAt\":");
+                builder.Append(Json.Quote(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+                builder.Append(",\"pid\":");
+                builder.Append(Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+                builder.Append(",\"sessions\":");
+                string trimmed = sessionsJson == null ? "" : sessionsJson.Trim();
+                bool looksLikeArray = trimmed.Length > 1 && trimmed[0] == '[' && trimmed[trimmed.Length - 1] == ']';
+                builder.Append(looksLikeArray ? trimmed : "[]");
+                builder.Append("}");
+                File.WriteAllText(path, builder.ToString());
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "Could not record assistant sessions: " + error.Message);
+            }
+        }
+
+        private static bool ProcessIsAlive(int processId)
+        {
+            if (processId <= 0)
+            {
+                return false;
+            }
+            try
+            {
+                using (Process existing = Process.GetProcessById(processId))
+                {
+                    return !existing.HasExited;
+                }
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private static bool ClaimIsStale(string claimPath)
+        {
+            try
+            {
+                string text = File.ReadAllText(claimPath);
+                int marker = text.IndexOf("\"pid\"", StringComparison.Ordinal);
+                if (marker < 0)
+                {
+                    return true;
+                }
+                string digits = String.Empty;
+                for (int index = marker + 5; index < text.Length; index++)
+                {
+                    char character = text[index];
+                    if (character >= '0' && character <= '9')
+                    {
+                        digits += character;
+                    }
+                    else if (digits.Length > 0)
+                    {
+                        break;
+                    }
+                }
+                int claimedPid;
+                if (!Int32.TryParse(digits, NumberStyles.Integer, CultureInfo.InvariantCulture, out claimedPid))
+                {
+                    return true;
+                }
+                return !ProcessIsAlive(claimedPid);
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool WriteClaim(string claimPath, int processId)
+        {
+            try
+            {
+                // CreateNew is the atomic step that stops two bridges starting at
+                // the same moment from taking the same id.
+                using (FileStream stream = new FileStream(claimPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (StreamWriter writer = new StreamWriter(stream, new UTF8Encoding(false)))
+                {
+                    writer.Write("{\"pid\":" + processId.ToString(CultureInfo.InvariantCulture)
+                        + ",\"claimedAt\":" + Json.Quote(DateTime.UtcNow.ToString("o")) + "}");
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void ClaimBridgeId()
+        {
+            try
+            {
+                string directory = BridgeIdDirectory();
+                Directory.CreateDirectory(directory);
+                int processId = Process.GetCurrentProcess().Id;
+                for (int number = 1; number <= 10000; number++)
+                {
+                    string identifier = FormatBridgeId(number);
+                    string claimPath = Path.Combine(directory, identifier + ".json");
+                    bool claimed = WriteClaim(claimPath, processId);
+                    if (!claimed && ClaimIsStale(claimPath))
+                    {
+                        try
+                        {
+                            File.Delete(claimPath);
+                            claimed = WriteClaim(claimPath, processId);
+                        }
+                        catch
+                        {
+                            claimed = false;
+                        }
+                    }
+                    if (claimed)
+                    {
+                        this.BridgeId = identifier;
+                        this.bridgeIdClaimPath = claimPath;
+                        return;
+                    }
+                }
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "Could not assign a bridge id: " + error.Message);
+            }
+        }
+
+        private void ReleaseBridgeId()
+        {
+            string path = this.bridgeIdClaimPath;
+            this.bridgeIdClaimPath = null;
+            if (String.IsNullOrEmpty(path))
+            {
+                return;
+            }
+            try
+            {
+                File.Delete(path);
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "Could not release this bridge id: " + error.Message);
+            }
+        }
+
+        private sealed class GitResult
+        {
+            public bool Ok;
+            public string StandardOutput = String.Empty;
+            public string StandardError = String.Empty;
+        }
+
+        // Arguments are passed as a pre-quoted argv string to git itself, never
+        // through a shell, so a repository URL cannot smuggle in extra commands.
+        private static GitResult RunGit(string[] arguments, string workingDirectory, int timeoutMilliseconds)
+        {
+            GitResult result = new GitResult();
+            try
+            {
+                ProcessStartInfo startInfo = new ProcessStartInfo();
+                startInfo.FileName = "git";
+                StringBuilder argumentLine = new StringBuilder();
+                foreach (string argument in arguments)
+                {
+                    if (argumentLine.Length > 0) argumentLine.Append(' ');
+                    argumentLine.Append('"').Append(argument.Replace("\"", "\\\"")).Append('"');
+                }
+                startInfo.Arguments = argumentLine.ToString();
+                if (!String.IsNullOrEmpty(workingDirectory)) startInfo.WorkingDirectory = workingDirectory;
+                startInfo.UseShellExecute = false;
+                startInfo.CreateNoWindow = true;
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+                using (Process process = Process.Start(startInfo))
+                {
+                    string output = process.StandardOutput.ReadToEnd();
+                    string error = process.StandardError.ReadToEnd();
+                    if (!process.WaitForExit(timeoutMilliseconds))
+                    {
+                        try { process.Kill(); } catch { }
+                        result.StandardError = "git did not finish in time.";
+                        return result;
+                    }
+                    result.Ok = process.ExitCode == 0;
+                    result.StandardOutput = output;
+                    result.StandardError = error;
+                }
+            }
+            catch (Exception error)
+            {
+                result.StandardError = error.Message;
+            }
+            return result;
+        }
+
+        private static string GitInspectionJson(string directory, out string repositoryRoot)
+        {
+            repositoryRoot = String.Empty;
+            string target = (directory ?? String.Empty).Trim();
+            if (target.Length == 0)
+            {
+                return "\"isRepository\":false,\"reason\":\"No folder was provided.\"";
+            }
+            if (!Directory.Exists(target))
+            {
+                return "\"isRepository\":false,\"reason\":\"That folder does not exist.\"";
+            }
+            GitResult root = RunGit(new string[] { "rev-parse", "--show-toplevel" }, target, 30000);
+            if (!root.Ok)
+            {
+                return "\"isRepository\":false,\"reason\":\"That folder is not inside a git repository.\"";
+            }
+            repositoryRoot = Path.GetFullPath(root.StandardOutput.Trim());
+            GitResult branch = RunGit(new string[] { "rev-parse", "--abbrev-ref", "HEAD" }, repositoryRoot, 30000);
+            GitResult status = RunGit(new string[] { "status", "--porcelain" }, repositoryRoot, 30000);
+            GitResult originHead = RunGit(new string[] { "symbolic-ref", "--short", "refs/remotes/origin/HEAD" }, repositoryRoot, 30000);
+            string currentBranch = branch.Ok ? branch.StandardOutput.Trim() : String.Empty;
+            string defaultBranch = currentBranch;
+            if (originHead.Ok)
+            {
+                defaultBranch = originHead.StandardOutput.Trim();
+                if (defaultBranch.StartsWith("origin/", StringComparison.Ordinal))
+                {
+                    defaultBranch = defaultBranch.Substring(7);
+                }
+            }
+            return "\"isRepository\":true,\"repositoryRoot\":" + Json.Quote(repositoryRoot)
+                + ",\"currentBranch\":" + Json.Quote(currentBranch)
+                + ",\"defaultBranch\":" + Json.Quote(defaultBranch)
+                + ",\"isDirty\":" + ((status.Ok && status.StandardOutput.Trim().Length > 0) ? "true" : "false")
+                + ",\"parentDirectory\":" + Json.Quote(Path.GetDirectoryName(repositoryRoot) ?? String.Empty);
+        }
+
+        private void SendGitInspection(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string repositoryRoot;
+            string body = GitInspectionJson(Json.Get(message, "path"), out repositoryRoot);
+            client.Send("{\"type\":\"gitInspection\",\"requestId\":" + Json.Quote(requestId) + "," + body + "}");
+        }
+
+        private void SendGitWorktrees(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string repositoryRoot;
+            string inspection = GitInspectionJson(Json.Get(message, "path"), out repositoryRoot);
+            if (repositoryRoot.Length == 0)
+            {
+                client.Send("{\"type\":\"gitWorktreeList\",\"requestId\":" + Json.Quote(requestId)
+                    + ",\"ok\":false,\"reason\":\"That folder is not inside a git repository.\",\"worktrees\":[]}");
+                return;
+            }
+            GitResult listed = RunGit(new string[] { "worktree", "list", "--porcelain" }, repositoryRoot, 30000);
+            StringBuilder builder = new StringBuilder("[");
+            bool first = true;
+            string currentPath = null;
+            string currentBranch = String.Empty;
+            bool detached = false;
+            bool bare = false;
+            string[] lines = listed.StandardOutput.Replace("\r\n", "\n").Split('\n');
+            for (int index = 0; index <= lines.Length; index++)
+            {
+                string line = index < lines.Length ? lines[index] : String.Empty;
+                bool isBoundary = index == lines.Length || line.StartsWith("worktree ", StringComparison.Ordinal);
+                if (isBoundary && currentPath != null)
+                {
+                    // The parent branch lives in the repository's own config rather
+                    // than a separate registry, so it cannot drift from git's list.
+                    string parentBranch = String.Empty;
+                    string createdAt = String.Empty;
+                    if (currentBranch.Length > 0)
+                    {
+                        GitResult parent = RunGit(new string[] { "config", "--local", "--get", "multiterm.worktree." + currentBranch + ".parent" }, repositoryRoot, 15000);
+                        if (parent.Ok) parentBranch = parent.StandardOutput.Trim();
+                        GitResult created = RunGit(new string[] { "config", "--local", "--get", "multiterm.worktree." + currentBranch + ".created" }, repositoryRoot, 15000);
+                        if (created.Ok) createdAt = created.StandardOutput.Trim();
+                    }
+                    if (!first) builder.Append(",");
+                    builder.Append("{\"path\":").Append(Json.Quote(currentPath))
+                        .Append(",\"branch\":").Append(Json.Quote(currentBranch))
+                        .Append(",\"parentBranch\":").Append(Json.Quote(parentBranch))
+                        .Append(",\"createdAt\":").Append(Json.Quote(createdAt))
+                        .Append(",\"createdByMultiTerm\":").Append(parentBranch.Length > 0 ? "true" : "false")
+                        .Append(",\"isBare\":").Append(bare ? "true" : "false")
+                        .Append(",\"isDetached\":").Append(detached ? "true" : "false").Append("}");
+                    first = false;
+                    currentPath = null;
+                    currentBranch = String.Empty;
+                    detached = false;
+                    bare = false;
+                }
+                if (index == lines.Length) break;
+                if (line.StartsWith("worktree ", StringComparison.Ordinal))
+                {
+                    currentPath = line.Substring(9).Trim();
+                }
+                else if (line.StartsWith("branch ", StringComparison.Ordinal))
+                {
+                    currentBranch = line.Substring(7).Trim();
+                    if (currentBranch.StartsWith("refs/heads/", StringComparison.Ordinal))
+                    {
+                        currentBranch = currentBranch.Substring(11);
+                    }
+                }
+                else if (line == "detached") { detached = true; }
+                else if (line == "bare") { bare = true; }
+            }
+            builder.Append("]");
+            client.Send("{\"type\":\"gitWorktreeList\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (listed.Ok ? "true" : "false")
+                + ",\"reason\":\"\",\"worktrees\":" + builder.ToString() + "}");
+        }
+
+        private void SendGitWorktreeRemoval(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string worktreePath = (Json.Get(message, "path") ?? String.Empty).Trim();
+            string repositoryRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
+            bool ok = false;
+            string reason;
+            if (worktreePath.Length == 0 || repositoryRoot.Length == 0)
+            {
+                reason = "A repository and worktree path are both required.";
+            }
+            else
+            {
+                GitResult removed = RunGit(new string[] { "worktree", "remove", worktreePath }, repositoryRoot, 60000);
+                ok = removed.Ok;
+                reason = ok ? String.Empty : (removed.StandardError + removed.StandardOutput).Trim();
+                if (!ok && reason.Length == 0) reason = "git could not remove that worktree.";
+                string branch = (Json.Get(message, "branch") ?? String.Empty).Trim();
+                if (ok && branch.Length > 0)
+                {
+                    RunGit(new string[] { "config", "--local", "--remove-section", "multiterm.worktree." + branch }, repositoryRoot, 15000);
+                }
+            }
+            client.Send("{\"type\":\"gitWorktreeRemoved\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (ok ? "true" : "false") + ",\"reason\":" + Json.Quote(reason) + "}");
+        }
+
+        private const int MaxGitDiffBytes = 2 * 1024 * 1024;
+
+        private void SendGitDiff(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string repositoryRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
+            string baseRef = (Json.Get(message, "base") ?? String.Empty).Trim();
+            string headRef = (Json.Get(message, "head") ?? String.Empty).Trim();
+            bool ok = false;
+            bool truncated = false;
+            string diffText = String.Empty;
+            string reason = "A repository and two revisions are required.";
+            // A revision beginning with "-" would be read as an option.
+            if (repositoryRoot.Length > 0 && baseRef.Length > 0 && headRef.Length > 0
+                && !baseRef.StartsWith("-", StringComparison.Ordinal) && !headRef.StartsWith("-", StringComparison.Ordinal))
+            {
+                GitResult diff = RunGit(new string[] { "diff", "--no-color", baseRef + "..." + headRef }, repositoryRoot, 60000);
+                if (diff.Ok)
+                {
+                    ok = true;
+                    reason = String.Empty;
+                    diffText = diff.StandardOutput;
+                    if (diffText.Length > MaxGitDiffBytes)
+                    {
+                        diffText = diffText.Substring(0, MaxGitDiffBytes);
+                        truncated = true;
+                    }
+                }
+                else
+                {
+                    reason = (diff.StandardError + diff.StandardOutput).Trim();
+                    if (reason.Length == 0) reason = "git could not produce that diff.";
+                }
+            }
+            client.Send("{\"type\":\"gitDiffResult\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (ok ? "true" : "false")
+                + ",\"truncated\":" + (truncated ? "true" : "false")
+                + ",\"reason\":" + Json.Quote(reason)
+                + ",\"diff\":" + Json.Quote(diffText) + "}");
+        }
+
+        private void SendGitWorktreeRecord(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string repositoryRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
+            string branch = (Json.Get(message, "branch") ?? String.Empty).Trim();
+            string parentBranch = (Json.Get(message, "parentBranch") ?? String.Empty).Trim();
+            bool ok = false;
+            string reason = "Repository, branch and parent are all required.";
+            if (repositoryRoot.Length > 0 && branch.Length > 0 && parentBranch.Length > 0)
+            {
+                RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".parent", parentBranch }, repositoryRoot, 15000);
+                RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".created", DateTime.UtcNow.ToString("o") }, repositoryRoot, 15000);
+                ok = true;
+                reason = String.Empty;
+            }
+            client.Send("{\"type\":\"gitWorktreeRecorded\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (ok ? "true" : "false") + ",\"reason\":" + Json.Quote(reason) + "}");
+        }
+
+        private void FocusBridgeTerminal(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            bool ok = false;
+            string reason;
+            try
+            {
+                string helper = Path.Combine(
+                    Path.GetDirectoryName(ScriptPath) ?? String.Empty,
+                    "Focus-BridgeTerminal.ps1");
+                if (this.consoleDashboard == null)
+                {
+                    reason = "This bridge is not running its control console.";
+                }
+                else if (String.IsNullOrEmpty(this.BridgeId))
+                {
+                    reason = "This bridge does not have an id.";
+                }
+                else if (!File.Exists(helper))
+                {
+                    reason = "The focus helper is missing from this installation.";
+                }
+                else
+                {
+                    ProcessStartInfo startInfo = new ProcessStartInfo();
+                    startInfo.FileName = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.System),
+                        "WindowsPowerShell", "v1.0", "powershell.exe");
+                    startInfo.Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \""
+                        + helper + "\" -BridgeId " + this.BridgeId
+                        + " -ProcessId " + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture);
+                    startInfo.UseShellExecute = false;
+                    startInfo.CreateNoWindow = true;
+                    startInfo.RedirectStandardOutput = true;
+                    startInfo.RedirectStandardError = true;
+                    using (Process helperProcess = Process.Start(startInfo))
+                    {
+                        string output = helperProcess.StandardOutput.ReadToEnd();
+                        helperProcess.StandardError.ReadToEnd();
+                        if (!helperProcess.WaitForExit(20000))
+                        {
+                            try { helperProcess.Kill(); } catch { }
+                            reason = "The focus helper did not finish in time.";
+                        }
+                        else
+                        {
+                            ok = helperProcess.ExitCode == 0;
+                            reason = ExtractJsonString(output, "reason");
+                            if (String.IsNullOrEmpty(reason))
+                            {
+                                reason = ok ? "Focused the bridge terminal." : "The focus helper reported no result.";
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception error)
+            {
+                ok = false;
+                reason = "Could not run the focus helper: " + error.Message;
+            }
+
+            this.Log(ok ? "info" : "warn", "Focus request for " + this.BridgeId + ": " + reason);
+            client.Send("{\"type\":\"bridgeTerminalFocus\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (ok ? "true" : "false")
+                + ",\"reason\":" + Json.Quote(reason) + "}");
+        }
+
+        private static string ExtractJsonString(string payload, string name)
+        {
+            if (String.IsNullOrEmpty(payload))
+            {
+                return String.Empty;
+            }
+            string marker = "\"" + name + "\":\"";
+            int start = payload.IndexOf(marker, StringComparison.Ordinal);
+            if (start < 0)
+            {
+                return String.Empty;
+            }
+            start += marker.Length;
+            StringBuilder builder = new StringBuilder();
+            for (int index = start; index < payload.Length; index++)
+            {
+                char character = payload[index];
+                if (character == '\\' && index + 1 < payload.Length)
+                {
+                    index++;
+                    builder.Append(payload[index]);
+                    continue;
+                }
+                if (character == '"')
+                {
+                    break;
+                }
+                builder.Append(character);
+            }
+            return builder.ToString();
+        }
+
         private void UnregisterInstance()
         {
+            this.ReleaseBridgeId();
             string path = this.instanceFilePath;
             this.instanceFilePath = null;
             if (String.IsNullOrEmpty(path))
@@ -3140,6 +3750,39 @@ namespace MultiTerm.PowerShellBridge
             else if (type == "getAiUsage")
             {
                 client.Send("{\"type\":\"aiUsage\",\"usage\":" + this.AiUsageSnapshotJson() + "}");
+            }
+            else if (type == "saveAssistantSessions")
+            {
+                this.WriteAssistantSessions(Json.Get(message, "sessions"));
+            }
+            else if (type == "getAssistantSessions")
+            {
+                client.Send("{\"type\":\"assistantSessions\",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
+                    + ",\"sessions\":" + this.ReadAssistantSessionsJson() + "}");
+            }
+            else if (type == "focusBridgeTerminal")
+            {
+                this.FocusBridgeTerminal(client, message);
+            }
+            else if (type == "gitInspect")
+            {
+                this.SendGitInspection(client, message);
+            }
+            else if (type == "gitWorktrees")
+            {
+                this.SendGitWorktrees(client, message);
+            }
+            else if (type == "gitWorktreeRemove")
+            {
+                this.SendGitWorktreeRemoval(client, message);
+            }
+            else if (type == "gitWorktreeRecord")
+            {
+                this.SendGitWorktreeRecord(client, message);
+            }
+            else if (type == "gitDiff")
+            {
+                this.SendGitDiff(client, message);
             }
             else if (type == "generateTerminalTitle")
             {
@@ -6374,6 +7017,8 @@ namespace MultiTerm.PowerShellBridge
         private string WelcomeJson(out int pendingFolderCount)
         {
             return "{\"type\":\"welcome\",\"aiProviderBootstrap\":" + ReadAiProviderBootstrapJson()
+                + ",\"bridgeId\":" + Json.Quote(this.BridgeId)
+                + ",\"canFocusBridgeTerminal\":" + (this.consoleDashboard == null ? "false" : "true")
                 + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + ",\"sessions\":" + this.SessionsJson()
                 + ",\"openFolders\":" + this.PendingOpenFoldersJson(out pendingFolderCount) + "}";
         }

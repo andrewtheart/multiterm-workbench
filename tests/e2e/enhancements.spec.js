@@ -705,7 +705,7 @@ test.describe("Enhancement milestone", () => {
     });
 
     const command = "copilot --yolo --model \"gpt-5.4\" --effort high --context long_context";
-    await page.locator("#contextMenu .ctx-item", { hasText: "Run GitHub Copilot" }).click();
+    await page.getByRole("menuitem", { name: "Run GitHub Copilot", exact: true }).click();
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
     await expect.poll(() => page.evaluate((expectedCommand) => window.__copilotLaunchFrames
       .filter((frame) => frame.type === "input" && (frame.data === expectedCommand || frame.data === "\r"))

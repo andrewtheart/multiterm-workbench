@@ -26,9 +26,17 @@ const defaultSettings = {
   aiSessionProvider: "copilot",
   aiSetupCompleted: false,
   aiTitleProvider: "copilot",
+  allowBridgeTerminalFocus: false,
   appTheme: "dark",
+  autoTitleSuggestions: true,
+  // Opt-in: hiding Focus/Maximize until hover is a real trade against
+  // discoverability, and the menu defaults already free most of the bar.
+  headerActionsRevealOnHover: false,
+  resumeAssistantSessions: "ask",
+  autoTitleSchedule: "5, 60, 120, 240, 360, 720, 1440, 2160",
   automationHistoryLimit: 200,
   bellNotify: false,
+  worktreeSharedRoot: "",
   broadcastSendEnter: true,
   closeAction: "ask",
   columns: 2,
@@ -52,7 +60,7 @@ const defaultSettings = {
   gap: 10,
   headerHidden: false,
   headerActionDragScope: "ask",
-  headerActionsInMenu: ["find", "duplicate"],
+  headerActionsInMenu: ["move-left", "move-right", "find", "clear", "copy", "color", "restart", "duplicate"],
   highlightInputPrompts: true,
   keepSessionsOnClose: true,
   layout: "auto",
@@ -132,6 +140,10 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotTitleContext: "copilot title context window long default tokens",
   copilotTitleContextKb: "copilot title terminal text transcript output context size kilobytes kb limit",
   copilotTitleMinWords: "copilot title minimum words length short concise",
+  autoTitleSuggestions: "automatic periodic background terminal title suggestions ai copilot rename",
+  autoTitleSchedule: "automatic title interval minutes backoff schedule frequency how often rename delay",
+  resumeAssistantSessions: "resume restore copilot claude sessions relaunch restart crash recover reopen tui",
+  headerActionsRevealOnHover: "header actions buttons hide reveal hover show on hover terminal title space room icons",
   copilotTitleMaxWords: "copilot title maximum words length short concise",
   syncInput: "broadcast keyboard keys keystrokes mirror mirrored linked simultaneous type typing all terminals panes",
   ctrlVPaste: "clipboard paste keyboard shortcut control ctrl v insert",
@@ -151,6 +163,8 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   autoUpdateChecks: "automatic updates updater check releases versions upgrade background scheduled",
   updateCheckIntervalHours: "update frequency cadence schedule interval timer hours polling check updater",
   bellNotify: "bell beep ding sound terminal notification notifications alert alerts audible",
+  allowBridgeTerminalFocus: "bridge terminal focus window automation ui automation bring to front show bridge",
+  worktreeSharedRoot: "worktree worktrees git clone shared location folder repository repo agent isolated parallel branch",
   copyOnSelect: "selection selected highlight mouse clipboard copy automatically auto",
   highlightInputPrompts: "awaiting input prompt prompts question questions badge glow attention detect detection interactive highlight",
   notifyActivity: "activity busy background output notification notifications alert alerts terminal change",
@@ -183,7 +197,18 @@ const HEADER_ACTION_IDS = [
   "dequeue", "artifacts", "minimize", "focus", "maximize", "duplicate", "close"
 ];
 const HEADER_ACTION_ID_SET = new Set(HEADER_ACTION_IDS);
-const DEFAULT_HEADER_ACTIONS_IN_MENU = ["find", "duplicate"];
+// Most of these have a menu equivalent and are used rarely, so the header keeps
+// only what people reach for constantly and the title gets the rest of the bar.
+const DEFAULT_HEADER_ACTIONS_IN_MENU = defaultSettings.headerActionsInMenu.slice();
+// Order in which actions give up their header slot when the bar runs out of
+// room. Close and Focus are never surrendered: a rail pane is deliberately
+// narrow and Focus is how you get into it.
+const HEADER_ACTION_OVERFLOW_ORDER = [
+  "duplicate", "move-left", "move-right", "color", "find", "clear",
+  "copy", "restart", "artifacts", "minimize", "maximize"
+];
+// The title needs a floor worth reading before buttons may take the rest.
+const PANE_TITLE_MIN_WIDTH = 150;
 const HEADER_ACTIONS = Object.freeze({
   "move-left": { label: "Move left", icon: "arrow-left" },
   "move-right": { label: "Move right", icon: "arrow-right" },
@@ -396,6 +421,41 @@ const elements = {
   automationWelcome: document.querySelector("#automationWelcome"),
   automationWelcomeNew: document.querySelector("#automationWelcomeNew"),
   bellNotify: document.querySelector("#bellNotify"),
+  allowBridgeTerminalFocus: document.querySelector("#allowBridgeTerminalFocus"),
+  worktreeOverlay: document.querySelector("#worktreeOverlay"),
+  worktreeSubtitle: document.querySelector("#worktreeSubtitle"),
+  worktreeClose: document.querySelector("#worktreeClose"),
+  worktreeCancel: document.querySelector("#worktreeCancel"),
+  worktreeCreate: document.querySelector("#worktreeCreate"),
+  worktreeRunHere: document.querySelector("#worktreeRunHere"),
+  worktreeFolderField: document.querySelector("#worktreeFolderField"),
+  worktreeFolderInput: document.querySelector("#worktreeFolderInput"),
+  worktreeBrowse: document.querySelector("#worktreeBrowse"),
+  worktreeUrlFields: document.querySelector("#worktreeUrlFields"),
+  worktreeUrlInput: document.querySelector("#worktreeUrlInput"),
+  worktreeBranchInput: document.querySelector("#worktreeBranchInput"),
+  worktreeSharedRootInput: document.querySelector("#worktreeSharedRootInput"),
+  worktreeSharedRootBrowse: document.querySelector("#worktreeSharedRootBrowse"),
+  worktreePlacement: document.querySelector("#worktreePlacement"),
+  worktreeParentRow: document.querySelector("#worktreeParentRow"),
+  worktreeParentBranch: document.querySelector("#worktreeParentBranch"),
+  worktreeNameInput: document.querySelector("#worktreeNameInput"),
+  worktreePathRow: document.querySelector("#worktreePathRow"),
+  worktreePathPreview: document.querySelector("#worktreePathPreview"),
+  worktreeStatus: document.querySelector("#worktreeStatus"),
+  worktreeManagerOverlay: document.querySelector("#worktreeManagerOverlay"),
+  worktreeManagerClose: document.querySelector("#worktreeManagerClose"),
+  worktreeManagerDone: document.querySelector("#worktreeManagerDone"),
+  worktreeManagerRepo: document.querySelector("#worktreeManagerRepo"),
+  worktreeManagerBrowse: document.querySelector("#worktreeManagerBrowse"),
+  worktreeManagerList: document.querySelector("#worktreeManagerList"),
+  worktreeManagerStatus: document.querySelector("#worktreeManagerStatus"),
+  worktreeReviewOverlay: document.querySelector("#worktreeReviewOverlay"),
+  worktreeReviewSubtitle: document.querySelector("#worktreeReviewSubtitle"),
+  worktreeReviewClose: document.querySelector("#worktreeReviewClose"),
+  worktreeReviewDone: document.querySelector("#worktreeReviewDone"),
+  worktreeReviewStatus: document.querySelector("#worktreeReviewStatus"),
+  worktreeReviewDiff: document.querySelector("#worktreeReviewDiff"),
   bridgeStatus: document.querySelector("#bridgeStatus"),
   findAllBar: document.querySelector("#findAllBar"),
   findAllInput: document.querySelector("#findAllInput"),
@@ -428,6 +488,28 @@ const elements = {
   copilotTitleMaxWords: document.querySelector("#copilotTitleMaxWords"),
   copilotTitleMinWords: document.querySelector("#copilotTitleMinWords"),
   copilotTitleModel: document.querySelector("#copilotTitleModel"),
+  autoTitleSuggestions: document.querySelector("#autoTitleSuggestions"),
+  autoTitleSchedule: document.querySelector("#autoTitleSchedule"),
+  workspaceEmpty: document.querySelector("#workspaceEmpty"),
+  workspaceEmptyRestore: document.querySelector("#workspaceEmptyRestore"),
+  workspaceEmptyHint: document.querySelector("#workspaceEmptyHint"),
+  workspaceEmptyList: document.querySelector("#workspaceEmptyList"),
+  workspaceEmptyRestoreAll: document.querySelector("#workspaceEmptyRestoreAll"),
+  workspaceEmptyShortcut: document.querySelector("#workspaceEmptyShortcut"),
+  resumeAssistantSessions: document.querySelector("#resumeAssistantSessions"),
+  tuiSearchOverlay: document.querySelector("#tuiSearchOverlay"),
+  tuiSearchList: document.querySelector("#tuiSearchList"),
+  tuiSearchStatus: document.querySelector("#tuiSearchStatus"),
+  tuiSearchSubtitle: document.querySelector("#tuiSearchSubtitle"),
+  tuiSearchClose: document.querySelector("#tuiSearchClose"),
+  tuiSearchDone: document.querySelector("#tuiSearchDone"),
+  headerActionsRevealOnHover: document.querySelector("#headerActionsRevealOnHover"),
+  assistantRestoreOverlay: document.querySelector("#assistantRestoreOverlay"),
+  assistantRestoreList: document.querySelector("#assistantRestoreList"),
+  assistantRestoreStatus: document.querySelector("#assistantRestoreStatus"),
+  assistantRestoreConfirm: document.querySelector("#assistantRestoreConfirm"),
+  assistantRestoreDismiss: document.querySelector("#assistantRestoreDismiss"),
+  assistantRestoreClose: document.querySelector("#assistantRestoreClose"),
   copilotResumeClose: document.querySelector("#copilotResumeClose"),
   copilotResumeAiSearch: document.querySelector("#copilotResumeAiSearch"),
   copilotResumeDescription: document.querySelector("#copilotResumeDescription"),
@@ -624,6 +706,11 @@ const elements = {
   shortcutsOverlay: document.querySelector("#shortcutsOverlay"),
   startupCommand: document.querySelector("#startupCommand"),
   statusConn: document.querySelector("#statusConn"),
+  bridgeIdentityCard: document.querySelector("#bridgeIdentityCard"),
+  bridgeIdentityId: document.querySelector("#bridgeIdentityId"),
+  bridgeIdentityNote: document.querySelector("#bridgeIdentityNote"),
+  bridgeIdentityFocus: document.querySelector("#bridgeIdentityFocus"),
+  bridgeIdentityStatus: document.querySelector("#bridgeIdentityStatus"),
   statusAdmin: document.querySelector("#statusAdmin"),
   statusMem: document.querySelector("#statusMem"),
   statusMemText: document.querySelector("#statusMemText"),
@@ -787,6 +874,8 @@ const state = {
   snap: null,
   socket: null,
   socketReady: false,
+  bridgeId: "",
+  canFocusBridgeTerminal: false,
   statistics: { terminalId: null, loading: false, requestGeneration: 0, returnFocus: null },
   terminalArtifacts: loadTerminalArtifacts(),
   terminalArtifactsHub: { returnFocus: null, savedTimer: 0 },
@@ -900,6 +989,15 @@ window.addEventListener("DOMContentLoaded", () => {
   bindGlobalShortcuts();
   bindFullscreenEvents();
   bindFindAll();
+  bindBridgeIdentityCard();
+  bindWorktreeDialog();
+  bindWorktreeManager();
+  bindWorktreeReview();
+  bindAssistantRestoreDialog();
+  bindTuiSearchResults();
+  elements.workspaceEmptyRestoreAll?.addEventListener("click", () => {
+    for (const terminal of minimizedTerminalsOnActivePage()) restoreTerminal(terminal.id);
+  });
   window.addEventListener("resize", noteResizeGesture);
   window.addEventListener("focus", announceRendererPresence);
   document.addEventListener("visibilitychange", () => {
@@ -982,6 +1080,7 @@ function bindControls() {
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
+  elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
   elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
   elements.rightClickAction.value = state.settings.rightClickAction;
@@ -1190,6 +1289,10 @@ function bindControls() {
   bindSetting(elements.copilotTitleContextKb, "copilotTitleContextKb", "change", clampCopilotTitleContextKb);
   bindSetting(elements.copilotTitleMinWords, "copilotTitleMinWords", "change", clampCopilotTitleMinWords);
   bindSetting(elements.copilotTitleMaxWords, "copilotTitleMaxWords", "change", clampCopilotTitleMaxWords);
+  bindSetting(elements.autoTitleSuggestions, "autoTitleSuggestions", "change", (_, element) => element.checked);
+  bindSetting(elements.autoTitleSchedule, "autoTitleSchedule", "change", normalizeAutoTitleSchedule);
+  bindSetting(elements.resumeAssistantSessions, "resumeAssistantSessions", "change", normalizeResumeAssistantSessions);
+  bindSetting(elements.headerActionsRevealOnHover, "headerActionsRevealOnHover", "change", (_, element) => element.checked);
   bindSetting(elements.keepSessionsOnClose, "keepSessionsOnClose", "change", (_, element) => element.checked);
   bindSetting(elements.restoreSession, "restoreSession", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
@@ -1269,6 +1372,11 @@ function bindControls() {
     setSearchAcrossPages(elements.searchAcrossPages.checked);
   });
 
+  elements.allowBridgeTerminalFocus.addEventListener("change", () => {
+    state.settings.allowBridgeTerminalFocus = elements.allowBridgeTerminalFocus.checked;
+    saveSettings();
+  });
+
   elements.bellNotify.addEventListener("change", () => {
     state.settings.bellNotify = elements.bellNotify.checked;
     saveSettings();
@@ -1293,6 +1401,9 @@ function bindSetting(element, key, eventName, transform) {
       syncAiTitleControls();
     } else if (key === "aiSessionProvider" || key === "aiSessionModel") {
       syncAiSessionControls();
+    }
+    if (key === "aiTitleProvider" || key === "autoTitleSuggestions" || key === "autoTitleSchedule") {
+      rescheduleAllAutoTitles();
     }
     if (key === "layout") {
       clearSnapLayout(false);
@@ -1440,7 +1551,13 @@ function syncCopilotTitleSettings() {
   state.settings.copilotTitleContextKb = clampCopilotTitleContextKb(state.settings.copilotTitleContextKb);
   state.settings.copilotTitleMinWords = clampCopilotTitleMinWords(state.settings.copilotTitleMinWords);
   state.settings.copilotTitleMaxWords = clampCopilotTitleMaxWords(state.settings.copilotTitleMaxWords);
+  state.settings.autoTitleSchedule = normalizeAutoTitleSchedule(state.settings.autoTitleSchedule);
+  state.settings.resumeAssistantSessions = normalizeResumeAssistantSessions(state.settings.resumeAssistantSessions);
   elements.aiTitleProvider.value = state.settings.aiTitleProvider;
+  elements.resumeAssistantSessions.value = state.settings.resumeAssistantSessions;
+  elements.headerActionsRevealOnHover.checked = state.settings.headerActionsRevealOnHover === true;
+  elements.autoTitleSuggestions.checked = state.settings.autoTitleSuggestions;
+  elements.autoTitleSchedule.value = state.settings.autoTitleSchedule;
   elements.copilotTitleEffort.value = state.settings.copilotTitleEffort;
   elements.copilotTitleContext.value = state.settings.copilotTitleContext;
   if (state.aiProviders.length > 0) syncAiTitleControls();
@@ -1858,9 +1975,24 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "bridgeTerminalFocus") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "gitInspection" || message.type === "gitWorktreeList"
+    || message.type === "gitWorktreeRemoved" || message.type === "gitWorktreeRecorded"
+    || message.type === "gitDiffResult" || message.type === "assistantSessions") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
   if (message.type === "welcome") {
     log.info("bridge", "Received welcome", { cwd: message.cwd, sessions: Array.isArray(message.sessions) ? message.sessions.length : 0 });
     acceptAiProviderBootstrap(message.aiProviderBootstrap);
+    state.bridgeId = typeof message.bridgeId === "string" ? message.bridgeId : "";
+    state.canFocusBridgeTerminal = message.canFocusBridgeTerminal === true;
+    renderBridgeIdentity();
     const known = new Set();
     const openFolders = Array.isArray(message.openFolders)
       ? message.openFolders.filter((folder) => typeof folder === "string" && folder.trim())
@@ -1931,6 +2063,8 @@ function handleBridgeMessage(message) {
     pruneTerminalLinks();
     pruneTerminalAnalyticsRecords();
     requestTerminalMessages();
+    reviewLostAssistantSessions(known);
+    startAssistantSessionRecording();
 
     return;
   }
@@ -2257,6 +2391,7 @@ function addTerminal(options = {}) {
   const titleInput = pane.querySelector(".pane-title");
   const titleDisplay = pane.querySelector(".pane-title-display");
   const titleGenerate = pane.querySelector(".pane-title-generate");
+  const titleHint = pane.querySelector(".pane-title-hint");
   const titleReview = pane.querySelector(".pane-title-review");
   const status = pane.querySelector(".pane-status");
   const term = new Terminal({
@@ -2375,10 +2510,14 @@ function addTerminal(options = {}) {
     titleDisplay,
     titleGenerate,
     titleGenerationToken: 0,
+    titleHint,
     titleInput,
     titleOriginal: "",
     titleReview,
     titleSuggestion: "",
+    autoTitleStep: 0,
+    autoTitleTimer: 0,
+    autoTitleRevision: 0,
     tmux: options.tmux || session.tmux || null
   };
 
@@ -2397,6 +2536,7 @@ function addTerminal(options = {}) {
   applyHeaderActionPlacement(terminal);
   updateTerminalNotificationButton(terminal);
   bindPaneDrag(terminal);
+  scheduleAutoTitle(terminal);
   bindPaneResize(terminal);
   bindPaneQuickQueue(terminal);
   bindTerminalHandoffGrips(terminal);
@@ -2417,6 +2557,7 @@ function addTerminal(options = {}) {
   bindTerminalSelectionHandling(terminal);
   registerCwdTracking(terminal);
   registerModifiedKeyReporting(terminal);
+  bindScrollToBottomControl(terminal);
 
   term.onData((data) => {
     if (!data) return;
@@ -2602,8 +2743,63 @@ function bindTerminalFontZoom(terminal) {
 let workspaceZoomWheelDelta = 0;
 let workspaceZoomIndicatorTimer = 0;
 
+const LAYOUT_MODE_OPTIONS = [
+  ["Auto fit", "auto"],
+  ["Fixed columns", "columns"],
+  ["Fixed rows", "rows"],
+  ["Horizontal strip", "horizontal"],
+  ["Vertical stack", "vertical"],
+  ["Focus rail", "focus"],
+  ["Balanced grid", "grid"],
+  ["Master top", "master-top"],
+  ["Master right", "master-right"],
+  ["Master bottom", "master-bottom"],
+  ["Master left", "master-left"],
+  ["Priority grid", "priority-grid"],
+  ["Compact matrix", "compact-matrix"],
+  ["Horizontal carousel", "carousel-horizontal"],
+  ["Vertical carousel", "carousel-vertical"],
+  ["Spotlight", "spotlight"],
+  ["Bento grid", "bento"],
+  ["Manual canvas", "manual"]
+];
+
+function layoutModeLabel(value) {
+  return LAYOUT_MODE_OPTIONS.find(([, id]) => id === value)?.[0] || value;
+}
+
+// Per-page overrides are deliberately in-memory only: savePages() serialises
+// state.pages wholesale, so anything stored on a page would outlive the session.
+const pageLayoutOverrides = new Map();
+const pageZoomOverrides = new Map();
+
+function effectivePageLayout() {
+  return pageLayoutOverrides.get(state.activePageId) || state.settings.layout;
+}
+
+function effectivePageZoom() {
+  const override = pageZoomOverrides.get(state.activePageId);
+  return normalizeWorkspaceZoom(override ?? state.settings.workspaceZoom);
+}
+
+function setPageLayoutOverride(layout) {
+  if (!layout) pageLayoutOverrides.delete(state.activePageId);
+  else pageLayoutOverrides.set(state.activePageId, layout);
+  applySettings();
+  window.requestAnimationFrame(() => fitAllTerminals());
+  toast(layout ? `This page uses the ${layoutModeLabel(layout)} layout` : "This page follows the global layout", "info", 1800);
+}
+
+function setPageZoomOverride(zoom) {
+  if (zoom == null) pageZoomOverrides.delete(state.activePageId);
+  else pageZoomOverrides.set(state.activePageId, normalizeWorkspaceZoom(zoom));
+  applySettings();
+  window.requestAnimationFrame(() => fitAllTerminals());
+  toast(zoom == null ? "This page follows the global zoom" : `This page is at ${normalizeWorkspaceZoom(zoom)}%`, "info", 1800);
+}
+
 function workspaceZoomScale() {
-  return normalizeWorkspaceZoom(state.settings.workspaceZoom) / 100;
+  return effectivePageZoom() / 100;
 }
 
 function clearTerminalFocus() {
@@ -2882,7 +3078,10 @@ function applyHeaderActionPlacement(terminal) {
     button.draggable = true;
     button.dataset.headerPlacement = placement;
     button.classList.toggle("is-user-menu-action", placement === "menu");
+    // Close stays put; everything else can wait until the pane is hovered.
+    if (action !== "close") button.dataset.reveal = "hover";
   }
+  updateHeaderActionOverflow(terminal);
 }
 
 function clearHeaderActionDragStyles() {
@@ -3257,6 +3456,7 @@ function bindPaneControls(terminal) {
   });
 
   terminal.titleGenerate.addEventListener("click", () => generateTerminalTitle(terminal));
+  terminal.titleHint.addEventListener("click", () => revealTerminalTitleSuggestion(terminal));
   terminal.titleReview.querySelector(".pane-title-accept").addEventListener("click", () => acceptTerminalTitleSuggestion(terminal));
   terminal.titleReview.querySelector(".pane-title-reject").addEventListener("click", () => rejectTerminalTitleSuggestion(terminal));
 
@@ -3289,6 +3489,11 @@ function bindPaneControls(terminal) {
     setActivePage(terminal.pageId, { focus: false });
     setActiveTerminal(terminal.id);
     revealTerminal(terminal);
+  });
+
+  terminal.pane.querySelector(".pane-history-match").addEventListener("click", (event) => {
+    event.stopPropagation();
+    openTuiSearchResults(terminal);
   });
 
   paneActions.addEventListener("dragstart", (event) => {
@@ -3345,7 +3550,7 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   clearTerminalTitleSuggestion(terminal);
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : terminalShellTitle(terminal.shell);
   terminal.titleInput.value = title;
-  terminal.titleDisplay.textContent = title;
+  setTerminalTitleDisplay(terminal, title);
   const analytics = state.analytics.terminals[terminal.id];
   if (analytics) {
     analytics.title = title;
@@ -3371,6 +3576,255 @@ function terminalTitleContextText(terminal) {
   return new TextDecoder().decode(encoded.slice(-maximumBytes)).replace(/^\uFFFD/, "");
 }
 
+const DEFAULT_AUTO_TITLE_SCHEDULE = [5, 60, 120, 240, 360, 720, 1440, 2160];
+
+// The ladder is deliberately steep: each suggestion is a real Copilot CLI call,
+// so a long-lived terminal must not keep paying for one every few minutes.
+function normalizeAutoTitleSchedule(value, element) {
+  const normalized = parseAutoTitleSchedule(value).join(", ");
+  if (element) element.value = normalized;
+  return normalized;
+}
+
+function normalizeResumeAssistantSessions(value) {
+  return ["never", "ask", "always"].includes(value) ? value : "ask";
+}
+
+function parseAutoTitleSchedule(value) {
+  const minutes = String(value ?? "")
+    .split(/[,;\s]+/)
+    .map((part) => Number(part))
+    .filter((part) => Number.isFinite(part) && part > 0)
+    .map((part) => Math.min(part, 60 * 24 * 30));
+  return minutes.length > 0 ? minutes : DEFAULT_AUTO_TITLE_SCHEDULE.slice();
+}
+
+function autoTitleDelayMs(step, schedule) {
+  const ladder = Array.isArray(schedule) && schedule.length > 0 ? schedule : DEFAULT_AUTO_TITLE_SCHEDULE;
+  const index = Math.min(Math.max(Number(step) || 0, 0), ladder.length - 1);
+  return ladder[index] * 60 * 1000;
+}
+
+function cancelAutoTitle(terminal) {
+  if (!terminal) return;
+  window.clearTimeout(terminal.autoTitleTimer);
+  terminal.autoTitleTimer = 0;
+}
+
+function scheduleAutoTitle(terminal) {
+  cancelAutoTitle(terminal);
+  if (!terminal || !state.settings.autoTitleSuggestions) return;
+  if (state.settings.aiTitleProvider === "none") return;
+  const schedule = parseAutoTitleSchedule(state.settings.autoTitleSchedule);
+  terminal.autoTitleTimer = window.setTimeout(() => {
+    terminal.autoTitleTimer = 0;
+    runAutoTitle(terminal);
+  }, autoTitleDelayMs(terminal.autoTitleStep, schedule));
+}
+
+async function runAutoTitle(terminal) {
+  if (!terminal || state.terminals.get(terminal.id) !== terminal) return;
+  if (!state.settings.autoTitleSuggestions || state.settings.aiTitleProvider === "none") return;
+  // Advance the ladder even when a run is skipped, so an idle or busy terminal
+  // cannot hold the schedule at five minutes forever.
+  terminal.autoTitleStep += 1;
+  const producedOutput = terminal.outputRevision !== terminal.autoTitleRevision;
+  const busy = Boolean(terminal.titleSuggestion) || terminal.titleGenerate.disabled;
+  if (terminal.status === "live" && producedOutput && !busy) {
+    terminal.autoTitleRevision = terminal.outputRevision;
+    await generateTerminalTitle(terminal, { auto: true });
+  }
+  scheduleAutoTitle(terminal);
+}
+
+function rescheduleAllAutoTitles() {
+  for (const terminal of state.terminals.values()) scheduleAutoTitle(terminal);
+}
+
+const ASSISTANT_SESSION_LIMIT = 40;
+const assistantSessionRecord = { timer: 0, lost: [], returnFocus: null };
+
+function assistantSessionRows() {
+  const rows = [];
+  for (const terminal of state.terminals.values()) {
+    const provider = terminal.aiAssistantTuiProvider;
+    if (!provider || terminal.status !== "live") continue;
+    rows.push({
+      id: terminal.id,
+      title: terminal.titleInput?.value || "",
+      cwd: terminal.cwd || "",
+      provider,
+      shell: terminal.shell || "",
+      recordedAt: new Date().toISOString()
+    });
+  }
+  return rows.slice(0, ASSISTANT_SESSION_LIMIT);
+}
+
+// Written continuously rather than on shutdown, because a force close or a
+// bridge crash never gets to run shutdown code. The bridge owns the file so the
+// record survives clearing browser storage, and lives beside its other state.
+function saveAssistantSessionRecord() {
+  sendBridge({ type: "saveAssistantSessions", sessions: JSON.stringify(assistantSessionRows()) });
+}
+
+function startAssistantSessionRecording() {
+  window.clearInterval(assistantSessionRecord.timer);
+  assistantSessionRecord.timer = window.setInterval(saveAssistantSessionRecord, 20000);
+  saveAssistantSessionRecord();
+}
+
+function normalizeAssistantSessionRows(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((row) => row && typeof row.id === "string" && typeof row.cwd === "string"
+      && (row.provider === "copilot" || row.provider === "claude"))
+    .slice(0, ASSISTANT_SESSION_LIMIT);
+}
+
+async function readAssistantSessionRecord() {
+  const response = await requestBridge({ type: "getAssistantSessions" }, { timeout: 20000 });
+  return normalizeAssistantSessionRows(response?.sessions);
+}
+
+// A recorded session whose id the bridge no longer lists did not survive.
+async function lostAssistantSessions(liveIds) {
+  const live = liveIds instanceof Set ? liveIds : new Set(liveIds || []);
+  const recorded = await readAssistantSessionRecord();
+  return recorded.filter((row) => !live.has(row.id));
+}
+
+async function reviewLostAssistantSessions(liveIds) {
+  if (state.settings.resumeAssistantSessions === "never") {
+    saveAssistantSessionRecord();
+    return;
+  }
+  // Read before the first save of this run, or the record is already overwritten.
+  const lost = await lostAssistantSessions(liveIds);
+  if (lost.length === 0) {
+    saveAssistantSessionRecord();
+    return;
+  }
+  assistantSessionRecord.lost = lost;
+  if (state.settings.resumeAssistantSessions === "always") {
+    restoreAssistantSessions(lost);
+    return;
+  }
+  openAssistantRestoreDialog(lost);
+}
+
+async function restoreAssistantSessions(rows) {
+  // The record cannot hold the CLI's own session id, so match the newest
+  // catalog entry for that folder and genuinely resume it.
+  const catalogs = new Map();
+  let restored = 0;
+  for (const row of rows) {
+    let catalog = catalogs.get(row.provider);
+    if (!catalog) {
+      const response = await requestBridge({
+        type: row.provider === "claude" ? "listClaudeSessions" : "listCopilotSessions"
+      }, { timeout: 30000 });
+      catalog = Array.isArray(response?.sessions) ? response.sessions : [];
+      catalogs.set(row.provider, catalog);
+    }
+    const match = catalog
+      .filter((session) => session?.id && sameHostDirectory(session.cwd || "", row.cwd))
+      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+    const command = buildAiAssistantCommand({
+      provider: row.provider,
+      resumeId: match?.id || ""
+    });
+    if (!command) continue;
+    addTerminal({
+      reveal: true,
+      runStartup: false,
+      title: row.title || "",
+      shell: row.shell || undefined,
+      cwd: row.cwd || undefined,
+      pendingCommand: command,
+      pendingCommandEnter: true
+    });
+    restored += 1;
+  }
+  saveAssistantSessionRecord();
+  if (restored > 0) {
+    toast(`Restored ${restored} assistant session${restored === 1 ? "" : "s"}`, "success", 3200);
+  }
+}
+
+function renderAssistantRestoreRows() {
+  elements.assistantRestoreList.textContent = "";
+  for (const [index, row] of assistantSessionRecord.lost.entries()) {
+    const label = document.createElement("label");
+    label.className = "assistant-restore-row";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.dataset.index = String(index);
+
+    const text = document.createElement("span");
+    const name = document.createElement("strong");
+    name.textContent = row.title || aiAssistantName(row.provider);
+    const meta = document.createElement("span");
+    meta.className = "assistant-restore-meta";
+    meta.textContent = `${aiAssistantName(row.provider)} in ${row.cwd || "an unknown folder"}`;
+    text.append(name, meta);
+    label.append(checkbox, text);
+    elements.assistantRestoreList.append(label);
+  }
+  elements.assistantRestoreStatus.textContent = assistantSessionRecord.lost.length === 1
+    ? "1 assistant session did not survive."
+    : `${assistantSessionRecord.lost.length} assistant sessions did not survive.`;
+}
+
+function openAssistantRestoreDialog(rows) {
+  assistantSessionRecord.lost = rows;
+  assistantSessionRecord.returnFocus = document.activeElement;
+  renderAssistantRestoreRows();
+  elements.assistantRestoreOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.assistantRestoreOverlay.classList.add("is-open");
+    elements.assistantRestoreConfirm.focus({ preventScroll: true });
+  });
+  refreshIcons(elements.assistantRestoreOverlay);
+}
+
+function closeAssistantRestoreDialog({ forget = true } = {}) {
+  elements.assistantRestoreOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.assistantRestoreOverlay.hidden = true;
+  }, 150);
+  // Dismissing means these are answered for; keep only what is live now.
+  if (forget) saveAssistantSessionRecord();
+  const returnFocus = assistantSessionRecord.returnFocus;
+  assistantSessionRecord.returnFocus = null;
+  if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+}
+
+function bindAssistantRestoreDialog() {
+  if (!elements.assistantRestoreOverlay) return;
+  elements.assistantRestoreConfirm.addEventListener("click", () => {
+    const chosen = [...elements.assistantRestoreList.querySelectorAll("input[type=checkbox]")]
+      .filter((box) => box.checked)
+      .map((box) => assistantSessionRecord.lost[Number(box.dataset.index)])
+      .filter(Boolean);
+    closeAssistantRestoreDialog({ forget: false });
+    restoreAssistantSessions(chosen);
+  });
+  elements.assistantRestoreDismiss.addEventListener("click", () => closeAssistantRestoreDialog());
+  elements.assistantRestoreClose.addEventListener("click", () => closeAssistantRestoreDialog());
+  elements.assistantRestoreOverlay.addEventListener("mousedown", (event) => {
+    if (event.target === elements.assistantRestoreOverlay) closeAssistantRestoreDialog();
+  });
+  elements.assistantRestoreOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeAssistantRestoreDialog();
+    }
+  });
+}
+
 function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
   if (!terminal) return;
   terminal.titleGenerationToken += 1;
@@ -3378,21 +3832,38 @@ function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
   terminal.titleGenerate.classList.remove("is-loading");
   terminal.titleGenerate.hidden = false;
   terminal.titleReview.hidden = true;
+  terminal.titleHint.hidden = true;
   terminal.titleInput.readOnly = false;
   terminal.pane.classList.remove("has-title-suggestion");
   if (restoreOriginal && terminal.titleOriginal) {
     terminal.titleInput.value = terminal.titleOriginal;
-    terminal.titleDisplay.textContent = terminal.titleOriginal;
+    setTerminalTitleDisplay(terminal, terminal.titleOriginal);
   }
   terminal.titleOriginal = "";
   terminal.titleSuggestion = "";
 }
 
-function showTerminalTitleSuggestion(terminal, title) {
-  terminal.titleOriginal = terminal.titleInput.value;
+// An automatic suggestion only offers itself; it must never rename a terminal
+// the user is watching without being asked.
+function showTerminalTitleSuggestion(terminal, title, { auto = false } = {}) {
   terminal.titleSuggestion = title;
+  if (auto) {
+    terminal.titleHint.hidden = false;
+    terminal.titleHint.title = `Suggested title: ${title}`;
+    terminal.titleHint.setAttribute("aria-label", `Review suggested terminal title: ${title}`);
+    refreshIcons(terminal.titleHint);
+    return;
+  }
+  revealTerminalTitleSuggestion(terminal);
+}
+
+function revealTerminalTitleSuggestion(terminal) {
+  const title = terminal?.titleSuggestion;
+  if (!title) return;
+  terminal.titleHint.hidden = true;
+  terminal.titleOriginal = terminal.titleInput.value;
   terminal.titleInput.value = title;
-  terminal.titleDisplay.textContent = title;
+  setTerminalTitleDisplay(terminal, title);
   terminal.titleInput.readOnly = true;
   terminal.titleGenerate.hidden = true;
   terminal.titleReview.hidden = false;
@@ -3415,20 +3886,22 @@ function rejectTerminalTitleSuggestion(terminal) {
   terminal.term.focus();
 }
 
-async function generateTerminalTitle(terminal) {
+async function generateTerminalTitle(terminal, { auto = false } = {}) {
   if (!terminal || terminal.titleGenerate.disabled) return false;
+  // An automatic run is not something the user asked for, so it fails quietly.
+  const report = (message, tone, duration) => { if (!auto) toast(message, tone, duration); };
   if (state.settings.aiTitleProvider === "none") {
-    toast("AI-generated terminal titles are disabled", "info", 2200);
+    report("AI-generated terminal titles are disabled", "info", 2200);
     return false;
   }
   const provider = aiProviderById(state.settings.aiTitleProvider);
   if (state.aiProviders.length > 0 && !provider?.available) {
-    toast(provider?.status || "The selected AI provider is not available", "error", 3200);
+    report(provider?.status || "The selected AI provider is not available", "error", 3200);
     return false;
   }
   const text = terminalTitleContextText(terminal);
   if (!text) {
-    toast("This terminal has no text to title yet", "info", 2200);
+    report("This terminal has no text to title yet", "info", 2200);
     return false;
   }
 
@@ -3455,10 +3928,10 @@ async function generateTerminalTitle(terminal) {
   terminal.titleGenerate.disabled = false;
   terminal.titleGenerate.classList.remove("is-loading");
   if (!response?.title) {
-    toast(response?.error || "The selected AI provider could not suggest a title", "error", 3200);
+    report(response?.error || "The selected AI provider could not suggest a title", "error", 3200);
     return false;
   }
-  showTerminalTitleSuggestion(terminal, response.title);
+  showTerminalTitleSuggestion(terminal, response.title, { auto });
   return true;
 }
 
@@ -4058,6 +4531,7 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.activityTimer);
   window.clearTimeout(terminal.silenceTimer);
   window.clearTimeout(terminal.promptTimer);
+  cancelAutoTitle(terminal);
   window.clearTimeout(terminal.autoQueueTimer);
   terminal.autoQueueTimer = 0;
   window.clearTimeout(terminal.pendingCwdTimer);
@@ -5064,7 +5538,47 @@ function isTerminalTranscriptNeeded() {
   return Boolean(normalizeSearchText(state.terminalSearch));
 }
 
+const TUI_TRANSCRIPT_CAP = 400000;
+
+// The alternate screen has no scrollback: anything a TUI scrolls past is
+// discarded by xterm, so searching the buffer can never find it again. Retain
+// it as it streams by instead.
+function terminalUsesAlternateScreen(terminal) {
+  return terminal.altScreenActive === true || terminal.term?.buffer?.active?.type === "alternate";
+}
+
+// xterm applies writes asynchronously, so the buffer may still say "normal" on
+// the very write that switches screens; read the switch from the bytes instead.
+function noteAlternateScreenSwitch(terminal, data) {
+  if (typeof data !== "string") return;
+  if (/\u001b\[\?(1049|1047|47)h/.test(data)) terminal.altScreenActive = true;
+  if (/\u001b\[\?(1049|1047|47)l/.test(data)) terminal.altScreenActive = false;
+}
+
+function appendTuiTranscript(terminal, text) {
+  if (!terminalUsesAlternateScreen(terminal)) return;
+  const clean = normalizeSearchText(stripTerminalControlCodes(text));
+  if (!clean.trim()) return;
+  // A TUI repaints the same rows constantly; dropping lines it just emitted
+  // keeps the retained window mostly real history rather than redraw noise.
+  const recent = terminal.tuiTranscriptRecent || (terminal.tuiTranscriptRecent = []);
+  const kept = [];
+  for (const line of clean.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || recent.includes(trimmed)) continue;
+    kept.push(line);
+    recent.push(trimmed);
+    if (recent.length > 400) recent.shift();
+  }
+  if (kept.length === 0) return;
+  let next = `${terminal.tuiTranscript || ""}\n${kept.join("\n")}`;
+  if (next.length > TUI_TRANSCRIPT_CAP) next = next.slice(-TUI_TRANSCRIPT_CAP);
+  terminal.tuiTranscript = next;
+}
+
 function appendTerminalSearchText(terminal, text) {
+  noteAlternateScreenSwitch(terminal, text);
+  appendTuiTranscript(terminal, text);
   if (!isTerminalTranscriptNeeded()) {
     terminal.searchTextStale = true;
     return;
@@ -5088,7 +5602,8 @@ function rebuildTerminalSearchText(terminal) {
       lines.push(buffer.getLine(i)?.translateToString(true) || "");
     }
   }
-  terminal.searchText = `${normalizeSearchText(terminalMetadataText(terminal))}\n${normalizeSearchText(lines.join("\n"))}`.slice(-SEARCH_TEXT_CAP);
+  const retained = terminal.tuiTranscript ? `${terminal.tuiTranscript}\n` : "";
+  terminal.searchText = `${normalizeSearchText(terminalMetadataText(terminal))}\n${retained}${normalizeSearchText(lines.join("\n"))}`.slice(-SEARCH_TEXT_CAP);
 }
 
 function refreshTerminalSearchText(terminal) {
@@ -5106,6 +5621,166 @@ function terminalMetadataText(terminal) {
 
 function terminalMetadataMatches(terminal, query) {
   return normalizeSearchText(terminalMetadataText(terminal)).includes(normalizeSearchText(query));
+}
+
+const tuiSearch = { terminalId: null, query: "", returnFocus: null };
+
+function renderTuiSearchResults() {
+  const terminal = state.terminals.get(tuiSearch.terminalId);
+  elements.tuiSearchList.textContent = "";
+  if (!terminal) {
+    elements.tuiSearchStatus.textContent = "That terminal is no longer available.";
+    return;
+  }
+  const hits = tuiHistoryMatchLines(terminal, tuiSearch.query);
+  elements.tuiSearchSubtitle.textContent = `${terminal.titleInput.value} scrolled past these.`;
+  for (const [index, hit] of hits.entries()) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "tui-search-row";
+    row.setAttribute("role", "listitem");
+    row.dataset.index = String(index);
+
+    const context = document.createElement("span");
+    context.className = "tui-search-context";
+    context.textContent = hit.before.join(" ") || "\u00a0";
+    const main = document.createElement("span");
+    main.className = "tui-search-line";
+    main.textContent = hit.line;
+    const trailing = document.createElement("span");
+    trailing.className = "tui-search-context";
+    trailing.textContent = hit.after.join(" ") || "\u00a0";
+
+    row.append(context, main, trailing);
+    row.addEventListener("click", async () => {
+      for (const other of elements.tuiSearchList.querySelectorAll(".tui-search-row")) {
+        other.classList.remove("is-active");
+      }
+      row.classList.add("is-active");
+      elements.tuiSearchStatus.textContent = "Scrolling that terminal back to the match\u2026";
+      const result = await jumpToTuiMatch(terminal, hit.line || tuiSearch.query);
+      elements.tuiSearchStatus.textContent = result.ok
+        ? result.steps === 0 ? "Already on screen." : `Found it after ${result.steps} scroll step${result.steps === 1 ? "" : "s"}.`
+        : result.reason;
+      if (result.ok) closeTuiSearchResults({ restoreFocus: false });
+    });
+    elements.tuiSearchList.append(row);
+  }
+  elements.tuiSearchStatus.textContent = hits.length === 0
+    ? "No matches in retained output."
+    : `${hits.length} match${hits.length === 1 ? "" : "es"}. Selecting one scrolls the terminal back to it.`;
+}
+
+function openTuiSearchResults(terminal) {
+  tuiSearch.terminalId = terminal.id;
+  tuiSearch.query = state.findAll.query || state.terminalSearch || "";
+  tuiSearch.returnFocus = document.activeElement;
+  renderTuiSearchResults();
+  elements.tuiSearchOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.tuiSearchOverlay.classList.add("is-open");
+    elements.tuiSearchList.querySelector(".tui-search-row")?.focus({ preventScroll: true });
+  });
+  refreshIcons(elements.tuiSearchOverlay);
+}
+
+function closeTuiSearchResults({ restoreFocus = true } = {}) {
+  elements.tuiSearchOverlay.classList.remove("is-open");
+  window.setTimeout(() => { elements.tuiSearchOverlay.hidden = true; }, 150);
+  const returnFocus = tuiSearch.returnFocus;
+  tuiSearch.returnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected && typeof returnFocus.focus === "function") {
+    returnFocus.focus();
+  }
+}
+
+function bindTuiSearchResults() {
+  if (!elements.tuiSearchOverlay) return;
+  elements.tuiSearchDone.addEventListener("click", () => closeTuiSearchResults());
+  elements.tuiSearchClose.addEventListener("click", () => closeTuiSearchResults());
+  elements.tuiSearchOverlay.addEventListener("mousedown", (event) => {
+    if (event.target === elements.tuiSearchOverlay) closeTuiSearchResults();
+  });
+  elements.tuiSearchOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeTuiSearchResults();
+    }
+  });
+}
+
+function updateTerminalHistoryMatchBadge(terminal, query) {
+  const badge = terminal.pane.querySelector(".pane-history-match");
+  if (!badge) return;
+  const hits = query ? tuiHistoryMatchLines(terminal, query) : [];
+  badge.hidden = hits.length === 0;
+  badge.querySelector(".pane-history-match-count").textContent = String(hits.length);
+  badge.title = `${hits.length} match${hits.length === 1 ? "" : "es"} in output this terminal scrolled past`;
+}
+
+function terminalHistoryMatches(terminal, query) {
+  if (!terminal.tuiTranscript) return false;
+  return normalizeSearchText(terminal.tuiTranscript).includes(normalizeSearchText(query));
+}
+
+const TUI_JUMP_MAX_STEPS = 80;
+
+function tuiHistoryMatchLines(terminal, query) {
+  const needle = normalizeSearchText(query);
+  if (!needle || !terminal.tuiTranscript) return [];
+  const lines = terminal.tuiTranscript.split("\n");
+  const hits = [];
+  for (let i = 0; i < lines.length && hits.length < 200; i += 1) {
+    if (!normalizeSearchText(lines[i]).includes(needle)) continue;
+    hits.push({
+      line: lines[i].trim(),
+      before: lines.slice(Math.max(0, i - 1), i).map((value) => value.trim()),
+      after: lines.slice(i + 1, i + 2).map((value) => value.trim())
+    });
+  }
+  return hits;
+}
+
+function terminalVisibleText(terminal) {
+  const buffer = terminal.term?.buffer?.active;
+  if (!buffer) return "";
+  const lines = [];
+  for (let i = 0; i < buffer.length; i += 1) lines.push(buffer.getLine(i)?.translateToString(true) || "");
+  return normalizeSearchText(lines.join("\n"));
+}
+
+// A TUI owns its own scroll position, so the only way back to text it scrolled
+// past is to ask it to scroll: drive its scrollback a step at a time until the
+// line is on screen again, at which point it is in xterm's buffer and the
+// normal highlighter can take over.
+function tuiScrollStep(terminal, direction) {
+  if (mouseReportingActive(terminal)) {
+    const button = direction === "up" ? 64 : 65;
+    sendBridge({ type: "input", id: terminal.id, data: `\u001b[<${button};1;1M` });
+    return;
+  }
+  sendBridge({ type: "input", id: terminal.id, data: direction === "up" ? "\u001b[5~" : "\u001b[6~" });
+}
+
+async function jumpToTuiMatch(terminal, query) {
+  const needle = normalizeSearchText(query);
+  if (!terminal || !needle) return { ok: false, reason: "Nothing to look for." };
+  terminal.term.focus();
+
+  if (terminalVisibleText(terminal).includes(needle)) {
+    searchTerminalPane(terminal, query);
+    return { ok: true, steps: 0 };
+  }
+
+  for (let step = 1; step <= TUI_JUMP_MAX_STEPS; step += 1) {
+    tuiScrollStep(terminal, "up");
+    await new Promise((resolve) => { window.setTimeout(resolve, 90); });
+    if (terminalVisibleText(terminal).includes(needle)) {
+      searchTerminalPane(terminal, query);
+      return { ok: true, steps: step };
+    }
+  }
+  return { ok: false, reason: "Could not scroll that terminal back to the match." };
 }
 
 // The header search runs the very same buffer search as Ctrl+Shift+F, so every
@@ -5299,7 +5974,55 @@ function updateTerminalActions() {
   elements.closeAllTerminals.title = label;
   elements.closeAllTerminals.setAttribute("aria-label", label);
   updateLayoutMetrics();
+  updateWorkspaceEmptyState();
   updateStatusBar();
+}
+
+// Ctrl+T is fixed in the key handler; this is not a user-rebindable chord yet.
+const NEW_TERMINAL_SHORTCUT = "Ctrl+T";
+let workspaceEmptySignature = "";
+
+function minimizedTerminalsOnActivePage() {
+  return [...terminalsOnActivePage()].filter((terminal) => terminal.minimized);
+}
+
+function updateWorkspaceEmptyState() {
+  if (!elements.workspaceEmpty) return;
+  if (countVisibleTerminals() > 0) {
+    elements.workspaceEmpty.hidden = true;
+    workspaceEmptySignature = "";
+    return;
+  }
+
+  const minimized = minimizedTerminalsOnActivePage();
+  elements.workspaceEmpty.hidden = false;
+  elements.workspaceEmptyRestore.hidden = minimized.length === 0;
+  elements.workspaceEmptyHint.hidden = minimized.length > 0;
+  elements.workspaceEmptyShortcut.textContent = NEW_TERMINAL_SHORTCUT;
+
+  // updateTerminalActions runs on routine status changes; rebuilding the rows
+  // every time would detach the button a click is already travelling towards.
+  const signature = minimized.map((terminal) => `${terminal.id}:${terminal.titleInput?.value || ""}`).join("|");
+  if (signature === workspaceEmptySignature) return;
+  workspaceEmptySignature = signature;
+
+  elements.workspaceEmptyList.textContent = "";
+  for (const terminal of minimized) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "listitem");
+    const title = terminal.titleInput?.value || "Terminal";
+    button.title = `Restore ${title}`;
+    const icon = document.createElement("i");
+    icon.dataset.lucide = "maximize-2";
+    const text = document.createElement("span");
+    text.textContent = title;
+    button.append(icon, text);
+    button.addEventListener("click", () => restoreTerminal(terminal.id));
+    elements.workspaceEmptyList.append(button);
+  }
+  elements.workspaceEmptyRestoreAll.hidden = minimized.length < 2;
+  refreshIcons(elements.workspaceEmpty);
 }
 
 function updateLayoutMetrics() {
@@ -5364,8 +6087,9 @@ function applySettings() {
   applyAppTheme();
   document.body.classList.toggle("header-hidden", state.settings.headerHidden);
   document.body.classList.toggle("sidecar-hidden", state.settings.sidecarHidden);
+  document.body.dataset.revealHeaderActions = String(state.settings.headerActionsRevealOnHover === true);
   applyPagerPlacement();
-  elements.host.dataset.layout = state.settings.layout;
+  elements.host.dataset.layout = effectivePageLayout();
   elements.controlPanel.dataset.mode = state.settings.layout;
   elements.host.classList.toggle("compact", state.settings.compactChrome);
   state.settings.workspaceZoom = normalizeWorkspaceZoom(state.settings.workspaceZoom);
@@ -5471,7 +6195,99 @@ function updateStatusBar() {
   const online = state.socketReady;
   elements.statusConn.textContent = online ? "Connected" : "Disconnected";
   elements.statusConn.dataset.tone = online ? "online" : "offline";
+  renderBridgeIdentity();
   updateFontZoomControls();
+}
+
+// The status label is the only place the bridge is visible, so it carries the id
+// that identifies which terminal window is serving this window.
+function renderBridgeIdentity() {
+  if (!elements.bridgeIdentityCard) {
+    return;
+  }
+  const identifier = state.bridgeId || "";
+  elements.bridgeIdentityId.textContent = identifier || "No bridge id";
+  elements.statusConn.title = identifier ? `Bridge ${identifier}` : "";
+  const focusable = Boolean(identifier) && state.canFocusBridgeTerminal && state.socketReady;
+  elements.bridgeIdentityFocus.disabled = !focusable;
+  elements.bridgeIdentityNote.textContent = !identifier
+    ? "This bridge did not report an id."
+    : state.canFocusBridgeTerminal
+      ? "Served by the terminal window titled with this id."
+      : "This bridge does not run in its own terminal window.";
+}
+
+function setBridgeIdentityStatus(text, tone) {
+  const target = elements.bridgeIdentityStatus;
+  if (!target) {
+    return;
+  }
+  target.hidden = !text;
+  target.textContent = text || "";
+  if (tone) {
+    target.dataset.tone = tone;
+  } else {
+    delete target.dataset.tone;
+  }
+}
+
+function openBridgeIdentityCard() {
+  if (!elements.bridgeIdentityCard) {
+    return;
+  }
+  renderBridgeIdentity();
+  elements.bridgeIdentityCard.hidden = false;
+}
+
+function closeBridgeIdentityCard() {
+  if (!elements.bridgeIdentityCard) {
+    return;
+  }
+  elements.bridgeIdentityCard.hidden = true;
+  setBridgeIdentityStatus("", "");
+}
+
+async function requestBridgeTerminalFocus() {
+  if (!state.settings.allowBridgeTerminalFocus) {
+    const granted = window.confirm(
+      `Bring the ${state.bridgeId} terminal window to the front?\n\n` +
+      "MultiTerm will use Windows UI Automation to select that terminal's tab and " +
+      "focus it. Nothing is typed into it.\n\n" +
+      "Allow this from now on? You can turn it off again in Settings."
+    );
+    if (!granted) {
+      setBridgeIdentityStatus("Left the bridge terminal alone.", "");
+      return;
+    }
+    state.settings.allowBridgeTerminalFocus = true;
+    saveSettings();
+  }
+  setBridgeIdentityStatus("Looking for the bridge terminal...", "");
+  const response = await requestBridge({ type: "focusBridgeTerminal" }, { timeout: 30000 });
+  if (!response) {
+    setBridgeIdentityStatus("The bridge did not answer the focus request.", "error");
+    return;
+  }
+  setBridgeIdentityStatus(
+    response.reason || (response.ok ? "Focused the bridge terminal." : "Could not focus the bridge terminal."),
+    response.ok ? "" : "error"
+  );
+}
+
+function bindBridgeIdentityCard() {
+  const wrap = elements.statusConn?.parentElement;
+  if (!wrap || !elements.bridgeIdentityCard) {
+    return;
+  }
+  wrap.addEventListener("pointerenter", openBridgeIdentityCard);
+  wrap.addEventListener("pointerleave", closeBridgeIdentityCard);
+  elements.statusConn.addEventListener("focus", openBridgeIdentityCard);
+  wrap.addEventListener("focusout", (event) => {
+    if (!wrap.contains(event.relatedTarget)) {
+      closeBridgeIdentityCard();
+    }
+  });
+  elements.bridgeIdentityFocus.addEventListener("click", requestBridgeTerminalFocus);
 }
 
 function updateFontZoomControls() {
@@ -5556,12 +6372,103 @@ function endResizeGesture() {
 // Driven by the pane's own width (via its ResizeObserver) so it responds to added
 // terminals, layout changes and window resizes alike — not just the manual
 // "Compact chrome" setting.
+let titleMeasureContext = null;
+
+function measureTitleText(text, font) {
+  if (!titleMeasureContext) titleMeasureContext = document.createElement("canvas").getContext("2d");
+  titleMeasureContext.font = font;
+  return titleMeasureContext.measureText(text).width;
+}
+
+// End-truncation hides the part that distinguishes two similar sessions, so the
+// middle goes instead and the tail survives.
+function middleTruncate(text, font, available) {
+  if (measureTitleText(text, font) <= available) return text;
+  const ellipsis = "\u2026";
+  for (let keep = Math.floor(text.length / 2); keep > 1; keep -= 1) {
+    const head = text.slice(0, Math.ceil(keep));
+    const tail = text.slice(text.length - Math.floor(keep));
+    const candidate = `${head}${ellipsis}${tail}`;
+    if (measureTitleText(candidate, font) <= available) return candidate;
+  }
+  return ellipsis;
+}
+
+function renderTerminalTitleDisplay(terminal) {
+  if (!terminal?.titleDisplay) return;
+  const full = terminal.titleDisplay.dataset.fullTitle ?? terminal.titleInput.value;
+  terminal.titleDisplay.dataset.fullTitle = full;
+  terminal.titleDisplay.title = full;
+  const region = terminal.titleDisplay.parentElement;
+  const wrap = terminal.pane.querySelector(".pane-title-wrap");
+  if (!wrap || !region) return;
+  // The region is shrink-to-fit, so its own width is the truncated text's width.
+  // Measure the space it could claim instead: the title area minus its siblings.
+  const leading = [...wrap.children]
+    .filter((element) => element !== region && element.offsetParent !== null)
+    .reduce((total, element) => total + element.getBoundingClientRect().width + 8, 0);
+  const available = wrap.clientWidth - leading - 12;
+  if (available <= 0) {
+    terminal.titleDisplay.textContent = full;
+    return;
+  }
+  const style = window.getComputedStyle(terminal.titleDisplay);
+  const font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+  terminal.titleDisplay.textContent = middleTruncate(full, font, available);
+}
+
+function setTerminalTitleDisplay(terminal, title) {
+  if (!terminal?.titleDisplay) return;
+  terminal.titleDisplay.dataset.fullTitle = title;
+  renderTerminalTitleDisplay(terminal);
+}
+
+// Priority+: rather than one width breakpoint, drop the least important action
+// repeatedly until the row fits beside a readable title.
+function updateHeaderActionOverflow(terminal) {
+  const bar = terminal.pane.querySelector(".pane-bar");
+  const actions = terminal.pane.querySelector(".pane-actions");
+  if (!bar || !actions) return;
+  const barWidth = bar.clientWidth;
+  if (!barWidth) return;
+
+  const candidates = HEADER_ACTION_OVERFLOW_ORDER
+    .map((action) => ({ action, button: actions.querySelector(`button[data-action="${action}"]`) }))
+    .filter((entry) => entry.button && !entry.button.classList.contains("is-user-menu-action") && !entry.button.hidden);
+
+  for (const entry of candidates) delete entry.button.dataset.autoOverflow;
+
+  const wrap = terminal.pane.querySelector(".pane-title-wrap");
+  const region = terminal.pane.querySelector(".pane-title-region");
+  const leading = [...wrap.children]
+    .filter((element) => element !== region && element.offsetParent !== null)
+    .reduce((total, element) => total + element.getBoundingClientRect().width + 8, 0);
+  const budget = barWidth - leading - PANE_TITLE_MIN_WIDTH - 18;
+
+  // Reveal-on-hover makes buttons measure zero at rest, so size the row from
+  // the full set it will show when hovered, not from what is painted now.
+  const slotWidth = (button) => (button.getBoundingClientRect().width || 30) + 3;
+  const alwaysOn = [...actions.querySelectorAll("button")]
+    .filter((button) => !button.hidden && !button.classList.contains("is-user-menu-action")
+      && !HEADER_ACTION_OVERFLOW_ORDER.includes(button.dataset.action));
+  let used = alwaysOn.reduce((total, button) => total + slotWidth(button), 0)
+    + candidates.reduce((total, entry) => total + slotWidth(entry.button), 0);
+
+  for (const entry of candidates) {
+    if (used <= budget) break;
+    entry.button.dataset.autoOverflow = "true";
+    used -= slotWidth(entry.button);
+  }
+}
+
 function updatePaneDensity(terminal) {
   const width = terminal.pane.clientWidth;
   // A hidden (minimized) pane reports 0; leave its current state alone until it
   // is laid out again, so restoring it doesn't flash the wrong control set.
   if (!width) return;
   terminal.pane.classList.toggle("is-narrow", width < PANE_OVERFLOW_WIDTH);
+  updateHeaderActionOverflow(terminal);
+  renderTerminalTitleDisplay(terminal);
 }
 
 function scheduleFit(terminal) {
@@ -7360,26 +8267,7 @@ function getCommands() {
     }
   ];
 
-  const layouts = [
-    ["Auto fit", "auto"],
-    ["Fixed columns", "columns"],
-    ["Fixed rows", "rows"],
-    ["Horizontal strip", "horizontal"],
-    ["Vertical stack", "vertical"],
-    ["Focus rail", "focus"],
-    ["Balanced grid", "grid"],
-    ["Master top", "master-top"],
-    ["Master right", "master-right"],
-    ["Master bottom", "master-bottom"],
-    ["Master left", "master-left"],
-    ["Priority grid", "priority-grid"],
-    ["Compact matrix", "compact-matrix"],
-    ["Horizontal carousel", "carousel-horizontal"],
-    ["Vertical carousel", "carousel-vertical"],
-    ["Spotlight", "spotlight"],
-    ["Bento grid", "bento"],
-    ["Manual canvas", "manual"]
-  ];
+  const layouts = LAYOUT_MODE_OPTIONS;
   for (const [label, value] of layouts) {
     commands.push({ label: `Layout: ${label}`, run: () => setLayoutMode(value) });
   }
@@ -8897,11 +9785,19 @@ function runSearchPass(rawQuery, { filter = false, preserveNav = false } = {}) {
     terminal.pane.classList.toggle("has-find-match", matched);
     if (matched) order.push(terminal.id);
 
+    // A TUI's scrolled-past output is not in xterm's buffer, so it can never be
+    // highlighted; the retained transcript at least keeps the pane in the
+    // results instead of hiding a terminal that genuinely contains the text.
+    const inHistory = !matched && terminalHistoryMatches(terminal, query);
+    terminal.pane.classList.toggle("has-history-match", inHistory);
+    updateTerminalHistoryMatchBadge(terminal, inHistory ? query : "");
+
     // A pane also survives the filter when its title/cwd/shell/status match,
     // which is how the header search has always narrowed down to a terminal by
     // name rather than by output. The pane the search was launched from is
     // always kept so the user never loses the terminal they were looking at.
     const kept = matched
+      || inHistory
       || terminal.id === state.findAll.exemptId
       || (filter && terminalMetadataMatches(terminal, query));
     if (kept && !isOnActivePage(terminal) && !terminal.minimized) offPage.push(terminal.id);
@@ -9349,6 +10245,31 @@ function updateMaximizeButton(terminal) {
 // Track each pane's directory from OSC 7 (file://) and OSC 9;9 (ConEmu/Windows
 // Terminal) sequences when the shell emits them; otherwise the initial cwd
 // stands in. Powers "Open folder" and "New terminal here".
+// The control only makes sense while a scrollback exists: an alternate-screen
+// TUI (a full-screen Copilot view, vim, less) has none, and xterm ignores
+// scrollToBottom there, so a visible button would silently do nothing.
+function bindScrollToBottomControl(terminal) {
+  const button = terminal.pane.querySelector(".pane-scroll-bottom");
+  if (!button) return;
+
+  const sync = () => {
+    button.hidden = terminal.term.buffer.active.type === "alternate";
+  };
+
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    terminal.term.scrollToBottom();
+    terminal.term.focus();
+  });
+  // Keep the pointer out of xterm's mouse-reporting path; a TUI that owns the
+  // mouse would otherwise receive a click at these coordinates.
+  for (const name of ["mousedown", "pointerdown", "contextmenu"]) {
+    button.addEventListener(name, (event) => event.stopPropagation());
+  }
+  terminal.term.buffer.onBufferChange(sync);
+  sync();
+}
+
 function registerCwdTracking(terminal) {
   const parser = terminal.term.parser;
   if (!parser || typeof parser.registerOscHandler !== "function") return;
@@ -9463,6 +10384,568 @@ function cwdProviderCapability(mode) {
     available: provider?.cwdChangeAvailable === true,
     status: provider?.cwdChangeStatus || "Refresh AI assistant status to verify Claude /cd support."
   };
+}
+
+const worktreeDialog = {
+  source: "folder",
+  terminalId: null,
+  openInNewTerminal: false,
+  returnFocus: null,
+  closeTimer: 0,
+  inspectTimer: 0,
+  inspectGeneration: 0,
+  inspection: null,
+  existingNames: [],
+  nameTouched: false
+};
+
+function worktreeHelpers() {
+  return window.GitWorktrees || null;
+}
+
+function setWorktreeStatus(text, tone = "") {
+  elements.worktreeStatus.textContent = text;
+  if (tone) elements.worktreeStatus.dataset.tone = tone;
+  else delete elements.worktreeStatus.dataset.tone;
+}
+
+function worktreeParentDirectory() {
+  const inspection = worktreeDialog.inspection;
+  if (worktreeDialog.source === "folder") {
+    if (!inspection?.isRepository) return "";
+    // Matches the `<repo>.worktrees` layout this repository already uses.
+    return `${inspection.repositoryRoot}.worktrees`;
+  }
+  const shared = elements.worktreeSharedRootInput.value.trim();
+  if (!shared) return "";
+  return elements.worktreePlacement.value === "sibling"
+    ? `${shared}\\${worktreeRepositoryFolderName()}.worktrees`
+    : `${shared}\\worktrees`;
+}
+
+function worktreeRepositoryFolderName() {
+  const url = elements.worktreeUrlInput.value.trim();
+  const match = url.replace(/\.git$/i, "").match(/([^/:\\]+)$/);
+  return match ? match[1] : "repository";
+}
+
+function refreshWorktreeSuggestion() {
+  const helpers = worktreeHelpers();
+  if (!helpers || worktreeDialog.nameTouched) return;
+  const parent = worktreeDialog.source === "folder"
+    ? worktreeDialog.inspection?.currentBranch || ""
+    : elements.worktreeBranchInput.value.trim() || worktreeDialog.inspection?.defaultBranch || "";
+  if (!parent) return;
+  elements.worktreeNameInput.value = helpers.suggestWorktreeName(parent, worktreeDialog.existingNames);
+}
+
+function updateWorktreeReadiness() {
+  const helpers = worktreeHelpers();
+  const name = elements.worktreeNameInput.value.trim();
+  const parentDirectory = worktreeParentDirectory();
+  const path = parentDirectory && name ? `${parentDirectory}\\${name}` : "";
+  elements.worktreePathPreview.textContent = path || "-";
+  elements.worktreePathRow.hidden = !path;
+
+  let ready = false;
+  if (!helpers) {
+    setWorktreeStatus("Worktree support did not load.", "error");
+  } else if (worktreeDialog.source === "folder") {
+    const inspection = worktreeDialog.inspection;
+    if (!elements.worktreeFolderInput.value.trim()) setWorktreeStatus("Choose a repository folder to continue.");
+    else if (!inspection) setWorktreeStatus("Checking that folder...", "waiting");
+    else if (!inspection.isRepository) setWorktreeStatus(inspection.reason, "error");
+    else if (!name) setWorktreeStatus("Name the worktree to continue.");
+    else if (!helpers.isSafeWorktreeName(name)) setWorktreeStatus("That name cannot be used as a folder.", "error");
+    else if (worktreeDialog.existingNames.includes(name.toLowerCase())) setWorktreeStatus("A worktree with that name already exists.", "error");
+    else {
+      setWorktreeStatus(`Ready to branch from ${inspection.currentBranch}.`, "ready");
+      ready = true;
+    }
+  } else {
+    const url = elements.worktreeUrlInput.value.trim();
+    const branch = elements.worktreeBranchInput.value.trim();
+    const shared = elements.worktreeSharedRootInput.value.trim();
+    if (!url) setWorktreeStatus("Enter a repository URL to continue.");
+    else if (!helpers.isSafeRepositoryUrl(url)) setWorktreeStatus("That repository URL is not accepted.", "error");
+    else if (branch && !helpers.isSafeBranchName(branch)) setWorktreeStatus("That branch name is not valid.", "error");
+    else if (!shared) setWorktreeStatus("Set a shared clone location to continue.");
+    else if (!name) setWorktreeStatus("Name the worktree to continue.");
+    else if (!helpers.isSafeWorktreeName(name)) setWorktreeStatus("That name cannot be used as a folder.", "error");
+    else {
+      setWorktreeStatus(branch ? `Ready to branch from ${branch}.` : "Ready to branch from the default branch.", "ready");
+      ready = true;
+    }
+  }
+  elements.worktreeCreate.disabled = !ready;
+}
+
+function scheduleWorktreeInspection() {
+  window.clearTimeout(worktreeDialog.inspectTimer);
+  worktreeDialog.inspectTimer = window.setTimeout(async () => {
+    const folder = elements.worktreeFolderInput.value.trim();
+    worktreeDialog.inspection = null;
+    worktreeDialog.existingNames = [];
+    if (!folder) {
+      updateWorktreeReadiness();
+      return;
+    }
+    const generation = ++worktreeDialog.inspectGeneration;
+    updateWorktreeReadiness();
+    const inspection = await requestBridge({ type: "gitInspect", path: folder }, { timeout: 30000 });
+    if (generation !== worktreeDialog.inspectGeneration) return;
+    worktreeDialog.inspection = inspection || { isRepository: false, reason: "The bridge did not answer." };
+    elements.worktreeParentBranch.textContent = worktreeDialog.inspection.currentBranch || "-";
+    elements.worktreeParentRow.hidden = !worktreeDialog.inspection.isRepository;
+    elements.worktreeRunHere.hidden = worktreeDialog.inspection.isRepository;
+    if (worktreeDialog.inspection.isRepository) {
+      const listed = await requestBridge({ type: "gitWorktrees", path: folder }, { timeout: 30000 });
+      if (generation !== worktreeDialog.inspectGeneration) return;
+      worktreeDialog.existingNames = (listed?.worktrees || [])
+        .map((worktree) => String(worktree.path || "").split(/[\\/]/).pop().toLowerCase())
+        .filter(Boolean);
+    }
+    refreshWorktreeSuggestion();
+    updateWorktreeReadiness();
+  }, 220);
+}
+
+function setWorktreeSource(source) {
+  worktreeDialog.source = source === "url" ? "url" : "folder";
+  for (const tab of elements.worktreeOverlay.querySelectorAll(".worktree-source-tab")) {
+    const active = tab.dataset.worktreeSource === worktreeDialog.source;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-checked", active ? "true" : "false");
+  }
+  elements.worktreeFolderField.hidden = worktreeDialog.source !== "folder";
+  elements.worktreeUrlFields.hidden = worktreeDialog.source !== "url";
+  elements.worktreeParentRow.hidden = worktreeDialog.source !== "folder" || !worktreeDialog.inspection?.isRepository;
+  elements.worktreeRunHere.hidden = true;
+  refreshWorktreeSuggestion();
+  updateWorktreeReadiness();
+}
+
+function openWorktreeDialog({ terminalId = null, openInNewTerminal = false, returnFocus = document.activeElement } = {}) {
+  const terminal = terminalId ? state.terminals.get(terminalId) : null;
+  worktreeDialog.terminalId = terminal ? terminalId : null;
+  worktreeDialog.openInNewTerminal = openInNewTerminal || !terminal;
+  worktreeDialog.returnFocus = returnFocus;
+  worktreeDialog.inspection = null;
+  worktreeDialog.existingNames = [];
+  worktreeDialog.nameTouched = false;
+  window.clearTimeout(worktreeDialog.closeTimer);
+  elements.worktreeSubtitle.textContent = `${aiAssistantName()} will start in the new worktree.`;
+  elements.worktreeFolderInput.value = terminal?.cwd || state.cwd || "";
+  elements.worktreeUrlInput.value = "";
+  elements.worktreeBranchInput.value = "";
+  elements.worktreeSharedRootInput.value = state.settings.worktreeSharedRoot || "";
+  elements.worktreeNameInput.value = "";
+  elements.worktreePlacement.value = "shared";
+  elements.worktreeOverlay.hidden = false;
+  setWorktreeSource("folder");
+  window.requestAnimationFrame(() => {
+    elements.worktreeOverlay.classList.add("is-open");
+    elements.worktreeFolderInput.focus();
+    elements.worktreeFolderInput.select();
+  });
+  scheduleWorktreeInspection();
+  refreshIcons(elements.worktreeOverlay);
+}
+
+function closeWorktreeDialog() {
+  worktreeDialog.inspectGeneration += 1;
+  window.clearTimeout(worktreeDialog.inspectTimer);
+  elements.worktreeOverlay.classList.remove("is-open");
+  worktreeDialog.closeTimer = window.setTimeout(() => {
+    elements.worktreeOverlay.hidden = true;
+  }, 150);
+  const returnFocus = worktreeDialog.returnFocus;
+  worktreeDialog.returnFocus = null;
+  worktreeDialog.terminalId = null;
+  if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+}
+
+// git runs in the visible terminal rather than through the bridge so that a
+// private clone's credential prompt has somewhere to appear. Everything after
+// the worktree add is guarded on the directory existing, so a failed clone
+// cannot leave the assistant running in the wrong place.
+function buildWorktreeCommand({ source, repositoryRoot, url, branch, sharedRoot, parentDirectory, worktreePath, name, assistantCommand }) {
+  const quoted = (value) => powerShellLiteral(value);
+  const clonePath = source === "url" ? `${sharedRoot}\\${worktreeRepositoryFolderName()}` : repositoryRoot;
+  const lines = [];
+  if (source === "url") {
+    lines.push(`if (Test-Path -LiteralPath ${quoted(clonePath)}) { git -C ${quoted(clonePath)} fetch --all --prune } else { git clone ${quoted(url)} ${quoted(clonePath)} }`);
+  }
+  lines.push(`New-Item -ItemType Directory -Force -Path ${quoted(parentDirectory)} | Out-Null`);
+  const start = source === "url" && branch ? `origin/${branch}` : branch;
+  const addArguments = [`-C ${quoted(clonePath)}`, "worktree add -b", quoted(name), quoted(worktreePath)];
+  if (start) addArguments.push(quoted(start));
+  lines.push(`git ${addArguments.join(" ")}`);
+  const parentBranch = branch || "";
+  const followUp = [
+    `git -C ${quoted(clonePath)} config --local ${quoted(`multiterm.worktree.${name}.parent`)} ${quoted(parentBranch)}`,
+    `git -C ${quoted(clonePath)} config --local ${quoted(`multiterm.worktree.${name}.created`)} ${quoted(new Date().toISOString())}`,
+    `Set-Location -LiteralPath ${quoted(worktreePath)}`,
+    assistantCommand
+  ].filter(Boolean).join("; ");
+  lines.push(`if (Test-Path -LiteralPath ${quoted(worktreePath)}) { ${followUp} } else { Write-Host 'MultiTerm: the worktree was not created.' }`);
+  return lines.join("; ");
+}
+
+function worktreeBranchName() {
+  return elements.worktreeNameInput.value.trim();
+}
+
+async function createWorktreeAndRun() {
+  const helpers = worktreeHelpers();
+  if (!helpers) return;
+  const name = elements.worktreeNameInput.value.trim();
+  const parentDirectory = worktreeParentDirectory();
+  if (!helpers.isSafeWorktreeName(name) || !parentDirectory) return;
+
+  const source = worktreeDialog.source;
+  const inspection = worktreeDialog.inspection;
+  const url = elements.worktreeUrlInput.value.trim();
+  const sharedRoot = elements.worktreeSharedRootInput.value.trim();
+  const branch = source === "folder"
+    ? (inspection?.currentBranch || "")
+    : elements.worktreeBranchInput.value.trim();
+  if (source === "url") {
+    if (!helpers.isSafeRepositoryUrl(url)) return;
+    if (branch && !helpers.isSafeBranchName(branch)) return;
+    if (state.settings.worktreeSharedRoot !== sharedRoot) {
+      state.settings.worktreeSharedRoot = sharedRoot;
+      saveSettings();
+    }
+  } else if (!inspection?.isRepository) {
+    return;
+  }
+
+  const worktreePath = `${parentDirectory}\\${name}`;
+  const command = buildWorktreeCommand({
+    source,
+    repositoryRoot: inspection?.repositoryRoot || "",
+    url,
+    branch,
+    sharedRoot,
+    parentDirectory,
+    worktreePath,
+    name,
+    assistantCommand: buildAiAssistantCommand()
+  });
+
+  let terminal = worktreeDialog.openInNewTerminal ? null : state.terminals.get(worktreeDialog.terminalId);
+  if (!terminal) {
+    addTerminal({ reveal: true, runStartup: true });
+    terminal = state.terminals.get(state.activeId);
+  }
+  closeWorktreeDialog();
+  if (!terminal) {
+    toast("Could not open a terminal for the worktree", "error", 2600);
+    return;
+  }
+
+  setAwaitingInput(terminal, false);
+  sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
+  window.requestAnimationFrame(() => terminal.term.focus());
+  toast(`Creating worktree ${name}`, "info", 2400);
+}
+
+const worktreeManager = { repositoryRoot: "", closeTimer: 0, generation: 0, returnFocus: null };
+
+function renderWorktreeRows(worktrees) {
+  const list = elements.worktreeManagerList;
+  list.textContent = "";
+  if (!worktrees.length) {
+    const empty = document.createElement("div");
+    empty.className = "worktree-empty";
+    empty.textContent = "This repository has no worktrees yet.";
+    list.append(empty);
+    return;
+  }
+  for (const worktree of worktrees) {
+    const row = document.createElement("div");
+    row.className = "worktree-row";
+    row.setAttribute("role", "listitem");
+    // Worktrees MultiTerm did not create have no recorded parent, so there is
+    // nothing to merge back into and nothing of ours to clean up.
+    row.dataset.managed = worktree.createdByMultiTerm ? "true" : "false";
+    row.dataset.branch = worktree.branch || "";
+
+    const identity = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "worktree-row-name";
+    name.textContent = worktree.path;
+    const meta = document.createElement("div");
+    meta.className = "worktree-row-meta";
+    meta.textContent = worktree.createdByMultiTerm
+      ? `${worktree.branch} from ${worktree.parentBranch}`
+      : `${worktree.branch || "detached"} - not created by MultiTerm`;
+    identity.append(name, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "worktree-row-actions";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary-action";
+    open.textContent = "Open";
+    open.addEventListener("click", () => {
+      closeWorktreeManager();
+      addTerminal({ reveal: true, runStartup: true, cwd: worktree.path });
+    });
+    actions.append(open);
+
+    if (worktree.createdByMultiTerm) {
+      const review = document.createElement("button");
+      review.type = "button";
+      review.className = "secondary-action";
+      review.textContent = "Review";
+      review.addEventListener("click", () => openWorktreeReview(worktree));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary-action";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => removeWorktree(worktree));
+      actions.append(review, remove);
+    }
+
+    row.append(identity, actions);
+    list.append(row);
+  }
+}
+
+async function refreshWorktreeManager() {
+  const folder = elements.worktreeManagerRepo.value.trim();
+  const generation = ++worktreeManager.generation;
+  if (!folder) {
+    elements.worktreeManagerList.textContent = "";
+    elements.worktreeManagerStatus.textContent = "Choose a repository to list its worktrees.";
+    delete elements.worktreeManagerStatus.dataset.tone;
+    return;
+  }
+  elements.worktreeManagerStatus.textContent = "Listing worktrees...";
+  elements.worktreeManagerStatus.dataset.tone = "waiting";
+  const listed = await requestBridge({ type: "gitWorktrees", path: folder }, { timeout: 60000 });
+  if (generation !== worktreeManager.generation) return;
+  if (!listed || !listed.ok) {
+    elements.worktreeManagerList.textContent = "";
+    elements.worktreeManagerStatus.textContent = listed?.reason || "The bridge did not answer.";
+    elements.worktreeManagerStatus.dataset.tone = "error";
+    return;
+  }
+  const inspection = await requestBridge({ type: "gitInspect", path: folder }, { timeout: 30000 });
+  if (generation !== worktreeManager.generation) return;
+  worktreeManager.repositoryRoot = inspection?.repositoryRoot || "";
+  renderWorktreeRows(listed.worktrees || []);
+  const managed = (listed.worktrees || []).filter((worktree) => worktree.createdByMultiTerm).length;
+  elements.worktreeManagerStatus.textContent = `${listed.worktrees.length} worktree(s), ${managed} created by MultiTerm.`;
+  delete elements.worktreeManagerStatus.dataset.tone;
+}
+
+async function removeWorktree(worktree) {
+  const confirmed = window.confirm(`Remove the worktree at ${worktree.path}?\n\nThe branch ${worktree.branch} is kept.`);
+  if (!confirmed) return;
+  const response = await requestBridge({
+    type: "gitWorktreeRemove",
+    repositoryRoot: worktreeManager.repositoryRoot,
+    path: worktree.path,
+    branch: worktree.branch
+  }, { timeout: 120000 });
+  if (response?.ok) {
+    toast(`Removed ${worktree.branch}`, "info", 2200);
+    refreshWorktreeManager();
+    return;
+  }
+  elements.worktreeManagerStatus.textContent = response?.reason || "The bridge did not answer.";
+  elements.worktreeManagerStatus.dataset.tone = "error";
+}
+
+function openWorktreeManager({ cwd = "", returnFocus = document.activeElement } = {}) {
+  worktreeManager.returnFocus = returnFocus;
+  window.clearTimeout(worktreeManager.closeTimer);
+  elements.worktreeManagerRepo.value = cwd || state.cwd || "";
+  elements.worktreeManagerList.textContent = "";
+  elements.worktreeManagerOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.worktreeManagerOverlay.classList.add("is-open");
+    elements.worktreeManagerRepo.focus();
+  });
+  refreshWorktreeManager();
+  refreshIcons(elements.worktreeManagerOverlay);
+}
+
+function closeWorktreeManager() {
+  worktreeManager.generation += 1;
+  elements.worktreeManagerOverlay.classList.remove("is-open");
+  worktreeManager.closeTimer = window.setTimeout(() => {
+    elements.worktreeManagerOverlay.hidden = true;
+  }, 150);
+  const returnFocus = worktreeManager.returnFocus;
+  worktreeManager.returnFocus = null;
+  if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+}
+
+const worktreeReview = { closeTimer: 0, generation: 0, returnFocus: null };
+
+async function openWorktreeReview(worktree) {
+  worktreeReview.returnFocus = document.activeElement;
+  window.clearTimeout(worktreeReview.closeTimer);
+  const generation = ++worktreeReview.generation;
+  elements.worktreeReviewSubtitle.textContent = `${worktree.branch} compared with ${worktree.parentBranch}`;
+  elements.worktreeReviewDiff.textContent = "";
+  elements.worktreeReviewStatus.textContent = "Loading changes...";
+  elements.worktreeReviewStatus.dataset.tone = "waiting";
+  elements.worktreeReviewOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.worktreeReviewOverlay.classList.add("is-open");
+    elements.worktreeReviewClose.focus();
+  });
+  refreshIcons(elements.worktreeReviewOverlay);
+
+  const response = await requestBridge({
+    type: "gitDiff",
+    repositoryRoot: worktreeManager.repositoryRoot,
+    base: worktree.parentBranch,
+    head: worktree.branch
+  }, { timeout: 90000 });
+  if (generation !== worktreeReview.generation) return;
+
+  if (!response || !response.ok) {
+    elements.worktreeReviewStatus.textContent = response?.reason || "The bridge did not answer.";
+    elements.worktreeReviewStatus.dataset.tone = "error";
+    return;
+  }
+  if (!response.diff.trim()) {
+    elements.worktreeReviewStatus.textContent = "This worktree has no committed changes yet.";
+    delete elements.worktreeReviewStatus.dataset.tone;
+    return;
+  }
+  if (!window.Diff2Html) {
+    elements.worktreeReviewStatus.textContent = "The diff viewer did not load.";
+    elements.worktreeReviewStatus.dataset.tone = "error";
+    return;
+  }
+  elements.worktreeReviewStatus.textContent = response.truncated
+    ? "Showing the first 2 MB of a larger diff."
+    : "";
+  if (!response.truncated) delete elements.worktreeReviewStatus.dataset.tone;
+  // diff2html escapes the diff it renders; the input is git's own output.
+  elements.worktreeReviewDiff.innerHTML = window.Diff2Html.html(response.diff, {
+    drawFileList: true,
+    matching: "lines",
+    outputFormat: "side-by-side",
+    colorScheme: state.settings.appTheme === "light" ? "light" : "dark"
+  });
+}
+
+function closeWorktreeReview() {
+  worktreeReview.generation += 1;
+  elements.worktreeReviewOverlay.classList.remove("is-open");
+  worktreeReview.closeTimer = window.setTimeout(() => {
+    elements.worktreeReviewOverlay.hidden = true;
+    elements.worktreeReviewDiff.textContent = "";
+  }, 150);
+  const returnFocus = worktreeReview.returnFocus;
+  worktreeReview.returnFocus = null;
+  if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+}
+
+function bindWorktreeReview() {
+  if (!elements.worktreeReviewOverlay) return;
+  elements.worktreeReviewDone.addEventListener("click", () => closeWorktreeReview());
+  elements.worktreeReviewClose.addEventListener("click", () => closeWorktreeReview());
+  elements.worktreeReviewOverlay.addEventListener("mousedown", (event) => {
+    if (event.target === elements.worktreeReviewOverlay) closeWorktreeReview();
+  });
+  elements.worktreeReviewOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeWorktreeReview();
+    }
+  });
+}
+
+function bindWorktreeManager() {
+  if (!elements.worktreeManagerOverlay) return;
+  let timer = 0;
+  elements.worktreeManagerRepo.addEventListener("input", () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(refreshWorktreeManager, 250);
+  });
+  elements.worktreeManagerBrowse.addEventListener("click", async () => {
+    const chosen = await requestBridge({ type: "pickFolder", cwd: elements.worktreeManagerRepo.value.trim() }, { timeout: 300000 });
+    if (chosen?.path) {
+      elements.worktreeManagerRepo.value = chosen.path;
+      refreshWorktreeManager();
+    }
+  });
+  elements.worktreeManagerDone.addEventListener("click", () => closeWorktreeManager());
+  elements.worktreeManagerClose.addEventListener("click", () => closeWorktreeManager());
+  elements.worktreeManagerOverlay.addEventListener("mousedown", (event) => {
+    if (event.target === elements.worktreeManagerOverlay) closeWorktreeManager();
+  });
+  elements.worktreeManagerOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeWorktreeManager();
+    }
+  });
+}
+
+function bindWorktreeDialog() {
+  if (!elements.worktreeOverlay) return;
+  for (const tab of elements.worktreeOverlay.querySelectorAll(".worktree-source-tab")) {
+    tab.addEventListener("click", () => setWorktreeSource(tab.dataset.worktreeSource));
+  }
+  elements.worktreeFolderInput.addEventListener("input", () => {
+    worktreeDialog.nameTouched = false;
+    scheduleWorktreeInspection();
+  });
+  elements.worktreeUrlInput.addEventListener("input", updateWorktreeReadiness);
+  elements.worktreeBranchInput.addEventListener("input", () => {
+    worktreeDialog.nameTouched = false;
+    refreshWorktreeSuggestion();
+    updateWorktreeReadiness();
+  });
+  elements.worktreeSharedRootInput.addEventListener("input", updateWorktreeReadiness);
+  elements.worktreePlacement.addEventListener("change", updateWorktreeReadiness);
+  elements.worktreeNameInput.addEventListener("input", () => {
+    worktreeDialog.nameTouched = true;
+    updateWorktreeReadiness();
+  });
+  elements.worktreeBrowse.addEventListener("click", async () => {
+    const chosen = await requestBridge({ type: "pickFolder", cwd: elements.worktreeFolderInput.value.trim() }, { timeout: 300000 });
+    if (chosen?.path) {
+      elements.worktreeFolderInput.value = chosen.path;
+      worktreeDialog.nameTouched = false;
+      scheduleWorktreeInspection();
+    }
+  });
+  elements.worktreeSharedRootBrowse.addEventListener("click", async () => {
+    const chosen = await requestBridge({ type: "pickFolder", cwd: elements.worktreeSharedRootInput.value.trim() }, { timeout: 300000 });
+    if (chosen?.path) {
+      elements.worktreeSharedRootInput.value = chosen.path;
+      updateWorktreeReadiness();
+    }
+  });
+  elements.worktreeCreate.addEventListener("click", createWorktreeAndRun);
+  elements.worktreeRunHere.addEventListener("click", () => {
+    const terminal = state.terminals.get(worktreeDialog.terminalId);
+    closeWorktreeDialog();
+    if (terminal) invokeAiAssistant(terminal);
+    else launchAiAssistant();
+  });
+  elements.worktreeCancel.addEventListener("click", () => closeWorktreeDialog());
+  elements.worktreeClose.addEventListener("click", () => closeWorktreeDialog());
+  elements.worktreeOverlay.addEventListener("mousedown", (event) => {
+    if (event.target === elements.worktreeOverlay) closeWorktreeDialog();
+  });
+  elements.worktreeOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeWorktreeDialog();
+    }
+  });
 }
 
 function setCwdChangeStatus(text, tone = "") {
@@ -10340,6 +11823,8 @@ function setActivePage(id, options = {}) {
     if (options.focusTerm !== false) onPage[0].term.focus();
   }
 
+  // Layout and zoom can be overridden per page, so both are re-resolved here.
+  applySettings();
   applyZoom();
   updateTerminalActions();
   window.requestAnimationFrame(() => fitAllTerminals());
@@ -11166,6 +12651,7 @@ function syncControlsFromSettings() {
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
   elements.bellNotify.checked = state.settings.bellNotify;
+  elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
   elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
   elements.rightClickAction.value = state.settings.rightClickAction;
@@ -15509,6 +16995,16 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       run: launchAiAssistant
     },
     {
+      label: `Run ${assistantName} in a worktree\u2026`,
+      icon: "git-branch",
+      shortcutId: "terminal.copilot-worktree",
+      title: assistantAvailable
+        ? `Creates an isolated worktree and starts ${assistantName} in it`
+        : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
+      disabled: !assistantAvailable,
+      run: () => openWorktreeDialog({ terminalId: terminal.id })
+    },
+    {
       label: `Resume ${assistantName} session\u2026`,
       icon: "history",
       shortcutId: "terminal.copilot-resume",
@@ -15693,6 +17189,42 @@ function buildSurfaceContextMenu() {
 
   renderContextMenu([
     { label: "New terminal", hint: "Ctrl+T", icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
+    {
+      label: `This page: ${layoutModeLabel(effectivePageLayout())}`,
+      icon: "layout-grid",
+      title: "Layout for this page only, until MultiTerm restarts",
+      submenu: [
+        {
+          label: `Follow global (${layoutModeLabel(state.settings.layout)})`,
+          icon: "globe",
+          disabled: !pageLayoutOverrides.has(state.activePageId),
+          run: () => setPageLayoutOverride(null)
+        },
+        ...LAYOUT_MODE_OPTIONS.map(([label, value]) => ({
+          label,
+          icon: value === effectivePageLayout() ? "check" : "square",
+          run: () => setPageLayoutOverride(value)
+        }))
+      ]
+    },
+    {
+      label: `This page zoom: ${effectivePageZoom()}%`,
+      icon: "zoom-in",
+      title: "Workspace zoom for this page only, until MultiTerm restarts",
+      submenu: [
+        {
+          label: `Follow global (${normalizeWorkspaceZoom(state.settings.workspaceZoom)}%)`,
+          icon: "globe",
+          disabled: !pageZoomOverrides.has(state.activePageId),
+          run: () => setPageZoomOverride(null)
+        },
+        ...[50, 67, 80, 90, 100, 110, 125, 150, 175, 200].map((value) => ({
+          label: `${value}%`,
+          icon: value === effectivePageZoom() ? "check" : "square",
+          run: () => setPageZoomOverride(value)
+        }))
+      ]
+    },
     { label: "New terminal here", icon: "folder-plus", title: here || undefined, disabled: !here, run: () => newTerminal({ cwd: here }) },
     { label: "Paste and execute", icon: "clipboard-check", title: "Pastes clipboard text and immediately presses Enter", run: pasteAndExecute },
     { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ cwd: here || undefined, runStartup: true }) },
@@ -15706,6 +17238,21 @@ function buildSurfaceContextMenu() {
         : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
       disabled: !aiAssistantAvailable(),
       run: launchAiAssistant
+    },
+    {
+      label: `Run ${aiAssistantName()} in a worktree\u2026`,
+      icon: "git-branch",
+      title: aiAssistantAvailable()
+        ? `Creates an isolated worktree and starts ${aiAssistantName()} in a new terminal`
+        : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
+      disabled: !aiAssistantAvailable(),
+      run: () => openWorktreeDialog({ openInNewTerminal: true })
+    },
+    {
+      label: "Worktrees\u2026",
+      icon: "git-fork",
+      title: "List, open and remove worktrees for a repository",
+      run: () => openWorktreeManager({ cwd: here || "" })
     },
     {
       label: `Resume ${aiAssistantName()} session\u2026`,
@@ -15751,11 +17298,10 @@ function buildSurfaceContextMenu() {
 function buildPaneOverflowMenu(terminal) {
   const compact = elements.host.classList.contains("compact");
   const narrow = terminal.pane.classList.contains("is-narrow");
-  const collapsed = compact || narrow;
-  const responsiveOverflow = [
-    ...(collapsed ? ["move-left", "move-right", "color"] : []),
-    ...(narrow ? ["find", "duplicate"] : [])
-  ];
+  // Whatever the measured fit pushed out of the header belongs in here.
+  const responsiveOverflow = [...terminal.pane.querySelectorAll('.pane-actions button[data-auto-overflow="true"]')]
+    .map((button) => button.dataset.action)
+    .filter((action) => HEADER_ACTION_ID_SET.has(action));
   const menuActions = HEADER_ACTION_IDS.filter((action) => headerActionPlacement(terminal, action) === "menu");
   const visibleActions = [...new Set([...responsiveOverflow, ...menuActions])];
   const items = visibleActions

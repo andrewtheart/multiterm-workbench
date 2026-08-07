@@ -31,8 +31,10 @@ describe("PowerShell bridge control dashboard", () => {
     expect(bridgeScript).toContain("internal sealed class BridgeConsoleDashboard");
     expect(bridgeScript).toContain("using Terminal.Gui;");
     expect(bridgeScript).toContain("Application.Init();");
-    expect(bridgeScript).toContain('Console.Title = "MultiTerm Bridge Control Console - "');
-    expect(bridgeScript).toContain('Title = "MultiTerm Bridge Control Console"');
+    // The bridge id leads both titles so a Windows Terminal tab still shows it
+    // after truncation, and so UI automation can match the tab by name.
+    expect(bridgeScript).toContain('Console.Title = this.bridgeId + " - MultiTerm Bridge Control Console - "');
+    expect(bridgeScript).toContain('Title = this.bridgeId + " - MultiTerm Bridge Control Console"');
     expect(bridgeScript).not.toContain('Title = "MultiTerm Control Console"');
     expect(bridgeScript).toContain('Title = "NOTICE"');
     expect(bridgeScript).toContain('Title = "Logs (streaming)"');
@@ -55,7 +57,11 @@ describe("PowerShell bridge control dashboard", () => {
     expect(bridgeScript).toContain('WarningAttribute = Terminal.Gui.Attribute.Make(Color.BrightYellow, Color.Gray)');
     expect(bridgeScript).toContain('ErrorAttribute = Terminal.Gui.Attribute.Make(Color.BrightRed, Color.Gray)');
     expect(bridgeScript).toContain('HelpAttribute = Terminal.Gui.Attribute.Make(Color.Black, Color.Gray)');
-    expect(bridgeScript).toContain('Math.Max(warningLines.Count + 1, height - HelpLines.Length)');
+    expect(bridgeScript).toContain('Math.Max(warningLines.Count + bannerRows + 1, height - HelpLines.Length)');
+    // The id is the first thing drawn, in its own colour, so it reads as a label
+    // for the whole console rather than another line of notice text.
+    expect(bridgeScript).toContain("BridgeIdAttribute = Terminal.Gui.Attribute.Make(Color.White, Color.Blue)");
+    expect(bridgeScript).toContain('string identifier = String.IsNullOrEmpty(this.BridgeId) ? "BRIDGE-???" : this.BridgeId;');
     expect(bridgeScript).toContain('return "ERR";');
     expect(bridgeScript).toContain('return "WARN";');
   });

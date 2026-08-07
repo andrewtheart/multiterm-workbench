@@ -27,6 +27,7 @@
     <link rel="manifest" href="manifest.webmanifest">
     <meta name="theme-color" content="#0c0d0b">
     <link rel="stylesheet" href="vendor/xterm.css">
+    <link rel="stylesheet" href="vendor/diff2html.css">
     <link rel="stylesheet" href="styles.css">
     <script defer src="vendor/xterm.js"></script>
     <script defer src="vendor/addon-fit.js"></script>
@@ -34,9 +35,12 @@
     <script defer src="vendor/addon-web-links.js"></script>
     <script defer src="vendor/addon-webgl.js"></script>
     <script defer src="vendor/lucide.js"></script>
+    <script defer src="vendor/diff.js"></script>
+    <script defer src="vendor/diff2html.js"></script>
     <script defer src="input-detection.js"></script>
     <script defer src="terminal-messaging.js"></script>
     <script defer src="syntax-highlight.js"></script>
+    <script defer src="git-worktrees.js"></script>
     <script defer src="automations.js"></script>
     <script defer src="app.js"></script>
   </head>
@@ -269,8 +273,12 @@
 
             <label class="control-row range-row">
               <span>Gap</span>
-              <input id="paneGap" type="range" min="0" max="24" step="2">
+              <input id="paneGap" type="range" min="0" max="50" step="2">
               <output id="paneGapValue"></output>
+            </label>
+            <label class="control-row toggle-row">
+              <span title="Keep the terminal title full width and only show a pane's action buttons when you hover or select that pane.">Reveal pane buttons on hover</span>
+              <input id="headerActionsRevealOnHover" type="checkbox">
             </label>
           </section>
 
@@ -438,6 +446,22 @@
               <span>Maximum words</span>
               <input id="copilotTitleMaxWords" type="number" min="1" max="20" step="1" inputmode="numeric">
             </label>
+            <label class="control-row toggle-row">
+              <span title="Periodically ask the selected AI provider for a better title. Each suggestion waits for your approval.">Suggest titles automatically</span>
+              <input id="autoTitleSuggestions" type="checkbox">
+            </label>
+            <label class="control-row">
+              <span title="Minutes before each automatic suggestion, in order. The gaps widen so a long-lived terminal does not keep making AI requests; the last value repeats.">Suggestion delays (minutes)</span>
+              <input id="autoTitleSchedule" type="text" spellcheck="false" autocomplete="off" placeholder="5, 60, 120, 240">
+            </label>
+            <label class="control-row">
+              <span title="When MultiTerm starts and finds assistant sessions that did not survive a close or crash, reopen them with the assistant resumed.">Resume assistant sessions on relaunch</span>
+              <select id="resumeAssistantSessions">
+                <option value="never">Never</option>
+                <option value="ask">Ask which to restore</option>
+                <option value="always">Restore all automatically</option>
+              </select>
+            </label>
           </section>
 
           <section class="control-section">
@@ -495,6 +519,10 @@
             <label class="toggle-row">
               <input id="bellNotify" type="checkbox">
               <span>Bell notifications</span>
+            </label>
+            <label class="toggle-row">
+              <input id="allowBridgeTerminalFocus" type="checkbox">
+              <span title="Lets the bridge id card use Windows UI Automation to select and focus the terminal tab running this window's bridge.">Allow focusing the bridge terminal</span>
             </label>
             <label class="toggle-row">
               <input id="copyOnSelect" type="checkbox">
@@ -652,6 +680,21 @@
             </button>
           </div>
           <div id="terminalHost" class="terminal-host" data-layout="auto"></div>
+          <div id="workspaceEmpty" class="workspace-empty" hidden>
+            <img class="workspace-empty-mark" src="favicon.svg" alt="" aria-hidden="true" width="56" height="56">
+            <div id="workspaceEmptyRestore" class="workspace-empty-panel" hidden>
+              <p class="workspace-empty-title">Every terminal on this page is minimized.</p>
+              <div id="workspaceEmptyList" class="workspace-empty-list" role="list"></div>
+              <button id="workspaceEmptyRestoreAll" class="secondary-action" type="button">Restore all</button>
+            </div>
+            <div id="workspaceEmptyHint" class="workspace-empty-panel" hidden>
+              <p class="workspace-empty-title">Nothing to show here.</p>
+              <p class="workspace-empty-body">
+                Add a new terminal with <kbd id="workspaceEmptyShortcut">Ctrl+T</kbd>, by right clicking in this page,
+                or by pressing <span class="workspace-empty-chip"><i data-lucide="plus"></i>Terminal</span> on the top right of the app.
+              </p>
+            </div>
+          </div>
           <div id="workspaceZoomIndicator" class="workspace-zoom-indicator" role="status" aria-live="polite"></div>
           <svg id="terminalConnectionsOverlay" class="terminal-connections-overlay" aria-label="Terminal connections">
             <defs>
@@ -712,7 +755,15 @@
           <i data-lucide="terminal-square"></i>
           <span id="statusShellText">PowerShell 7</span>
         </span>
-        <span class="status-dot" id="statusConn" data-tone="offline">Connecting</span>
+        <span class="status-conn-wrap">
+          <span class="status-dot" id="statusConn" data-tone="offline" tabindex="0" aria-describedby="bridgeIdentityCard">Connecting</span>
+          <div class="bridge-identity-card" id="bridgeIdentityCard" role="tooltip" hidden>
+            <div class="bridge-identity-id" id="bridgeIdentityId">BRIDGE-???</div>
+            <p class="bridge-identity-note" id="bridgeIdentityNote">This window is served by its own MultiTerm bridge.</p>
+            <button type="button" class="bridge-identity-action" id="bridgeIdentityFocus">Show bridge terminal</button>
+            <p class="bridge-identity-status" id="bridgeIdentityStatus" role="status" hidden></p>
+          </div>
+        </span>
         <span class="status-item status-admin" id="statusAdmin" title="This window is running as Administrator" hidden>
           <i data-lucide="shield"></i>
           <span>Administrator</span>
@@ -884,6 +935,199 @@
             <i data-lucide="send"></i>
             <span>Send</span>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tuiSearchOverlay" class="palette-overlay" hidden>
+      <div class="palette tui-search" role="dialog" aria-modal="true" aria-labelledby="tuiSearchTitle" aria-describedby="tuiSearchStatus" tabindex="-1">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="scroll-text"></i></span>
+            <div>
+              <h2 id="tuiSearchTitle">Matches in scrollback</h2>
+              <p id="tuiSearchSubtitle">Output this session scrolled past.</p>
+            </div>
+          </div>
+          <button id="tuiSearchClose" class="icon-button" type="button" title="Close" aria-label="Close scrollback results">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="cwd-change-body">
+          <div id="tuiSearchList" class="tui-search-list" role="list"></div>
+          <p id="tuiSearchStatus" class="cwd-change-status" role="status"></p>
+        </div>
+        <div class="cwd-change-actions">
+          <button id="tuiSearchDone" class="secondary-action" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="assistantRestoreOverlay" class="palette-overlay" hidden>
+      <div class="palette assistant-restore" role="dialog" aria-modal="true" aria-labelledby="assistantRestoreTitle" aria-describedby="assistantRestoreStatus" tabindex="-1">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="rotate-ccw"></i></span>
+            <div>
+              <h2 id="assistantRestoreTitle">Restore assistant sessions?</h2>
+              <p id="assistantRestoreSubtitle">These were running when MultiTerm last stopped.</p>
+            </div>
+          </div>
+          <button id="assistantRestoreClose" class="icon-button" type="button" title="Close" aria-label="Close restore dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="cwd-change-body">
+          <div id="assistantRestoreList" class="assistant-restore-list"></div>
+          <p id="assistantRestoreStatus" class="cwd-change-status" role="status"></p>
+        </div>
+        <div class="cwd-change-actions">
+          <button id="assistantRestoreDismiss" class="secondary-action" type="button">Not now</button>
+          <button id="assistantRestoreConfirm" class="primary-action" type="button">
+            <i data-lucide="rotate-ccw"></i>
+            <span>Restore selected</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="worktreeOverlay" class="palette-overlay" hidden>
+      <div class="palette worktree-dialog" role="dialog" aria-modal="true" aria-labelledby="worktreeTitle" aria-describedby="worktreeStatus" tabindex="-1">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="git-branch"></i></span>
+            <div>
+              <h2 id="worktreeTitle">Run in a worktree</h2>
+              <p id="worktreeSubtitle">Give this session an isolated checkout of its own.</p>
+            </div>
+          </div>
+          <button id="worktreeClose" class="icon-button" type="button" title="Close" aria-label="Close worktree dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="cwd-change-body">
+          <div class="worktree-source-tabs" role="radiogroup" aria-label="Where the repository comes from">
+            <button type="button" class="worktree-source-tab is-active" data-worktree-source="folder" role="radio" aria-checked="true">Folder on disk</button>
+            <button type="button" class="worktree-source-tab" data-worktree-source="url" role="radio" aria-checked="false">Repository URL</button>
+          </div>
+
+          <label class="cwd-change-field" id="worktreeFolderField">
+            <span>Repository folder</span>
+            <span class="cwd-change-input-row">
+              <input id="worktreeFolderInput" type="text" spellcheck="false" autocomplete="off" placeholder="Folder inside a git repository">
+              <button id="worktreeBrowse" class="icon-button" type="button" title="Browse for a folder" aria-label="Browse for a repository folder">
+                <i data-lucide="folder-open"></i>
+              </button>
+            </span>
+          </label>
+
+          <div id="worktreeUrlFields" hidden>
+            <label class="cwd-change-field">
+              <span>Repository URL</span>
+              <input id="worktreeUrlInput" type="text" spellcheck="false" autocomplete="off" placeholder="https://dev.azure.com/org/project/_git/repo">
+            </label>
+            <label class="cwd-change-field">
+              <span>Branch <span class="worktree-hint">optional, defaults to the repository default</span></span>
+              <input id="worktreeBranchInput" type="text" spellcheck="false" autocomplete="off" placeholder="main">
+            </label>
+            <label class="cwd-change-field">
+              <span>Shared clone location</span>
+              <span class="cwd-change-input-row">
+                <input id="worktreeSharedRootInput" type="text" spellcheck="false" autocomplete="off" placeholder="Where clones are kept">
+                <button id="worktreeSharedRootBrowse" class="icon-button" type="button" title="Browse for a folder" aria-label="Browse for the shared clone location">
+                  <i data-lucide="folder-open"></i>
+                </button>
+              </span>
+            </label>
+            <label class="cwd-change-field">
+              <span>Worktree location</span>
+              <select id="worktreePlacement">
+                <option value="shared">Inside the shared location</option>
+                <option value="sibling">Beside the clone</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="worktree-parent" id="worktreeParentRow" hidden>
+            <span>Branching from</span>
+            <code id="worktreeParentBranch">-</code>
+          </div>
+
+          <label class="cwd-change-field">
+            <span>Worktree name</span>
+            <input id="worktreeNameInput" type="text" spellcheck="false" autocomplete="off" placeholder="Suggested from the branch">
+          </label>
+          <div class="worktree-parent" id="worktreePathRow" hidden>
+            <span>Will be created at</span>
+            <code id="worktreePathPreview">-</code>
+          </div>
+
+          <p id="worktreeStatus" class="cwd-change-status" role="status">Choose a repository to continue.</p>
+        </div>
+        <div class="cwd-change-actions">
+          <button id="worktreeRunHere" class="secondary-action" type="button" hidden>Run here instead</button>
+          <button id="worktreeCancel" class="secondary-action" type="button">Cancel</button>
+          <button id="worktreeCreate" class="primary-action" type="button" disabled>
+            <i data-lucide="git-branch-plus"></i>
+            <span>Create and run</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="worktreeManagerOverlay" class="palette-overlay" hidden>
+      <div class="palette worktree-manager" role="dialog" aria-modal="true" aria-labelledby="worktreeManagerTitle" tabindex="-1">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="git-fork"></i></span>
+            <div>
+              <h2 id="worktreeManagerTitle">Worktrees</h2>
+              <p id="worktreeManagerSubtitle">Isolated checkouts for this repository.</p>
+            </div>
+          </div>
+          <button id="worktreeManagerClose" class="icon-button" type="button" title="Close" aria-label="Close worktrees dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="cwd-change-body">
+          <label class="cwd-change-field">
+            <span>Repository</span>
+            <span class="cwd-change-input-row">
+              <input id="worktreeManagerRepo" type="text" spellcheck="false" autocomplete="off" placeholder="Folder inside a git repository">
+              <button id="worktreeManagerBrowse" class="icon-button" type="button" title="Browse for a folder" aria-label="Browse for a repository folder">
+                <i data-lucide="folder-open"></i>
+              </button>
+            </span>
+          </label>
+          <div id="worktreeManagerList" class="worktree-list" role="list"></div>
+          <p id="worktreeManagerStatus" class="cwd-change-status" role="status">Choose a repository to list its worktrees.</p>
+        </div>
+        <div class="cwd-change-actions">
+          <button id="worktreeManagerDone" class="secondary-action" type="button">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="worktreeReviewOverlay" class="palette-overlay" hidden>
+      <div class="palette worktree-review" role="dialog" aria-modal="true" aria-labelledby="worktreeReviewTitle" tabindex="-1">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="file-diff"></i></span>
+            <div>
+              <h2 id="worktreeReviewTitle">Review changes</h2>
+              <p id="worktreeReviewSubtitle">What this worktree changed.</p>
+            </div>
+          </div>
+          <button id="worktreeReviewClose" class="icon-button" type="button" title="Close" aria-label="Close review dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="cwd-change-body">
+          <p id="worktreeReviewStatus" class="cwd-change-status" role="status">Loading changes...</p>
+          <div id="worktreeReviewDiff" class="worktree-review-diff"></div>
+        </div>
+        <div class="cwd-change-actions">
+          <button id="worktreeReviewDone" class="secondary-action" type="button">Close</button>
         </div>
       </div>
     </div>
@@ -1630,6 +1874,10 @@
               <i data-lucide="layers"></i>
               <span class="pane-page-tag-name"></span>
             </button>
+            <button type="button" class="pane-history-match" hidden title="Matches in output this session scrolled past">
+              <i data-lucide="scroll-text"></i>
+              <span class="pane-history-match-count">0</span>
+            </button>
             <button type="button" class="pane-notification-compact" data-action="notifications-compact" title="Notifications for this terminal" aria-label="Notifications for this terminal" aria-haspopup="dialog" aria-expanded="false">
               <i data-lucide="bell"></i>
             </button>
@@ -1639,6 +1887,9 @@
             </span>
             <button type="button" class="pane-title-generate" title="Suggest a title with AI" aria-label="Suggest a terminal title with AI">
               <i class="ai-title-glyph" data-lucide="sparkles"></i>
+            </button>
+            <button type="button" class="pane-title-hint" hidden title="A new title suggestion is ready" aria-label="Review the suggested terminal title">
+              <i data-lucide="sparkles"></i>
             </button>
             <span class="pane-title-review" hidden>
               <button type="button" class="pane-title-accept" title="Use suggested title" aria-label="Use suggested terminal title"><i data-lucide="check"></i></button>
@@ -1708,6 +1959,9 @@
           <button class="pane-queue-add" type="button" title="Queue a command for when this terminal is ready" aria-label="Queue a command" aria-expanded="false">
             <i data-lucide="plus"></i>
             <span class="pane-queue-add-badge" hidden>0</span>
+          </button>
+          <button class="pane-scroll-bottom" type="button" title="Scroll to the bottom" aria-label="Scroll this terminal to the bottom">
+            <i data-lucide="chevron-down"></i>
           </button>
           <form class="pane-quick-queue" hidden>
             <input class="pane-quick-queue-input" type="text" maxlength="8192" spellcheck="false" autocomplete="off" placeholder="Command or AI assistant prompt" aria-label="Command or AI assistant prompt to queue">

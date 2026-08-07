@@ -65,6 +65,8 @@ const pendingOpenFolders = [];
 const terminalMessages = new Map();
 const copilotSessionCatalog = new Map();
 let instanceFilePath = null;
+let bridgeIdentifier = null;
+let bridgeIdentifierClaimPath = null;
 let terminalMessageMaxBytes = 64 * 1024;
 let terminalInboxCapacity = 500;
 let automationLeaseOwner = "";
@@ -196,6 +198,178 @@ function getInstanceDirectory() {
   return localAppData ? path.join(localAppData, "MultiTerm", "Instances") : null;
 }
 
+// Claims live beside the instance records rather than inside them so a bridge
+// that dies without cleaning up still leaves a claim we can prove is stale.
+function getBridgeIdentifierDirectory() {
+  const localAppData = process.env.LOCALAPPDATA;
+  return localAppData ? path.join(localAppData, "MultiTerm", "BridgeIds") : null;
+}
+
+function formatBridgeIdentifier(number) {
+  return `BRIDGE-${String(number).padStart(3, "0")}`;
+}
+
+// Kept per bridge id so a relaunched instance reads back exactly the sessions
+// its own predecessor lost, rather than another live instance's.
+function getAssistantSessionDirectory() {
+  const localAppData = process.env.LOCALAPPDATA;
+  return localAppData ? path.join(localAppData, "MultiTerm", "AssistantSessions") : null;
+}
+
+const maxAssistantSessions = 40;
+const maxAssistantSessionBytes = 64 * 1024;
+
+function getAssistantSessionPath() {
+  const directory = getAssistantSessionDirectory();
+  if (!directory || !bridgeIdentifier) return null;
+  return path.join(directory, `${bridgeIdentifier}.json`);
+}
+
+function normalizeAssistantSessions(value) {
+  // The installed bridge parses messages into a flat string map, so the payload
+  // travels as a JSON string rather than a nested array.
+  let rows = value;
+  if (typeof rows === "string") {
+    if (rows.length > maxAssistantSessionBytes) return [];
+    try {
+      rows = JSON.parse(rows);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(rows)) return [];
+  const normalized = [];
+  for (const entry of rows.slice(0, maxAssistantSessions)) {
+    if (!entry || typeof entry !== "object") continue;
+    const provider = entry.provider === "claude" ? "claude" : entry.provider === "copilot" ? "copilot" : "";
+    if (!provider || typeof entry.id !== "string" || !entry.id) continue;
+    normalized.push({
+      id: entry.id.slice(0, 128),
+      title: typeof entry.title === "string" ? entry.title.slice(0, 200) : "",
+      cwd: typeof entry.cwd === "string" ? entry.cwd.slice(0, 1024) : "",
+      provider,
+      shell: typeof entry.shell === "string" ? entry.shell.slice(0, 64) : "",
+      recordedAt: typeof entry.recordedAt === "string" ? entry.recordedAt.slice(0, 40) : ""
+    });
+  }
+  return normalized;
+}
+
+function readAssistantSessions() {
+  const file = getAssistantSessionPath();
+  if (!file) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    return normalizeAssistantSessions(parsed?.sessions);
+  } catch {
+    return [];
+  }
+}
+
+function writeAssistantSessions(sessions) {
+  const file = getAssistantSessionPath();
+  if (!file) return false;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({
+      savedAt: new Date().toISOString(),
+      pid: process.pid,
+      sessions: normalizeAssistantSessions(sessions)
+    }), { mode: 0o600 });
+    return true;
+  } catch (error) {
+    console.warn(`[bridge] Could not record assistant sessions: ${error.message}`);
+    return false;
+  }
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // A process owned by another user answers EPERM, which still means alive.
+    return error.code === "EPERM";
+  }
+}
+
+function bridgeIdentifierClaimIsStale(claimPath) {
+  try {
+    const claim = JSON.parse(fs.readFileSync(claimPath, "utf8"));
+    return !processIsAlive(Number(claim.pid));
+  } catch {
+    return true;
+  }
+}
+
+function writeBridgeIdentifierClaim(claimPath) {
+  let handle = null;
+  try {
+    handle = fs.openSync(claimPath, "wx", 0o600);
+  } catch {
+    return false;
+  }
+  try {
+    fs.writeSync(handle, JSON.stringify({ pid: process.pid, claimedAt: new Date().toISOString() }));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function claimBridgeIdentifier() {
+  const directory = getBridgeIdentifierDirectory();
+  if (!directory) {
+    return null;
+  }
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+  } catch (error) {
+    console.warn(`[bridge] Could not prepare the bridge id directory: ${error.message}`);
+    return null;
+  }
+  for (let number = 1; number <= 10000; number += 1) {
+    const identifier = formatBridgeIdentifier(number);
+    const claimPath = path.join(directory, `${identifier}.json`);
+    let claimed = writeBridgeIdentifierClaim(claimPath);
+    if (!claimed && bridgeIdentifierClaimIsStale(claimPath)) {
+      try {
+        fs.unlinkSync(claimPath);
+        claimed = writeBridgeIdentifierClaim(claimPath);
+      } catch {
+        claimed = false;
+      }
+    }
+    if (claimed) {
+      bridgeIdentifier = identifier;
+      bridgeIdentifierClaimPath = claimPath;
+      return identifier;
+    }
+  }
+  return null;
+}
+
+function releaseBridgeIdentifier() {
+  const claimPath = bridgeIdentifierClaimPath;
+  bridgeIdentifierClaimPath = null;
+  bridgeIdentifier = null;
+  if (!claimPath) {
+    return;
+  }
+  try {
+    fs.unlinkSync(claimPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      console.warn(`[bridge] Could not release this bridge id: ${error.message}`);
+    }
+  }
+}
+
 function registerInstance(boundHost, boundPort) {
   const directory = getInstanceDirectory();
   if (!directory) {
@@ -210,6 +384,7 @@ function registerInstance(boundHost, boundPort) {
     const temporaryPath = `${filePath}.${crypto.randomBytes(8).toString("hex")}.tmp`;
     const record = {
       app: "MultiTerm Workbench",
+      bridgeId: bridgeIdentifier,
       bridgeType: "electron",
       ownerPid: Number(process.env.MULTITERM_UI_OWNER_PID) || 0,
       pid: process.pid,
@@ -867,6 +1042,9 @@ server.on("upgrade", (request, socket) => {
   client.send({
     type: "welcome",
     aiProviderBootstrap: readAiProviderBootstrap(),
+    bridgeId: bridgeIdentifier,
+    // Only the installed bridge owns a console window worth focusing.
+    canFocusBridgeTerminal: false,
     cwd: process.cwd(),
     sessions: [...sessions.values()].map(toSessionSummary),
     openFolders: pendingOpenFolders.splice(0)
@@ -906,7 +1084,10 @@ server.on("upgrade", (request, socket) => {
   socket.on("error", removeClient);
 });
 
-server.on("close", unregisterInstance);
+server.on("close", () => {
+  unregisterInstance();
+  releaseBridgeIdentifier();
+});
 
 function start(callback, overridePort, overrideHost) {
   const listenPort = overridePort === undefined ? port : overridePort;
@@ -920,8 +1101,12 @@ function start(callback, overridePort, overrideHost) {
   server.listen(listenPort, listenHost, () => {
     const address = server.address();
     const boundPort = address && typeof address === "object" ? address.port : listenPort;
+    claimBridgeIdentifier();
     registerInstance(listenHost, boundPort);
     console.log(`MultiTerm bridge running on ${listenHost}:${boundPort}`);
+    if (bridgeIdentifier) {
+      console.log(`Bridge id: ${bridgeIdentifier}`);
+    }
     console.log("PowerShell sessions are available only to this local machine by default.");
     if (typeof callback === "function") {
       callback({ host: listenHost, port: boundPort });
@@ -1298,6 +1483,35 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "getAiUsage":
       client.send({ type: "aiUsage", usage: getAiUsageSnapshot() });
+      break;
+    case "focusBridgeTerminal":
+      client.send({
+        type: "bridgeTerminalFocus",
+        requestId: message.requestId,
+        ok: false,
+        reason: "This bridge does not run in its own terminal window."
+      });
+      break;
+    case "gitInspect":
+      sendGitInspection(client, message);
+      break;
+    case "gitWorktrees":
+      sendGitWorktrees(client, message);
+      break;
+    case "gitWorktreeRemove":
+      sendGitWorktreeRemoval(client, message);
+      break;
+    case "gitWorktreeRecord":
+      sendGitWorktreeRecord(client, message);
+      break;
+    case "gitDiff":
+      sendGitDiff(client, message);
+      break;
+    case "saveAssistantSessions":
+      writeAssistantSessions(message.sessions);
+      break;
+    case "getAssistantSessions":
+      client.send({ type: "assistantSessions", requestId: message.requestId, sessions: readAssistantSessions() });
       break;
     case "generateTerminalTitle":
       sendTerminalTitleSuggestion(client, message, dependencies);
@@ -2049,6 +2263,344 @@ function pickScript(client, message) {
     settle(null);
   });
   child.on("close", () => settle(out.trim()));
+}
+
+// Every git call goes through an argv array, never a shell string, so a
+// repository URL or branch name cannot smuggle in extra commands.
+function runGit(args, cwd, timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = childProcess.spawn("git", args, { cwd: cwd || undefined, windowsHide: true });
+    } catch (error) {
+      resolve({ ok: false, code: -1, stdout: "", stderr: error.message });
+      return;
+    }
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // The process already exited.
+      }
+    }, timeoutMs);
+    const settle = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ ok: code === 0, code, stdout, stderr });
+    };
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+    child.on("error", (error) => {
+      stderr += error.message;
+      settle(-1);
+    });
+    child.on("close", settle);
+  });
+}
+
+async function inspectGitRepository(directory) {
+  const target = String(directory || "").trim();
+  if (!target) {
+    return { isRepository: false, reason: "No folder was provided." };
+  }
+  try {
+    if (!fs.statSync(target).isDirectory()) {
+      return { isRepository: false, reason: "That path is not a folder." };
+    }
+  } catch {
+    return { isRepository: false, reason: "That folder does not exist." };
+  }
+
+  const root = await runGit(["rev-parse", "--show-toplevel"], target);
+  if (!root.ok) {
+    return { isRepository: false, reason: "That folder is not inside a git repository." };
+  }
+  const repositoryRoot = path.resolve(root.stdout.trim());
+  const [branch, status, originHead] = await Promise.all([
+    runGit(["rev-parse", "--abbrev-ref", "HEAD"], repositoryRoot),
+    runGit(["status", "--porcelain"], repositoryRoot),
+    runGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repositoryRoot)
+  ]);
+  const currentBranch = branch.ok ? branch.stdout.trim() : "";
+  // origin/HEAD only exists once someone has cloned or run `git remote set-head`.
+  const defaultBranch = originHead.ok
+    ? originHead.stdout.trim().replace(/^origin\//, "")
+    : currentBranch;
+  return {
+    isRepository: true,
+    repositoryRoot,
+    currentBranch,
+    defaultBranch,
+    isDirty: status.ok ? status.stdout.trim().length > 0 : false,
+    parentDirectory: path.dirname(repositoryRoot)
+  };
+}
+
+async function listGitWorktrees(repositoryRoot) {
+  const listed = await runGit(["worktree", "list", "--porcelain"], repositoryRoot);
+  if (!listed.ok) return [];
+  const worktrees = [];
+  let current = null;
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      current = { path: line.slice(9).trim(), branch: "", isBare: false, isDetached: false };
+      worktrees.push(current);
+    } else if (!current) {
+      continue;
+    } else if (line.startsWith("branch ")) {
+      current.branch = line.slice(7).trim().replace(/^refs\/heads\//, "");
+    } else if (line === "bare") {
+      current.isBare = true;
+    } else if (line === "detached") {
+      current.isDetached = true;
+    }
+  }
+  // The parent branch lives in the repository's own config rather than a
+  // separate registry, so it cannot drift from the worktrees git reports.
+  // Queried one key at a time because a branch name may itself contain dots.
+  for (const worktree of worktrees) {
+    if (!worktree.branch) continue;
+    const [parent, createdAt] = await Promise.all([
+      runGit(["config", "--local", "--get", `multiterm.worktree.${worktree.branch}.parent`], repositoryRoot),
+      runGit(["config", "--local", "--get", `multiterm.worktree.${worktree.branch}.created`], repositoryRoot)
+    ]);
+    worktree.parentBranch = parent.ok ? parent.stdout.trim() : "";
+    worktree.createdAt = createdAt.ok ? createdAt.stdout.trim() : "";
+    worktree.createdByMultiTerm = worktree.parentBranch.length > 0;
+  }
+  return worktrees;
+}
+
+async function recordWorktreeParent(repositoryRoot, branch, parentBranch) {
+  await runGit(["config", "--local", `multiterm.worktree.${branch}.parent`, parentBranch], repositoryRoot);
+  await runGit(["config", "--local", `multiterm.worktree.${branch}.created`, new Date().toISOString()], repositoryRoot);
+}
+
+async function forgetWorktreeParent(repositoryRoot, branch) {
+  await runGit(["config", "--local", "--remove-section", `multiterm.worktree.${branch}`], repositoryRoot);
+}
+
+async function sendGitInspection(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const inspection = await inspectGitRepository(message.path);
+  client.send({ type: "gitInspection", requestId, ...inspection });
+}
+
+async function sendGitWorktrees(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const inspection = await inspectGitRepository(message.path);
+  if (!inspection.isRepository) {
+    client.send({ type: "gitWorktreeList", requestId, ok: false, reason: inspection.reason, worktrees: [] });
+    return;
+  }
+  const worktrees = await listGitWorktrees(inspection.repositoryRoot);
+  client.send({ type: "gitWorktreeList", requestId, ok: true, reason: "", worktrees });
+}
+
+async function sendGitWorktreeRemoval(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const answer = (ok, reason) => client.send({ type: "gitWorktreeRemoved", requestId, ok, reason });
+  const worktreePath = String(message.path || "").trim();
+  const repositoryRoot = String(message.repositoryRoot || "").trim();
+  if (!worktreePath || !repositoryRoot) {
+    answer(false, "A repository and worktree path are both required.");
+    return;
+  }
+  const removed = await runGit(["worktree", "remove", worktreePath], repositoryRoot);
+  if (removed.ok) {
+    if (message.branch) await forgetWorktreeParent(repositoryRoot, String(message.branch));
+    answer(true, "");
+    return;
+  }
+  // git refuses while the worktree holds changes; say so instead of forcing.
+  answer(false, (removed.stderr || removed.stdout).trim() || "git could not remove that worktree.");
+}
+
+async function sendGitWorktreeRecord(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const repositoryRoot = String(message.repositoryRoot || "").trim();
+  const branch = String(message.branch || "").trim();
+  const parentBranch = String(message.parentBranch || "").trim();
+  if (!repositoryRoot || !branch || !parentBranch) {
+    client.send({ type: "gitWorktreeRecorded", requestId, ok: false, reason: "Repository, branch and parent are all required." });
+    return;
+  }
+  await recordWorktreeParent(repositoryRoot, branch, parentBranch);
+  client.send({ type: "gitWorktreeRecorded", requestId, ok: true, reason: "" });
+}
+
+const maxGitDiffBytes = 2 * 1024 * 1024;
+
+async function sendGitDiff(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const repositoryRoot = String(message.repositoryRoot || "").trim();
+  const base = String(message.base || "").trim();
+  const head = String(message.head || "").trim();
+  const answer = (ok, diff, reason, truncated = false) =>
+    client.send({ type: "gitDiffResult", requestId, ok, diff, reason, truncated });
+
+  // A revision beginning with "-" would be read as an option even through argv.
+  if (!repositoryRoot || !base || !head || base.startsWith("-") || head.startsWith("-")) {
+    answer(false, "", "A repository and two revisions are required.");
+    return;
+  }
+  // Three dots so the review shows only what this worktree added.
+  const diff = await runGit(["diff", "--no-color", `${base}...${head}`], repositoryRoot, 60000);
+  if (!diff.ok) {
+    answer(false, "", (diff.stderr || diff.stdout).trim() || "git could not produce that diff.");
+    return;
+  }
+  const truncated = diff.stdout.length > maxGitDiffBytes;
+  answer(true, truncated ? diff.stdout.slice(0, maxGitDiffBytes) : diff.stdout, "", truncated);
+}
+
+const gitMergeSessions = new Map();
+
+async function branchCheckoutPath(repositoryRoot, branch) {
+  const worktrees = await listGitWorktrees(repositoryRoot);
+  const match = worktrees.find((worktree) => worktree.branch === branch);
+  return match ? match.path : "";
+}
+
+async function worktreeIsDirty(directory) {
+  const status = await runGit(["status", "--porcelain"], directory);
+  return status.ok ? status.stdout.trim() : "";
+}
+
+async function conflictedPaths(directory) {
+  const listed = await runGit(["diff", "--name-only", "--diff-filter=U"], directory);
+  if (!listed.ok) return [];
+  return listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+// git couples a branch ref to its checkout: whichever tree holds the parent
+// branch is the tree the merge has to happen in, because updating the ref
+// underneath a different checkout would silently desync it.
+async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch, strategy }) {
+  if (!repositoryRoot || !parentBranch || !worktreeBranch) {
+    return { ok: false, status: "refused", reason: "A repository, parent branch and worktree branch are required." };
+  }
+  if (!["squash", "merge"].includes(strategy)) {
+    return { ok: false, status: "refused", reason: `Unsupported merge strategy: ${strategy}.` };
+  }
+
+  const worktreePath = await branchCheckoutPath(repositoryRoot, worktreeBranch);
+  if (worktreePath) {
+    const dirty = await worktreeIsDirty(worktreePath);
+    if (dirty) {
+      return {
+        ok: false,
+        status: "dirty",
+        reason: "The worktree has uncommitted changes. Commit or discard them first.",
+        changes: dirty.split(/\r?\n/).slice(0, 50)
+      };
+    }
+  }
+
+  const parentPath = await branchCheckoutPath(repositoryRoot, parentBranch);
+  let workPath = parentPath;
+  let temporary = false;
+  if (parentPath) {
+    const dirty = await worktreeIsDirty(parentPath);
+    if (dirty) {
+      return {
+        ok: false,
+        status: "parentDirty",
+        reason: `${parentBranch} is checked out at ${parentPath} and has uncommitted changes. Merging would update that tree underneath them.`,
+        changes: dirty.split(/\r?\n/).slice(0, 50)
+      };
+    }
+  } else {
+    workPath = path.join(os.tmpdir(), `multiterm-merge-${crypto.randomBytes(6).toString("hex")}`);
+    const added = await runGit(["worktree", "add", workPath, parentBranch], repositoryRoot, 120000);
+    if (!added.ok) {
+      return { ok: false, status: "refused", reason: (added.stderr || added.stdout).trim() || "Could not prepare a merge worktree." };
+    }
+    temporary = true;
+  }
+
+  const mergeArguments = strategy === "squash"
+    ? ["merge", "--squash", worktreeBranch]
+    : ["merge", "--no-ff", "--no-commit", worktreeBranch];
+  // diff3 puts the base into the conflict markers, so the resolver gets all
+  // three sides straight from git rather than recomputing them.
+  const merged = await runGit(["-c", "merge.conflictStyle=diff3", ...mergeArguments], workPath, 120000);
+  const conflicts = await conflictedPaths(workPath);
+  const sessionId = crypto.randomBytes(8).toString("hex");
+  gitMergeSessions.set(sessionId, { repositoryRoot, workPath, temporary, parentBranch, worktreeBranch, strategy });
+
+  if (conflicts.length) {
+    return { ok: true, status: "conflicts", sessionId, workPath, conflicts, reason: "" };
+  }
+  if (!merged.ok) {
+    await finishWorktreeMerge(sessionId, { abort: true });
+    return { ok: false, status: "refused", reason: (merged.stderr || merged.stdout).trim() || "git could not merge those branches." };
+  }
+  return { ok: true, status: "staged", sessionId, workPath, conflicts: [], reason: "" };
+}
+
+async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "" } = {}) {
+  const session = gitMergeSessions.get(sessionId);
+  if (!session) return { ok: false, reason: "That merge is no longer in progress." };
+  gitMergeSessions.delete(sessionId);
+
+  let result = { ok: true, reason: "" };
+  if (abort) {
+    await runGit(["merge", "--abort"], session.workPath);
+    await runGit(["reset", "--hard"], session.workPath);
+  } else {
+    const message = commitMessage
+      || `Merge ${session.worktreeBranch} into ${session.parentBranch}`;
+    const committed = await runGit(["commit", "-m", message], session.workPath, 60000);
+    if (!committed.ok) {
+      result = { ok: false, reason: (committed.stderr || committed.stdout).trim() || "git could not commit the merge." };
+    }
+  }
+
+  if (session.temporary) {
+    await runGit(["worktree", "remove", "--force", session.workPath], session.repositoryRoot, 120000);
+  }
+  return result;
+}
+
+async function readConflictSides(sessionId, filePath) {
+  const session = gitMergeSessions.get(sessionId);
+  if (!session) return { ok: false, reason: "That merge is no longer in progress." };
+  const read = async (stage) => {
+    const shown = await runGit(["show", `:${stage}:${filePath}`], session.workPath);
+    return shown.ok ? shown.stdout : "";
+  };
+  const [base, ours, theirs] = await Promise.all([read(1), read(2), read(3)]);
+  let merged = "";
+  try {
+    merged = fs.readFileSync(path.join(session.workPath, filePath), "utf8");
+  } catch {
+    merged = "";
+  }
+  return { ok: true, reason: "", base, ours, theirs, merged };
+}
+
+async function writeConflictResolution(sessionId, filePath, contents) {
+  const session = gitMergeSessions.get(sessionId);
+  if (!session) return { ok: false, reason: "That merge is no longer in progress." };
+  const target = path.resolve(session.workPath, filePath);
+  // Keep resolution inside the merge worktree even if the path is crafted.
+  if (!target.startsWith(path.resolve(session.workPath) + path.sep)) {
+    return { ok: false, reason: "That path is outside the merge worktree." };
+  }
+  try {
+    fs.writeFileSync(target, contents, "utf8");
+  } catch (error) {
+    return { ok: false, reason: error.message };
+  }
+  const added = await runGit(["add", "--", filePath], session.workPath);
+  if (!added.ok) return { ok: false, reason: (added.stderr || added.stdout).trim() || "git could not stage that file." };
+  const remaining = await conflictedPaths(session.workPath);
+  return { ok: true, reason: "", remaining };
 }
 
 function pickFolder(client, message) {
@@ -4727,6 +5279,21 @@ module.exports = {
     serveStaticFile,
     sendJsonResponse,
     getInstanceDirectory,
+    runGit,
+    inspectGitRepository,
+    listGitWorktrees,
+    recordWorktreeParent,
+    forgetWorktreeParent,
+    branchCheckoutPath,
+    startWorktreeMerge,
+    finishWorktreeMerge,
+    readConflictSides,
+    writeConflictResolution,
+    getBridgeIdentifierDirectory,
+    claimBridgeIdentifier,
+    releaseBridgeIdentifier,
+    formatBridgeIdentifier,
+    getBridgeIdentifier: () => bridgeIdentifier,
     registerInstance,
     unregisterInstance,
     handleShutdownRequest,
