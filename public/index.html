@@ -1990,6 +1990,86 @@
       </div>
     </div>
 
+    <div id="headerBackgroundOverlay" class="palette-overlay header-background-overlay" hidden>
+      <div class="palette header-background-dialog" role="dialog" aria-modal="true" aria-labelledby="headerBackgroundTitle" aria-describedby="headerBackgroundSubtitle" tabindex="-1">
+        <header class="header-background-head">
+          <i data-lucide="palette" aria-hidden="true"></i>
+          <div>
+            <h2 id="headerBackgroundTitle">Terminal header background</h2>
+            <p id="headerBackgroundSubtitle"></p>
+          </div>
+          <button id="headerBackgroundClose" class="icon-button" type="button" title="Close" aria-label="Close header background editor">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+
+        <div class="header-background-body">
+          <div id="headerBackgroundPreview" class="header-background-preview" aria-label="Header background preview">
+            <span class="header-background-preview-title"><i data-lucide="terminal"></i><span>Terminal header</span></span>
+            <i data-lucide="more-horizontal" aria-hidden="true"></i>
+          </div>
+
+          <fieldset class="header-gradient-types">
+            <legend>Gradient type</legend>
+            <div role="group" aria-label="Gradient type">
+              <button type="button" data-header-gradient-type="linear" aria-pressed="true"><i data-lucide="move-diagonal-2"></i><span>Linear</span></button>
+              <button type="button" data-header-gradient-type="radial" aria-pressed="false"><i data-lucide="circle-dot"></i><span>Radial</span></button>
+              <button type="button" data-header-gradient-type="conic" aria-pressed="false"><i data-lucide="aperture"></i><span>Conic</span></button>
+            </div>
+          </fieldset>
+
+          <div class="header-gradient-geometry">
+            <label id="headerGradientAngleRow" class="header-gradient-range-row">
+              <span>Angle</span>
+              <span class="header-gradient-range-pair">
+                <input id="headerGradientAngle" type="range" min="0" max="359" step="1" value="135" aria-label="Gradient angle">
+                <span class="header-gradient-number"><input id="headerGradientAngleValue" type="number" min="0" max="359" step="1" value="135" aria-label="Gradient angle in degrees"><span>deg</span></span>
+              </span>
+            </label>
+            <label id="headerGradientShapeRow" class="header-gradient-select-row" hidden>
+              <span>Shape</span>
+              <select id="headerGradientShape" aria-label="Radial gradient shape">
+                <option value="ellipse">Ellipse</option>
+                <option value="circle">Circle</option>
+              </select>
+            </label>
+            <label id="headerGradientCenterXRow" class="header-gradient-range-row" hidden>
+              <span>Center X</span>
+              <span class="header-gradient-range-pair">
+                <input id="headerGradientCenterX" type="range" min="0" max="100" step="1" value="50" aria-label="Gradient horizontal center">
+                <span class="header-gradient-number"><input id="headerGradientCenterXValue" type="number" min="0" max="100" step="1" value="50" aria-label="Gradient horizontal center percentage"><span>%</span></span>
+              </span>
+            </label>
+            <label id="headerGradientCenterYRow" class="header-gradient-range-row" hidden>
+              <span>Center Y</span>
+              <span class="header-gradient-range-pair">
+                <input id="headerGradientCenterY" type="range" min="0" max="100" step="1" value="50" aria-label="Gradient vertical center">
+                <span class="header-gradient-number"><input id="headerGradientCenterYValue" type="number" min="0" max="100" step="1" value="50" aria-label="Gradient vertical center percentage"><span>%</span></span>
+              </span>
+            </label>
+          </div>
+
+          <section class="header-gradient-stops" aria-labelledby="headerGradientStopsTitle">
+            <div class="header-gradient-stops-head">
+              <div>
+                <h3 id="headerGradientStopsTitle">Color stops</h3>
+                <span id="headerGradientStopsCount"></span>
+              </div>
+              <button id="headerGradientAddStop" type="button" class="secondary-action"><i data-lucide="plus"></i><span>Add stop</span></button>
+            </div>
+            <div id="headerGradientStopList" class="header-gradient-stop-list"></div>
+          </section>
+        </div>
+
+        <footer class="header-background-actions">
+          <button id="headerBackgroundReset" type="button" class="secondary-action"><i data-lucide="rotate-ccw"></i><span>Use default</span></button>
+          <span></span>
+          <button id="headerBackgroundCancel" type="button" class="secondary-action">Cancel</button>
+          <button id="headerBackgroundApply" type="button" class="primary-action">Apply</button>
+        </footer>
+      </div>
+    </div>
+
     <div id="statisticsOverlay" class="palette-overlay" hidden>
       <div class="palette statistics" role="dialog" aria-modal="true" aria-labelledby="statisticsTitle" aria-describedby="statisticsSubtitle">
         <div class="statistics-head">

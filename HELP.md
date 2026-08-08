@@ -38,6 +38,8 @@ Right-click a pane or its title bar to:
 - move the terminal to another page; or
 - minimize, maximize, recolor, rename, or close the pane.
 
+Choose **Header background...** to style only the terminal header you right-clicked. The editor supports linear, radial, and conic gradients with adjustable angle or center, two to eight color stops, arbitrary colors, opacity, and stop positions. Your edits preview live on the pane header itself, so what you see is exactly what you get; **Apply** stores the result with that terminal, **Use default** removes the override, and **Cancel** reverts the header to how it looked before you opened the editor. Color stops re-sort themselves once you finish editing a position. Header backgrounds survive renderer reloads, session restoration, terminal restart or duplication, and saved workspace restoration. Elevated (Administrator) and awaiting-input headers keep their warning colors, which always take precedence over a custom background. The separate **Cycle color** action still controls the pane's label accent.
+
 The terminal context menu organizes these actions into two columns of named groups. Its search field is focused immediately, so you can type an action name without an extra click. Press <kbd>Down</kbd> or <kbd>Tab</kbd> to enter the filtered results, then use the arrow keys and Enter. On narrow windows the groups collapse to one column.
 
 Customize that menu directly:

@@ -106,6 +106,16 @@ const defaultSettings = {
 };
 
 const PANE_COLORS = ["#4fd1b0", "#7ca8f6", "#f0b35a", "#e8695b", "#d486e8", "#94d36f"];
+const HEADER_GRADIENT_TYPES = new Set(["linear", "radial", "conic"]);
+const HEADER_GRADIENT_SHAPES = new Set(["circle", "ellipse"]);
+const HEADER_GRADIENT_MAX_STOPS = 8;
+const HEADER_GRADIENT_FALLBACK_COLOR = "#1E242C";
+let headerBackgroundTerminalId = null;
+let headerBackgroundReturnFocus = null;
+let headerBackgroundDraft = null;
+let headerBackgroundCloseTimer = 0;
+let headerBackgroundOpen = false;
+let headerBackgroundReady = false;
 const TERMINAL_NOTIFICATION_SETTINGS = Object.freeze({
   activity: "notifyActivity",
   question: "notifyQuestions",
@@ -553,6 +563,27 @@ const elements = {
   tuiSearchClose: document.querySelector("#tuiSearchClose"),
   tuiSearchDone: document.querySelector("#tuiSearchDone"),
   headerActionsRevealOnHover: document.querySelector("#headerActionsRevealOnHover"),
+  headerBackgroundApply: document.querySelector("#headerBackgroundApply"),
+  headerBackgroundCancel: document.querySelector("#headerBackgroundCancel"),
+  headerBackgroundClose: document.querySelector("#headerBackgroundClose"),
+  headerBackgroundOverlay: document.querySelector("#headerBackgroundOverlay"),
+  headerBackgroundPreview: document.querySelector("#headerBackgroundPreview"),
+  headerBackgroundReset: document.querySelector("#headerBackgroundReset"),
+  headerBackgroundSubtitle: document.querySelector("#headerBackgroundSubtitle"),
+  headerGradientAddStop: document.querySelector("#headerGradientAddStop"),
+  headerGradientAngle: document.querySelector("#headerGradientAngle"),
+  headerGradientAngleRow: document.querySelector("#headerGradientAngleRow"),
+  headerGradientAngleValue: document.querySelector("#headerGradientAngleValue"),
+  headerGradientCenterX: document.querySelector("#headerGradientCenterX"),
+  headerGradientCenterXRow: document.querySelector("#headerGradientCenterXRow"),
+  headerGradientCenterXValue: document.querySelector("#headerGradientCenterXValue"),
+  headerGradientCenterY: document.querySelector("#headerGradientCenterY"),
+  headerGradientCenterYRow: document.querySelector("#headerGradientCenterYRow"),
+  headerGradientCenterYValue: document.querySelector("#headerGradientCenterYValue"),
+  headerGradientShape: document.querySelector("#headerGradientShape"),
+  headerGradientShapeRow: document.querySelector("#headerGradientShapeRow"),
+  headerGradientStopList: document.querySelector("#headerGradientStopList"),
+  headerGradientStopsCount: document.querySelector("#headerGradientStopsCount"),
   assistantRestoreOverlay: document.querySelector("#assistantRestoreOverlay"),
   assistantRestoreList: document.querySelector("#assistantRestoreList"),
   assistantRestoreStatus: document.querySelector("#assistantRestoreStatus"),
@@ -1064,6 +1095,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindQuickSwitch();
   renderPager();
   bindContextMenu();
+  bindHeaderBackgroundEditor();
   bindTopBarShortcutMenus();
   bindRightClickWarning();
   bindCloseConfirm();
@@ -2156,6 +2188,7 @@ function handleBridgeMessage(message) {
               cwd: meta.cwd,
               copilotCwd: meta.copilotCwd,
               color: meta.color,
+              headerBackground: meta.headerBackground,
               fontSizeOverride: meta.fontSizeOverride,
               headerActionOverrides: meta.headerActionOverrides,
               notificationOverrides: meta.notificationOverrides,
@@ -2662,6 +2695,7 @@ function addTerminal(options = {}) {
     elevated,
     fitAddon,
     fontSizeOverride,
+    headerBackground: normalizeHeaderBackground(savedMeta?.headerBackground ?? options.headerBackground),
     headerActionOverrides: normalizeHeaderActionOverrides(savedMeta?.headerActionOverrides ?? options.headerActionOverrides),
     fontZoomIndicator,
     fontZoomIndicatorTimer: 0,
@@ -2751,6 +2785,7 @@ function addTerminal(options = {}) {
   bindTerminalHandoffGrips(terminal);
   bindPaneFind(terminal);
   applyPaneColor(terminal);
+  applyTerminalHeaderBackground(terminal);
   if (terminal.elevated) pane.classList.add("is-admin");
   applyManualLayout(terminal, ensureManualLayout(id));
   // Panes for other pages are hidden immediately so a reattached session never
@@ -3717,6 +3752,7 @@ function runHeaderAction(terminal, action, anchor = null) {
       title: `${terminal.titleInput.value} copy`,
       copilotCwd: terminal.copilotCwd,
       fontSizeOverride: terminal.fontSizeOverride,
+      headerBackground: cloneHeaderBackground(terminal.headerBackground),
       headerActionOverrides: { ...terminal.headerActionOverrides },
       notificationOverrides: { ...terminal.notificationOverrides }
     });
@@ -5167,6 +5203,7 @@ function disposeTerminal(terminal) {
   const { id } = terminal;
   if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
   if (terminalNotesFlyoutId === id) closeTerminalNotesFlyout();
+  if (headerBackgroundTerminalId === id) closeHeaderBackgroundEditor({ restoreFocus: false });
   if (state.snap?.id === id) {
     state.snap = null;
   }
@@ -10016,6 +10053,14 @@ function bindGlobalShortcuts() {
       return;
     }
 
+    if (headerBackgroundOpen) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeHeaderBackgroundEditor();
+      }
+      return;
+    }
+
     if (elements.statisticsOverlay && !elements.statisticsOverlay.hidden) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -10289,6 +10334,7 @@ function restartSession(id) {
     cwd: terminal.cwd,
     copilotCwd: terminal.copilotCwd,
     color: terminal.color,
+    headerBackground: cloneHeaderBackground(terminal.headerBackground),
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
     notificationOverrides: { ...terminal.notificationOverrides },
@@ -10306,6 +10352,7 @@ function restartSession(id) {
     cwd: meta.cwd,
     copilotCwd: meta.copilotCwd,
     color: meta.color,
+    headerBackground: meta.headerBackground,
     fontSizeOverride: meta.fontSizeOverride,
     headerActionOverrides: meta.headerActionOverrides,
     notificationOverrides: meta.notificationOverrides,
@@ -14520,6 +14567,7 @@ function saveWorkspace(rawName) {
       cwd: terminal.cwd,
       copilotCwd: terminal.copilotCwd,
       color: terminal.color,
+      headerBackground: cloneHeaderBackground(terminal.headerBackground),
       fontSizeOverride: terminal.fontSizeOverride,
       headerActionOverrides: { ...terminal.headerActionOverrides },
       notificationOverrides: { ...terminal.notificationOverrides },
@@ -14584,6 +14632,7 @@ function restoreWorkspace(name) {
         cwd: meta.cwd,
         copilotCwd: meta.copilotCwd,
         color: meta.color,
+        headerBackground: meta.headerBackground,
         fontSizeOverride: meta.fontSizeOverride,
         headerActionOverrides: meta.headerActionOverrides,
         notificationOverrides: meta.notificationOverrides,
@@ -14693,6 +14742,492 @@ function cyclePaneColor(terminal) {
   saveSessionSnapshot();
 }
 
+function normalizeHeaderBackground(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const type = HEADER_GRADIENT_TYPES.has(value.type) ? value.type : "linear";
+  const rawAngle = Number(value.angle);
+  const angle = Number.isFinite(rawAngle) ? ((Math.round(rawAngle) % 360) + 360) % 360 : 135;
+  const rawCenterX = Number(value.centerX);
+  const rawCenterY = Number(value.centerY);
+  const centerX = Number.isFinite(rawCenterX) ? Math.min(100, Math.max(0, Math.round(rawCenterX))) : 50;
+  const centerY = Number.isFinite(rawCenterY) ? Math.min(100, Math.max(0, Math.round(rawCenterY))) : 50;
+  const shape = HEADER_GRADIENT_SHAPES.has(value.shape) ? value.shape : "ellipse";
+  const stops = Array.isArray(value.stops)
+    ? value.stops
+        .map((stop) => {
+          if (!stop || typeof stop !== "object" || !/^#[0-9a-f]{6}$/i.test(String(stop.color || ""))) return null;
+          const rawPosition = Number(stop.position);
+          const rawOpacity = Number(stop.opacity);
+          return {
+            color: String(stop.color).toUpperCase(),
+            opacity: Number.isFinite(rawOpacity) ? Math.min(100, Math.max(0, Math.round(rawOpacity))) : 100,
+            position: Number.isFinite(rawPosition) ? Math.min(100, Math.max(0, Math.round(rawPosition))) : 0
+          };
+        })
+        // Discard malformed entries before capping, so a run of bad leading
+        // stops cannot push valid ones past the limit.
+        .filter(Boolean)
+        .slice(0, HEADER_GRADIENT_MAX_STOPS)
+        .sort((left, right) => left.position - right.position)
+    : [];
+  if (stops.length < 2) return null;
+  return { type, angle, centerX, centerY, shape, stops };
+}
+
+function cloneHeaderBackground(value) {
+  const normalized = normalizeHeaderBackground(value);
+  if (!normalized) return null;
+  return {
+    ...normalized,
+    stops: normalized.stops.map((stop) => ({ ...stop }))
+  };
+}
+
+function headerGradientStopCss(stop) {
+  if (stop.opacity >= 100) return `${stop.color} ${stop.position}%`;
+  const red = Number.parseInt(stop.color.slice(1, 3), 16);
+  const green = Number.parseInt(stop.color.slice(3, 5), 16);
+  const blue = Number.parseInt(stop.color.slice(5, 7), 16);
+  return `rgb(${red} ${green} ${blue} / ${stop.opacity}%) ${stop.position}%`;
+}
+
+function headerBackgroundCss(value) {
+  const background = normalizeHeaderBackground(value);
+  if (!background) return "";
+  const stops = background.stops.map(headerGradientStopCss).join(", ");
+  const center = `${background.centerX}% ${background.centerY}%`;
+  if (background.type === "radial") return `radial-gradient(${background.shape} at ${center}, ${stops})`;
+  if (background.type === "conic") return `conic-gradient(from ${background.angle}deg at ${center}, ${stops})`;
+  return `linear-gradient(${background.angle}deg, ${stops})`;
+}
+
+function paintTerminalHeaderBackground(terminal, value) {
+  const bar = terminal?.pane?.querySelector(".pane-bar");
+  if (!bar) return;
+  const background = headerBackgroundCss(value);
+  // Feed the stylesheet's custom property instead of the inline background
+  // shorthand; the elevated and awaiting-input rules must keep overriding a
+  // decorative gradient so those cues can never be styled away.
+  if (background) bar.style.setProperty("--pane-bar-custom-bg", background);
+  else bar.style.removeProperty("--pane-bar-custom-bg");
+}
+
+function applyTerminalHeaderBackground(terminal) {
+  paintTerminalHeaderBackground(terminal, terminal?.headerBackground);
+}
+
+function headerGradientChannelsToHex(channels) {
+  return `#${channels
+    .map((channel) => Math.min(255, Math.max(0, Math.round(channel))).toString(16).padStart(2, "0"))
+    .join("")}`.toUpperCase();
+}
+
+function cssColorToHex(value) {
+  const text = String(value || "").trim();
+  const srgb = text.match(/^color\(\s*srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*([\d.]+))?/i);
+  if (srgb) {
+    if (srgb[4] !== undefined && Number(srgb[4]) === 0) return "";
+    return headerGradientChannelsToHex([srgb[1], srgb[2], srgb[3]].map((part) => Number(part) * 255));
+  }
+  const rgb = text.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+))?/i);
+  if (rgb) {
+    // A fully transparent bar tells us nothing about its apparent colour.
+    if (rgb[4] !== undefined && Number(rgb[4]) === 0) return "";
+    return headerGradientChannelsToHex([rgb[1], rgb[2], rgb[3]].map(Number));
+  }
+  return "";
+}
+
+function shiftHeaderGradientColor(hex, amount) {
+  return headerGradientChannelsToHex([1, 3, 5].map(
+    (offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) + amount
+  ));
+}
+
+// Seed the editor from the header's real resting colour so the starting point
+// matches what the user is looking at rather than an invented palette.
+function defaultHeaderBackground(terminal) {
+  const bar = terminal?.pane?.querySelector(".pane-bar");
+  const base = (bar && cssColorToHex(getComputedStyle(bar).backgroundColor)) || HEADER_GRADIENT_FALLBACK_COLOR;
+  // Shift away from whichever end of the range the base sits at, so the seed
+  // stays a visible gradient on light themes as well as dark ones.
+  const average = [1, 3, 5].reduce((total, offset) => total + Number.parseInt(base.slice(offset, offset + 2), 16), 0) / 3;
+  return {
+    type: "linear",
+    angle: 135,
+    centerX: 50,
+    centerY: 50,
+    shape: "ellipse",
+    stops: [
+      { color: base, opacity: 100, position: 0 },
+      { color: shiftHeaderGradientColor(base, average > 160 ? -26 : 26), opacity: 100, position: 100 }
+    ]
+  };
+}
+
+function headerGradientControlValue(value, min, max, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
+}
+
+function interpolateHeaderGradientColor(left, right, ratio) {
+  const channel = (color, offset) => Number.parseInt(color.slice(offset, offset + 2), 16);
+  return headerGradientChannelsToHex([1, 3, 5].map(
+    (offset) => channel(left, offset) + (channel(right, offset) - channel(left, offset)) * ratio
+  ));
+}
+
+function updateHeaderBackgroundPreview() {
+  if (!headerBackgroundDraft) return;
+  elements.headerBackgroundPreview.style.background = headerBackgroundCss(headerBackgroundDraft);
+  // Mirror the draft onto the real header too. The dialog swatch can only ever
+  // approximate the pane, so the pane itself is the honest preview; the draft
+  // is not committed to the terminal until Apply.
+  paintTerminalHeaderBackground(state.terminals.get(headerBackgroundTerminalId), headerBackgroundDraft);
+}
+
+function syncHeaderGradientGeometry() {
+  if (!headerBackgroundDraft) return;
+  for (const button of elements.headerBackgroundOverlay.querySelectorAll("[data-header-gradient-type]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.headerGradientType === headerBackgroundDraft.type));
+  }
+  const usesAngle = headerBackgroundDraft.type !== "radial";
+  const usesCenter = headerBackgroundDraft.type !== "linear";
+  elements.headerGradientAngleRow.hidden = !usesAngle;
+  elements.headerGradientShapeRow.hidden = headerBackgroundDraft.type !== "radial";
+  elements.headerGradientCenterXRow.hidden = !usesCenter;
+  elements.headerGradientCenterYRow.hidden = !usesCenter;
+  elements.headerGradientAngle.value = String(headerBackgroundDraft.angle);
+  elements.headerGradientAngleValue.value = String(headerBackgroundDraft.angle);
+  elements.headerGradientCenterX.value = String(headerBackgroundDraft.centerX);
+  elements.headerGradientCenterXValue.value = String(headerBackgroundDraft.centerX);
+  elements.headerGradientCenterY.value = String(headerBackgroundDraft.centerY);
+  elements.headerGradientCenterYValue.value = String(headerBackgroundDraft.centerY);
+  elements.headerGradientShape.value = headerBackgroundDraft.shape;
+  updateHeaderBackgroundPreview();
+}
+
+function renderHeaderGradientStops() {
+  const list = elements.headerGradientStopList;
+  list.replaceChildren();
+  if (!headerBackgroundDraft) return;
+
+  const canRemove = headerBackgroundDraft.stops.length > 2;
+  headerBackgroundDraft.stops.forEach((stop, index) => {
+    const row = document.createElement("div");
+    row.className = "header-gradient-stop";
+    row.dataset.stopIndex = String(index);
+
+    const well = document.createElement("input");
+    well.className = "header-gradient-color-well";
+    well.type = "color";
+    well.value = stop.color;
+    well.title = `Color stop ${index + 1}`;
+    well.setAttribute("aria-label", `Color stop ${index + 1}`);
+
+    const makeField = (label, fieldName, input) => {
+      const field = document.createElement("label");
+      field.className = "header-gradient-stop-field";
+      field.dataset.stopField = fieldName;
+      const text = document.createElement("span");
+      text.textContent = label;
+      field.append(text, input);
+      return field;
+    };
+
+    const hex = document.createElement("input");
+    hex.type = "text";
+    hex.value = stop.color;
+    hex.maxLength = 7;
+    hex.spellcheck = false;
+    hex.autocomplete = "off";
+    hex.setAttribute("aria-label", `Color stop ${index + 1} hex color`);
+
+    const position = document.createElement("input");
+    position.type = "number";
+    position.min = "0";
+    position.max = "100";
+    position.step = "1";
+    position.value = String(stop.position);
+    position.setAttribute("aria-label", `Color stop ${index + 1} position percentage`);
+
+    const opacity = document.createElement("input");
+    opacity.type = "number";
+    opacity.min = "0";
+    opacity.max = "100";
+    opacity.step = "1";
+    opacity.value = String(stop.opacity);
+    opacity.setAttribute("aria-label", `Color stop ${index + 1} opacity percentage`);
+
+    const remove = document.createElement("button");
+    remove.className = "header-gradient-remove icon-button";
+    remove.type = "button";
+    remove.title = "Remove color stop";
+    remove.setAttribute("aria-label", `Remove color stop ${index + 1}`);
+    remove.disabled = !canRemove;
+    const removeIcon = document.createElement("i");
+    removeIcon.dataset.lucide = "trash-2";
+    remove.append(removeIcon);
+
+    well.addEventListener("input", () => {
+      stop.color = well.value.toUpperCase();
+      hex.value = stop.color;
+      hex.removeAttribute("aria-invalid");
+      updateHeaderBackgroundPreview();
+    });
+    hex.addEventListener("input", () => {
+      const value = hex.value.trim();
+      const valid = /^#[0-9a-f]{6}$/i.test(value);
+      hex.setAttribute("aria-invalid", String(!valid));
+      if (!valid) return;
+      stop.color = value.toUpperCase();
+      well.value = stop.color;
+      updateHeaderBackgroundPreview();
+    });
+    hex.addEventListener("blur", () => {
+      if (hex.getAttribute("aria-invalid") === "true") {
+        hex.value = stop.color;
+        hex.removeAttribute("aria-invalid");
+      }
+    });
+    position.addEventListener("input", () => {
+      if (position.value === "") return;
+      stop.position = headerGradientControlValue(position.value, 0, 100, stop.position);
+      updateHeaderBackgroundPreview();
+    });
+    // Reordering happens on commit rather than per keystroke so rows do not
+    // jump around mid-edit, but the list never stays out of step with the
+    // gradient it describes once the edit settles.
+    position.addEventListener("change", () => {
+      position.value = String(stop.position);
+      sortHeaderGradientStops(stop);
+    });
+    opacity.addEventListener("input", () => {
+      if (opacity.value === "") return;
+      stop.opacity = headerGradientControlValue(opacity.value, 0, 100, stop.opacity);
+      updateHeaderBackgroundPreview();
+    });
+    opacity.addEventListener("change", () => {
+      opacity.value = String(stop.opacity);
+    });
+    remove.addEventListener("click", () => {
+      if (headerBackgroundDraft.stops.length <= 2) return;
+      headerBackgroundDraft.stops.splice(index, 1);
+      renderHeaderGradientStops();
+    });
+
+    row.append(
+      well,
+      makeField("Color", "color", hex),
+      makeField("Position %", "position", position),
+      makeField("Opacity %", "opacity", opacity),
+      remove
+    );
+    list.append(row);
+  });
+
+  const stopCount = headerBackgroundDraft.stops.length;
+  elements.headerGradientStopsCount.textContent = `${stopCount} of ${HEADER_GRADIENT_MAX_STOPS}`;
+  elements.headerGradientAddStop.disabled = stopCount >= HEADER_GRADIENT_MAX_STOPS;
+  refreshIcons(list);
+  updateHeaderBackgroundPreview();
+}
+
+function sortHeaderGradientStops(focusStop = null) {
+  if (!headerBackgroundDraft) return;
+  const ordered = [...headerBackgroundDraft.stops].sort((left, right) => left.position - right.position);
+  if (ordered.every((stop, index) => stop === headerBackgroundDraft.stops[index])) return;
+  headerBackgroundDraft.stops = ordered;
+  renderHeaderGradientStops();
+  const index = focusStop ? headerBackgroundDraft.stops.indexOf(focusStop) : -1;
+  if (index < 0) return;
+  elements.headerGradientStopList
+    .querySelector(`[data-stop-index="${index}"] [data-stop-field="position"] input`)
+    ?.focus();
+}
+
+function addHeaderGradientStop() {
+  if (!headerBackgroundDraft || headerBackgroundDraft.stops.length >= HEADER_GRADIENT_MAX_STOPS) return;
+  const stops = [...headerBackgroundDraft.stops].sort((left, right) => left.position - right.position);
+  let left = stops[0];
+  let right = stops[stops.length - 1];
+  let widestGap = -1;
+  for (let index = 0; index < stops.length - 1; index += 1) {
+    const gap = stops[index + 1].position - stops[index].position;
+    if (gap > widestGap) {
+      widestGap = gap;
+      left = stops[index];
+      right = stops[index + 1];
+    }
+  }
+  const position = Math.round((left.position + right.position) / 2);
+  const ratio = right.position === left.position ? 0.5 : (position - left.position) / (right.position - left.position);
+  headerBackgroundDraft.stops.push({
+    color: interpolateHeaderGradientColor(left.color, right.color, ratio),
+    opacity: Math.round(left.opacity + (right.opacity - left.opacity) * ratio),
+    position
+  });
+  headerBackgroundDraft.stops.sort((first, second) => first.position - second.position);
+  renderHeaderGradientStops();
+}
+
+function openHeaderBackgroundEditor(terminal) {
+  if (!terminal || !headerBackgroundReady) return;
+  hideContextMenu();
+  // A pending close animation would otherwise hide the dialog we are about to
+  // show and strand a live draft behind an invisible overlay.
+  window.clearTimeout(headerBackgroundCloseTimer);
+  headerBackgroundCloseTimer = 0;
+  headerBackgroundTerminalId = terminal.id;
+  headerBackgroundOpen = true;
+  headerBackgroundReturnFocus = terminal.term.textarea || terminal.screen;
+  headerBackgroundDraft = cloneHeaderBackground(terminal.headerBackground) || defaultHeaderBackground(terminal);
+  elements.headerBackgroundSubtitle.textContent = terminal.titleInput.value || "Terminal";
+  const bar = terminal.pane?.querySelector(".pane-bar");
+  const barHeight = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
+  if (barHeight > 0) elements.headerBackgroundPreview.style.setProperty("--header-preview-height", `${barHeight}px`);
+  else elements.headerBackgroundPreview.style.removeProperty("--header-preview-height");
+  syncHeaderGradientGeometry();
+  renderHeaderGradientStops();
+  elements.headerBackgroundOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.headerBackgroundOverlay.classList.add("is-open");
+    elements.headerBackgroundOverlay.querySelector(`[data-header-gradient-type="${headerBackgroundDraft?.type}"]`)?.focus();
+  });
+  refreshIcons(elements.headerBackgroundOverlay);
+}
+
+function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
+  if (!elements.headerBackgroundOverlay || !headerBackgroundOpen) return;
+  const returnFocus = headerBackgroundReturnFocus;
+  const terminal = state.terminals.get(headerBackgroundTerminalId);
+  headerBackgroundTerminalId = null;
+  headerBackgroundReturnFocus = null;
+  headerBackgroundDraft = null;
+  headerBackgroundOpen = false;
+  // Repaint from the terminal's stored value. That discards an uncommitted
+  // live preview on cancel, and is a no-op after Apply or Use default.
+  if (terminal) applyTerminalHeaderBackground(terminal);
+  elements.headerBackgroundOverlay.classList.remove("is-open");
+  headerBackgroundCloseTimer = window.setTimeout(() => {
+    headerBackgroundCloseTimer = 0;
+    elements.headerBackgroundOverlay.hidden = true;
+    if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  }, 150);
+}
+
+function applyHeaderBackgroundEditor() {
+  const terminal = state.terminals.get(headerBackgroundTerminalId);
+  const background = cloneHeaderBackground(headerBackgroundDraft);
+  if (!terminal) {
+    closeHeaderBackgroundEditor();
+    toast("That terminal is gone; header background not saved", "warn", 2600);
+    return;
+  }
+  if (!background) {
+    toast("Header background needs at least two valid color stops", "warn", 2600);
+    return;
+  }
+  terminal.headerBackground = background;
+  applyTerminalHeaderBackground(terminal);
+  saveSessionSnapshot();
+  closeHeaderBackgroundEditor();
+  toast("Header background updated", "success", 1800);
+}
+
+function resetHeaderBackgroundEditor() {
+  const terminal = state.terminals.get(headerBackgroundTerminalId);
+  if (!terminal) {
+    closeHeaderBackgroundEditor();
+    toast("That terminal is gone; header background not reset", "warn", 2600);
+    return;
+  }
+  terminal.headerBackground = null;
+  applyTerminalHeaderBackground(terminal);
+  saveSessionSnapshot();
+  closeHeaderBackgroundEditor();
+  toast("Header background reset", "info", 1800);
+}
+
+function bindHeaderBackgroundEditor() {
+  if (!elements.headerBackgroundOverlay) return;
+  // Every control is dereferenced without further guards below, so confirm the
+  // markup is complete once instead of throwing part-way through an open and
+  // leaving a half-built dialog on screen.
+  const required = [
+    "headerBackgroundApply", "headerBackgroundCancel", "headerBackgroundClose", "headerBackgroundPreview",
+    "headerBackgroundReset", "headerBackgroundSubtitle", "headerGradientAddStop", "headerGradientAngle",
+    "headerGradientAngleRow", "headerGradientAngleValue", "headerGradientCenterX", "headerGradientCenterXRow",
+    "headerGradientCenterXValue", "headerGradientCenterY", "headerGradientCenterYRow", "headerGradientCenterYValue",
+    "headerGradientShape", "headerGradientShapeRow", "headerGradientStopList", "headerGradientStopsCount"
+  ];
+  const missing = required.filter((key) => !elements[key]);
+  if (missing.length > 0) {
+    log.warn("ui", "Header background editor disabled; markup incomplete", { missing });
+    return;
+  }
+  headerBackgroundReady = true;
+  for (const button of elements.headerBackgroundOverlay.querySelectorAll("[data-header-gradient-type]")) {
+    button.addEventListener("click", () => {
+      if (!headerBackgroundDraft) return;
+      headerBackgroundDraft.type = button.dataset.headerGradientType;
+      syncHeaderGradientGeometry();
+    });
+  }
+  const bindPair = (range, number, key, min, max) => {
+    const update = (source) => {
+      if (!headerBackgroundDraft || source.value === "") return;
+      const value = headerGradientControlValue(source.value, min, max, headerBackgroundDraft[key]);
+      headerBackgroundDraft[key] = value;
+      range.value = String(value);
+      number.value = String(value);
+      updateHeaderBackgroundPreview();
+    };
+    range.addEventListener("input", () => update(range));
+    number.addEventListener("input", () => update(number));
+    number.addEventListener("change", () => update(number));
+  };
+  bindPair(elements.headerGradientAngle, elements.headerGradientAngleValue, "angle", 0, 359);
+  bindPair(elements.headerGradientCenterX, elements.headerGradientCenterXValue, "centerX", 0, 100);
+  bindPair(elements.headerGradientCenterY, elements.headerGradientCenterYValue, "centerY", 0, 100);
+  elements.headerGradientShape.addEventListener("change", () => {
+    if (!headerBackgroundDraft || !HEADER_GRADIENT_SHAPES.has(elements.headerGradientShape.value)) return;
+    headerBackgroundDraft.shape = elements.headerGradientShape.value;
+    updateHeaderBackgroundPreview();
+  });
+  elements.headerGradientAddStop.addEventListener("click", addHeaderGradientStop);
+  elements.headerBackgroundClose.addEventListener("click", closeHeaderBackgroundEditor);
+  elements.headerBackgroundCancel.addEventListener("click", closeHeaderBackgroundEditor);
+  elements.headerBackgroundApply.addEventListener("click", applyHeaderBackgroundEditor);
+  elements.headerBackgroundReset.addEventListener("click", resetHeaderBackgroundEditor);
+  elements.headerBackgroundOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.headerBackgroundOverlay) closeHeaderBackgroundEditor();
+  });
+  elements.headerBackgroundOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeHeaderBackgroundEditor();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...elements.headerBackgroundOverlay.querySelectorAll(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]'
+    )].filter((element) => !element.closest("[hidden]") && element.getClientRects().length > 0);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+}
+
 /* ---------------- Bell notifications --------------- */
 
 function handleBell(terminal) {
@@ -14716,6 +15251,7 @@ function saveSessionSnapshot() {
     cwd: terminal.cwd,
     copilotCwd: terminal.copilotCwd,
     color: terminal.color,
+    headerBackground: cloneHeaderBackground(terminal.headerBackground),
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
     notificationOverrides: { ...terminal.notificationOverrides },
@@ -18508,6 +19044,7 @@ const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.duplicate": "Split (duplicate)",
   "terminal.restart": "Restart",
   "terminal.cycle-color": "Cycle color",
+  "terminal.header-background": "Header background",
   "terminal.move-new-page": "Move to new page",
   "terminal.close": "Close"
 });
@@ -20005,12 +20542,14 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         title: `${terminal.titleInput.value} copy`,
         copilotCwd: terminal.copilotCwd,
         fontSizeOverride: terminal.fontSizeOverride,
+        headerBackground: cloneHeaderBackground(terminal.headerBackground),
         headerActionOverrides: { ...terminal.headerActionOverrides },
         notificationOverrides: { ...terminal.notificationOverrides }
       })
     },
     { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
     { label: "Cycle color", icon: "tag", shortcutId: "terminal.cycle-color", run: () => cyclePaneColor(terminal) },
+    { label: "Header background\u2026", icon: "palette", shortcutId: "terminal.header-background", run: () => openHeaderBackgroundEditor(terminal) },
     ...buildMoveToPageItems(terminal),
     { label: "Close", hint: "Ctrl+Shift+W", icon: "x", shortcutId: "terminal.close", danger: true, run: () => removeTerminal(terminal.id) }
   ];
