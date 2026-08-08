@@ -240,7 +240,7 @@
 
             <label class="control-row range-row">
               <span>Workspace zoom</span>
-              <input id="workspaceZoom" type="range" min="50" max="150" step="5">
+              <input id="workspaceZoom" type="range" min="25" max="200" step="5" title="Workspace zoom&#10;Ctrl+mouse wheel or trackpad pinch&#10;Keyboard: focus the slider, then use Arrow keys; Home jumps to 25%, End to 200%">
               <output id="workspaceZoomValue"></output>
             </label>
 
@@ -800,7 +800,7 @@
         <span class="status-spacer"></span>
         <label class="status-workspace-zoom" title="Workspace zoom: drag to resize every pane">
           <i data-lucide="scan" aria-hidden="true"></i>
-          <input id="statusWorkspaceZoom" type="range" min="50" max="150" step="5" aria-label="Workspace zoom">
+          <input id="statusWorkspaceZoom" type="range" min="25" max="200" step="5" aria-label="Workspace zoom" title="Workspace zoom&#10;Ctrl+mouse wheel or trackpad pinch&#10;Keyboard: focus the slider, then use Arrow keys; Home jumps to 25%, End to 200%">
           <output id="statusWorkspaceZoomValue">100%</output>
         </label>
         <span id="statusShortcutHint" class="status-hint">Ctrl+Shift+P commands · Ctrl+N new terminal · Ctrl+T new page</span>
@@ -1863,7 +1863,6 @@
                 <button type="button" role="radio" data-automation-type="copilot" aria-checked="false"><i data-lucide="sparkles"></i><span><strong>Copilot automation</strong><small>Run a scheduled prompt in Copilot CLI</small></span></button>
               </div>
             </fieldset>
-            <label class="automation-field automation-account-field"><span>Run as user</span><input id="automationRunAs" type="text" maxlength="320" autocomplete="username" spellcheck="false"><small id="automationRunAsHint">Defaults to the current user.</small></label>
 
             <fieldset class="automation-block">
               <legend>When</legend>
@@ -1890,6 +1889,7 @@
               <div id="automationActionList" class="automation-action-list" aria-label="Visual automation workflow"></div>
               <button id="automationActionAdd" class="secondary-action automation-action-add" type="button"><i data-lucide="plus"></i><span>Add another action</span></button>
             </fieldset>
+            <label class="automation-field automation-account-field"><span>Run as user</span><input id="automationRunAs" type="text" maxlength="320" autocomplete="username" spellcheck="false"><small id="automationRunAsHint">Defaults to the current user.</small></label>
 
             <div class="automation-preview"><i data-lucide="sparkles"></i><span id="automationPreview">Every 60 minutes</span></div>
             <footer class="automation-editor-actions">

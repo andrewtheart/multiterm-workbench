@@ -137,7 +137,7 @@ Open **Settings** and choose a layout under **Layout**:
 
 In **Manual canvas**, drag a pane's title bar to move it. Drag any edge or corner to resize it like a normal unsnapped window; the pane's position and size persist across launches.
 
-Click blank workspace background to move keyboard focus away from every terminal. While the background is focused, scroll up/down or pinch in/out on a trackpad to change **Workspace zoom** in 5% steps. Zooming out gives the layout more logical room, so more panes can fit in the viewport; zooming in makes panes larger. The **Workspace zoom** slider under **Layout** covers 50–150%, and the selected value persists across launches and saved workspaces.
+Click blank workspace background to move keyboard focus away from every terminal. While the background is focused, hold Ctrl and use the mouse wheel, or pinch in/out on a trackpad, to change **Workspace zoom** in 5% steps. Ordinary mouse-wheel and two-finger trackpad movement scrolls the workspace instead. Zooming out gives the layout more logical room, so more panes can fit in the viewport; zooming in makes panes larger. The **Workspace zoom** slider under **Layout** covers 25–200%, and the selected value persists across launches and saved workspaces.
 
 Use **Fit all terminals** after resizing the window or changing layouts. **Reset layout** clears layout-specific adjustments. <kbd>Ctrl+Shift+X</kbd> temporarily maximizes the active pane.
 
@@ -433,7 +433,7 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 
 ## Keyboard shortcuts
 
-Open the keyboard-shortcut catalog from the top bar or with <kbd>Ctrl+/</kbd>. Click any key combination to replace it. Hover an action for one second to reveal controls for adding another combination, removing one, or restoring that action's defaults. Global shortcuts are stored with the other settings; terminal right-click menu shortcuts remain a separate customization. The catalog can also be printed or saved as a UTF-8 text reference.
+Open the keyboard-shortcut catalog from the top bar or with <kbd>Ctrl+/</kbd>. The **Top Bar Actions** section lists every action button in the app header with a default binding. Right-click any of those buttons to change its primary shortcut, add another shortcut, or jump directly to its catalog row. In the catalog, click any key combination to replace it. Hover an action for one second to reveal controls for adding another combination, removing one, or restoring that action's defaults. Global shortcuts are stored with the other settings; terminal right-click menu shortcuts remain a separate customization. The catalog can also be printed or saved as a UTF-8 text reference.
 
 | Shortcut | Action |
 | --- | --- |

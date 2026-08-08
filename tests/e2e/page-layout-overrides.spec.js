@@ -96,7 +96,15 @@ test.describe("Per-page layout and zoom", () => {
     expect(layoutIndex).toBeGreaterThan(openFolderIndex);
     expect(zoomIndex).toBe(layoutIndex + 1);
     expect(fitIndex).toBe(zoomIndex + 1);
-    await page.keyboard.press("Escape");
+
+    await page.locator("#contextMenu .ctx-item", { hasText: "This page zoom: 125%" }).click();
+    const submenu = page.locator("#contextSubmenu");
+    await expect(submenu).toBeVisible();
+    await submenu.getByRole("menuitem", { name: "25%", exact: true }).click();
+    expect(await page.evaluate(() => ({ global: state.settings.workspaceZoom, page: effectivePageZoom() }))).toEqual({
+      global: 100,
+      page: 25
+    });
   });
 
   test("does not persist the overrides", async ({ page }) => {

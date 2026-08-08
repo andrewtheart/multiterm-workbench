@@ -6243,6 +6243,11 @@ button.shortcut-binding.is-capturing {
 .automation-field > span,
 .automation-clock-fields label > span { color: var(--muted); font-size: 11px; }
 .automation-field > small { color: var(--muted); font-size: 9.5px; line-height: 1.35; }
+.automation-account-field {
+  grid-column: 2;
+  justify-self: start;
+  width: min(100%, 280px);
+}
 
 .automation-kind-block {
   border: 0;
@@ -6512,7 +6517,7 @@ button.shortcut-binding.is-capturing {
   .automation-rule-rail { border-bottom: 1px solid var(--border); border-right: 0; max-height: 230px; }
   .automation-editor { grid-template-columns: 1fr; overflow: visible; }
   .automation-block,
-  .automation-account-field { grid-column: 1 / -1; }
+  .automation-account-field { grid-column: 1; }
   .automation-welcome { min-height: 260px; }
 }
 

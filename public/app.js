@@ -17,7 +17,7 @@
  */
 
 const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
-const WORKSPACE_ZOOM_BOUNDS = { min: 50, max: 150, step: 5, fallback: 100 };
+const WORKSPACE_ZOOM_BOUNDS = { min: 25, max: 200, step: 5, fallback: 100 };
 
 const defaultSettings = {
   aiSessionContext: "default",
@@ -1064,6 +1064,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindQuickSwitch();
   renderPager();
   bindContextMenu();
+  bindTopBarShortcutMenus();
   bindRightClickWarning();
   bindCloseConfirm();
   bindPageCloseConfirm();
@@ -3097,9 +3098,12 @@ function bindWorkspaceBackgroundZoom() {
   elements.stage.addEventListener("pointerdown", focusBackgroundFromPointer);
   elements.stage.addEventListener("click", focusBackgroundFromPointer);
 
+  // Chromium exposes a trackpad pinch as a Ctrl-marked wheel event. Plain
+  // two-finger scrolling has no Ctrl modifier and must remain native scrolling.
   elements.stage.addEventListener("wheel", (event) => {
-    if (document.activeElement !== elements.stage || event.deltaY === 0) return;
+    if (!event.ctrlKey || document.activeElement !== elements.stage || event.deltaY === 0) return;
     if (event.altKey || event.metaKey || event.shiftKey) return;
+    if (event.target.closest(".terminal-pane, .find-all-bar, .terminal-connector-action, .terminal-connector-hit")) return;
     event.preventDefault();
     event.stopPropagation();
 
@@ -6984,6 +6988,7 @@ function updateChromeToggles() {
   setChromeToggle(elements.toggleSidecar, state.settings.sidecarHidden, "Show layout controls", "Hide layout controls");
   setChromeToggle(elements.toggleHeaderTop, state.settings.headerHidden, "Expand top bar", "Collapse top bar");
   setChromeToggle(elements.toggleSidecarTop, state.settings.sidecarHidden, "Show layout controls", "Hide layout controls");
+  refreshTopBarShortcutHints();
 }
 
 function setChromeToggle(button, isHidden, showLabel, hideLabel) {
@@ -9791,10 +9796,23 @@ function bindQuickSwitch() {
 
 /* ---------------- Global keyboard shortcuts --------------- */
 
+const TOP_BAR_SHORTCUT_SECTION = "Top Bar Actions";
+
 const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
-  { id: "app.help", section: "App", label: "Help", detail: "Opens the in-app help guide.", defaults: [{ key: "f1" }], run: () => openHelp() },
-  { id: "app.command-palette", section: "App", label: "Command palette", detail: "Opens or closes the searchable action palette.", defaults: [{ ctrl: true, shift: true, key: "p" }], run: () => palette.open ? closePalette() : openPalette() },
-  { id: "app.shortcuts", section: "App", label: "Keyboard shortcuts", detail: "Opens or closes this shortcut catalog.", defaults: [{ ctrl: true, key: "/" }], run: () => elements.shortcutsOverlay.hidden ? openShortcuts() : closeShortcuts() },
+  { id: "top.about", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "aboutToggle", label: "About MultiTerm", detail: "Opens version, project, and update information.", defaults: [{ ctrl: true, shift: true, key: "f1" }], run: () => elements.aboutToggle.click() },
+  { id: "app.shortcuts", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "helpToggle", label: "Keyboard shortcuts", detail: "Opens or closes this shortcut catalog.", defaults: [{ ctrl: true, key: "/" }], run: () => elements.shortcutsOverlay.hidden ? openShortcuts() : closeShortcuts() },
+  { id: "app.help", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "helpDocToggle", label: "Help", detail: "Opens the in-app help guide.", defaults: [{ key: "f1" }], run: () => openHelp() },
+  { id: "terminal.broadcast", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "broadcastToggle", label: "Broadcast command", detail: "Opens the command broadcaster.", defaults: [{ ctrl: true, shift: true, key: "b" }], run: () => toggleBroadcast() },
+  { id: "app.command-palette", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "commandPalette", label: "Command palette", detail: "Opens or closes the searchable action palette.", defaults: [{ ctrl: true, shift: true, key: "p" }], run: () => palette.open ? closePalette() : openPalette() },
+  { id: "top.artifacts", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "terminalArtifactsToggle", label: "Terminal notes and command queue", detail: "Opens notes and staged commands for the active terminal.", defaults: [{ ctrl: true, alt: true, key: "q" }], run: () => elements.terminalArtifactsToggle.click() },
+  { id: "top.messages", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "terminalMessagesToggle", label: "Terminal messages", detail: "Opens terminal messaging and handoff controls.", defaults: [{ ctrl: true, shift: true, key: "m" }], run: () => elements.terminalMessagesToggle.click() },
+  { id: "top.automations", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "automationToggle", label: "Automations", detail: "Opens Automation Studio.", defaults: [{ ctrl: true, shift: true, key: "a" }], run: () => elements.automationToggle.click() },
+  { id: "top.ai-sessions", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "copilotSessionsToggle", label: "Resume AI assistant session", detail: "Opens saved GitHub Copilot or Claude sessions.", defaults: [{ ctrl: true, alt: true, key: "r" }], run: () => elements.copilotSessionsToggle.click() },
+  { id: "top.theme", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "themeToggle", label: "Toggle theme", detail: "Switches between the light and dark app themes.", defaults: [{ ctrl: true, alt: true, key: "d" }], run: () => elements.themeToggle.click() },
+  { id: "top.tmux", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "attachTmux", label: "Attach WSL tmux session", detail: "Opens the WSL tmux session picker.", defaults: [{ ctrl: true, alt: true, key: "t" }], run: () => elements.attachTmux.click() },
+  { id: "top.minimize", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "minimizeApp", label: "Minimize MultiTerm", detail: "Minimizes the application window.", defaults: [{ ctrl: true, alt: true, key: "m" }], run: () => elements.minimizeApp.click() },
+  { id: "top.toggle-header", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "toggleHeaderTop", label: "Collapse or expand top bar", detail: "Hides or restores the app top bar.", defaults: [{ ctrl: true, shift: true, key: "h" }], run: () => elements.toggleHeaderTop.click() },
+  { id: "terminal.new", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "addTerminal", label: "New terminal", detail: "Starts a terminal on the active page.", defaults: [{ ctrl: true, key: "n" }, { ctrl: true, shift: true, key: "t" }], run: () => addTerminal({ reveal: true, runStartup: true }) },
   { id: "app.quick-switch", section: "App", label: "Switch terminal", detail: "Opens the quick terminal switcher.", defaults: [{ alt: true, key: "q" }], run: () => quickSwitch.open ? closeQuickSwitch() : openQuickSwitch() },
   { id: "app.fullscreen", section: "App", label: "Fullscreen focus mode", detail: "Enters or exits fullscreen focus mode.", defaults: [{ key: "f11" }], run: () => toggleFullscreenFocus() },
   { id: "app.zoom-in", section: "App", label: "Increase default terminal size", detail: "Increases the default terminal font size.", defaults: [{ ctrl: true, key: "=" }], run: () => fontZoom(1) },
@@ -9803,13 +9821,11 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
   { id: "page.new", section: "Page", label: "New page", detail: "Creates and opens a new page.", defaults: [{ ctrl: true, key: "t" }, { ctrl: true, key: "p" }], run: () => addPage() },
   { id: "page.next", section: "Page", label: "Next page", detail: "Moves to the next page without stopping its terminals.", defaults: [{ ctrl: true, key: "pagedown" }], run: () => cyclePage(1) },
   { id: "page.previous", section: "Page", label: "Previous page", detail: "Moves to the previous page without stopping its terminals.", defaults: [{ ctrl: true, key: "pageup" }], run: () => cyclePage(-1) },
-  { id: "terminal.new", section: "Terminal", label: "New terminal", detail: "Starts a terminal on the active page.", defaults: [{ ctrl: true, key: "n" }, { ctrl: true, shift: true, key: "t" }], run: () => addTerminal({ reveal: true, runStartup: true }) },
   { id: "terminal.close", section: "Terminal", label: "Close active terminal", detail: "Closes the active terminal session.", defaults: [{ ctrl: true, shift: true, key: "w" }], run: () => { if (state.activeId) removeTerminal(state.activeId); } },
   { id: "terminal.find", section: "Terminal", label: "Find", detail: "Searches the active terminal.", defaults: [{ ctrl: true, key: "f" }], run: () => openFindActive() },
   { id: "terminal.find-all", section: "Terminal", label: "Find in all terminals", detail: "Searches every terminal buffer.", defaults: [{ ctrl: true, shift: true, key: "f" }], run: () => openFindAll() },
   { id: "terminal.filter", section: "Terminal", label: "Search and filter panes", detail: "Focuses the terminal filter in the top bar.", defaults: [{ ctrl: true, shift: true, key: "e" }], run: () => { if (!blockFullscreenSurfaceAction("terminal search")) { elements.terminalSearchInput.focus(); elements.terminalSearchInput.select(); } } },
   { id: "terminal.restart", section: "Terminal", label: "Restart active terminal", detail: "Restarts the active shell.", defaults: [{ ctrl: true, shift: true, key: "r" }], run: () => restartActiveSession() },
-  { id: "terminal.broadcast", section: "Terminal", label: "Broadcast command", detail: "Opens the command broadcaster.", defaults: [{ ctrl: true, shift: true, key: "b" }], run: () => toggleBroadcast() },
   { id: "terminal.paste", section: "Terminal", label: "Paste", detail: "Pastes clipboard text into the active terminal.", defaults: [{ ctrl: true, shift: true, key: "v" }], run: () => pasteIntoActive() },
   { id: "terminal.clear", section: "Terminal", label: "Clear active terminal", detail: "Clears the active terminal display.", defaults: [{ ctrl: true, shift: true, key: "l" }], run: () => clearActiveTerminal() },
   { id: "terminal.pane-zoom", section: "Terminal", label: "Maximize or restore pane", detail: "Toggles the active pane size.", defaults: [{ ctrl: true, shift: true, key: "x" }], run: () => toggleZoomPane(state.activeId) },
@@ -9823,6 +9839,8 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
 ]);
 
 const GLOBAL_SHORTCUT_ACTION_BY_ID = new Map(GLOBAL_SHORTCUT_ACTIONS.map((action) => [action.id, action]));
+const TOP_BAR_SHORTCUT_ACTIONS = GLOBAL_SHORTCUT_ACTIONS.filter((action) => action.section === TOP_BAR_SHORTCUT_SECTION);
+const TOP_BAR_SHORTCUT_ACTION_IDS = TOP_BAR_SHORTCUT_ACTIONS.map((action) => action.id);
 const GLOBAL_SHORTCUT_MODIFIER_KEYS = new Set(["alt", "altgraph", "control", "meta", "shift"]);
 
 function normalizeGlobalShortcutBinding(value) {
@@ -10060,8 +10078,8 @@ function bindGlobalShortcuts() {
     }
 
     if (runGlobalShortcut(event, [
-      "terminal.new", "terminal.close", "terminal.find", "terminal.find-all", "terminal.filter",
-      "terminal.restart", "terminal.broadcast", "terminal.paste", "terminal.clear", "terminal.pane-zoom",
+      ...TOP_BAR_SHORTCUT_ACTION_IDS, "terminal.close", "terminal.find", "terminal.find-all", "terminal.filter",
+      "terminal.restart", "terminal.paste", "terminal.clear", "terminal.pane-zoom",
       "terminal.copy", "terminal.dequeue", "terminal.next", "terminal.previous", "terminal.zoom-in",
       "terminal.zoom-out", "terminal.zoom-reset", "page.next", "page.previous", "app.zoom-in",
       "app.zoom-out", "app.zoom-reset"
@@ -15068,6 +15086,7 @@ function updateTerminalArtifactIndicators() {
     const label = `Terminal notes and command queue: ${pendingCount} queued, ${recoveredCount} recovered note${recoveredCount === 1 ? "" : "s"}`;
     elements.terminalArtifactsToggle.title = label;
     elements.terminalArtifactsToggle.setAttribute("aria-label", label);
+    refreshTopBarShortcutHints();
   }
 
   for (const terminal of state.terminals.values()) {
@@ -15808,6 +15827,7 @@ function updateAutomationBadge() {
   const status = state.automations.paused ? "paused" : `${enabled} enabled`;
   elements.automationToggle.title = `Automations: ${status}`;
   elements.automationToggle.setAttribute("aria-label", `Automations: ${status}`);
+  refreshTopBarShortcutHints();
 }
 
 function automationLiveTerminals() {
@@ -17980,6 +18000,7 @@ function updateTerminalMessageIndicators() {
   const label = count ? `Terminal messages: ${count} pending` : "Terminal messages";
   elements.terminalMessagesToggle.title = label;
   elements.terminalMessagesToggle.setAttribute("aria-label", label);
+  refreshTopBarShortcutHints();
   updateTerminalConnectionViews();
 }
 
@@ -18269,6 +18290,21 @@ function globalShortcutAria(binding) {
     .join("+");
 }
 
+function refreshTopBarShortcutHints() {
+  for (const action of TOP_BAR_SHORTCUT_ACTIONS) {
+    const button = elements[action.topBarElement];
+    if (!button) continue;
+    const bindings = globalShortcutBindings(action.id);
+    const bindingLabel = bindings.map(formatGlobalShortcut).join(" / ") || "Not assigned";
+    const label = button.getAttribute("aria-label") || action.label;
+    button.dataset.topBarShortcutAction = action.id;
+    button.title = `${label} (${bindingLabel})`;
+    const aria = bindings.map(globalShortcutAria).filter(Boolean).join(" ");
+    if (aria) button.setAttribute("aria-keyshortcuts", aria);
+    else button.removeAttribute("aria-keyshortcuts");
+  }
+}
+
 function refreshGlobalShortcutHints() {
   const terminalBindings = globalShortcutBindings("terminal.new");
   const terminalLabel = primaryGlobalShortcutLabel("terminal.new");
@@ -18305,6 +18341,48 @@ function refreshGlobalShortcutHints() {
       if (aria) element.setAttribute("aria-keyshortcuts", aria);
       else element.removeAttribute("aria-keyshortcuts");
     }
+  }
+  refreshTopBarShortcutHints();
+}
+
+function focusGlobalShortcutAction(actionId, captureIndex = null) {
+  openShortcuts();
+  window.requestAnimationFrame(() => {
+    const row = elements.shortcutsCatalog.querySelector(`[data-shortcut-action="${actionId}"]`);
+    if (!row) return;
+    row.classList.add("show-shortcut-controls");
+    row.scrollIntoView({ block: "center" });
+    if (captureIndex != null) {
+      beginGlobalShortcutCapture(actionId, captureIndex);
+      return;
+    }
+    row.querySelector(".shortcut-binding, .shortcut-edit-controls .shortcut-binding")?.focus();
+  });
+}
+
+function showTopBarShortcutMenu(event, action) {
+  event.preventDefault();
+  event.stopPropagation();
+  const bindings = globalShortcutBindings(action.id);
+  const primary = bindings[0];
+  renderContextMenu([
+    { label: action.label, info: true, title: bindings.map(formatGlobalShortcut).join(" / ") || "Not assigned" },
+    {
+      label: primary ? `Change primary shortcut (${formatGlobalShortcut(primary)})` : "Set primary shortcut",
+      icon: "keyboard",
+      run: () => focusGlobalShortcutAction(action.id, primary ? 0 : -1)
+    },
+    { label: "Add another shortcut", icon: "plus", run: () => focusGlobalShortcutAction(action.id, -1) },
+    { label: "Open in Keyboard Shortcuts", icon: "list", run: () => focusGlobalShortcutAction(action.id) }
+  ]);
+  showBuiltContextMenu(event.clientX, event.clientY, { returnFocus: event.currentTarget });
+}
+
+function bindTopBarShortcutMenus() {
+  for (const action of TOP_BAR_SHORTCUT_ACTIONS) {
+    const button = elements[action.topBarElement];
+    if (!button) continue;
+    button.addEventListener("contextmenu", (event) => showTopBarShortcutMenu(event, action));
   }
 }
 
@@ -18479,7 +18557,7 @@ function renderGlobalShortcutSection(sectionName) {
   const section = document.createElement("section");
   section.className = "shortcuts-section";
   const heading = document.createElement("h3");
-  heading.textContent = `${sectionName} shortcuts`;
+  heading.textContent = sectionName === TOP_BAR_SHORTCUT_SECTION ? sectionName : `${sectionName} shortcuts`;
   const list = document.createElement("ul");
   list.className = "shortcuts-list";
   for (const action of GLOBAL_SHORTCUT_ACTIONS.filter((candidate) => candidate.section === sectionName)) {
@@ -18548,7 +18626,7 @@ function renderGlobalShortcutSection(sectionName) {
 
 function renderShortcutCatalog() {
   elements.shortcutsCatalog.textContent = "";
-  for (const sectionName of ["App", "Page", "Terminal"]) renderGlobalShortcutSection(sectionName);
+  for (const sectionName of [TOP_BAR_SHORTCUT_SECTION, "App", "Page", "Terminal"]) renderGlobalShortcutSection(sectionName);
   for (const section of CONTEXTUAL_SHORTCUT_SECTIONS) renderShortcutSection(section.title, section.items);
   const custom = [...contextMenuShortcuts.entries()].map(([actionId, binding]) => [
     formatContextShortcut(binding),
@@ -18561,8 +18639,8 @@ function renderShortcutCatalog() {
 
 function shortcutCatalogText() {
   const lines = ["MultiTerm keyboard shortcuts", ""];
-  for (const sectionName of ["App", "Page", "Terminal"]) {
-    lines.push(`${sectionName} shortcuts`);
+  for (const sectionName of [TOP_BAR_SHORTCUT_SECTION, "App", "Page", "Terminal"]) {
+    lines.push(sectionName === TOP_BAR_SHORTCUT_SECTION ? sectionName : `${sectionName} shortcuts`);
     for (const action of GLOBAL_SHORTCUT_ACTIONS.filter((candidate) => candidate.section === sectionName)) {
       lines.push(`${action.label}: ${globalShortcutBindings(action.id).map(formatGlobalShortcut).join(", ") || "Not assigned"}`);
     }
@@ -20159,7 +20237,7 @@ function buildSurfaceContextMenu() {
           disabled: !pageZoomOverrides.has(state.activePageId),
           run: () => setPageZoomOverride(null)
         },
-        ...[50, 67, 80, 90, 100, 110, 125, 150, 175, 200].map((value) => ({
+        ...[25, 50, 67, 80, 90, 100, 110, 125, 150, 175, 200].map((value) => ({
           label: `${value}%`,
           icon: value === effectivePageZoom() ? "check" : "square",
           run: () => setPageZoomOverride(value)
@@ -21397,7 +21475,7 @@ function renderContextMenu(items, {
     }
 
     // A plain row you can actually run is the only kind that earns an accelerator.
-    const actionable = Boolean(item.run) && !item.disabled && !item.info && !item.customizationHidden;
+    const actionable = Boolean(item.run || item.submenu) && !item.disabled && !item.info && !item.customizationHidden;
     const shortcutEligible = shortcutEditor && actionable && CONTEXT_SHORTCUT_ID_PATTERN.test(item.shortcutId || "");
     const customBinding = shortcutEditor && item.shortcutId
       ? contextMenuShortcuts.get(item.shortcutId)
@@ -21481,7 +21559,8 @@ function renderContextMenu(items, {
       el.id = `ctx-item-${rowId++}`;
       el.addEventListener("click", () => {
         if (ctxSuppressCustomizationClick) return;
-        runContextMenuAction(item.run);
+        if (item.submenu && !item.run) openContextSubmenuFor(el, item.submenu);
+        else runContextMenuAction(item.run);
       });
       // Keep the keyboard highlight in step with the pointer so the two input
       // modes never disagree about which row is current. A submenu parent also

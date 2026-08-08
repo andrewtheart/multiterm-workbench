@@ -114,12 +114,26 @@ test.describe("Automation Studio", () => {
       const scheduleGeometry = await page.locator("#automationEditor").evaluate((editor) => {
         const editorRect = editor.getBoundingClientRect();
         const controls = [...editor.querySelectorAll(".automation-action-row input, .automation-action-row select, .automation-action-row button")];
+        const blocks = [...editor.querySelectorAll(":scope > .automation-block")];
+        const thenBlock = blocks[1];
+        const account = editor.querySelector(".automation-account-field");
+        const accountRect = account.getBoundingClientRect();
+        const thenRect = thenBlock.getBoundingClientRect();
         return {
+          accountAfterThen: Boolean(thenBlock.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING),
+          accountBelowThen: accountRect.top >= thenRect.bottom,
+          accountInputWidth: account.querySelector("input").getBoundingClientRect().width,
+          accountLeft: accountRect.left,
           clientWidth: editor.clientWidth,
           controlsInside: controls.every((control) => control.getBoundingClientRect().right <= editorRect.right + 1),
-          scrollWidth: editor.scrollWidth
+          scrollWidth: editor.scrollWidth,
+          thenLeft: thenRect.left
         };
       });
+      expect(scheduleGeometry.accountAfterThen).toBe(true);
+      expect(scheduleGeometry.accountBelowThen).toBe(true);
+      expect(scheduleGeometry.accountInputWidth).toBeLessThanOrEqual(280);
+      expect(Math.abs(scheduleGeometry.accountLeft - scheduleGeometry.thenLeft)).toBeLessThanOrEqual(1);
       expect(scheduleGeometry.scrollWidth).toBeLessThanOrEqual(scheduleGeometry.clientWidth);
       expect(scheduleGeometry.controlsInside).toBe(true);
 

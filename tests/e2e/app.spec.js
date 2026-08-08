@@ -63,9 +63,9 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#bridgeStatus")).toHaveText(/Bridge connected/i);
     await expect(page.locator("#statusSessions")).toHaveText("1 session");
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
-    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+N)");
+    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+N / Ctrl+Shift+T)");
     await expect(page.locator("#addTerminal")).toHaveAttribute("aria-keyshortcuts", "Control+N Control+Shift+T");
-    await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("title", "Collapse top bar");
+    await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("title", "Collapse top bar (Ctrl+Shift+H)");
     await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("aria-label", "Collapse top bar");
     await expect(page.locator(".action-cluster > :last-child")).toHaveAttribute("id", "addTerminal");
   });
@@ -593,7 +593,7 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(await page.evaluate((id) => terminalFontSize(state.terminals.get(id)), ids[0])).toBe(14);
   });
 
-  test("defocuses terminals and zooms the workspace from background wheel and pinch", async () => {
+  test("defocuses terminals, scrolls normally, and zooms the workspace only with Ctrl or pinch", async () => {
     const originalViewport = page.viewportSize();
     await page.setViewportSize({ width: 1400, height: 900 });
     const setup = await page.evaluate(() => {
@@ -603,12 +603,12 @@ test.describe("MultiTerm Workbench UI", () => {
       applySettings();
       saveSettings();
       const existingIds = [...state.terminals.keys()];
-      while (state.terminals.size < 4) addTerminal();
+      while (state.terminals.size < 8) addTerminal();
       const terminal = [...state.terminals.values()][0];
       terminal.term.focus();
       return { existingIds, focusedId: terminal.id };
     });
-    await expect(page.locator(".terminal-pane")).toHaveCount(4);
+    await expect(page.locator(".terminal-pane")).toHaveCount(8);
     await expect.poll(() => page.evaluate(() => state.activeId)).toBe(setup.focusedId);
 
     const firstRowCount = () => page.locator(".terminal-pane:not(.is-page-hidden):not(.is-minimized)").evaluateAll((panes) => {
@@ -647,7 +647,33 @@ test.describe("MultiTerm Workbench UI", () => {
       target: { id: "terminalHost", isPane: false }
     });
 
-    for (let index = 0; index < 4; index += 1) await page.mouse.wheel(0, 120);
+    const plainWheelAccepted = await page.evaluate(() => elements.host.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 24
+    })));
+    expect(plainWheelAccepted).toBe(true);
+    await page.mouse.wheel(0, 360);
+    await expect.poll(() => page.evaluate(() => elements.host.scrollTop)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => state.settings.workspaceZoom)).toBe(100);
+
+    const ctrlWheelAccepted = await page.evaluate(() => elements.host.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: 120
+    })));
+    expect(ctrlWheelAccepted).toBe(false);
+    await page.evaluate(() => {
+      for (let index = 0; index < 3; index += 1) {
+        elements.host.dispatchEvent(new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          deltaY: 120
+        }));
+      }
+    });
     await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(80);
     await expect(page.locator("#workspaceZoomValue")).toHaveText("80%");
     await expect(page.locator("#workspaceZoomIndicator")).toHaveText("80%");
@@ -666,7 +692,22 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings") || "{}").workspaceZoom)).toBe(85);
 
     const statusZoom = page.locator("#statusWorkspaceZoom");
+    const workspaceZoomHelp = "Workspace zoom\nCtrl+mouse wheel or trackpad pinch\nKeyboard: focus the slider, then use Arrow keys; Home jumps to 25%, End to 200%";
+    await expect(statusZoom).toHaveAttribute("title", workspaceZoomHelp);
+    await expect(page.locator("#workspaceZoom")).toHaveAttribute("title", workspaceZoomHelp);
+    await expect(statusZoom).toHaveAttribute("min", "25");
+    await expect(statusZoom).toHaveAttribute("max", "200");
+    await expect(page.locator("#workspaceZoom")).toHaveAttribute("min", "25");
+    await expect(page.locator("#workspaceZoom")).toHaveAttribute("max", "200");
     await statusZoom.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(90);
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(85);
+    await page.keyboard.press("Home");
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(25);
+    await page.keyboard.press("End");
+    await expect.poll(() => page.evaluate(() => state.settings.workspaceZoom)).toBe(200);
     await statusZoom.evaluate((slider) => {
       slider.value = "140";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
@@ -840,7 +881,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await setCheck("#compactChrome", true);
     await expect(page.locator("#terminalHost")).toHaveClass(/compact/);
 
-    await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("title", "Collapse top bar");
+    await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("title", "Collapse top bar (Ctrl+Shift+H)");
     await page.locator("#toggleHeaderTop").click();
     await expect(page.locator("body")).toHaveClass(/header-hidden/);
     await expect(page.locator("#toggleHeader")).toBeVisible();
@@ -1652,6 +1693,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#helpToggle").click();
     await expect(page.locator("#shortcutsOverlay")).toBeVisible();
     await expect(page.locator(".shortcuts-section h3")).toContainText([
+      "Top Bar Actions",
       "App shortcuts",
       "Page shortcuts",
       "Terminal shortcuts",
@@ -1670,21 +1712,21 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#shortcutsStatus")).toContainText("Press the new shortcut");
     await page.keyboard.press("Control+Alt+N");
     await expect(terminalRow.locator(".shortcut-binding")).toContainText(["Ctrl+Alt+N", "Ctrl+Shift+T"]);
-    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+Alt+N)");
+    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+Alt+N / Ctrl+Shift+T)");
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).keyboardShortcuts["terminal.new"][0]))
       .toEqual({ alt: true, ctrl: true, key: "n", meta: false, shift: false });
 
     await terminalRow.hover();
     await expect(terminalRow).not.toHaveClass(/show-shortcut-controls/);
     await expect(terminalRow).toHaveClass(/show-shortcut-controls/, { timeout: 1500 });
-    await terminalRow.locator(".shortcut-edit-controls .shortcut-binding").click();
+    await terminalRow.locator(".shortcut-edit-controls .shortcut-binding").evaluate((button) => button.click());
     await page.keyboard.press("Control+Alt+T");
     await expect(terminalRow.locator(".shortcut-binding")).toContainText(["Ctrl+Alt+N", "Ctrl+Shift+T", "Ctrl+Alt+T"]);
 
     const pageRow = page.locator('[data-shortcut-action="page.new"]').first();
     await pageRow.hover();
     await expect(pageRow).toHaveClass(/show-shortcut-controls/, { timeout: 1500 });
-    await pageRow.locator(".shortcut-edit-controls .shortcut-binding").click();
+    await pageRow.locator(".shortcut-edit-controls .shortcut-binding").evaluate((button) => button.click());
     await page.keyboard.press("Control+Alt+N");
     await expect(page.locator("#shortcutsStatus")).toContainText("reassigned from New terminal");
     await expect(pageRow.locator(".shortcut-binding")).toContainText(["Ctrl+T", "Ctrl+P", "Ctrl+Alt+N"]);
@@ -1716,7 +1758,7 @@ test.describe("MultiTerm Workbench UI", () => {
       refreshGlobalShortcutHints();
       renderShortcutCatalog();
     });
-    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+N)");
+    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+N / Ctrl+Shift+T)");
     await page.locator("#shortcutsClose").click();
     await expect(page.locator("#shortcutsOverlay")).toBeHidden();
     await page.evaluate(() => {
@@ -1728,6 +1770,100 @@ test.describe("MultiTerm Workbench UI", () => {
       delete window.__shortcutPrintCalled;
       delete window.__shortcutExport;
     });
+  });
+
+  test("customizes every top-bar action from its right-click menu", async () => {
+    const inventory = await page.evaluate(() => {
+      const actions = TOP_BAR_SHORTCUT_ACTIONS.map((action) => {
+        const button = elements[action.topBarElement];
+        return {
+          actionId: action.id,
+          bindings: globalShortcutBindings(action.id).map(formatGlobalShortcut),
+          buttonId: button.id,
+          exposedAction: button.dataset.topBarShortcutAction,
+          title: button.title
+        };
+      });
+      const defaultSignatures = GLOBAL_SHORTCUT_ACTIONS.flatMap((action) => action.defaults.map(globalShortcutSignature));
+      const menus = TOP_BAR_SHORTCUT_ACTIONS.map((action) => {
+        const button = elements[action.topBarElement];
+        button.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 40
+        }));
+        const result = { actionId: action.id, hidden: elements.contextMenu.hidden, text: elements.contextMenu.textContent };
+        hideContextMenu();
+        return result;
+      });
+      return {
+        actions,
+        duplicateDefaults: defaultSignatures.filter((signature, index) => defaultSignatures.indexOf(signature) !== index),
+        menus
+      };
+    });
+
+    expect(inventory.actions).toEqual([
+      { actionId: "top.about", bindings: ["Ctrl+Shift+F1"], buttonId: "aboutToggle", exposedAction: "top.about", title: "About MultiTerm (Ctrl+Shift+F1)" },
+      { actionId: "app.shortcuts", bindings: ["Ctrl+/"], buttonId: "helpToggle", exposedAction: "app.shortcuts", title: "Keyboard shortcuts (Ctrl+/)" },
+      { actionId: "app.help", bindings: ["F1"], buttonId: "helpDocToggle", exposedAction: "app.help", title: "Help (F1)" },
+      { actionId: "terminal.broadcast", bindings: ["Ctrl+Shift+B"], buttonId: "broadcastToggle", exposedAction: "terminal.broadcast", title: "Broadcast command (Ctrl+Shift+B)" },
+      { actionId: "app.command-palette", bindings: ["Ctrl+Shift+P"], buttonId: "commandPalette", exposedAction: "app.command-palette", title: "Command palette (Ctrl+Shift+P)" },
+      { actionId: "top.artifacts", bindings: ["Ctrl+Alt+Q"], buttonId: "terminalArtifactsToggle", exposedAction: "top.artifacts", title: "Terminal notes and command queue: 0 queued, 0 recovered notes (Ctrl+Alt+Q)" },
+      { actionId: "top.messages", bindings: ["Ctrl+Shift+M"], buttonId: "terminalMessagesToggle", exposedAction: "top.messages", title: "Terminal messages (Ctrl+Shift+M)" },
+      { actionId: "top.automations", bindings: ["Ctrl+Shift+A"], buttonId: "automationsToggle", exposedAction: "top.automations", title: "Automations: 0 enabled (Ctrl+Shift+A)" },
+      { actionId: "top.ai-sessions", bindings: ["Ctrl+Alt+R"], buttonId: "copilotSessionsToggle", exposedAction: "top.ai-sessions", title: "Resume an AI assistant session (Ctrl+Alt+R)" },
+      { actionId: "top.theme", bindings: ["Ctrl+Alt+D"], buttonId: "themeToggle", exposedAction: "top.theme", title: "Toggle theme (Ctrl+Alt+D)" },
+      { actionId: "top.tmux", bindings: ["Ctrl+Alt+T"], buttonId: "attachTmux", exposedAction: "top.tmux", title: "Attach WSL tmux session (Ctrl+Alt+T)" },
+      { actionId: "top.minimize", bindings: ["Ctrl+Alt+M"], buttonId: "minimizeApp", exposedAction: "top.minimize", title: "Minimize MultiTerm (Ctrl+Alt+M)" },
+      { actionId: "top.toggle-header", bindings: ["Ctrl+Shift+H"], buttonId: "toggleHeaderTop", exposedAction: "top.toggle-header", title: "Collapse top bar (Ctrl+Shift+H)" },
+      { actionId: "terminal.new", bindings: ["Ctrl+N", "Ctrl+Shift+T"], buttonId: "addTerminal", exposedAction: "terminal.new", title: "New terminal (Ctrl+N / Ctrl+Shift+T)" }
+    ]);
+    expect(inventory.duplicateDefaults).toEqual([]);
+    expect(inventory.menus.every((menu) => (
+      !menu.hidden
+      && menu.text.includes("shortcut")
+      && menu.text.includes("Add another shortcut")
+      && menu.text.includes("Open in Keyboard Shortcuts")
+    ))).toBe(true);
+
+    const automations = page.locator("#automationsToggle");
+    await automations.click({ button: "right" });
+    await page.getByRole("menuitem", { name: /Change primary shortcut/ }).click();
+    await expect(page.locator("#shortcutsOverlay")).toBeVisible();
+    await expect(page.locator("#shortcutsStatus")).toContainText("Press the new shortcut");
+    await page.keyboard.press("Control+Alt+Shift+A");
+    const row = page.locator('[data-shortcut-action="top.automations"]').first();
+    await expect(row.locator(".shortcut-binding")).toContainText(["Ctrl+Alt+Shift+A"]);
+    await expect(automations).toHaveAttribute("title", "Automations: 0 enabled (Ctrl+Alt+Shift+A)");
+    await page.locator("#shortcutsClose").click();
+    await expect(page.locator("#shortcutsOverlay")).toBeHidden();
+
+    await page.keyboard.press("Control+Alt+Shift+A");
+    await expect(page.locator("#automationsOverlay")).toBeVisible();
+    await page.locator("#automationsClose").click();
+
+    await automations.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Add another shortcut", exact: true }).click();
+    await expect(page.locator("#shortcutsStatus")).toContainText("Press the new shortcut");
+    await page.keyboard.press("Control+Alt+Shift+U");
+    await expect(row.locator(".shortcut-binding")).toContainText(["Ctrl+Alt+Shift+A", "Ctrl+Alt+Shift+U"]);
+    await page.locator("#shortcutsClose").click();
+
+    await automations.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Open in Keyboard Shortcuts", exact: true }).click();
+    await expect(row).toBeVisible();
+    await expect(row.locator(".shortcut-binding").first()).toBeFocused();
+
+    await page.evaluate(() => {
+      state.settings.keyboardShortcuts = {};
+      saveSettings();
+      refreshGlobalShortcutHints();
+      renderShortcutCatalog();
+    });
+    await expect(automations).toHaveAttribute("title", "Automations: 0 enabled (Ctrl+Shift+A)");
+    await page.locator("#shortcutsClose").click();
   });
 
   test("uses F11 fullscreen focus mode and restores the prior UI with Escape", async () => {
