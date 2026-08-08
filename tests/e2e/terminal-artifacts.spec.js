@@ -388,6 +388,111 @@ test.describe("Terminal notes and command queue", () => {
     });
   });
 
+  test("sequences external assistant launches before their follow-up commands", async ({ page }) => {
+    await reset(page);
+    await page.evaluate(() => {
+      window.__externalLaunchFrames = [];
+      window.__externalLaunchOriginalSend = state.socket.send;
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        window.__externalLaunchFrames.push(frame);
+        if (frame.type !== "input") window.__externalLaunchOriginalSend.call(this, payload);
+      };
+      window.__externalCopilotId = openExternalTerminal({
+        path: "D:\\multiTerm",
+        title: "External Copilot review",
+        command: "Review the current diff",
+        assistantType: "copilot",
+        assistantModel: "gpt-5.4",
+        assistantEffort: "high",
+        assistantContext: "long_context"
+      }).id;
+    });
+
+    const copilotCommand = "copilot --yolo --model \"gpt-5.4\" --effort high --context long_context\r";
+    await expect.poll(() => page.evaluate((command) => window.__externalLaunchFrames
+      .filter((frame) => frame.type === "input" && frame.id === window.__externalCopilotId && frame.data === command)
+      .map((frame) => frame.data), copilotCommand)).toEqual([copilotCommand]);
+    await expect(page.locator(`[data-id="${await page.evaluate(() => window.__externalCopilotId)}"] .pane-title`))
+      .toHaveValue("External Copilot review");
+
+    const wrongProviderResult = await page.evaluate(async () => {
+      const terminal = state.terminals.get(window.__externalCopilotId);
+      terminal.term.reset();
+      await new Promise((resolve) => terminal.term.write(
+        "Claude Code v2.1.71\r\n❯\r\n? for shortcuts",
+        resolve
+      ));
+      terminal.outputRevision = terminal.autoQueueRequiredRevision;
+      return dispatchAutomaticQueueItem(terminal);
+    });
+    expect(wrongProviderResult).toBe(false);
+    expect(await page.evaluate(() => window.__externalLaunchFrames
+      .some((frame) => frame.data === "Review the current diff"))).toBe(false);
+
+    await page.evaluate(async () => {
+      const terminal = state.terminals.get(window.__externalCopilotId);
+      terminal.term.reset();
+      await new Promise((resolve) => terminal.term.write([
+        "Copilot v1.0.78 uses AI.",
+        "❯",
+        " / commands · ? help · tab next tab"
+      ].join("\r\n"), resolve));
+      terminal.outputRevision = terminal.autoQueueRequiredRevision;
+      dispatchAutomaticQueueItem(terminal);
+    });
+    await expect.poll(() => page.evaluate((expectedCommand) => window.__externalLaunchFrames
+      .filter((frame) => frame.type === "input"
+        && frame.id === window.__externalCopilotId
+        && [expectedCommand, "Review the current diff", "\x1b[13u"].includes(frame.data))
+      .map((frame) => frame.data), copilotCommand)).toEqual([
+      copilotCommand,
+      "Review the current diff",
+      "\x1b[13u"
+    ]);
+
+    await page.evaluate(() => {
+      window.__externalClaudeId = openExternalTerminal({
+        path: "D:\\multiTerm",
+        command: "Summarize the repository",
+        assistantType: "claude",
+        assistantModel: "claude-sonnet-4-6[1m]",
+        assistantEffort: "high"
+      }).id;
+    });
+    const claudeCommand = "claude --dangerously-skip-permissions --model \"claude-sonnet-4-6[1m]\" --effort high\r";
+    await expect.poll(() => page.evaluate((command) => window.__externalLaunchFrames
+      .filter((frame) => frame.type === "input" && frame.id === window.__externalClaudeId && frame.data === command)
+      .map((frame) => frame.data), claudeCommand)).toEqual([claudeCommand]);
+    await page.evaluate(async () => {
+      const terminal = state.terminals.get(window.__externalClaudeId);
+      terminal.term.reset();
+      await new Promise((resolve) => terminal.term.write(
+        "Claude Code v2.1.71\r\n❯\r\n? for shortcuts",
+        resolve
+      ));
+      terminal.outputRevision = terminal.autoQueueRequiredRevision;
+      dispatchAutomaticQueueItem(terminal);
+    });
+    await expect.poll(() => page.evaluate((expectedCommand) => window.__externalLaunchFrames
+      .filter((frame) => frame.type === "input"
+        && frame.id === window.__externalClaudeId
+        && [expectedCommand, "Summarize the repository", "\r"].includes(frame.data))
+      .map((frame) => frame.data), claudeCommand)).toEqual([
+      claudeCommand,
+      "Summarize the repository",
+      "\r"
+    ]);
+
+    await page.evaluate(() => {
+      state.socket.send = window.__externalLaunchOriginalSend;
+      delete window.__externalLaunchOriginalSend;
+      delete window.__externalLaunchFrames;
+      delete window.__externalCopilotId;
+      delete window.__externalClaudeId;
+    });
+  });
+
   test("recovers notes and makes queued commands unparented when a PID exits", async ({ page }) => {
     await reset(page, 2);
     const ids = await page.evaluate(() => [...state.terminals.keys()]);

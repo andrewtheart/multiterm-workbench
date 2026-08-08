@@ -21,7 +21,8 @@
   "activationEvents": [
     "onCommand:multiterm.openContainingFolder",
     "onCommand:multiterm.openFolder",
-    "onCommand:multiterm.openWorkspace"
+    "onCommand:multiterm.openWorkspace",
+    "onCommand:multiterm.openTerminal"
   ],
   "contributes": {
     "commands": [
@@ -42,6 +43,12 @@
         "title": "Open Workspace in MultiTerm",
         "category": "MultiTerm",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "multiterm.openTerminal",
+        "title": "Open Configured Terminal in MultiTerm",
+        "category": "MultiTerm",
+        "icon": "$(terminal)"
       }
     ],
     "configuration": {
@@ -52,6 +59,40 @@
           "default": "",
           "scope": "machine",
           "description": "Optional full path to Start-MultiTerm.ps1. Leave empty to find a standard MultiTerm installation automatically."
+        },
+        "multiterm.terminalTitle": {
+          "type": "string",
+          "default": "",
+          "description": "Optional title for terminals opened from VS Code."
+        },
+        "multiterm.terminalCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional command or assistant prompt to execute after the terminal is ready."
+        },
+        "multiterm.assistantType": {
+          "type": "string",
+          "enum": ["", "copilot", "claude"],
+          "enumDescriptions": ["Open a normal shell.", "Start GitHub Copilot CLI first.", "Start Claude CLI first."],
+          "default": "",
+          "description": "Optional assistant CLI to start before the configured command."
+        },
+        "multiterm.assistantModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional model name passed to the selected assistant CLI."
+        },
+        "multiterm.assistantEffort": {
+          "type": "string",
+          "enum": ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "default": "",
+          "description": "Optional thinking/reasoning effort passed to the selected assistant CLI."
+        },
+        "multiterm.assistantContext": {
+          "type": "string",
+          "enum": ["", "default", "long_context"],
+          "default": "",
+          "description": "Optional Copilot CLI context tier. Claude ignores this setting."
         }
       }
     },

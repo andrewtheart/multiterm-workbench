@@ -37,7 +37,7 @@ test.describe("Pages and the quick switcher", () => {
     });
     page = await context.newPage();
     await startRendererCoverage(page);
-    page.on("pageerror", (err) => errors.push(String(err.message || err)));
+    page.on("pageerror", (err) => errors.push(String(err.stack || err.message || err)));
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
   });
@@ -420,7 +420,7 @@ test.describe("Pages and the quick switcher", () => {
           settings: box(elements.controlPanel),
           stage: box(elements.stage),
           workbench: box(elements.workbench),
-          orientation: elements.pager.getAttribute("aria-orientation")
+          orientation: elements.pagerList.getAttribute("aria-orientation")
         };
       });
     };
@@ -481,7 +481,7 @@ test.describe("Pages and the quick switcher", () => {
     await page.reload();
     await expect(page.locator("body")).toHaveAttribute("data-pager-placement", "right");
     await expect(page.locator("#pagerPlacement")).toHaveValue("right");
-    await expect(page.locator("#pager")).toHaveAttribute("aria-orientation", "vertical");
+    await expect(page.locator("#pagerList")).toHaveAttribute("aria-orientation", "vertical");
     await expect(page.locator("#pager")).toBeVisible();
 
     await page.setViewportSize({ width: 900, height: 800 });
@@ -556,6 +556,91 @@ test.describe("Pages and the quick switcher", () => {
       state.settings.sidecarHidden = false;
       applySettings();
     });
+  });
+
+  test("moves the whole page bar only from its deliberate drag grip", async () => {
+    await reset(0);
+    const handle = page.locator("#pagerMove");
+    const targets = page.locator("#pagerDockTargets");
+    const placement = () => page.getAttribute("body", "data-pager-placement");
+
+    await expect(handle).toBeVisible();
+    await expect(handle).toHaveAttribute("aria-label", "Move pages bar");
+    await expect(handle.locator("svg")).toBeVisible();
+    await handle.click();
+    await expect(page.locator("#contextMenu")).toBeVisible();
+    expect(await placement()).toBe("bottom");
+    await page.keyboard.press("Escape");
+
+    const handleCenter = async () => {
+      const box = await handle.boundingBox();
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    };
+    const beginGripDrag = async () => {
+      const start = await handleCenter();
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(start.x + 16, start.y + 16, { steps: 3 });
+      await expect(targets).toBeVisible();
+    };
+
+    const start = await handleCenter();
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 5, start.y + 5);
+    await page.mouse.up();
+    await expect(targets).toBeHidden();
+    expect(await placement()).toBe("bottom");
+
+    const list = await page.locator("#pagerList").boundingBox();
+    await page.mouse.move(list.x + list.width - 8, list.y + list.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(700, 30, { steps: 4 });
+    await page.mouse.up();
+    await expect(targets).toBeHidden();
+    expect(await placement()).toBe("bottom");
+
+    await page.evaluate(() => {
+      addPage({ name: "Builds", activate: false });
+      addPage({ name: "Logs", activate: false });
+    });
+    await page.locator(".pager-chip", { hasText: "Page 1" }).dragTo(
+      page.locator(".pager-chip", { hasText: "Logs" })
+    );
+    await expect(targets).toBeHidden();
+    expect(await placement()).toBe("bottom");
+
+    await beginGripDrag();
+    await page.mouse.move(700, 450, { steps: 4 });
+    await page.mouse.up();
+    await expect(targets).toBeHidden();
+    expect(await placement()).toBe("bottom");
+
+    await beginGripDrag();
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    await expect(targets).toBeHidden();
+    expect(await placement()).toBe("bottom");
+
+    const placements = ["top", "bottom", "left", "right"];
+    for (const source of placements) {
+      for (const destination of placements.filter((candidate) => candidate !== source)) {
+        await page.evaluate((value) => setPagerPlacement(value), source);
+        await beginGripDrag();
+        await expect(page.locator(`[data-pager-dock="${source}"]`)).toBeHidden();
+        await expect(page.locator(".pager-dock-target:visible")).toHaveCount(3);
+        const target = page.locator(`[data-pager-dock="${destination}"]`);
+        const box = await target.boundingBox();
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
+        await expect(target).toHaveClass(/is-targeted/);
+        await page.mouse.up();
+        await expect(targets).toBeHidden();
+        await expect(page.locator("body")).toHaveAttribute("data-pager-placement", destination);
+        await expect.poll(() => page.evaluate(() => (
+          JSON.parse(localStorage.getItem("multiterm.settings") || "{}").pagerPlacement
+        ))).toBe(destination);
+      }
+    }
   });
 
   test("persists page placement changed from the Layout side panel", async () => {

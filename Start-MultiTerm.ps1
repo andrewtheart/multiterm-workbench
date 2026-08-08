@@ -27,7 +27,13 @@ param(
     [switch]$Stop,
     [switch]$RequireStopped,
     [string]$ElevatedHost = "",
-    [string]$OpenFolder = ""
+    [string]$OpenFolder = "",
+    [string]$TerminalTitle = "",
+    [string]$TerminalCommand = "",
+    [string]$AssistantType = "",
+    [string]$AssistantModel = "",
+    [string]$AssistantEffort = "",
+    [string]$AssistantContext = ""
 )
 
 $portWasSpecified = $PSBoundParameters.ContainsKey("Port")
@@ -189,6 +195,26 @@ if ($OpenFolder) {
   }
 }
 
+if ($AssistantType -and $AssistantType -notin @("copilot", "claude")) {
+    throw "AssistantType must be copilot or claude."
+}
+$hasOpenTerminalOptions = [bool](
+    $TerminalTitle -or $TerminalCommand -or $AssistantType -or
+    $AssistantModel -or $AssistantEffort -or $AssistantContext
+)
+$openTerminalPayload = ""
+if ($resolvedOpenFolder) {
+    $openTerminalPayload = [ordered]@{
+        path = $resolvedOpenFolder
+        title = $TerminalTitle
+        command = $TerminalCommand
+        assistantType = $AssistantType
+        assistantModel = $AssistantModel
+        assistantEffort = $AssistantEffort
+        assistantContext = $AssistantContext
+    } | ConvertTo-Json -Compress
+}
+
 # The console window is hidden for installed launches, so Ctrl+C is no longer
 # available to stop the bridge. The Start Menu "Stop" shortcut re-runs this
 # script with -Stop, which asks every registered bridge to shut down over loopback.
@@ -275,13 +301,12 @@ if ($resolvedOpenFolder -and -not $portWasSpecified -and -not $NewInstance.IsPre
     # nothing. Fall through and start an instance that opens a window instead.
     if (-not $instance.HasRenderer) { continue }
     try {
-      $payload = @{ path = $resolvedOpenFolder } | ConvertTo-Json -Compress
       Invoke-WebRequest `
         -Uri ([Uri]::new([Uri]$instance.url, "open-folder")) `
         -Method Post `
         -Headers @{ "X-MultiTerm-Request" = "Explorer" } `
         -ContentType "application/json" `
-        -Body ([Text.Encoding]::UTF8.GetBytes($payload)) `
+        -Body ([Text.Encoding]::UTF8.GetBytes($openTerminalPayload)) `
         -UseBasicParsing `
         -TimeoutSec 5 | Out-Null
       return
@@ -1509,6 +1534,7 @@ namespace MultiTerm.PowerShellBridge
         private readonly string publicDir;
         private readonly object openFolderLock = new object();
         private readonly ConcurrentQueue<string> pendingOpenFolders = new ConcurrentQueue<string>();
+        private readonly ConcurrentQueue<string> pendingOpenTerminals = new ConcurrentQueue<string>();
         // Stable AppUserModelID so the browser "--app" window is grouped and
         // pinned as MultiTerm (with the MultiTerm icon) instead of the host
         // browser (e.g. Microsoft Edge). Must match the installer shortcut.
@@ -1580,7 +1606,7 @@ namespace MultiTerm.PowerShellBridge
         // pseudo-console, so we need to know where we came from.
         public static string ScriptPath;
 
-        public BridgeServer(string host, int port, bool autoPort, string publicDir, bool openBrowser, bool consoleDashboardEnabled, string startupOpenFolder)
+        public BridgeServer(string host, int port, bool autoPort, string publicDir, bool openBrowser, bool consoleDashboardEnabled, string startupOpenFolder, string startupOpenTerminal)
         {
             this.host = host;
             this.port = port;
@@ -1591,7 +1617,18 @@ namespace MultiTerm.PowerShellBridge
             this.openBrowser = openBrowser;
             this.consoleDashboardEnabled = consoleDashboardEnabled;
             string folder = this.NormalizeOpenFolder(startupOpenFolder);
-            if (folder != null)
+            bool hasOptions = false;
+            string launch = null;
+            if (!String.IsNullOrWhiteSpace(startupOpenTerminal))
+            {
+                try { launch = this.NormalizeOpenTerminal(Json.ParseFlatObject(startupOpenTerminal), out hasOptions); }
+                catch { }
+            }
+            if (launch != null && hasOptions)
+            {
+                this.pendingOpenTerminals.Enqueue(launch);
+            }
+            else if (folder != null)
             {
                 this.pendingOpenFolders.Enqueue(folder);
             }
@@ -1626,8 +1663,13 @@ namespace MultiTerm.PowerShellBridge
                     }
 
                     string startupFolder;
+                    string startupTerminal;
                     bool connectedToMultiTerm;
-                    if (this.pendingOpenFolders.TryDequeue(out startupFolder))
+                    if (this.pendingOpenTerminals.TryDequeue(out startupTerminal))
+                    {
+                        connectedToMultiTerm = this.SendOpenTerminalToExisting(startupTerminal);
+                    }
+                    else if (this.pendingOpenFolders.TryDequeue(out startupFolder))
                     {
                         connectedToMultiTerm = this.SendOpenFolderToExisting(startupFolder);
                     }
@@ -2522,19 +2564,27 @@ namespace MultiTerm.PowerShellBridge
                     {
                         body = reader.ReadToEnd();
                     }
-                    string folder = null;
+                    string launch = null;
+                    bool hasOptions = false;
                     try
                     {
-                        folder = this.NormalizeOpenFolder(Json.Get(Json.ParseFlatObject(body), "path"));
+                        launch = this.NormalizeOpenTerminal(Json.ParseFlatObject(body), out hasOptions);
                     }
                     catch { }
-                    if (folder == null)
+                    if (launch == null)
                     {
                         this.SendText(context.Response, 400, "Invalid folder", "text/plain; charset=utf-8");
                         return;
                     }
 
-                    this.DispatchOpenFolder(folder);
+                    if (hasOptions)
+                    {
+                        this.DispatchOpenTerminal(launch);
+                    }
+                    else
+                    {
+                        this.DispatchOpenFolder(Json.Get(Json.ParseFlatObject(launch), "path"));
+                    }
                     this.SendText(context.Response, 200, "{\"ok\":true}", "application/json; charset=utf-8");
                     return;
                 }
@@ -2838,6 +2888,46 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
+        private string NormalizeOpenTerminal(Dictionary<string, string> value, out bool hasOptions)
+        {
+            hasOptions = false;
+            if (value == null) return null;
+            string folder = this.NormalizeOpenFolder(Json.Get(value, "path"));
+            if (folder == null) return null;
+            Func<string, string> oneLine = delegate(string input)
+            {
+                string text = (input ?? String.Empty).Trim();
+                foreach (char character in text)
+                {
+                    if (Char.IsControl(character)) return String.Empty;
+                }
+                return text;
+            };
+            string title = oneLine(Json.Get(value, "title"));
+            string command = oneLine(Json.Get(value, "command"));
+            if (command.Length > 8192) return null;
+            string assistantType = oneLine(Json.Get(value, "assistantType"));
+            if (assistantType != "copilot" && assistantType != "claude") assistantType = String.Empty;
+            string assistantModel = oneLine(Json.Get(value, "assistantModel"));
+            string assistantEffort = oneLine(Json.Get(value, "assistantEffort"));
+            if (assistantEffort != "minimal" && assistantEffort != "low" && assistantEffort != "medium"
+                && assistantEffort != "high" && assistantEffort != "xhigh" && assistantEffort != "max")
+            {
+                assistantEffort = "none";
+            }
+            string assistantContext = oneLine(Json.Get(value, "assistantContext"));
+            if (assistantContext != "long_context") assistantContext = "default";
+            hasOptions = title.Length > 0 || command.Length > 0 || assistantType.Length > 0
+                || assistantModel.Length > 0 || assistantEffort != "none" || assistantContext != "default";
+            return "{\"path\":" + Json.Quote(folder)
+                + ",\"title\":" + Json.Quote(title)
+                + ",\"command\":" + Json.Quote(command)
+                + ",\"assistantType\":" + Json.Quote(assistantType)
+                + ",\"assistantModel\":" + Json.Quote(assistantModel)
+                + ",\"assistantEffort\":" + Json.Quote(assistantEffort)
+                + ",\"assistantContext\":" + Json.Quote(assistantContext) + "}";
+        }
+
         private void DispatchOpenFolder(string folder)
         {
             string message = "{\"type\":\"openFolder\",\"path\":" + Json.Quote(folder) + "}";
@@ -2863,6 +2953,28 @@ namespace MultiTerm.PowerShellBridge
                     return;
                 }
                 this.pendingOpenFolders.Enqueue(folder);
+            }
+        }
+
+        private void DispatchOpenTerminal(string launch)
+        {
+            string message = "{\"type\":\"openTerminal\"," + launch.Substring(1);
+            lock (this.openFolderLock)
+            {
+                BridgeClient target = null;
+                foreach (BridgeClient client in this.clients.Values)
+                {
+                    if (!client.IsRenderer) continue;
+                    if (target == null
+                        || (client.RendererVisible && !target.RendererVisible)
+                        || (client.RendererVisible == target.RendererVisible
+                            && client.RendererActiveAt > target.RendererActiveAt))
+                    {
+                        target = client;
+                    }
+                }
+                if (target != null && target.Send(message)) return;
+                this.pendingOpenTerminals.Enqueue(launch);
             }
         }
 
@@ -2918,6 +3030,34 @@ namespace MultiTerm.PowerShellBridge
             catch (Exception error)
             {
                 Console.WriteLine("Could not send the selected folder to the running MultiTerm instance: " + error.Message);
+                return false;
+            }
+        }
+
+        private bool SendOpenTerminalToExisting(string launch)
+        {
+            try
+            {
+                if (!this.IsExistingBridge()) return false;
+                byte[] payload = Encoding.UTF8.GetBytes(launch);
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(this.Url + "open-folder");
+                request.Method = "POST";
+                request.ContentType = "application/json";
+                request.Headers["X-MultiTerm-Request"] = "Explorer";
+                request.ContentLength = payload.Length;
+                request.Timeout = 5000;
+                using (Stream stream = request.GetRequestStream())
+                {
+                    stream.Write(payload, 0, payload.Length);
+                }
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    return response.StatusCode == HttpStatusCode.OK;
+                }
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine("Could not send the terminal request to the running MultiTerm instance: " + error.Message);
                 return false;
             }
         }
@@ -3556,12 +3696,18 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.clients[client.Id] = client;
                 int pendingFolderCount;
-                if (client.Send(this.WelcomeJson(out pendingFolderCount)))
+                int pendingTerminalCount;
+                if (client.Send(this.WelcomeJson(out pendingFolderCount, out pendingTerminalCount)))
                 {
                     string ignoredFolder;
                     for (int index = 0; index < pendingFolderCount; index++)
                     {
                         this.pendingOpenFolders.TryDequeue(out ignoredFolder);
+                    }
+                    string ignoredTerminal;
+                    for (int index = 0; index < pendingTerminalCount; index++)
+                    {
+                        this.pendingOpenTerminals.TryDequeue(out ignoredTerminal);
                     }
                 }
             }
@@ -7017,13 +7163,14 @@ namespace MultiTerm.PowerShellBridge
             catch { }
         }
 
-        private string WelcomeJson(out int pendingFolderCount)
+        private string WelcomeJson(out int pendingFolderCount, out int pendingTerminalCount)
         {
             return "{\"type\":\"welcome\",\"aiProviderBootstrap\":" + ReadAiProviderBootstrapJson()
                 + ",\"bridgeId\":" + Json.Quote(this.BridgeId)
                 + ",\"canFocusBridgeTerminal\":" + (this.consoleDashboard == null ? "false" : "true")
                 + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + ",\"sessions\":" + this.SessionsJson()
-                + ",\"openFolders\":" + this.PendingOpenFoldersJson(out pendingFolderCount) + "}";
+                + ",\"openFolders\":" + this.PendingOpenFoldersJson(out pendingFolderCount)
+                + ",\"openTerminals\":" + this.PendingOpenTerminalsJson(out pendingTerminalCount) + "}";
         }
 
         private string PendingOpenFoldersJson(out int pendingFolderCount)
@@ -7040,6 +7187,13 @@ namespace MultiTerm.PowerShellBridge
             }
             builder.Append("]");
             return builder.ToString();
+        }
+
+        private string PendingOpenTerminalsJson(out int pendingTerminalCount)
+        {
+            string[] launches = this.pendingOpenTerminals.ToArray();
+            pendingTerminalCount = launches.Length;
+            return "[" + String.Join(",", launches) + "]";
         }
 
         private string SessionsJson()
@@ -8938,7 +9092,8 @@ $bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new(
     $publicDir,
     -not $NoBrowser.IsPresent,
     $ConsoleDashboard.IsPresent,
-    $resolvedOpenFolder)
+    $resolvedOpenFolder,
+    $(if ($hasOpenTerminalOptions) { $openTerminalPayload } else { "" }))
 try {
   $bridge.Run()
 } catch {

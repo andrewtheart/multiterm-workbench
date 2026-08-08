@@ -417,6 +417,20 @@ describe("working directory picker and validation", () => {
     expect(client.send).toHaveBeenCalledWith({ type: "folderPicked", requestId: "folder-1", path: "C:\\work\\repo" });
   });
 
+  it("returns null off Windows and when the folder picker cannot start", () => {
+    setPlatform("linux");
+    const unsupported = fakeClient();
+    server.pickFolder(unsupported, { requestId: 42, cwd: "/tmp" });
+    expect(unsupported.send).toHaveBeenCalledWith({ type: "folderPicked", requestId: "", path: null });
+
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockImplementation(() => { throw new Error("missing cwd"); });
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => { throw new Error("spawn failed"); });
+    const failed = fakeClient();
+    server.pickFolder(failed, { requestId: "folder-failed", cwd: "C:\\missing" });
+    expect(failed.send).toHaveBeenCalledWith({ type: "folderPicked", requestId: "folder-failed", path: null });
+  });
+
   it("answers null exactly once when the folder picker errors and closes", () => {
     setPlatform("win32");
     vi.spyOn(fs, "statSync").mockReturnValue({ isDirectory: () => true });
@@ -488,6 +502,24 @@ describe("working directory picker and validation", () => {
       valid: false,
       error: "That directory does not exist or is not accessible."
     }));
+  });
+
+  it("rejects unsupported WSL, invalid distros, and invalid converted paths", async () => {
+    setPlatform("linux");
+    const unsupported = fakeClient();
+    await server.validateDirectory(unsupported, { requestId: "wsl-linux", path: "/tmp", shell: "wsl" });
+    expect(unsupported.send).toHaveBeenCalledWith(expect.objectContaining({ valid: false, kind: "wsl", error: expect.stringContaining("Windows") }));
+
+    setPlatform("win32");
+    const invalidDistro = fakeClient();
+    await server.validateDirectory(invalidDistro, { requestId: "wsl-distro", path: "C:\\work", shell: "wsl", distro: "bad\ndistro" });
+    expect(invalidDistro.send).toHaveBeenCalledWith(expect.objectContaining({ valid: false, error: expect.stringContaining("distribution name") }));
+
+    const emptyConversion = vi.fn((_file, _args, _options, callback) => callback(null, "", ""));
+    const invalidPath = fakeClient();
+    await server.validateDirectory(invalidPath, { requestId: "wsl-empty", path: "C:\\work", shell: "wsl" }, emptyConversion);
+    expect(invalidPath.send).toHaveBeenCalledWith(expect.objectContaining({ valid: false, error: expect.stringContaining("does not exist") }));
+    expect(emptyConversion.mock.calls[0][1]).not.toContain("--distribution");
   });
 });
 
@@ -561,6 +593,42 @@ describe("prepared text tools", () => {
     });
   });
 
+  it("handles Save As launch failure, cancellation, picker error, and write failure", () => {
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockImplementation(() => { throw new Error("missing cwd"); });
+    const spawn = vi.spyOn(childProcess, "spawn");
+
+    spawn.mockImplementationOnce(() => { throw new Error("blocked"); });
+    const launchFailed = fakeClient();
+    server.savePreparedText(launchFailed, { requestId: "launch-failed", suggestedName: 42 });
+    expect(launchFailed.send).toHaveBeenCalledWith(expect.objectContaining({ path: null, error: expect.stringContaining("blocked") }));
+
+    const cancelledProcess = fakeProcess();
+    spawn.mockReturnValueOnce(cancelledProcess);
+    const cancelled = fakeClient();
+    server.savePreparedText(cancelled, { requestId: "cancelled" });
+    cancelledProcess.emitClose();
+    expect(cancelled.send).toHaveBeenCalledWith({ type: "preparedSaved", requestId: "cancelled", path: null, error: null });
+
+    const errorProcess = fakeProcess();
+    spawn.mockReturnValueOnce(errorProcess);
+    const pickerError = fakeClient();
+    server.savePreparedText(pickerError, { requestId: "picker-error" });
+    errorProcess.emitError(new Error("dialog failed"));
+    errorProcess.emitClose();
+    expect(pickerError.send).toHaveBeenCalledTimes(1);
+    expect(pickerError.send).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining("dialog failed") }));
+
+    const writeProcess = fakeProcess();
+    spawn.mockReturnValueOnce(writeProcess);
+    vi.spyOn(fs, "writeFile").mockImplementation((_path, _text, _options, callback) => callback(new Error("disk full")));
+    const writeFailed = fakeClient();
+    server.savePreparedText(writeFailed, { requestId: "write-failed", text: 42 });
+    writeProcess.emitStdout("C:\\temp\\file.ps1");
+    writeProcess.emitClose();
+    expect(writeFailed.send).toHaveBeenCalledWith(expect.objectContaining({ path: null, error: expect.stringContaining("disk full") }));
+  });
+
   it("uses the real PowerShell parser and returns source locations", async () => {
     setPlatform("win32");
     const result = await validation({ language: "powershell", text: "$value = (" });
@@ -610,6 +678,58 @@ describe("prepared text tools", () => {
       issues: [],
       error: expect.stringContaining("checker failed")
     }));
+  });
+
+  it("reports validator platform, setup, start, runtime, and scalar-result failures", () => {
+    setPlatform("linux");
+    const unsupported = fakeClient();
+    server.validatePreparedText(unsupported, { requestId: "unsupported", language: "csharp" });
+    expect(unsupported.send).toHaveBeenCalledWith(expect.objectContaining({ engine: "Windows C# compiler", error: expect.stringContaining("Windows") }));
+
+    setPlatform("win32");
+    vi.spyOn(fs, "mkdtempSync").mockImplementationOnce(() => { throw new Error("temp denied"); });
+    const setupFailed = fakeClient();
+    server.validatePreparedText(setupFailed, { requestId: "setup", language: "powershell" });
+    expect(setupFailed.send).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining("temp denied") }));
+
+    vi.spyOn(fs, "mkdtempSync").mockReturnValue("C:\\temp\\prepare");
+    vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    const remove = vi.spyOn(fs, "rmSync").mockImplementation(() => {});
+    const spawn = vi.spyOn(childProcess, "spawn");
+    spawn.mockImplementationOnce(() => { throw new Error("start denied"); });
+    const startFailed = fakeClient();
+    server.validatePreparedText(startFailed, { requestId: "start", language: "powershell" });
+    expect(remove).toHaveBeenCalled();
+    expect(startFailed.send).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining("start denied") }));
+
+    const runtimeProcess = fakeProcess();
+    spawn.mockReturnValueOnce(runtimeProcess);
+    const runtimeFailed = fakeClient();
+    server.validatePreparedText(runtimeFailed, { requestId: "runtime", language: "powershell" });
+    runtimeProcess.emitError(new Error("runtime denied"));
+    runtimeProcess.emitClose();
+    expect(runtimeFailed.send).toHaveBeenCalledTimes(1);
+    expect(runtimeFailed.send).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringContaining("runtime denied") }));
+
+    const scalarProcess = fakeProcess();
+    spawn.mockReturnValueOnce(scalarProcess);
+    const scalar = fakeClient();
+    server.validatePreparedText(scalar, { requestId: "scalar", language: "powershell", text: 42 });
+    scalarProcess.emitStdout("{\"message\":\"one issue\"}");
+    scalarProcess.emitClose();
+    expect(scalar.send).toHaveBeenCalledWith(expect.objectContaining({ issues: [{ message: "one issue" }], error: null }));
+  });
+
+  it("dispatches folder, directory, save, and validation tools through the bridge handler", async () => {
+    setPlatform("linux");
+    const client = fakeClient();
+    server.handleClientMessage(client, JSON.stringify({ type: "pickFolder", requestId: "folder" }));
+    server.handleClientMessage(client, JSON.stringify({ type: "validateDirectory", requestId: "directory", path: "" }));
+    server.handleClientMessage(client, JSON.stringify({ type: "prepareSave", requestId: "save" }));
+    server.handleClientMessage(client, JSON.stringify({ type: "prepareValidate", requestId: "validate" }));
+    await vi.waitFor(() => expect(client.send.mock.calls.map(([message]) => message.type)).toEqual(expect.arrayContaining([
+      "folderPicked", "directoryValidation", "preparedSaved", "prepareValidation"
+    ])));
   });
 });
 

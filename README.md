@@ -694,6 +694,25 @@ only the integrations it installed when they are disabled during an upgrade or
 when MultiTerm is uninstalled. The Visual Studio source and VSIX build live under
 `integrations/visualstudio/`.
 
+External launchers can enrich an `-OpenFolder` request with a terminal title and
+command, or start Copilot CLI or Claude CLI before submitting that command as a
+prompt:
+
+```powershell
+multiterm -OpenFolder 'C:\work\repo' `
+  -TerminalTitle 'Review changes' `
+  -TerminalCommand 'Review the current diff' `
+  -AssistantType copilot `
+  -AssistantModel gpt-5 `
+  -AssistantEffort high `
+  -AssistantContext long_context
+```
+
+`AssistantType` accepts `copilot` or `claude`. Assistant model and effort are
+optional, and context applies to Copilot. MultiTerm waits for the selected
+assistant's composer before submitting `TerminalCommand`; without an assistant,
+the command runs in the new shell after it is created.
+
 ### Download
 
 Grab the latest per-user installer from the

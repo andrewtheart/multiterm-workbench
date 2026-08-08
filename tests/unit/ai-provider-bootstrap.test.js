@@ -63,6 +63,22 @@ describe("AI provider installer bootstrap", () => {
     expect(server.consumeAiProviderBootstrap()).toBe(true);
   });
 
+  it("resolves Windows and portable default bootstrap paths without local app data", () => {
+    const originalLocalData = process.env.LOCALAPPDATA;
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    delete process.env.LOCALAPPDATA;
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+      expect(server.getAiProviderBootstrapPath()).toContain(path.join("AppData", "Local", "MultiTerm"));
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      expect(server.getAiProviderBootstrapPath()).toBe(path.join(os.homedir(), "MultiTerm", "ai-provider-bootstrap.json"));
+    } finally {
+      if (originalLocalData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = originalLocalData;
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
   it("consumes the configured bootstrap only after renderer acknowledgement", () => {
     process.env.MULTITERM_AI_PROVIDER_BOOTSTRAP_PATH = filePath;
     fs.writeFileSync(filePath, JSON.stringify({ version: 1, provider: "copilot" }));

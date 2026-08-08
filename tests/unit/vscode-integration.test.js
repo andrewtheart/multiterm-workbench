@@ -92,6 +92,44 @@ describe("VS Code integration", () => {
     }
   });
 
+  it("passes terminal and assistant overrides to the installed launcher", () => {
+    const child = { unref: vi.fn() };
+    const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+    try {
+      launchFolder("C:\\MultiTerm\\Start-MultiTerm.ps1", "C:\\work repo", {
+        title: "Review changes",
+        command: "Review the current diff",
+        assistantType: "copilot",
+        assistantModel: "gpt-5",
+        assistantEffort: "high",
+        assistantContext: "long_context"
+      });
+      const args = spawn.mock.calls[0][1];
+      expect(args).toEqual(expect.arrayContaining([
+        "-TerminalTitle", "Review changes",
+        "-TerminalCommand", "Review the current diff",
+        "-AssistantType", "copilot",
+        "-AssistantModel", "gpt-5",
+        "-AssistantEffort", "high",
+        "-AssistantContext", "long_context"
+      ]));
+      expect(manifest.activationEvents).toContain("onCommand:multiterm.openTerminal");
+      expect(manifest.contributes.commands).toContainEqual(
+        expect.objectContaining({ command: "multiterm.openTerminal" })
+      );
+      for (const setting of [
+        "terminalTitle", "terminalCommand", "assistantType", "assistantModel", "assistantEffort", "assistantContext"
+      ]) {
+        expect(manifest.contributes.configuration.properties).toHaveProperty(`multiterm.${setting}`);
+      }
+      expect(extensionSource).toContain('registerCommand("multiterm.openTerminal"');
+      expect(extensionSource).toContain('typeof overrides.path === "string"');
+      expect(extensionSource).toContain('value.scheme || value.fsPath');
+    } finally {
+      spawn.mockRestore();
+    }
+  });
+
   it("packages and installs the VSIX as an optional installer task", () => {
     expect(installer).toContain('Name: "vscodeextension"');
     expect(installer).toContain("Install-VSCodeIntegration.ps1");

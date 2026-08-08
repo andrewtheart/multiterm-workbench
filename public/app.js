@@ -627,7 +627,9 @@ const elements = {
   pager: document.querySelector("#pager"),
   pagerAdd: document.querySelector("#pagerAdd"),
   pagerCollapse: document.querySelector("#pagerCollapse"),
+  pagerDockTargets: document.querySelector("#pagerDockTargets"),
   pagerList: document.querySelector("#pagerList"),
+  pagerMove: document.querySelector("#pagerMove"),
   quickSwitchInput: document.querySelector("#quickSwitchInput"),
   quickSwitchList: document.querySelector("#quickSwitchList"),
   quickSwitchOverlay: document.querySelector("#quickSwitchOverlay"),
@@ -1993,6 +1995,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "openTerminal") {
+    openExternalTerminal(message);
+    return;
+  }
+
   if (message.type === "bridgeTerminalFocus") {
     resolveBridgeRequest(message, message);
     return;
@@ -2014,6 +2021,9 @@ function handleBridgeMessage(message) {
     const known = new Set();
     const openFolders = Array.isArray(message.openFolders)
       ? message.openFolders.filter((folder) => typeof folder === "string" && folder.trim())
+      : [];
+    const openTerminals = Array.isArray(message.openTerminals)
+      ? message.openTerminals.map(normalizeExternalTerminalLaunch).filter(Boolean)
       : [];
     if (!elements.cwdInput.value) {
       elements.cwdInput.value = message.cwd || "";
@@ -2045,7 +2055,7 @@ function handleBridgeMessage(message) {
           markSessionLostWhileOffline(terminal);
         }
       }
-    } else if (state.terminals.size === 0 && openFolders.length === 0) {
+    } else if (state.terminals.size === 0 && openFolders.length === 0 && openTerminals.length === 0) {
       const snapshot = state.settings.restoreSession ? loadSessionSnapshot() : null;
       if (snapshot && snapshot.length > 0) {
         batchTerminalWork(() => {
@@ -2076,6 +2086,9 @@ function handleBridgeMessage(message) {
 
     for (const folder of openFolders) {
       openFolderInNewTerminal(folder);
+    }
+    for (const launch of openTerminals) {
+      openExternalTerminal(launch);
     }
     recoverStaleTerminalArtifacts(known);
     pruneTerminalLinks();
@@ -2160,6 +2173,21 @@ function handleBridgeMessage(message) {
       window.setTimeout(() => {
         const liveTerminal = state.terminals.get(terminal.id);
         if (liveTerminal?.status === "live") invokeAiAssistant(liveTerminal);
+      }, 500);
+    }
+    if (terminal.pendingExternalAssistant) {
+      const pending = terminal.pendingExternalAssistant;
+      terminal.pendingExternalAssistant = null;
+      window.setTimeout(() => {
+        const liveTerminal = state.terminals.get(terminal.id);
+        if (liveTerminal?.status !== "live") return;
+        const sent = sendBridge({ type: "input", id: terminal.id, data: `${pending.command}\r` });
+        if (!sent || !pending.followup) return;
+        liveTerminal.autoQueueRequiredAssistant = pending.provider;
+        liveTerminal.autoQueueRequiredRevision = liveTerminal.outputRevision + 1;
+        queueAutomaticTerminalCommand(liveTerminal, pending.followup, {
+          occurrenceKey: `external-launch:${terminal.id}`
+        });
       }, 500);
     }
     if (terminal.pendingHandoff) {
@@ -2315,6 +2343,56 @@ function openFolderInNewTerminal(folder) {
     reveal: true,
     runStartup: true,
     cwd: folder.trim()
+  });
+}
+
+function normalizeExternalTerminalLaunch(value) {
+  const launch = typeof value === "string" ? { path: value } : value;
+  if (!launch || typeof launch !== "object") return null;
+  const path = typeof launch.path === "string" ? launch.path.trim() : "";
+  if (!path) return null;
+  const oneLine = (input) => {
+    const text = typeof input === "string" ? input.trim() : "";
+    return !/[\u0000-\u001f\u007f-\u009f]/.test(text) ? text : "";
+  };
+  const assistantType = launch.assistantType === "copilot" || launch.assistantType === "claude"
+    ? launch.assistantType
+    : "";
+  return {
+    path,
+    title: oneLine(launch.title),
+    command: safeTerminalCommand(launch.command) || "",
+    assistantType,
+    assistantModel: oneLine(launch.assistantModel),
+    assistantEffort: COPILOT_TITLE_EFFORTS.has(launch.assistantEffort) ? launch.assistantEffort : "none",
+    assistantContext: COPILOT_TITLE_CONTEXTS.has(launch.assistantContext) ? launch.assistantContext : "default"
+  };
+}
+
+function openExternalTerminal(value) {
+  const launch = normalizeExternalTerminalLaunch(value);
+  if (!launch) return null;
+  focusAppWindow();
+  const assistantCommand = launch.assistantType
+    ? buildAiAssistantCommand({
+      provider: launch.assistantType,
+      model: launch.assistantModel,
+      effort: launch.assistantEffort,
+      context: launch.assistantContext
+    })
+    : "";
+  return addTerminal({
+    reveal: true,
+    runStartup: !assistantCommand,
+    cwd: launch.path,
+    title: launch.title || undefined,
+    pendingCommand: assistantCommand ? null : launch.command || null,
+    pendingCommandEnter: true,
+    pendingExternalAssistant: assistantCommand ? {
+      command: assistantCommand,
+      followup: launch.command,
+      provider: launch.assistantType
+    } : null
   });
 }
 
@@ -2506,6 +2584,9 @@ function addTerminal(options = {}) {
     observer: null,
     pane,
     pendingAiAssistant: Boolean(options.pendingAiAssistant),
+    pendingExternalAssistant: options.pendingExternalAssistant && typeof options.pendingExternalAssistant === "object"
+      ? options.pendingExternalAssistant
+      : null,
     pendingCommand: typeof options.pendingCommand === "string" ? options.pendingCommand : null,
     pendingCommandEnter: options.pendingCommandEnter !== false,
     pendingPaste: typeof options.pendingPaste === "string" ? options.pendingPaste : null,
@@ -5836,6 +5917,14 @@ function dispatchAutomaticQueueItem(terminal) {
   if (terminal.autoQueueCompletionMarker) {
     const evidence = normalizeAutomaticQueueEvidence(terminal.autoQueueOutputEvidence);
     if (!evidence.includes(terminal.autoQueueCompletionMarker)) return false;
+  }
+  if (terminal.autoQueueRequiredAssistant) {
+    const lines = activeBufferLines(terminal);
+    const provider = promptDetector.aiAssistantTuiProvider(lines)
+      || (promptDetector.isCopilotTui(lines) ? "copilot" : "");
+    if (provider !== terminal.autoQueueRequiredAssistant) return false;
+    terminal.aiAssistantTuiProvider = provider;
+    terminal.autoQueueRequiredAssistant = "";
   }
   const readiness = terminalExecutionReadiness(terminal);
   if (!readiness.ready) return false;
@@ -12658,6 +12747,7 @@ function cyclePage(direction) {
 }
 
 const PAGER_PLACEMENTS = new Set(["top", "bottom", "left", "right"]);
+const PAGER_DOCK_DRAG_THRESHOLD = 12;
 
 function normalizedPagerPlacement(value = state.settings.pagerPlacement) {
   return PAGER_PLACEMENTS.has(value) ? value : "bottom";
@@ -12678,7 +12768,7 @@ function applyPagerPlacement() {
 
   document.body.dataset.pagerPlacement = placement;
   document.body.classList.toggle("pager-panel-collapsed", collapsed);
-  elements.pager.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
+  elements.pagerList.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
 
   if (vertical) {
     if (placement === "left") elements.workbench.insertBefore(elements.pager, elements.stage);
@@ -12737,6 +12827,111 @@ function showPagerPlacementMenu(x, y) {
     { label: "Move pages to right", icon: "panel-right", disabled: current === "right", run: () => setPagerPlacement("right") }
   ]);
   showBuiltContextMenu(x, y);
+}
+
+let pagerDockGesture = null;
+let suppressPagerMoveClick = false;
+
+function setPagerDockTargetsVisible(visible) {
+  if (!elements.pagerDockTargets) return;
+  elements.pagerDockTargets.hidden = !visible;
+  document.body.classList.toggle("is-pager-docking", visible);
+  elements.pager.classList.toggle("is-dock-dragging", visible);
+  const current = normalizedPagerPlacement();
+  for (const target of elements.pagerDockTargets.querySelectorAll("[data-pager-dock]")) {
+    target.hidden = visible && target.dataset.pagerDock === current;
+    target.classList.remove("is-targeted");
+  }
+}
+
+function pagerDockTargetAt(clientX, clientY) {
+  if (!elements.pagerDockTargets || elements.pagerDockTargets.hidden) return "";
+  for (const target of elements.pagerDockTargets.querySelectorAll("[data-pager-dock]:not([hidden])")) {
+    const rect = target.getBoundingClientRect();
+    if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+      return target.dataset.pagerDock;
+    }
+  }
+  return "";
+}
+
+function updatePagerDockTarget(clientX, clientY) {
+  if (!pagerDockGesture?.active) return;
+  pagerDockGesture.target = pagerDockTargetAt(clientX, clientY);
+  for (const target of elements.pagerDockTargets.querySelectorAll("[data-pager-dock]")) {
+    target.classList.toggle("is-targeted", target.dataset.pagerDock === pagerDockGesture.target);
+  }
+}
+
+function finishPagerDockGesture({ cancel = false } = {}) {
+  const gesture = pagerDockGesture;
+  if (!gesture) return;
+  pagerDockGesture = null;
+  if (elements.pagerMove?.hasPointerCapture(gesture.pointerId)) {
+    elements.pagerMove.releasePointerCapture(gesture.pointerId);
+  }
+  if (gesture.active) setPagerDockTargetsVisible(false);
+  if (gesture.moved || gesture.active) {
+    suppressPagerMoveClick = true;
+    window.setTimeout(() => { suppressPagerMoveClick = false; }, 0);
+  }
+  if (!cancel && gesture.active && gesture.target) setPagerPlacement(gesture.target);
+}
+
+function bindPagerDockDrag() {
+  const handle = elements.pagerMove;
+  if (!handle || !elements.pagerDockTargets) return;
+
+  handle.addEventListener("dragstart", (event) => event.preventDefault());
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.isPrimary === false) return;
+    pagerDockGesture = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+      moved: false,
+      target: ""
+    };
+    handle.setPointerCapture(event.pointerId);
+    handle.focus({ preventScroll: true });
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!pagerDockGesture || event.pointerId !== pagerDockGesture.pointerId) return;
+    const distance = Math.hypot(
+      event.clientX - pagerDockGesture.startX,
+      event.clientY - pagerDockGesture.startY
+    );
+    if (distance >= 3) pagerDockGesture.moved = true;
+    if (!pagerDockGesture.active && distance >= PAGER_DOCK_DRAG_THRESHOLD) {
+      pagerDockGesture.active = true;
+      setPagerDockTargetsVisible(true);
+    }
+    updatePagerDockTarget(event.clientX, event.clientY);
+  });
+  handle.addEventListener("pointerup", (event) => {
+    if (!pagerDockGesture || event.pointerId !== pagerDockGesture.pointerId) return;
+    updatePagerDockTarget(event.clientX, event.clientY);
+    finishPagerDockGesture();
+  });
+  handle.addEventListener("pointercancel", () => finishPagerDockGesture({ cancel: true }));
+  handle.addEventListener("lostpointercapture", () => finishPagerDockGesture({ cancel: true }));
+  handle.addEventListener("click", (event) => {
+    if (suppressPagerMoveClick) {
+      event.preventDefault();
+      return;
+    }
+    const rect = handle.getBoundingClientRect();
+    showPagerPlacementMenu(rect.left, rect.bottom + 4);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !pagerDockGesture?.active) return;
+    event.preventDefault();
+    event.stopPropagation();
+    finishPagerDockGesture({ cancel: true });
+  }, true);
 }
 
 let draggedPageId = null;
@@ -12892,6 +13087,8 @@ function bindPager() {
   const list = elements.pagerList;
   if (!list) return;
 
+  bindPagerDockDrag();
+
   list.addEventListener("wheel", (event) => {
     if (isVerticalPager() || list.scrollWidth <= list.clientWidth) return;
     const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
@@ -12947,8 +13144,8 @@ function bindPager() {
   });
 
   list.addEventListener("dragstart", (event) => {
-    const chip = event.target.closest(".pager-chip");
-    if (!chip || event.target.closest("[data-page-close], .pager-rename")) {
+    const chip = event.target.closest?.(".pager-chip");
+    if (!chip || event.target.closest?.("[data-page-close], .pager-rename")) {
       event.preventDefault();
       return;
     }
@@ -12968,14 +13165,14 @@ function bindPager() {
     if (!draggedPageId) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    const targetChip = event.target.closest(".pager-chip");
+    const targetChip = event.target.closest?.(".pager-chip");
     if (targetChip) {
       const rect = targetChip.getBoundingClientRect();
       const before = isVerticalPager()
         ? event.clientY < rect.top + rect.height / 2
         : event.clientX < rect.left + rect.width / 2;
       moveDraggedPage(targetChip, before);
-    } else if (event.target === list || event.target.closest(".pager-list") === list) {
+    } else if (event.target === list || event.target.closest?.(".pager-list") === list) {
       const draggedChip = list.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
       if (draggedChip && draggedChip !== list.lastElementChild) {
         list.append(draggedChip);
@@ -12992,7 +13189,7 @@ function bindPager() {
   });
 
   list.addEventListener("dragend", (event) => {
-    event.target.closest(".pager-chip")?.classList.remove("is-page-dragging");
+    event.target.closest?.(".pager-chip")?.classList.remove("is-page-dragging");
     if (pageDragChanged && pageDropAccepted) {
       savePages();
     } else if (pageDragChanged && originalPageOrder) {
@@ -17699,7 +17896,13 @@ function quotedAiArgument(value) {
   return AI_MODEL_ID_PATTERN.test(argument) ? `"${argument}"` : "";
 }
 
-function buildAiAssistantCommand({ provider = state.settings.aiSessionProvider, resumeId = "" } = {}) {
+function buildAiAssistantCommand({
+  provider = state.settings.aiSessionProvider,
+  resumeId = "",
+  model = state.settings.aiSessionModel,
+  effort = state.settings.aiSessionEffort,
+  context = state.settings.aiSessionContext
+} = {}) {
   if (provider !== "copilot" && provider !== "claude") return "";
   const parts = provider === "claude"
     ? ["claude", "--dangerously-skip-permissions"]
@@ -17707,13 +17910,13 @@ function buildAiAssistantCommand({ provider = state.settings.aiSessionProvider, 
   if (resumeId && COPILOT_RESUME_ID_PATTERN.test(resumeId)) {
     parts.push("--resume", quotedAiArgument(resumeId));
   }
-  const model = quotedAiArgument(state.settings.aiSessionModel);
-  if (model) parts.push("--model", model);
-  if (COPILOT_TITLE_EFFORTS.has(state.settings.aiSessionEffort) && state.settings.aiSessionEffort !== "none") {
-    parts.push("--effort", state.settings.aiSessionEffort);
+  const modelArgument = quotedAiArgument(model);
+  if (modelArgument) parts.push("--model", modelArgument);
+  if (COPILOT_TITLE_EFFORTS.has(effort) && effort !== "none") {
+    parts.push("--effort", effort);
   }
-  if (provider === "copilot" && COPILOT_TITLE_CONTEXTS.has(state.settings.aiSessionContext)) {
-    parts.push("--context", state.settings.aiSessionContext);
+  if (provider === "copilot" && COPILOT_TITLE_CONTEXTS.has(context)) {
+    parts.push("--context", context);
   }
   return parts.filter(Boolean).join(" ");
 }

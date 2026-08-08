@@ -437,6 +437,106 @@ describe("watchdog bridge control", () => {
     }
   });
 
+  it("claims the lowest free bridge id, reclaims stale records, and handles cleanup failures", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-bridge-id-"));
+    const original = process.env.LOCALAPPDATA;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      delete process.env.LOCALAPPDATA;
+      expect(server.claimBridgeIdentifier()).toBeNull();
+      expect(() => server.releaseBridgeIdentifier()).not.toThrow();
+
+      process.env.LOCALAPPDATA = root;
+      const directory = path.join(root, "MultiTerm", "BridgeIds");
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "BRIDGE-001.json"), "not json");
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-001");
+
+      const unlink = vi.spyOn(fs, "unlinkSync").mockImplementationOnce(() => {
+        throw Object.assign(new Error("release denied"), { code: "EACCES" });
+      });
+      server.releaseBridgeIdentifier();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("release denied"));
+      unlink.mockRestore();
+
+      fs.writeFileSync(path.join(directory, "BRIDGE-001.json"), JSON.stringify({ pid: process.pid }));
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-002");
+      const claimedPath = path.join(directory, "BRIDGE-002.json");
+      fs.rmSync(claimedPath);
+      expect(() => server.releaseBridgeIdentifier()).not.toThrow();
+    } finally {
+      server.releaseBridgeIdentifier();
+      if (original === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = original;
+      vi.restoreAllMocks();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails bridge id setup and assistant-session writes without leaking exceptions", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-bridge-id-errors-"));
+    const original = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const mkdir = vi.spyOn(fs, "mkdirSync").mockImplementationOnce(() => { throw new Error("id directory denied"); });
+      expect(server.claimBridgeIdentifier()).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("id directory denied"));
+      mkdir.mockRestore();
+
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-001");
+      const write = vi.spyOn(fs, "writeFileSync").mockImplementationOnce(() => { throw new Error("session write denied"); });
+      server.handleClientMessage(fakeClient(), JSON.stringify({ type: "saveAssistantSessions", sessions: [] }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("session write denied"));
+      write.mockRestore();
+    } finally {
+      server.releaseBridgeIdentifier();
+      if (original === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = original;
+      vi.restoreAllMocks();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles bridge id claim write failures, EPERM owners, unlink failures, and exhaustion", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-bridge-id-edges-"));
+    const original = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const directory = path.join(root, "MultiTerm", "BridgeIds");
+    fs.mkdirSync(directory, { recursive: true });
+    try {
+      const write = vi.spyOn(fs, "writeSync").mockImplementationOnce(() => { throw new Error("claim write failed"); });
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-001");
+      server.releaseBridgeIdentifier();
+      write.mockRestore();
+
+      fs.writeFileSync(path.join(directory, "BRIDGE-001.json"), JSON.stringify({ pid: 12345 }));
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
+      });
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-002");
+      server.releaseBridgeIdentifier();
+      kill.mockRestore();
+
+      fs.writeFileSync(path.join(directory, "BRIDGE-001.json"), JSON.stringify({ pid: -1 }));
+      const unlink = vi.spyOn(fs, "unlinkSync").mockImplementationOnce(() => { throw new Error("stale unlink failed"); });
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-002");
+      server.releaseBridgeIdentifier();
+      unlink.mockRestore();
+
+      vi.spyOn(fs, "openSync").mockImplementation(() => { throw new Error("occupied"); });
+      vi.spyOn(fs, "readFileSync").mockReturnValue(JSON.stringify({ pid: process.pid }));
+      vi.spyOn(process, "kill").mockImplementation(() => {});
+      expect(server.claimBridgeIdentifier()).toBeNull();
+    } finally {
+      server.releaseBridgeIdentifier();
+      if (original === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = original;
+      vi.restoreAllMocks();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("dispatches shutdown and watchdog paths through the HTTP request listener", () => {
     const shutdownResponse = mockResponse();
     server.server.emit("request", mockRequest({ method: "GET", url: "/shutdown" }), shutdownResponse);
@@ -460,6 +560,120 @@ describe("watchdog bridge control", () => {
     const resumed = mockResponse();
     server.server.emit("request", mockRequest({ url: "/health" }), resumed);
     expect(JSON.parse(resumed.body).watchdogSuppressed).toBe(false);
+  });
+
+  it("returns the bridge-terminal focus limitation through the protocol", () => {
+    const client = fakeClient();
+    server.handleClientMessage(client, JSON.stringify({ type: "focusBridgeTerminal", requestId: "focus" }));
+    expect(client.send).toHaveBeenCalledWith({
+      type: "bridgeTerminalFocus",
+      requestId: "focus",
+      ok: false,
+      reason: "This bridge does not run in its own terminal window."
+    });
+  });
+});
+
+describe("open-folder request callbacks", () => {
+  it("rejects streamed overflow without relying on Content-Length", () => {
+    const request = mockRequest({
+      method: "POST",
+      url: "/open-folder",
+      headers: { "x-multiterm-request": "Explorer" }
+    });
+    const response = mockResponse();
+    server.handleOpenFolderRequest(request, response);
+
+    request.emit("data", "x".repeat(server.openFolderMaxSize + 1));
+    request.emit("data", "ignored after overflow");
+    request.emit("end");
+
+    expect(response.statusCode).toBe(413);
+    expect(JSON.parse(response.body)).toEqual({ ok: false, error: "Request too large" });
+  });
+
+  it("reports request stream errors only before a response has started", () => {
+    const request = mockRequest({
+      method: "POST",
+      url: "/open-folder",
+      headers: { "x-multiterm-request": "Explorer" }
+    });
+    const response = mockResponse();
+    server.handleOpenFolderRequest(request, response);
+    request.emit("error", new Error("stream failed"));
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.body).error).toBe("stream failed");
+
+    const lateRequest = mockRequest({
+      method: "POST",
+      url: "/open-folder",
+      headers: { "x-multiterm-request": "Explorer" }
+    });
+    const lateResponse = mockResponse();
+    lateResponse.headersSent = true;
+    server.handleOpenFolderRequest(lateRequest, lateResponse);
+    lateRequest.emit("error", "late failure");
+    expect(lateResponse.ended).toBe(false);
+  });
+
+  it("prefers a visible renderer and otherwise queues a normalized folder", () => {
+    const hidden = { renderer: true, rendererVisible: false, rendererActiveAt: 20, send: vi.fn() };
+    const visible = { renderer: true, rendererVisible: true, rendererActiveAt: 10, send: vi.fn() };
+    const recentVisible = { renderer: true, rendererVisible: true, rendererActiveAt: 40, send: vi.fn() };
+    const relay = { renderer: false, rendererVisible: true, rendererActiveAt: 30, send: vi.fn() };
+    server.clients.add(hidden);
+    server.clients.add(relay);
+    server.clients.add(visible);
+    server.clients.add(recentVisible);
+
+    expect(server.dispatchOpenFolder(process.cwd())).toBe(true);
+    expect(recentVisible.send).toHaveBeenCalledWith({ type: "openFolder", path: process.cwd() });
+    expect(hidden.send).not.toHaveBeenCalled();
+    expect(relay.send).not.toHaveBeenCalled();
+    expect(visible.send).not.toHaveBeenCalled();
+
+    server.clients.clear();
+    expect(server.dispatchOpenFolder(process.cwd())).toBe(false);
+    expect(server.pendingOpenFolders.pop()).toBe(process.cwd());
+    expect(server.normalizeOpenFolder(__filename)).toBeNull();
+  });
+
+  it("normalizes and routes structured terminal launches independently of folder-only requests", () => {
+    const launch = server.normalizeOpenTerminal({
+      path: process.cwd(),
+      title: "Review",
+      command: "Explain the diff",
+      assistantType: "claude",
+      assistantModel: "sonnet",
+      assistantEffort: "high",
+      assistantContext: "long_context"
+    });
+    expect(launch).toEqual({
+      path: process.cwd(),
+      title: "Review",
+      command: "Explain the diff",
+      assistantType: "claude",
+      assistantModel: "sonnet",
+      assistantEffort: "high",
+      assistantContext: "long_context"
+    });
+    expect(server.externalLaunchHasOptions(launch)).toBe(true);
+
+    const renderer = { renderer: true, rendererVisible: true, rendererActiveAt: 1, send: vi.fn() };
+    server.clients.add(renderer);
+    expect(server.dispatchOpenTerminal(launch)).toBe(true);
+    expect(renderer.send).toHaveBeenCalledWith({ type: "openTerminal", ...launch });
+    server.clients.clear();
+    expect(server.dispatchOpenTerminal(launch)).toBe(false);
+    expect(server.pendingOpenTerminals.pop()).toEqual(launch);
+
+    expect(server.normalizeOpenTerminal({ path: __filename })).toBeNull();
+    expect(server.normalizeOpenTerminal({ path: process.cwd(), command: "x".repeat(8193) })).toBeNull();
+    expect(server.normalizeOpenTerminal({ path: process.cwd(), assistantType: "other" })).toMatchObject({
+      assistantType: "",
+      assistantEffort: "none",
+      assistantContext: "default"
+    });
   });
 });
 

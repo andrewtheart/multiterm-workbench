@@ -14,6 +14,32 @@ function configuredLauncherPath() {
   return vscode.workspace.getConfiguration("multiterm").get("launcherPath", "").trim();
 }
 
+function configuredLaunchOptions() {
+  const configuration = vscode.workspace.getConfiguration("multiterm");
+  return {
+    title: configuration.get("terminalTitle", ""),
+    command: configuration.get("terminalCommand", ""),
+    assistantType: configuration.get("assistantType", ""),
+    assistantModel: configuration.get("assistantModel", ""),
+    assistantEffort: configuration.get("assistantEffort", ""),
+    assistantContext: configuration.get("assistantContext", "")
+  };
+}
+
+function launchOptions(overrides = {}) {
+  const configured = configuredLaunchOptions();
+  const result = {};
+  for (const key of ["title", "command", "assistantType", "assistantModel", "assistantEffort", "assistantContext"]) {
+    result[key] = typeof overrides[key] === "string" ? overrides[key] : configured[key];
+  }
+  return result;
+}
+
+function terminalLaunchOverrides(value) {
+  if (!value || typeof value !== "object" || value.scheme || value.fsPath) return {};
+  return value;
+}
+
 async function chooseWorkspaceFolder() {
   const folders = vscode.workspace.workspaceFolders || [];
   if (folders.length === 0) return null;
@@ -37,8 +63,21 @@ async function resolveResourceFolder(resource, forceWorkspace = false) {
   return chooseWorkspaceFolder();
 }
 
-async function openInMultiTerm(resource, forceWorkspace = false) {
-  const folder = await resolveResourceFolder(resource, forceWorkspace);
+async function openInMultiTerm(resource, forceWorkspace = false, overrides = {}) {
+  overrides = terminalLaunchOverrides(overrides);
+  let folder;
+  const requestedPath = typeof overrides.path === "string" && overrides.path.trim()
+    ? overrides.path.trim()
+    : typeof overrides.folder === "string" ? overrides.folder.trim() : "";
+  if (requestedPath) {
+    try {
+      folder = folderForResource(requestedPath, fs.statSync(requestedPath).isDirectory());
+    } catch (error) {
+      throw new Error(`The requested MultiTerm folder is unavailable: ${error.message}`);
+    }
+  } else {
+    folder = await resolveResourceFolder(resource, forceWorkspace);
+  }
   if (!folder) {
     vscode.window.showErrorMessage("MultiTerm needs an open local workspace or a selected local file or folder.");
     return;
@@ -57,7 +96,7 @@ async function openInMultiTerm(resource, forceWorkspace = false) {
   }
 
   try {
-    const child = launchFolder(launcher, folder);
+    const child = launchFolder(launcher, folder, launchOptions(overrides));
     child.once("error", (error) => {
       vscode.window.showErrorMessage(`Could not start MultiTerm: ${error.message}`);
     });
@@ -76,7 +115,8 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("multiterm.openContainingFolder", (resource) => openInMultiTerm(resource)),
     vscode.commands.registerCommand("multiterm.openFolder", (resource) => openInMultiTerm(resource)),
-    vscode.commands.registerCommand("multiterm.openWorkspace", () => openInMultiTerm(null, true))
+    vscode.commands.registerCommand("multiterm.openWorkspace", (overrides = {}) => openInMultiTerm(null, true, overrides)),
+    vscode.commands.registerCommand("multiterm.openTerminal", (overrides = {}) => openInMultiTerm(null, true, overrides))
   );
 }
 

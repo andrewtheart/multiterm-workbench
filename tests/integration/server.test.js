@@ -183,6 +183,7 @@ describe("open-folder forwarding", () => {
 
   beforeEach(() => {
     app.pendingOpenFolders.length = 0;
+    app.pendingOpenTerminals.length = 0;
   });
 
   it("rejects methods, untrusted callers, oversized bodies, and non-directories", async () => {
@@ -219,6 +220,34 @@ describe("open-folder forwarding", () => {
     expect(welcome.openFolders).toEqual([folder]);
     // Handing it over must also clear it, or every reconnect reopens the folder.
     expect(app.pendingOpenFolders).toEqual([]);
+  });
+
+  it("preserves structured terminal and assistant options in queued welcome delivery", async () => {
+    const launch = {
+      path: folder,
+      title: "Review changes",
+      command: "Review the current diff",
+      assistantType: "copilot",
+      assistantModel: "gpt-5",
+      assistantEffort: "high",
+      assistantContext: "long_context"
+    };
+    expect((await post(JSON.stringify(launch))).status).toBe(200);
+    expect(app.pendingOpenFolders).toEqual([]);
+    expect(app.pendingOpenTerminals).toEqual([launch]);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${new URL(baseUrl).port}/ws`);
+    const welcome = await new Promise((resolve, reject) => {
+      ws.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === "welcome") resolve(message);
+      });
+      ws.addEventListener("error", reject);
+    });
+    ws.close();
+
+    expect(welcome.openTerminals).toEqual([launch]);
+    expect(app.pendingOpenTerminals).toEqual([]);
   });
 
   it("delivers straight to a live renderer instead of queueing", async () => {

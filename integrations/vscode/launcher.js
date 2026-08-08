@@ -47,22 +47,33 @@ function folderForResource(resourcePath, isDirectory) {
   return path.resolve(isDirectory ? resourcePath : path.dirname(resourcePath));
 }
 
-function launchFolder(launcherPath, folderPath) {
+function launchFolder(launcherPath, folderPath, options = {}) {
+  const argumentsList = [
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-WindowStyle",
+    "Hidden",
+    "-File",
+    launcherPath,
+    "-OpenFolder",
+    folderPath
+  ];
+  for (const [parameter, value] of [
+    ["-TerminalTitle", options.title],
+    ["-TerminalCommand", options.command],
+    ["-AssistantType", options.assistantType],
+    ["-AssistantModel", options.assistantModel],
+    ["-AssistantEffort", options.assistantEffort],
+    ["-AssistantContext", options.assistantContext]
+  ]) {
+    if (typeof value === "string" && value.trim()) argumentsList.push(parameter, value.trim());
+  }
   const child = childProcess.spawn(
     "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-WindowStyle",
-      "Hidden",
-      "-File",
-      launcherPath,
-      "-OpenFolder",
-      folderPath
-    ],
+    argumentsList,
     {
       stdio: "ignore",
       windowsHide: true

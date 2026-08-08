@@ -6021,4 +6021,608 @@ test.describe("Renderer coverage completion", () => {
     expect(result.visibleDialogAfterHide).toBe(null);
     expect(result.focusClass).toBe(false);
   });
+
+  test("covers retained TUI search rendering and navigation @full", async () => {
+    const result = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      const originalTranscript = terminal.tuiTranscript;
+      const originalSendBridge = window.sendBridge;
+      const originalFindAllQuery = state.findAll.query;
+      const focusTarget = document.createElement("button");
+      focusTarget.type = "button";
+      document.body.append(focusTarget);
+      focusTarget.focus();
+
+      const target = `retained coverage target ${Date.now()}`;
+      await new Promise((resolve) => terminal.term.write(`\r\n${target}\r\n`, resolve));
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      terminal.tuiTranscript = `before\n${target}\nafter\n${target} again`;
+
+      tuiSearch.terminalId = "missing-terminal";
+      tuiSearch.query = target;
+      renderTuiSearchResults();
+      const missingStatus = elements.tuiSearchStatus.textContent;
+
+      tuiSearch.terminalId = terminal.id;
+      tuiSearch.query = "absent retained text";
+      renderTuiSearchResults();
+      const emptyStatus = elements.tuiSearchStatus.textContent;
+
+      tuiSearch.query = target;
+      renderTuiSearchResults();
+      const rowCount = elements.tuiSearchList.querySelectorAll(".tui-search-row").length;
+      const context = elements.tuiSearchList.querySelector(".tui-search-context")?.textContent;
+      const visible = terminalVisibleText(terminal).includes(normalizeSearchText(target));
+      const noBuffer = terminalVisibleText({ term: null });
+      const emptyMatches = tuiHistoryMatchLines(terminal, "");
+      const retainedMatches = tuiHistoryMatchLines(terminal, target);
+
+      updateTerminalHistoryMatchBadge(terminal, target);
+      const badge = terminal.pane.querySelector(".pane-history-match");
+      const badgeCount = badge?.querySelector(".pane-history-match-count")?.textContent;
+      updateTerminalHistoryMatchBadge(terminal, "absent retained text");
+      const badgeHidden = badge?.hidden;
+      const missingBadgeTerminal = { pane: document.createElement("div"), tuiTranscript: terminal.tuiTranscript };
+      updateTerminalHistoryMatchBadge(missingBadgeTerminal, target);
+      const historyMatches = terminalHistoryMatches(terminal, target);
+      const noHistoryMatches = terminalHistoryMatches({ tuiTranscript: "" }, target);
+
+      const sent = [];
+      window.sendBridge = (message) => { sent.push(message); return true; };
+      tuiScrollStep({ id: "mouse", term: { modes: { mouseTrackingMode: "sgr" } } }, "up");
+      tuiScrollStep({ id: "plain", term: { modes: { mouseTrackingMode: "none" } } }, "down");
+      window.sendBridge = originalSendBridge;
+
+      const clickTerminal = {
+        id: "coverage-tui-click",
+        titleInput: { value: "Coverage TUI" },
+        tuiTranscript: `before\n${target}\nafter`,
+        term: {
+          buffer: {
+            active: {
+              length: 1,
+              getLine: () => ({ translateToString: () => target })
+            }
+          },
+          focus() {}
+        }
+      };
+      state.terminals.set(clickTerminal.id, clickTerminal);
+      tuiSearch.terminalId = clickTerminal.id;
+      tuiSearch.query = target;
+      renderTuiSearchResults();
+      elements.tuiSearchList.querySelector(".tui-search-row")?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      const selectedStatus = elements.tuiSearchStatus.textContent;
+      const invalidJump = await jumpToTuiMatch(null, target);
+      focusTarget.focus();
+      state.findAll.query = target;
+      openTuiSearchResults(clickTerminal);
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+      closeTuiSearchResults({ restoreFocus: true });
+      const restoredFocus = document.activeElement === focusTarget;
+
+      state.terminals.delete(clickTerminal.id);
+      terminal.tuiTranscript = originalTranscript;
+      state.findAll.query = originalFindAllQuery;
+      focusTarget.remove();
+      return {
+        badgeCount,
+        badgeHidden,
+        context,
+        emptyMatches: emptyMatches.length,
+        emptyStatus,
+        historyMatches,
+        invalidJump,
+        missingStatus,
+        noBuffer,
+        noHistoryMatches,
+        retainedMatches: retainedMatches.length,
+        restoredFocus,
+        rowCount,
+        selectedStatus,
+        sent,
+        visible
+      };
+    });
+
+    expect(result).toMatchObject({
+      badgeCount: "2",
+      badgeHidden: true,
+      context: "before",
+      emptyMatches: 0,
+      historyMatches: true,
+      invalidJump: { ok: false, reason: "Nothing to look for." },
+      noBuffer: "",
+      noHistoryMatches: false,
+      retainedMatches: 2,
+      restoredFocus: true,
+      rowCount: 2,
+      visible: true
+    });
+    expect(result.emptyStatus).toContain("No matches");
+    expect(result.missingStatus).toContain("no longer available");
+    expect(result.selectedStatus).toContain("Already on screen");
+    expect(result.sent).toEqual([
+      { type: "input", id: "mouse", data: "\u001b[<64;1;1M" },
+      { type: "input", id: "plain", data: "\u001b[6~" }
+    ]);
+  });
+
+  test("covers worktree manager and review result states @full", async () => {
+    const result = await page.evaluate(async () => {
+      const savedRequestBridge = requestBridge;
+      const savedRefreshWorktreeManager = refreshWorktreeManager;
+      const savedConfirm = window.confirm;
+      const savedDiff2Html = window.Diff2Html;
+      const savedSendBridge = sendBridge;
+      const terminal = [...state.terminals.values()][0];
+      const values = { refreshes: 0, sent: [] };
+
+      try {
+        renderWorktreeRows([]);
+        values.empty = elements.worktreeManagerList.textContent;
+        renderWorktreeRows([
+          { path: "D:\\repo", branch: "main", parentBranch: "", createdByMultiTerm: false },
+          { path: "D:\\repo.worktrees\\feature", branch: "feature", parentBranch: "main", createdByMultiTerm: true }
+        ]);
+        values.rowCount = elements.worktreeManagerList.querySelectorAll(".worktree-row").length;
+        values.managedActions = elements.worktreeManagerList.querySelector('[data-managed="true"]')
+          ?.querySelectorAll("button").length;
+
+        elements.worktreeManagerRepo.value = "";
+        await refreshWorktreeManager();
+        values.blankManager = elements.worktreeManagerStatus.textContent;
+
+        requestBridge = async () => null;
+        elements.worktreeManagerRepo.value = "D:\\missing";
+        await refreshWorktreeManager();
+        values.failedManager = elements.worktreeManagerStatus.textContent;
+
+        requestBridge = async (message) => message.type === "gitWorktrees"
+          ? {
+              ok: true,
+              worktrees: [
+                { path: "D:\\repo", branch: "main", parentBranch: "", createdByMultiTerm: false },
+                { path: "D:\\repo.worktrees\\feature", branch: "feature", parentBranch: "main", createdByMultiTerm: true }
+              ]
+            }
+          : { ok: true, repositoryRoot: "D:\\repo" };
+        await refreshWorktreeManager();
+        values.managerSummary = elements.worktreeManagerStatus.textContent;
+        values.repositoryRoot = worktreeManager.repositoryRoot;
+
+        let resolveStale;
+        requestBridge = () => new Promise((resolve) => { resolveStale = resolve; });
+        const staleRefresh = refreshWorktreeManager();
+        worktreeManager.generation += 1;
+        resolveStale({ ok: true, worktrees: [] });
+        await staleRefresh;
+
+        refreshWorktreeManager = () => { values.refreshes += 1; };
+        window.confirm = () => false;
+        await removeWorktree({ path: "D:\\cancelled", branch: "cancelled" });
+        window.confirm = () => true;
+        requestBridge = async () => ({ ok: true });
+        await removeWorktree({ path: "D:\\removed", branch: "removed" });
+        requestBridge = async () => ({ ok: false, reason: "remove failed" });
+        await removeWorktree({ path: "D:\\failed", branch: "failed" });
+        values.removeStatus = elements.worktreeManagerStatus.textContent;
+
+        const review = { branch: "feature", parentBranch: "main" };
+        requestBridge = async () => null;
+        await openWorktreeReview(review);
+        values.reviewNoReply = elements.worktreeReviewStatus.textContent;
+        requestBridge = async () => ({ ok: true, diff: "", truncated: false });
+        await openWorktreeReview(review);
+        values.reviewEmpty = elements.worktreeReviewStatus.textContent;
+        window.Diff2Html = null;
+        requestBridge = async () => ({ ok: true, diff: "diff --git a/a b/a\n", truncated: false });
+        await openWorktreeReview(review);
+        values.reviewNoViewer = elements.worktreeReviewStatus.textContent;
+        window.Diff2Html = { html: (diff, options) => `<pre data-theme="${options.colorScheme}">${diff}</pre>` };
+        requestBridge = async () => ({ ok: true, diff: "diff --git a/a b/a\n", truncated: true });
+        await openWorktreeReview(review);
+        values.reviewTruncated = elements.worktreeReviewStatus.textContent;
+        values.reviewRendered = elements.worktreeReviewDiff.textContent;
+
+        let resolveStaleReview;
+        requestBridge = () => new Promise((resolve) => { resolveStaleReview = resolve; });
+        const staleReview = openWorktreeReview(review);
+        worktreeReview.generation += 1;
+        resolveStaleReview({ ok: true, diff: "stale", truncated: false });
+        await staleReview;
+
+        requestBridge = async (message) => message.type === "pickFolder" ? { path: "D:\\chosen" } : null;
+        elements.worktreeManagerBrowse.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        values.browsedFolder = elements.worktreeManagerRepo.value;
+        elements.worktreeManagerOverlay.hidden = false;
+        elements.worktreeManagerOverlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        elements.worktreeManagerOverlay.hidden = false;
+        elements.worktreeManagerOverlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        elements.worktreeReviewOverlay.hidden = false;
+        elements.worktreeReviewOverlay.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        elements.worktreeReviewOverlay.hidden = false;
+        elements.worktreeReviewOverlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+        worktreeDialog.source = "folder";
+        worktreeDialog.inspection = { isRepository: true, repositoryRoot: "D:\\repo", currentBranch: "main" };
+        worktreeDialog.terminalId = terminal.id;
+        worktreeDialog.openInNewTerminal = false;
+        elements.worktreeNameInput.value = "coverage-worktree";
+        sendBridge = (message) => { values.sent.push(message); return true; };
+        await createWorktreeAndRun();
+        values.branchName = worktreeBranchName();
+      } finally {
+        requestBridge = savedRequestBridge;
+        refreshWorktreeManager = savedRefreshWorktreeManager;
+        window.confirm = savedConfirm;
+        window.Diff2Html = savedDiff2Html;
+        sendBridge = savedSendBridge;
+        elements.worktreeManagerOverlay.hidden = true;
+        elements.worktreeReviewOverlay.hidden = true;
+        elements.worktreeOverlay.hidden = true;
+      }
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      blankManager: "Choose a repository to list its worktrees.",
+      branchName: "coverage-worktree",
+      browsedFolder: "D:\\chosen",
+      failedManager: "The bridge did not answer.",
+      managedActions: 3,
+      managerSummary: "2 worktree(s), 1 created by MultiTerm.",
+      refreshes: 2,
+      removeStatus: "remove failed",
+      repositoryRoot: "D:\\repo",
+      reviewEmpty: "This worktree has no committed changes yet.",
+      reviewNoReply: "The bridge did not answer.",
+      reviewNoViewer: "The diff viewer did not load.",
+      reviewTruncated: "Showing the first 2 MB of a larger diff.",
+      rowCount: 2
+    });
+    expect(result.empty).toContain("no worktrees");
+    expect(result.reviewRendered).toContain("diff --git");
+    expect(result.sent).toHaveLength(1);
+    expect(result.sent[0]).toMatchObject({ type: "input", id: expect.any(String) });
+    expect(result.sent[0].data).toContain("worktree add -b");
+  });
+
+  test("covers automation editor, filters, and modal callbacks @full", async () => {
+    const result = await page.evaluate(async () => {
+      const savedAutomations = structuredClone(state.automations);
+      const savedLinks = state.terminalLinks;
+      const savedHistoryLimit = state.settings.automationHistoryLimit;
+      const focusTarget = document.createElement("button");
+      focusTarget.type = "button";
+      document.body.append(focusTarget);
+      focusTarget.focus();
+      const values = {};
+      try {
+        const now = new Date().toISOString();
+        const rule = automationApi.normalizeRule({
+          actions: [{ command: "git status", id: "coverage-action", submit: false, targetName: "Coverage" }],
+          createdAt: now,
+          enabled: true,
+          id: "coverage-rule",
+          name: "Coverage schedule",
+          trigger: { catchUp: "once", days: [1, 3], intervalMinutes: 120, mode: "interval", time: "09:30", type: "schedule" },
+          updatedAt: now
+        });
+        state.automations.rules = [rule];
+        state.automations.history = [
+          { automationId: rule.id, detail: "queued", occurredAt: now, status: "queued", title: rule.name },
+          { automationId: null, detail: "handoff", occurredAt: now, status: "staged", title: "Producer to Consumer" },
+          { automationId: rule.id, detail: "failed", occurredAt: now, status: "failed", title: rule.name }
+        ];
+
+        const preview = elements.automationPreview;
+        elements.automationPreview = null;
+        updateAutomationPreview();
+        elements.automationPreview = preview;
+        openAutomationEditor(rule.id);
+        values.editorTitle = elements.automationEditorTitle.textContent;
+        updateAutomationPreview();
+        values.preview = elements.automationPreview.textContent;
+        closeAutomationEditor();
+        openAutomationEditor("missing-rule");
+        values.newEditorTitle = elements.automationEditorTitle.textContent;
+        elements.automationActionList.textContent = "";
+        values.invalidSave = saveAutomationEditor({ preventDefault() {} });
+
+        toggleAutomationRule("missing-rule");
+        toggleAutomationRule(rule.id);
+        values.toggled = state.automations.rules[0].enabled;
+        state.automationStudio.editingId = "missing-rule";
+        deleteAutomationEditor();
+        state.automationStudio.editingId = rule.id;
+        deleteAutomationEditor();
+        values.deleted = state.automations.rules.length;
+        state.automations.rules = [rule];
+
+        elements.automationSearch.value = "does-not-match";
+        renderAutomationRuleList();
+        values.filteredEmpty = !elements.automationRuleEmpty.hidden;
+        elements.automationSearch.value = "coverage";
+        state.automationStudio.editingId = rule.id;
+        renderAutomationRuleList();
+        values.filteredRows = elements.automationRuleList.children.length;
+
+        const terminals = [...state.terminals.values()];
+        const sourceId = terminals[0]?.id || "source";
+        const targetId = terminals[1]?.id || "missing-target";
+        state.terminalLinks = new Map([
+          ["coverage-route", {
+            sourceId,
+            targetId,
+            sourceTitle: "Fallback producer",
+            targetTitle: "Fallback consumer",
+            handoffEnabled: false
+          }]
+        ]);
+        renderAutomationRoutes();
+        values.routeText = elements.automationRouteList.textContent;
+        values.routeChecked = elements.automationRouteList.querySelector("input")?.checked;
+        state.terminalLinks = new Map();
+        renderAutomationRoutes();
+        values.routeEmpty = !elements.automationRouteEmpty.hidden;
+
+        const activityCounts = {};
+        for (const filter of ["all", "schedules", "handoffs", "attention"]) {
+          elements.automationActivityFilter.value = filter;
+          renderAutomationActivity();
+          activityCounts[filter] = elements.automationActivityList.children.length;
+        }
+        state.automations.history = [];
+        renderAutomationActivity();
+        values.emptyActivity = elements.automationActivityEmpty.textContent;
+        state.automations.history = [{ automationId: rule.id, detail: "queued", occurredAt: now, status: "queued", title: rule.name }];
+        elements.automationActivityFilter.value = "attention";
+        renderAutomationActivity();
+        values.filteredActivity = elements.automationActivityEmpty.textContent;
+
+        switchAutomationView("unknown");
+        values.defaultView = state.automationStudio.view;
+        switchAutomationView("routes");
+        switchAutomationView("activity");
+        openAutomationStudio("activity");
+        values.openView = state.automationStudio.view;
+        closeAutomationStudio({ restoreFocus: false });
+
+        elements.automationHistoryLimit.value = "invalid";
+        elements.automationHistoryLimit.dispatchEvent(new Event("change", { bubbles: true }));
+        values.defaultHistoryLimit = state.settings.automationHistoryLimit;
+        state.automations.history = [{ automationId: null, detail: "clear", occurredAt: now, status: "staged", title: "Clear" }];
+        elements.automationActivityClear.click();
+        values.clearedHistory = state.automations.history.length;
+
+        elements.automationOverlay.hidden = false;
+        elements.automationOverlay.classList.add("is-open");
+        const first = elements.automationClose;
+        const last = elements.automationActivityClear;
+        first.focus();
+        const reverseTab = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+        elements.automationOverlay.dispatchEvent(reverseTab);
+        last.focus();
+        const forwardTab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+        elements.automationOverlay.dispatchEvent(forwardTab);
+        elements.automationOverlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        values.escapeClosed = !elements.automationOverlay.classList.contains("is-open");
+        values.focusableCount = automationFocusableElements().length;
+        values.activityCounts = activityCounts;
+      } finally {
+        state.automations = savedAutomations;
+        state.terminalLinks = savedLinks;
+        state.settings.automationHistoryLimit = savedHistoryLimit;
+        elements.automationSearch.value = "";
+        elements.automationActivityFilter.value = "all";
+        elements.automationOverlay.hidden = true;
+        elements.appShell.inert = false;
+        focusTarget.remove();
+        renderAutomationStudio();
+      }
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      activityCounts: { all: 3, attention: 1, handoffs: 1, schedules: 2 },
+      clearedHistory: 0,
+      defaultView: "schedules",
+      deleted: 0,
+      editorTitle: "Coverage schedule",
+      emptyActivity: "No automation activity yet.",
+      escapeClosed: true,
+      filteredActivity: "No activity matches this filter.",
+      filteredEmpty: true,
+      filteredRows: 1,
+      invalidSave: false,
+      newEditorTitle: "New automation",
+      openView: "activity",
+      routeChecked: false,
+      routeEmpty: true,
+      toggled: false
+    });
+    expect(result.defaultHistoryLimit).toBeGreaterThanOrEqual(0);
+    expect(result.focusableCount).toBeGreaterThan(0);
+    expect(result.preview).toContain("2 hours");
+    expect(result.routeText).toContain("Handoffs disabled");
+  });
+
+  test("covers remaining bound dialog and editor callbacks @full", async () => {
+    const result = await page.evaluate(async () => {
+      const savedRequestBridge = requestBridge;
+      const savedAutomations = structuredClone(state.automations);
+      const savedDocumentExecCommand = document.execCommand;
+      const terminal = [...state.terminals.values()][0];
+      const values = { cardClicks: 0, execCommands: [] };
+      try {
+        const card = document.createElement("button");
+        card.className = "copilot-session-card";
+        card.addEventListener("click", () => { values.cardClicks += 1; });
+        elements.copilotResumeList.textContent = "";
+        elements.copilotResumeList.append(card);
+        elements.copilotResumeOverlay.hidden = false;
+        elements.copilotResumeSearch.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+        values.cardFocused = document.activeElement === card;
+        elements.copilotResumeSearch.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        elements.copilotResumeSearch.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+        elements.copilotResumeList.textContent = "";
+        elements.copilotResumeSearch.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        elements.copilotResumeOverlay.hidden = false;
+        elements.copilotResumeOverlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        elements.copilotResumeOverlay.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+
+        elements.cwdChangeSend.disabled = true;
+        elements.cwdChangeInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        elements.cwdChangeInput.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+        elements.cwdChangeOverlay.hidden = false;
+        elements.cwdChangeOverlay.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+
+        const notificationAnchor = terminal.pane.querySelector("[data-terminal-notifications]") || document.createElement("button");
+        if (!notificationAnchor.isConnected) document.body.append(notificationAnchor);
+        notificationAnchor.setAttribute("aria-haspopup", "dialog");
+        terminal.notificationOverrides ||= {};
+        openTerminalNotificationFlyout(terminal, notificationAnchor);
+        const notificationButton = elements.terminalNotificationFlyout.querySelector("button[data-notification-value]");
+        notificationButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }));
+        notificationButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+        elements.terminalNotificationReset.click();
+        openTerminalNotificationFlyout(terminal, notificationAnchor);
+        elements.terminalNotificationFlyout.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        openTerminalNotificationFlyout(terminal, notificationAnchor);
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        values.notificationClosed = elements.terminalNotificationFlyout.hidden;
+        if (!terminal.pane.contains(notificationAnchor)) notificationAnchor.remove();
+
+        document.execCommand = (command) => { values.execCommands.push(command); return true; };
+        openPrepareEditor("alpha alpha\nbeta", terminal.id, "copy");
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+        values.prepareFocusable = prepareEditorFocusableElements().length;
+        elements.prepareText.setSelectionRange(0, 5);
+        elements.prepareFindToggle.click();
+        elements.prepareFind.value = "alpha";
+        elements.prepareReplace.value = "omega";
+        elements.prepareReplaceAll.click();
+        values.replacedText = elements.prepareText.value;
+        elements.prepareFind.value = "missing";
+        elements.prepareReplaceAll.click();
+        elements.prepareFind.value = "omega";
+        elements.prepareFind.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        elements.prepareFind.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }));
+        elements.prepareFind.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        elements.prepareFindPrevious.click();
+        elements.prepareFindNext.click();
+        elements.prepareUndo.click();
+        elements.prepareRedo.click();
+        elements.prepareWrap.click();
+        elements.prepareText.value = "| framed |";
+        elements.prepareCleanCopilot.click();
+        values.cleanedText = elements.prepareText.value;
+        values.emptyReplaceAll = (() => { elements.prepareFind.value = ""; return replaceAllPreparedText(); })();
+
+        requestBridge = async (message) => message.type === "prepareSave" ? { path: "D:\\tmp\\coverage.ps1" } : null;
+        await savePreparedFile();
+        values.savedName = elements.prepareFileName.value;
+        requestBridge = async () => ({ error: "save refused" });
+        await savePreparedFile();
+        requestBridge = async () => null;
+        await savePreparedFile();
+
+        elements.prepareText.value = "send coverage";
+        togglePrepareTerminalFlyout(true);
+        elements.prepareTerminalSearch.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+        elements.prepareTerminalSearch.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        togglePrepareTerminalFlyout(true);
+        elements.prepareTerminalSearch.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true }));
+        elements.prepareTerminalFlyout.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }));
+        elements.prepareTerminalFlyout.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true, cancelable: true }));
+        elements.prepareTerminalFlyout.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }));
+        closePrepareEditor({ restoreFocus: false });
+
+        requestBridge = async (message) => message.type === "pickFolder" ? { path: "D:\\callback-choice" } : null;
+        elements.worktreeOverlay.hidden = false;
+        elements.worktreeFolderInput.value = "D:\\start";
+        elements.worktreeBrowse.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        values.worktreeFolder = elements.worktreeFolderInput.value;
+        elements.worktreeSharedRootInput.value = "D:\\shared";
+        elements.worktreeSharedRootBrowse.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        values.worktreeSharedRoot = elements.worktreeSharedRootInput.value;
+        elements.worktreeRunHere.click();
+        elements.worktreeOverlay.hidden = false;
+        elements.worktreeCancel.click();
+        elements.worktreeOverlay.hidden = false;
+        elements.worktreeClose.click();
+
+        const now = new Date().toISOString();
+        const rule = automationApi.normalizeRule({
+          actions: [{ command: "git status", id: "callback-action", submit: false, targetName: "Coverage" }],
+          createdAt: now,
+          enabled: true,
+          id: "callback-rule",
+          name: "Callback rule",
+          trigger: { intervalMinutes: 60, mode: "interval", type: "schedule" }
+        });
+        state.automations.rules = [rule];
+        elements.automationWelcomeNew.click();
+        state.automationStudio.editingId = rule.id;
+        openAutomationEditor(rule.id);
+        elements.automationRunNow.click();
+        elements.automationCancel.click();
+        elements.automationOverlay.hidden = false;
+        elements.automationOverlay.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+
+        elements.aiSetupOverlay.hidden = false;
+        const aiFocusable = [...elements.aiSetupOverlay.querySelectorAll("select:not(:disabled), button:not(:disabled)")];
+        const activeElementDescriptor = Object.getOwnPropertyDescriptor(document, "activeElement");
+        Object.defineProperty(document, "activeElement", { configurable: true, value: aiFocusable[0] });
+        const reverseTab = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+        elements.aiSetupOverlay.dispatchEvent(reverseTab);
+        Object.defineProperty(document, "activeElement", { configurable: true, value: aiFocusable.at(-1) });
+        const forwardTab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+        elements.aiSetupOverlay.dispatchEvent(forwardTab);
+        elements.aiSetupOverlay.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true }));
+        values.aiForwardWrapped = forwardTab.defaultPrevented;
+        values.aiReverseWrapped = reverseTab.defaultPrevented;
+        if (activeElementDescriptor) Object.defineProperty(document, "activeElement", activeElementDescriptor);
+        else delete document.activeElement;
+      } finally {
+        requestBridge = savedRequestBridge;
+        state.automations = savedAutomations;
+        document.execCommand = savedDocumentExecCommand;
+        elements.copilotResumeOverlay.hidden = true;
+        elements.cwdChangeOverlay.hidden = true;
+        elements.prepareOverlay.hidden = true;
+        elements.worktreeOverlay.hidden = true;
+        elements.automationOverlay.hidden = true;
+        elements.aiSetupOverlay.hidden = true;
+        elements.appShell.inert = false;
+        renderAutomationStudio();
+      }
+      return values;
+    });
+
+    expect(result).toMatchObject({
+      aiForwardWrapped: true,
+      aiReverseWrapped: true,
+      cardClicks: 1,
+      cardFocused: true,
+      cleanedText: "framed",
+      emptyReplaceAll: 0,
+      notificationClosed: true,
+      replacedText: "omega omega\nbeta",
+      savedName: "coverage.ps1",
+      worktreeFolder: "D:\\callback-choice",
+      worktreeSharedRoot: "D:\\callback-choice"
+    });
+    expect(result.execCommands).toEqual(["undo", "redo"]);
+    expect(result.prepareFocusable).toBeGreaterThan(0);
+  });
 });

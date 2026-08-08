@@ -11,6 +11,8 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const childProcess = require("node:child_process");
+const { encode } = require("@msgpack/msgpack");
 const server = require("../../server.js");
 
 let temporaryRoot;
@@ -84,6 +86,129 @@ function claudeSdkFixture({ costUsd, output = "Title: Review Claude Terminal Out
 }
 
 describe("Copilot CLI session discovery", () => {
+  it("decodes a standards-compliant MessagePack value stream and rejects malformed values", () => {
+    const expected = [
+      1,
+      -1,
+      { Name: "Visual Studio task", Count: 2 },
+      [3, null],
+      "hi",
+      false,
+      true,
+      Buffer.from([0xaa, 0xbb]),
+      1.5,
+      Math.PI,
+      new Date(4002)
+    ];
+    const stream = Buffer.concat(expected.map((value) => Buffer.from(encode(value))));
+
+    expect(server.decodeMessagePackStream(stream)).toEqual(expected);
+    expect(server.decodeMessagePackStream(Buffer.alloc(0))).toEqual([]);
+    expect(() => server.decodeMessagePackStream(Buffer.from([0xc1]))).toThrow();
+    expect(() => server.decodeMessagePackStream(Buffer.from([0xd9]))).toThrow();
+    expect(() => server.decodeMessagePackStream(Buffer.from([0xc4, 0x02, 0x01]))).toThrow();
+    expect(() => server.decodeMessagePackStream(Buffer.from([0xd4, 0xff, 0x44]))).toThrow();
+    expect(() => server.decodeMessagePackStream(Buffer.from([0xdd, 0x00, 0x00, 0x00, 0x06]))).toThrow();
+  });
+
+  it("persists normalized assistant sessions for the claimed bridge id", () => {
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = temporaryRoot;
+    const client = { send: vi.fn() };
+    const longId = "i".repeat(140);
+
+    try {
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-001");
+      server.handleClientMessage(client, JSON.stringify({
+        type: "saveAssistantSessions",
+        sessions: JSON.stringify([
+          {
+            id: longId,
+            title: "t".repeat(220),
+            cwd: "c".repeat(1040),
+            provider: "copilot",
+            shell: "s".repeat(80),
+            recordedAt: "r".repeat(50)
+          },
+          { id: "claude-1", provider: "claude" },
+          { id: "unsupported", provider: "other" },
+          null
+        ])
+      }));
+      server.handleClientMessage(client, JSON.stringify({
+        type: "getAssistantSessions",
+        requestId: "assistant-read"
+      }));
+
+      expect(client.send).toHaveBeenLastCalledWith({
+        type: "assistantSessions",
+        requestId: "assistant-read",
+        sessions: [{
+          id: longId.slice(0, 128),
+          title: "t".repeat(200),
+          cwd: "c".repeat(1024),
+          provider: "copilot",
+          shell: "s".repeat(64),
+          recordedAt: "r".repeat(40)
+        }, {
+          id: "claude-1",
+          title: "",
+          cwd: "",
+          provider: "claude",
+          shell: "",
+          recordedAt: ""
+        }]
+      });
+
+      const storePath = path.join(temporaryRoot, "MultiTerm", "AssistantSessions", "BRIDGE-001.json");
+      fs.writeFileSync(storePath, "not json", "utf8");
+      client.send.mockClear();
+      server.handleClientMessage(client, JSON.stringify({ type: "getAssistantSessions", requestId: "corrupt" }));
+      expect(client.send).toHaveBeenCalledWith({
+        type: "assistantSessions",
+        requestId: "corrupt",
+        sessions: []
+      });
+
+      server.handleClientMessage(client, JSON.stringify({
+        type: "saveAssistantSessions",
+        sessions: "[" + " ".repeat(64 * 1024) + "]"
+      }));
+      expect(JSON.parse(fs.readFileSync(storePath, "utf8")).sessions).toEqual([]);
+    } finally {
+      server.releaseBridgeIdentifier();
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+    }
+
+    client.send.mockClear();
+    server.handleClientMessage(client, JSON.stringify({ type: "getAssistantSessions", requestId: "unclaimed" }));
+    expect(client.send).toHaveBeenCalledWith({
+      type: "assistantSessions",
+      requestId: "unclaimed",
+      sessions: []
+    });
+  });
+
+  it("rejects malformed assistant payloads and storage without local app data", () => {
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    delete process.env.LOCALAPPDATA;
+    const client = { send: vi.fn() };
+    try {
+      server.handleClientMessage(client, JSON.stringify({ type: "saveAssistantSessions", sessions: "not json" }));
+      server.handleClientMessage(client, JSON.stringify({ type: "saveAssistantSessions", sessions: { invalid: true } }));
+      server.handleClientMessage(client, JSON.stringify({ type: "getAssistantSessions", requestId: "no-local-data" }));
+      expect(client.send).toHaveBeenCalledWith({
+        type: "assistantSessions",
+        requestId: "no-local-data",
+        sessions: []
+      });
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+    }
+  });
+
   it("parses the CLI's generated YAML scalar forms", () => {
     expect(server.parseCopilotYamlScalar('"Quoted \\"name\\"\\r\\nnext"')).toBe('Quoted "name"\r\nnext');
     expect(server.parseCopilotYamlScalar('"invalid \\q escape"')).toBe("invalid \\q escape");
@@ -169,6 +294,34 @@ describe("Copilot CLI session discovery", () => {
     });
   });
 
+  it("returns correlated aggregate and Claude listing failures", async () => {
+    const aggregate = { send: vi.fn() };
+    const invalidRoot = path.join(temporaryRoot, "not-a-directory");
+    fs.writeFileSync(invalidRoot, "file");
+    await server.sendAllCopilotSessions(aggregate, "aggregate-error", {
+      cliRoot: invalidRoot,
+      vscodeRoot: path.join(temporaryRoot, "missing-vscode"),
+      visualStudioFiles: []
+    });
+    expect(aggregate.send).toHaveBeenCalledWith({
+      type: "copilotSessions",
+      requestId: "aggregate-error",
+      sessions: [],
+      message: "Could not read local Copilot sessions."
+    });
+
+    const claude = { send: vi.fn() };
+    await server.sendClaudeSessions(claude, "claude-error", async () => {
+      throw new Error("Claude history denied");
+    });
+    expect(claude.send).toHaveBeenCalledWith({
+      type: "claudeSessions",
+      requestId: "claude-error",
+      sessions: [],
+      message: "Could not read local Claude sessions."
+    });
+  });
+
   it("dispatches the list request through the bridge protocol", async () => {
     const client = { send: vi.fn() };
     vi.spyOn(fs.promises, "readdir").mockResolvedValue([]);
@@ -224,6 +377,67 @@ describe("Copilot CLI session discovery", () => {
     expect(server.copilotSessionCatalog.size).toBe(3);
   });
 
+  it("handles malformed editor metadata, session files, and URI prefixes", async () => {
+    expect(server.fileUriToWindowsPath(42)).toBe("");
+    expect(server.fileUriToWindowsPath("https://example.com")).toBe("");
+    expect(server.fileUriToWindowsPath("file:///%zz")).toBe("");
+    expect(server.jsonStringFromPrefix("{}", "customTitle")).toBe("");
+    expect(server.jsonStringFromPrefix('{"customTitle":"bad\\q"}', "customTitle")).toBe("");
+    await expect(server.listVsCodeCopilotSessions("")).resolves.toEqual([]);
+
+    const vscodeRoot = path.join(temporaryRoot, "malformed-vscode");
+    const missingSessions = path.join(vscodeRoot, "a".repeat(32));
+    const workspace = path.join(vscodeRoot, "b".repeat(32));
+    fs.mkdirSync(missingSessions, { recursive: true });
+    fs.mkdirSync(path.join(workspace, "chatSessions"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "workspace.json"), "not json");
+    fs.writeFileSync(path.join(workspace, "chatSessions", "not-a-session.jsonl"), "{}");
+    fs.writeFileSync(path.join(workspace, "chatSessions", "0298ec3b-6599-4e8d-a620-c1338f9bb47b.jsonl"), "{}");
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(fs.promises, "open").mockRejectedValueOnce(new Error("open denied"));
+
+    await expect(server.listVsCodeCopilotSessions(vscodeRoot)).resolves.toEqual([]);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("Could not read VS Code Copilot session"));
+
+    const visualStudioId = "70ea177d-5558-40c4-b068-2477e84b9325";
+    const noHeader = path.join(temporaryRoot, "NoHeader", ".vs", "App", "copilot-chat", "x", "sessions", visualStudioId);
+    fs.mkdirSync(path.dirname(noHeader), { recursive: true });
+    fs.writeFileSync(noHeader, Buffer.from([0x01]));
+    const malformed = path.join(temporaryRoot, "Malformed", ".vs", "App", "copilot-chat", "x", "sessions", "0298ec3b-6599-4e8d-a620-c1338f9bb47b");
+    fs.mkdirSync(path.dirname(malformed), { recursive: true });
+    fs.writeFileSync(malformed, Buffer.from([0xc1]));
+    await expect(server.listVisualStudioCopilotSessions(["not-an-id", noHeader, malformed])).resolves.toEqual([]);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("Could not read Visual Studio Copilot session"));
+  });
+
+  it("discovers Visual Studio session files through Everything and fails closed", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const executable = path.join(temporaryRoot, "es.exe");
+    fs.writeFileSync(executable, "fixture");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const execFile = vi.spyOn(childProcess, "execFile");
+    const first = path.join(temporaryRoot, "one");
+    const second = path.join(temporaryRoot, "two");
+
+    try {
+      execFile
+        .mockImplementationOnce((_file, _args, _options, callback) => callback(null, "3\n"))
+        .mockImplementationOnce((_file, _args, _options, callback) => callback(null, `${first}\n${second}\n${first}\n`));
+      await expect(server.findVisualStudioCopilotSessionFiles(executable)).resolves.toEqual([first, second]);
+
+      execFile.mockImplementationOnce((_file, _args, _options, callback) => callback(null, "not-a-count"));
+      await expect(server.findVisualStudioCopilotSessionFiles(executable)).resolves.toEqual([]);
+
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      execFile.mockImplementationOnce((_file, _args, _options, callback) => callback(new Error("search failed"), ""));
+      await expect(server.findVisualStudioCopilotSessionFiles(executable)).resolves.toEqual([]);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("search failed"));
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+    }
+    await expect(server.findVisualStudioCopilotSessionFiles(executable)).resolves.toEqual([]);
+  });
+
   it("searches bounded session transcripts and accepts only catalog keys", async () => {
     const firstId = "0298ec3b-6599-4e8d-a620-c1338f9bb47b";
     const secondId = "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373";
@@ -264,6 +478,73 @@ describe("Copilot CLI session discovery", () => {
       enableSessionStore: false,
       model: "claude-opus-4.6"
     }));
+  });
+
+  it("extracts searchable content recursively and ignores unrelated CLI events", async () => {
+    expect(server.sessionSearchContentText({
+      content: "  alpha\n beta ",
+      ignored: "not searchable",
+      nested: [{ message: "gamma" }, null, 42]
+    })).toEqual(["alpha beta", "gamma"]);
+    expect(server.sessionSearchContentText("top-level", "ignored")).toEqual([]);
+    expect(server.sessionSearchExcerpt("cli", [
+      "partial json",
+      JSON.stringify({ type: "tool.execution", data: { content: "hidden" } }),
+      JSON.stringify({ type: "user.message", data: { content: "visible question" } })
+    ].join("\n"))).toBe("visible question");
+
+    const excerptFile = path.join(temporaryRoot, "excerpt.jsonl");
+    fs.writeFileSync(excerptFile, JSON.stringify({ type: "user.message", data: { content: "catalog excerpt" } }));
+    const catalog = await server.buildCopilotSessionSearchCatalog(64, [{
+      key: "cli:excerpt",
+      source: "cli",
+      name: "Excerpt",
+      filePath: excerptFile,
+      updatedAt: "2026-08-07T00:00:00.000Z"
+    }]);
+    expect(catalog).toContain("catalog excerpt");
+
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await server.buildCopilotSessionSearchCatalog(64, [{
+      key: "cli:denied",
+      source: "cli",
+      name: "Denied",
+      filePath: path.join(temporaryRoot, "missing-excerpt"),
+      updatedAt: "2026-08-07T00:00:00.000Z"
+    }]);
+    expect(warning).not.toHaveBeenCalled();
+    await expect(server.buildCopilotSessionSearchCatalog(64, [])).resolves.toBe("");
+  });
+
+  it("rejects malformed search objects and reports invalid search requests", async () => {
+    expect(() => server.parseCopilotSessionSearchKeys("prefix {not json} suffix", new Set()))
+      .toThrow("invalid session search response");
+    expect(() => server.parseCopilotSessionSearchKeys('{"other":[]}', new Set()))
+      .toThrow("invalid session search response");
+
+    server.copilotSessionCatalog.clear();
+    await expect(server.searchCopilotSessions({ query: "valid but empty" })).resolves.toEqual([]);
+    await expect(server.searchCopilotSessions({ query: "bad\nquery" })).rejects.toThrow("valid AI session search request");
+
+    const client = { send: vi.fn() };
+    await server.sendCopilotSessionSearch(client, { requestId: 42, query: "" });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "copilotSessionSearch",
+      requestId: "",
+      keys: [],
+      error: expect.stringContaining("valid AI session search request")
+    }));
+
+    server.copilotSessionCatalog.set("cli:signed-out", {
+      key: "cli:signed-out",
+      source: "cli",
+      name: "Signed out",
+      updatedAt: "2026-08-07T00:00:00.000Z"
+    });
+    const signedOut = copilotSdkFixture({ authenticated: false });
+    await expect(server.searchCopilotSessions({ query: "find work" }, signedOut.createClient))
+      .rejects.toThrow("not signed in");
+    server.copilotSessionCatalog.clear();
   });
 
   it("fails visibly when complete metadata exceeds the configured AI search budget", async () => {
@@ -339,6 +620,115 @@ describe("Copilot CLI session discovery", () => {
     fs.rmSync(result.contextPath, { force: true });
   });
 
+  it("applies every VS Code JSONL update form and bounds the newest context", async () => {
+    const filePath = path.join(temporaryRoot, "updates.jsonl");
+    fs.writeFileSync(filePath, [
+      "not json",
+      "",
+      { kind: 0, v: { requests: [{ message: { text: "First" }, response: [{ kind: "thinking", value: "hidden" }, { value: { value: "Nested" } }] }, { message: { text: "" } }] } },
+      { kind: 2, k: ["requests"], v: [{ message: { text: "Second" }, response: [{ value: "Initial" }] }] },
+      { kind: 2, k: ["requests", 1, "response"], v: [{ value: "Appended" }] },
+      { kind: 1, k: ["requests", 1, "response"], v: [{ value: "Replacement" }] },
+      { kind: 2, k: ["other", 1, "response"], v: [] },
+      { kind: 2, k: ["requests", -1, "response"], v: [] }
+    ].map((value) => typeof value === "string" ? value : JSON.stringify(value)).join("\n"));
+
+    await expect(server.readVsCodeCopilotExchanges(filePath)).resolves.toEqual([
+      { user: "First", assistant: "Nested" },
+      { user: "Second", assistant: "Replacement" }
+    ]);
+    expect(server.vscodeResponseText(null)).toBe("");
+    expect(server.vscodeResponseText([null, { kind: "toolInvocationSerialized", value: "hidden" }, { value: 42 }])).toBe("");
+
+    const entry = { source: "visualstudio", name: "", cwd: "", id: "session" };
+    const exchanges = [
+      { user: "old", assistant: "answer" },
+      { user: "new" }
+    ];
+    const fullContext = server.boundedCopilotContext(entry, exchanges, 4096);
+    expect(fullContext).toContain("Imported Visual Studio");
+    expect(fullContext).toContain("Untitled session");
+    expect(fullContext).toContain("(No recorded response)");
+
+    const headingBytes = Buffer.byteLength(server.boundedCopilotContext(entry, [], 4096));
+    const limitedContext = server.boundedCopilotContext(entry, exchanges, headingBytes + 20);
+    expect(Buffer.byteLength(limitedContext)).toBeLessThanOrEqual(headingBytes + 20);
+    expect(limitedContext).not.toContain("## User\nold");
+  });
+
+  it("prepares Visual Studio context and returns correlated protocol success and errors", async () => {
+    const visualStudioId = "70ea177d-5558-40c4-b068-2477e84b9325";
+    const visualStudioFile = path.join(temporaryRoot, "ContextProject", ".vs", "ContextProject", "copilot-chat", "x", "sessions", visualStudioId);
+    fs.mkdirSync(path.dirname(visualStudioFile), { recursive: true });
+    fs.writeFileSync(visualStudioFile, Buffer.concat([
+      packMap({ Name: "Context session" }),
+      Buffer.from([0x92, 0x00]),
+      packMap({ Content: "ignored non-array content" })
+    ]));
+    const sessions = await server.listAllCopilotSessions({
+      cliRoot: path.join(temporaryRoot, "missing-cli"),
+      vscodeRoot: path.join(temporaryRoot, "missing-vscode"),
+      visualStudioFiles: [visualStudioFile]
+    });
+    const client = { send: vi.fn() };
+
+    server.handleClientMessage(client, JSON.stringify({
+      type: "prepareCopilotSessionContext",
+      requestId: "context-success",
+      key: sessions[0].key,
+      maxContextKb: 8
+    }));
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "copilotSessionContext", requestId: "context-success", source: "visualstudio", id: visualStudioId
+    })));
+    fs.rmSync(client.send.mock.calls.at(-1)[0].contextPath, { force: true });
+
+    server.handleClientMessage(client, JSON.stringify({
+      type: "prepareCopilotSessionContext",
+      requestId: "context-error",
+      key: "missing"
+    }));
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "copilotSessionContext",
+      requestId: "context-error",
+      error: "The selected editor session is no longer available."
+    }));
+  });
+
+  it("cleans expired context files and tolerates cleanup stat failures", async () => {
+    const vscodeRoot = path.join(temporaryRoot, "cleanup-vscode");
+    const workspaceHash = "c".repeat(32);
+    const vscodeId = "6f9d4799-beb6-4163-a392-1a22b54f3a2e";
+    const workspace = path.join(vscodeRoot, workspaceHash);
+    fs.mkdirSync(path.join(workspace, "chatSessions"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "workspace.json"), JSON.stringify({ folder: "file:///D%3A/Cleanup" }));
+    fs.writeFileSync(path.join(workspace, "chatSessions", `${vscodeId}.jsonl`), JSON.stringify({
+      kind: 0,
+      v: { requests: [{ message: { text: "Cleanup" }, response: [] }] }
+    }));
+    const sessions = await server.listAllCopilotSessions({
+      cliRoot: path.join(temporaryRoot, "missing-cli"),
+      vscodeRoot,
+      visualStudioFiles: []
+    });
+    const readdir = vi.spyOn(fs.promises, "readdir").mockResolvedValueOnce([
+      { name: "expired.md", isFile: () => true },
+      { name: "folder", isFile: () => false },
+      { name: "unreadable.md", isFile: () => true }
+    ]);
+    const stat = vi.spyOn(fs.promises, "stat")
+      .mockResolvedValueOnce({ mtimeMs: 0 })
+      .mockRejectedValueOnce(new Error("stat denied"));
+    const remove = vi.spyOn(fs.promises, "rm").mockResolvedValue();
+    const write = vi.spyOn(fs.promises, "writeFile").mockResolvedValue();
+
+    const result = await server.prepareCopilotSessionContext(sessions[0].key, 8);
+    expect(remove).toHaveBeenCalledWith(expect.stringContaining("expired.md"), { force: true });
+    expect(stat).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledWith(result.contextPath, expect.any(String), expect.objectContaining({ flag: "wx" }));
+    readdir.mockRestore();
+  });
+
   it("extracts Visual Studio user and assistant content and clamps the configured import size", () => {
     const values = [
       1,
@@ -370,6 +760,9 @@ describe("Claude session discovery", () => {
     }, {
       sessionId: "not-a-session",
       summary: "Ignored"
+    }, {
+      sessionId: "0298ec3b-6599-4e8d-a620-c1338f9bb47b",
+      summary: "Undated session"
     }]);
 
     const sessions = await server.listClaudeSessions(async () => ({ listSessions }));
@@ -385,6 +778,16 @@ describe("Claude session discovery", () => {
       branch: "main",
       createdAt: "2026-08-03T20:00:00.000Z",
       updatedAt: "2026-08-04T00:00:00.000Z"
+    }, {
+      id: "0298ec3b-6599-4e8d-a620-c1338f9bb47b",
+      key: "claude:0298ec3b-6599-4e8d-a620-c1338f9bb47b",
+      source: "claude",
+      name: "Undated session",
+      cwd: "",
+      repository: "",
+      branch: "",
+      createdAt: "",
+      updatedAt: ""
     }]);
   });
 
@@ -457,6 +860,39 @@ describe("Copilot terminal title generation", () => {
     );
   });
 
+  it("runs ordinary provider executables without a command shim", async () => {
+    const execFile = vi.fn((_file, _args, _options, callback) => callback(null, undefined, ""));
+    await expect(server.execFileText("C:\\Tools\\claude.exe", ["--version"], execFile)).resolves.toBe("");
+    expect(execFile.mock.calls[0][0]).toBe("C:\\Tools\\claude.exe");
+    expect(execFile.mock.calls[0][1]).toEqual(["--version"]);
+
+    const spawned = {};
+    const spawnProcess = vi.fn(() => spawned);
+    expect(server.spawnCommandProcess({ command: "C:\\Tools\\claude.exe" }, spawnProcess)).toBe(spawned);
+    expect(spawnProcess).toHaveBeenCalledWith(
+      "C:\\Tools\\claude.exe",
+      [],
+      expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
+    );
+  });
+
+  it("finds provider executables, loads the Claude SDK, and maps provider errors", async () => {
+    const found = vi.fn((_file, args, _options, callback) => callback(null, `\nC:\\Tools\\${args[0]}.cmd\n`, ""));
+    await expect(server.findCopilotExecutable(found)).resolves.toBe("C:\\Tools\\copilot.cmd");
+    await expect(server.findClaudeExecutable(found)).resolves.toBe("C:\\Tools\\claude.cmd");
+    const missing = vi.fn((_file, _args, _options, callback) => callback(new Error("not found"), "", ""));
+    await expect(server.findCommandExecutable("missing", missing)).resolves.toBe("");
+    await expect(server.loadClaudeSdk()).resolves.toEqual(expect.objectContaining({ query: expect.any(Function) }));
+
+    expect(server.copilotSdkError(new Error("403 forbidden")).message).toContain("subscription");
+    expect(server.copilotSdkError(null).message).toContain("could not generate");
+    expect(server.normalizeCopilotCapabilityModels(null)).toEqual([]);
+    expect(server.normalizeCopilotCapabilityModels([{ id: "off", policy: { state: "disabled" } }, { id: "on" }]))
+      .toEqual([expect.objectContaining({ id: "on", name: "on", efforts: [], maxPromptTokens: 0 })]);
+    expect(server.normalizeClaudeCapabilityModels([null, { value: " " }, { value: "sonnet", description: "normal" }]))
+      .toEqual([expect.objectContaining({ id: "sonnet", name: "sonnet", description: "normal", maxContextTokens: 0 })]);
+  });
+
   it("discovers optional providers independently and preserves their reported model capabilities", async () => {
     const copilot = copilotSdkFixture({
       models: [{
@@ -523,6 +959,84 @@ describe("Copilot terminal title generation", () => {
       expect.objectContaining({ id: "copilot", installed: true, authenticated: false, available: false }),
       expect.objectContaining({ id: "claude", installed: false, authenticated: false, available: false })
     ]);
+  });
+
+  it("reports Copilot startup failures and authenticated accounts without models", async () => {
+    const failed = await server.copilotProviderCapabilities(
+      () => ({ start: vi.fn(async () => { throw new Error("403 forbidden"); }), stop: vi.fn(async () => {}) }),
+      vi.fn(async () => "C:\\Tools\\copilot.exe")
+    );
+    expect(failed).toMatchObject({
+      cliInstalled: true,
+      authenticated: false,
+      available: false,
+      status: expect.stringContaining("subscription"),
+      interactiveStatus: expect.stringContaining("subscription")
+    });
+
+    const noModels = copilotSdkFixture({ models: [] });
+    await expect(server.copilotProviderCapabilities(noModels.createClient, vi.fn(async () => "C:\\Tools\\copilot.exe")))
+      .resolves.toMatchObject({
+        cliInstalled: true,
+        authenticated: true,
+        available: false,
+        cwdChangeStatus: "No GitHub Copilot models are available for this account."
+      });
+    await expect(server.copilotProviderCapabilities(noModels.createClient, vi.fn(async () => "")))
+      .resolves.toMatchObject({
+        cliInstalled: false,
+        authenticated: true,
+        interactiveAvailable: false,
+        cwdChangeAvailable: false,
+        interactiveStatus: "GitHub Copilot CLI is not installed or is not on PATH."
+      });
+  });
+
+  it("reports Claude version, authentication, and SDK initialization failures", async () => {
+    const authFailureExec = vi.fn((_file, args, _options, callback) => {
+      if (args[0] === "--version") callback(new Error("version failed"), "", "");
+      else callback(Object.assign(new Error("auth failed"), {}), "", "login required");
+    });
+    await expect(server.claudeProviderCapabilities({
+      execFile: authFailureExec,
+      findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe")
+    })).resolves.toMatchObject({
+      installed: true,
+      authenticated: false,
+      version: "",
+      cwdChangeStatus: expect.stringContaining("Could not determine"),
+      status: "login required"
+    });
+
+    const signedOutExec = vi.fn((_file, args, _options, callback) => callback(
+      null,
+      args[0] === "--version" ? "2.1.168" : JSON.stringify({ loggedIn: false }),
+      ""
+    ));
+    await expect(server.claudeProviderCapabilities({
+      execFile: signedOutExec,
+      findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe")
+    })).resolves.toMatchObject({
+      authenticated: false,
+      cwdChangeAvailable: false,
+      cwdChangeStatus: expect.stringContaining("2.1.169")
+    });
+
+    const close = vi.fn();
+    const authenticatedExec = vi.fn((_file, args, _options, callback) => callback(
+      null,
+      args[0] === "--version" ? "2.1.169" : JSON.stringify({ isAuthenticated: true }),
+      ""
+    ));
+    await expect(server.claudeProviderCapabilities({
+      execFile: authenticatedExec,
+      findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+      loadSdk: vi.fn(async () => ({ query: () => ({
+        close,
+        initializationResult: vi.fn(async () => { throw new Error("initialization failed"); })
+      }) }))
+    })).resolves.toMatchObject({ authenticated: true, available: false, status: "initialization failed" });
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("returns provider discovery through a correlated bridge response", async () => {
@@ -700,6 +1214,19 @@ describe("Copilot terminal title generation", () => {
     });
   });
 
+  it("ignores unknown usage and tolerates Copilot metrics failures", async () => {
+    const before = server.getAiUsageSnapshot();
+    expect(server.recordAiOperationUsage("unknown", { inputTokens: 1 })).toEqual(before);
+    expect(server.recordAiOperationUsage("copilot", null)).toEqual(before);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await server.captureCopilotOperationUsage({
+      rpc: { usage: { getMetrics: vi.fn(async () => { throw new Error("metrics unavailable"); }) } }
+    });
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("metrics unavailable"));
+    expect(server.normalizeCopilotUsage({})).toMatchObject({ totalTokens: 0, aiCredits: 0, premiumRequests: 0 });
+    expect(server.normalizeCopilotUsage({ modelMetrics: { empty: {} } })).toMatchObject({ totalTokens: 0 });
+  });
+
   it("bounds model output and reports unavailable accounts, models, or invalid generations", async () => {
     const bounded = copilotSdkFixture({ output: "Review Git Working Tree Changes" });
     await expect(server.generateTerminalTitle({
@@ -714,6 +1241,10 @@ describe("Copilot terminal title generation", () => {
     await expect(server.generateTerminalTitle({ text: "git status" }, invalid.createClient))
       .rejects.toThrow("outside the configured word range");
 
+    const missingOutput = copilotSdkFixture({ output: null });
+    await expect(server.generateTerminalTitle({ text: "git status" }, missingOutput.createClient))
+      .rejects.toThrow("outside the configured word range");
+
     const signedOut = copilotSdkFixture({ authenticated: false });
     await expect(server.generateTerminalTitle({ text: "git status" }, signedOut.createClient))
       .rejects.toThrow("GitHub Copilot is not signed in");
@@ -725,6 +1256,66 @@ describe("Copilot terminal title generation", () => {
     const pinned = copilotSdkFixture();
     await expect(server.generateTerminalTitle({ model: "retired-model", text: "git status" }, pinned.createClient))
       .rejects.toThrow("model 'retired-model' is not available");
+    await expect(server.generateTerminalTitle({}, pinned.createClient)).rejects.toThrow("no text");
+  });
+
+  it("reports missing Claude, failed result events, empty titles, and authentication errors", async () => {
+    await expect(server.generateClaudeTerminalTitle({ text: "status" }, {
+      findExecutable: vi.fn(async () => "")
+    })).rejects.toThrow("not installed");
+    await expect(server.generateClaudeTerminalTitle({}, {
+      findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe")
+    })).rejects.toThrow("no text");
+
+    const queryFor = (events) => {
+      const query = {
+        close: vi.fn(),
+        async *[Symbol.asyncIterator]() {
+          for (const event of events) yield event;
+        }
+      };
+      return { query, loadSdk: vi.fn(async () => ({ query: vi.fn(() => query) })) };
+    };
+    const failed = queryFor([{ type: "progress" }, { type: "result", subtype: "error", errors: ["quota", "reached"] }]);
+    await expect(server.generateClaudeTerminalTitle({ text: "status" }, {
+      findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+      loadSdk: failed.loadSdk
+    })).rejects.toThrow("quota reached");
+    expect(failed.query.close).toHaveBeenCalled();
+
+    const empty = queryFor([{ type: "result", subtype: "success", result: "" }]);
+    await expect(server.generateClaudeTerminalTitle({ cwd: "C:\\missing", effort: "none", text: "status" }, {
+      findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+      loadSdk: empty.loadSdk
+    })).rejects.toThrow("outside the configured word range");
+
+    await expect(server.generateClaudeTerminalTitle({ text: "status" }, {
+      findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+      loadSdk: vi.fn(async () => { throw new Error("401 unauthorized"); })
+    })).rejects.toThrow("not signed in");
+  });
+
+  it("times out a Claude title query that never returns a result", async () => {
+    vi.useFakeTimers();
+    let finishQuery;
+    const query = {
+      close: vi.fn(() => finishQuery?.()),
+      async *[Symbol.asyncIterator]() {
+        await new Promise((resolve) => { finishQuery = resolve; });
+      }
+    };
+    try {
+      const result = server.generateClaudeTerminalTitle({ text: "status" }, {
+        findExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+        loadSdk: vi.fn(async () => ({ query: vi.fn(() => query) }))
+      });
+      const rejection = expect(result).rejects.toThrow("timed out");
+      await vi.advanceTimersByTimeAsync(180001);
+      await rejection;
+      expect(query.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns a correlated protocol response for a failed generation", async () => {
@@ -766,5 +1357,18 @@ describe("Copilot terminal title generation", () => {
       requestId: "claude-title",
       title: "Inspect Claude Provider State"
     }));
+  });
+
+  it("routes successful titles through the provider-neutral generator", async () => {
+    const copilot = copilotSdkFixture({ output: "Route Copilot Title" });
+    await expect(server.generateAiTerminalTitle({ provider: "copilot", text: "status" }, {
+      createCopilotClient: copilot.createClient
+    })).resolves.toEqual({ title: "Route Copilot Title" });
+
+    const claude = claudeSdkFixture({ output: "Route Claude Title" });
+    await expect(server.generateAiTerminalTitle({ provider: "claude", text: "status" }, {
+      findClaudeExecutable: vi.fn(async () => "C:\\Tools\\claude.exe"),
+      loadClaudeSdk: claude.loadSdk
+    })).resolves.toEqual({ title: "Route Claude Title" });
   });
 });

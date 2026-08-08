@@ -739,18 +739,28 @@
         </main>
       </div>
 
-      <nav id="pager" class="pager" role="tablist" aria-label="Pages">
+      <nav id="pager" class="pager" aria-label="Pages">
         <div class="pager-header">
           <span>Pages</span>
           <button id="pagerCollapse" class="pager-collapse" type="button" title="Hide pages panel" aria-label="Hide pages panel" aria-controls="pager" aria-expanded="true">
             <i data-lucide="panel-left-close"></i>
           </button>
         </div>
-        <div id="pagerList" class="pager-list"></div>
+        <div id="pagerList" class="pager-list" role="tablist" aria-label="Open pages"></div>
+        <button id="pagerMove" class="pager-move" type="button" title="Move pages bar" aria-label="Move pages bar" aria-haspopup="menu">
+          <i data-lucide="grip-vertical"></i>
+        </button>
         <button id="pagerAdd" class="pager-add" type="button" title="New page" aria-label="New page">
           <i data-lucide="plus"></i>
         </button>
       </nav>
+
+      <div id="pagerDockTargets" class="pager-dock-targets" aria-hidden="true" hidden>
+        <div class="pager-dock-target pager-dock-target-top" data-pager-dock="top"><i data-lucide="panel-top"></i></div>
+        <div class="pager-dock-target pager-dock-target-bottom" data-pager-dock="bottom"><i data-lucide="panel-bottom"></i></div>
+        <div class="pager-dock-target pager-dock-target-left" data-pager-dock="left"><i data-lucide="panel-left"></i></div>
+        <div class="pager-dock-target pager-dock-target-right" data-pager-dock="right"><i data-lucide="panel-right"></i></div>
+      </div>
 
       <footer class="status-bar" aria-label="Status bar">
         <div class="status-restores" role="group" aria-label="Restore hidden panels">

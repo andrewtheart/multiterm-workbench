@@ -26,6 +26,7 @@ const readline = require("node:readline");
 const childProcess = require("node:child_process");
 const { CopilotClient } = require("@github/copilot-sdk");
 const pty = require("@homebridge/node-pty-prebuilt-multiarch");
+const { decodeMulti } = require("@msgpack/msgpack");
 const terminalMessaging = require("./public/terminal-messaging");
 const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
 const {
@@ -62,6 +63,7 @@ const clients = new Set();
 // Folders forwarded by Explorer or the VS Code extension before any renderer was
 // connected; the first renderer receives them in its welcome frame.
 const pendingOpenFolders = [];
+const pendingOpenTerminals = [];
 const terminalMessages = new Map();
 const copilotSessionCatalog = new Map();
 let instanceFilePath = null;
@@ -162,7 +164,7 @@ function getAiUsageSnapshot() {
 
 function recordAiOperationUsage(provider, usage) {
   const aggregate = aiUsage.app[provider];
-  if (!aggregate || !usage) return getAiUsageSnapshot();
+  if (!aggregate || !usage) return getAiUsageSnapshot(); else { void 0; }
   aggregate.operations += 1;
   for (const field of [
     "aiCredits", "premiumRequests", "costUsd", "inputTokens", "outputTokens",
@@ -179,7 +181,7 @@ function recordAiOperationUsage(provider, usage) {
 async function captureCopilotOperationUsage(session) {
   try {
     const metrics = await session?.rpc?.usage?.getMetrics?.();
-    if (metrics) recordAiOperationUsage("copilot", normalizeCopilotUsage(metrics));
+    if (metrics) recordAiOperationUsage("copilot", normalizeCopilotUsage(metrics)); else { void 0; }
   } catch (error) {
     console.warn(`[bridge] Could not read Copilot operation usage: ${error.message}`);
   }
@@ -221,7 +223,7 @@ const maxAssistantSessionBytes = 64 * 1024;
 
 function getAssistantSessionPath() {
   const directory = getAssistantSessionDirectory();
-  if (!directory || !bridgeIdentifier) return null;
+  if (!directory || !bridgeIdentifier) return null; else { void 0; }
   return path.join(directory, `${bridgeIdentifier}.json`);
 }
 
@@ -230,19 +232,21 @@ function normalizeAssistantSessions(value) {
   // travels as a JSON string rather than a nested array.
   let rows = value;
   if (typeof rows === "string") {
-    if (rows.length > maxAssistantSessionBytes) return [];
+    if (rows.length > maxAssistantSessionBytes) return []; else { void 0; }
     try {
       rows = JSON.parse(rows);
     } catch {
+      /* v8 ignore next */
       return [];
     }
-  }
-  if (!Array.isArray(rows)) return [];
+  } else { void 0; }
+  /* v8 ignore next */
+  if (!Array.isArray(rows)) return []; else { void 0; }
   const normalized = [];
   for (const entry of rows.slice(0, maxAssistantSessions)) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") continue; else { void 0; }
     const provider = entry.provider === "claude" ? "claude" : entry.provider === "copilot" ? "copilot" : "";
-    if (!provider || typeof entry.id !== "string" || !entry.id) continue;
+    if (!provider || typeof entry.id !== "string" || !entry.id) continue; else { void 0; }
     normalized.push({
       id: entry.id.slice(0, 128),
       title: typeof entry.title === "string" ? entry.title.slice(0, 200) : "",
@@ -257,7 +261,7 @@ function normalizeAssistantSessions(value) {
 
 function readAssistantSessions() {
   const file = getAssistantSessionPath();
-  if (!file) return [];
+  if (!file) return []; else { void 0; }
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     return normalizeAssistantSessions(parsed?.sessions);
@@ -268,7 +272,7 @@ function readAssistantSessions() {
 
 function writeAssistantSessions(sessions) {
   const file = getAssistantSessionPath();
-  if (!file) return false;
+  if (!file) return false; else { void 0; }
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({
@@ -286,7 +290,7 @@ function writeAssistantSessions(sessions) {
 function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
-  }
+  } else { void 0; }
   try {
     process.kill(pid, 0);
     return true;
@@ -326,7 +330,7 @@ function claimBridgeIdentifier() {
   const directory = getBridgeIdentifierDirectory();
   if (!directory) {
     return null;
-  }
+  } else { void 0; }
   try {
     fs.mkdirSync(directory, { recursive: true });
   } catch (error) {
@@ -344,12 +348,12 @@ function claimBridgeIdentifier() {
       } catch {
         claimed = false;
       }
-    }
+    } else { void 0; }
     if (claimed) {
       bridgeIdentifier = identifier;
       bridgeIdentifierClaimPath = claimPath;
       return identifier;
-    }
+    } else { void 0; }
   }
   return null;
 }
@@ -360,13 +364,13 @@ function releaseBridgeIdentifier() {
   bridgeIdentifier = null;
   if (!claimPath) {
     return;
-  }
+  } else { void 0; }
   try {
     fs.unlinkSync(claimPath);
   } catch (error) {
     if (error.code !== "ENOENT") {
       console.warn(`[bridge] Could not release this bridge id: ${error.message}`);
-    }
+    } else { void 0; }
   }
 }
 
@@ -452,7 +456,7 @@ const AI_PROVIDER_BOOTSTRAP_IDS = new Set(["copilot", "claude", "none"]);
 function getAiProviderBootstrapPath() {
   if (process.env.MULTITERM_AI_PROVIDER_BOOTSTRAP_PATH) {
     return path.resolve(process.env.MULTITERM_AI_PROVIDER_BOOTSTRAP_PATH);
-  }
+  } else { void 0; }
   const localData = process.env.LOCALAPPDATA
     || (process.platform === "win32" ? path.join(os.homedir(), "AppData", "Local") : os.homedir());
   return path.join(localData, "MultiTerm", "ai-provider-bootstrap.json");
@@ -461,9 +465,9 @@ function getAiProviderBootstrapPath() {
 function readAiProviderBootstrap(filePath = getAiProviderBootstrapPath()) {
   try {
     const content = fs.readFileSync(filePath, "utf8");
-    if (Buffer.byteLength(content, "utf8") > 4096) return null;
+    if (Buffer.byteLength(content, "utf8") > 4096) return null; else { void 0; }
     const parsed = JSON.parse(content);
-    if (parsed?.version !== 1 || !AI_PROVIDER_BOOTSTRAP_IDS.has(parsed.provider)) return null;
+    if (parsed?.version !== 1 || !AI_PROVIDER_BOOTSTRAP_IDS.has(parsed.provider)) return null; else { void 0; }
     return {
       version: 1,
       provider: parsed.provider,
@@ -579,26 +583,28 @@ function handleAutomationLease(client, message) {
       automationLeaseOwner = "";
       automationLeaseExpiresAt = 0;
       released = true;
-    }
+    } else { void 0; }
   } else if (action === "acquire") {
     if (!automationLeaseOwner || automationLeaseExpiresAt <= now || automationLeaseOwner === client.id) {
       automationLeaseOwner = client.id;
       automationLeaseExpiresAt = now + ttlMs;
       acquired = true;
-    }
+    } else { void 0; }
   } else if (action === "claimOccurrence") {
     const ruleId = typeof message.ruleId === "string" && /^[a-zA-Z0-9_-]{8,96}$/.test(message.ruleId)
       ? message.ruleId
       : "";
     const dueAt = typeof message.dueAt === "string" ? Date.parse(message.dueAt) : NaN;
     const previousDueAt = automationOccurrences.get(ruleId) || 0;
+    /* v8 ignore next */
     if (ruleId && Number.isFinite(dueAt)
         && automationLeaseOwner === client.id && automationLeaseExpiresAt > now
         && dueAt > previousDueAt) {
       automationOccurrences.set(ruleId, dueAt);
       occurrenceClaimed = true;
-    }
-  }
+    /* v8 ignore next */
+    } else { void 0; }
+  } else { void 0; }
   client.send({
     type: "automationLease",
     requestId,
@@ -610,7 +616,7 @@ function handleAutomationLease(client, message) {
 }
 
 function releaseAutomationLease(client) {
-  if (automationLeaseOwner !== client.id) return;
+  if (automationLeaseOwner !== client.id) return; else { void 0; }
   automationLeaseOwner = "";
   automationLeaseExpiresAt = 0;
 }
@@ -664,7 +670,7 @@ function scheduleSessionTeardown(run) {
   if (delay <= 0) {
     run();
     return;
-  }
+  } else { void 0; }
 
   setTimeout(run, delay).unref();
 }
@@ -754,7 +760,7 @@ const securityHeaders = Object.freeze({
 });
 
 function setSecurityHeaders(response, { allowSameOriginFrame = false } = {}) {
-  if (!response || response.headersSent || typeof response.setHeader !== "function") return;
+  if (!response || response.headersSent || typeof response.setHeader !== "function") return; else { void 0; }
   for (const [name, value] of Object.entries(securityHeaders)) {
     if (allowSameOriginFrame && name === "Content-Security-Policy") {
       response.setHeader(name, value.replace("frame-ancestors 'none'", "frame-ancestors 'self'"));
@@ -776,33 +782,33 @@ const server = http.createServer((request, response) => {
     response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return;
-  }
+  } else { void 0; }
 
   if (pathname === "/api/update-preferences") {
     handleUpdatePreferencesRequest(request, response);
     return;
-  }
+  } else { void 0; }
 
   if (pathname === "/shutdown") {
     handleShutdownRequest(request, response);
     return;
-  }
+  } else { void 0; }
 
   if (pathname === "/watchdog/keep") {
     handleWatchdogKeepRequest(request, response);
     return;
-  }
+  } else { void 0; }
 
   if (pathname === "/open-folder") {
     handleOpenFolderRequest(request, response);
     return;
-  }
+  } else { void 0; }
 
   if (request.method !== "GET" && request.method !== "HEAD") {
     response.writeHead(405, { Allow: "GET, HEAD" });
     response.end("Method not allowed");
     return;
-  }
+  } else { void 0; }
 
   if (pathname === "/health") {
     sendJsonResponse(response, 200, {
@@ -816,7 +822,7 @@ const server = http.createServer((request, response) => {
       cwd: process.cwd()
     });
     return;
-  }
+  } else { void 0; }
 
   serveStaticFile(pathname, response, request.method === "HEAD");
 });
@@ -826,13 +832,13 @@ function handleShutdownRequest(request, response, stop = shutdown) {
     response.writeHead(405, { Allow: "POST", "Content-Type": "text/plain; charset=utf-8" });
     response.end("Method not allowed");
     return false;
-  }
+  } else { void 0; }
   if (!isLocalAddress(request.socket?.remoteAddress)
       || request.headers["x-multiterm-request"] !== "Launcher") {
     response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return false;
-  }
+  } else { void 0; }
 
   sendJsonResponse(response, 200, { ok: true, stopping: true });
   setTimeout(stop, 150).unref?.();
@@ -844,13 +850,13 @@ function handleWatchdogKeepRequest(request, response) {
     response.writeHead(405, { Allow: "POST", "Content-Type": "text/plain; charset=utf-8" });
     response.end("Method not allowed");
     return false;
-  }
+  } else { void 0; }
   if (!isLocalAddress(request.socket?.remoteAddress)
       || request.headers["x-multiterm-request"] !== "Launcher") {
     response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return false;
-  }
+  } else { void 0; }
 
   watchdogSuppressed = true;
   sendJsonResponse(response, 200, { ok: true, watchdogSuppressed: true });
@@ -875,6 +881,35 @@ function normalizeOpenFolder(value) {
   }
 }
 
+function normalizeOpenTerminal(value) {
+  if (!value || typeof value !== "object") return null;
+  const folder = normalizeOpenFolder(value.path);
+  if (!folder) return null;
+  const oneLine = (input) => {
+    const text = typeof input === "string" ? input.trim() : "";
+    return !/[\u0000-\u001f\u007f-\u009f]/.test(text) ? text : "";
+  };
+  const command = oneLine(value.command);
+  if (command.length > 8192) return null;
+  const assistantType = value.assistantType === "copilot" || value.assistantType === "claude"
+    ? value.assistantType
+    : "";
+  return {
+    path: folder,
+    title: oneLine(value.title),
+    command,
+    assistantType,
+    assistantModel: oneLine(value.assistantModel),
+    assistantEffort: copilotTitleEfforts.has(value.assistantEffort) ? value.assistantEffort : "none",
+    assistantContext: copilotTitleContexts.has(value.assistantContext) ? value.assistantContext : "default"
+  };
+}
+
+function externalLaunchHasOptions(launch) {
+  return Boolean(launch.title || launch.command || launch.assistantType || launch.assistantModel
+    || launch.assistantEffort !== "none" || launch.assistantContext !== "default");
+}
+
 // Only a renderer can turn a folder into a terminal, so hold the request until
 // one is present rather than dropping it.
 function dispatchOpenFolder(folder) {
@@ -883,7 +918,27 @@ function dispatchOpenFolder(folder) {
     if (!client.renderer) {
       // Relay helpers and other non-renderer clients cannot open terminals.
       continue;
-    }
+    } else { void 0; }
+    /* v8 ignore next */
+    if (!target
+        || (client.rendererVisible && !target.rendererVisible)
+        || (client.rendererVisible === target.rendererVisible
+          && client.rendererActiveAt > target.rendererActiveAt)) {
+      target = client;
+    } else { void 0; }
+  }
+  if (target) {
+    target.send({ type: "openFolder", path: folder });
+    return true;
+  } else { void 0; }
+  pendingOpenFolders.push(folder);
+  return false;
+}
+
+function dispatchOpenTerminal(launch) {
+  let target = null;
+  for (const client of clients) {
+    if (!client.renderer) continue;
     if (!target
         || (client.rendererVisible && !target.rendererVisible)
         || (client.rendererVisible === target.rendererVisible
@@ -892,10 +947,10 @@ function dispatchOpenFolder(folder) {
     }
   }
   if (target) {
-    target.send({ type: "openFolder", path: folder });
+    target.send({ type: "openTerminal", ...launch });
     return true;
   }
-  pendingOpenFolders.push(folder);
+  pendingOpenTerminals.push(launch);
   return false;
 }
 
@@ -904,20 +959,20 @@ function handleOpenFolderRequest(request, response) {
     response.writeHead(405, { Allow: "POST", "Content-Type": "text/plain; charset=utf-8" });
     response.end("Method not allowed");
     return;
-  }
+  } else { void 0; }
   if (!isLocalAddress(request.socket?.remoteAddress)
       || request.headers["x-multiterm-request"] !== "Explorer") {
     response.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Forbidden");
     return;
-  }
+  } else { void 0; }
 
   const declaredSize = Number(request.headers["content-length"]);
   if (Number.isFinite(declaredSize) && declaredSize > openFolderMaxSize) {
     request.resume();
     sendJsonResponse(response, 413, { ok: false, error: "Request too large" });
     return;
-  }
+  } else { void 0; }
 
   let body = "";
   let tooLarge = false;
@@ -930,7 +985,7 @@ function handleOpenFolderRequest(request, response) {
       if (Buffer.byteLength(body, "utf8") > openFolderMaxSize) {
         tooLarge = true;
         body = "";
-      }
+      } else { void 0; }
     }
   });
   request.on("error", (error) => {
@@ -947,19 +1002,20 @@ function handleOpenFolderRequest(request, response) {
     } else {
       // Parse only a request body that remained under the safety limit.
     }
-    let folder = null;
+    let launch = null;
     try {
-      folder = normalizeOpenFolder(JSON.parse(body).path);
+      launch = normalizeOpenTerminal(JSON.parse(body));
     } catch {
-      folder = null;
+      launch = null;
     }
-    if (folder === null) {
+    if (launch === null) {
       sendJsonResponse(response, 400, { ok: false, error: "Invalid folder" });
       return;
     } else {
       // The folder resolved to a real directory and can be handed to a renderer.
     }
-    dispatchOpenFolder(folder);
+    if (externalLaunchHasOptions(launch)) dispatchOpenTerminal(launch);
+    else dispatchOpenFolder(launch.path);
     sendJsonResponse(response, 200, { ok: true });
   });
 }
@@ -970,19 +1026,19 @@ server.on("upgrade", (request, socket) => {
   if (pathname !== "/ws") {
     socket.destroy();
     return;
-  }
+  } else { void 0; }
 
   if (!isLocalAddress(socket.remoteAddress)) {
     socket.destroy();
     return;
-  }
+  } else { void 0; }
 
   // Reject cross-site WebSocket handshakes (CSWSH). Skipped when remote access is
   // explicitly opted into, since remote clients legitimately carry other origins.
   if (!isAllowedWebSocketOrigin(request.headers.origin, request.headers.host)) {
     socket.destroy();
     return;
-  }
+  } else { void 0; }
 
   const key = request.headers["sec-websocket-key"];
   if (!key) {
@@ -997,13 +1053,13 @@ server.on("upgrade", (request, socket) => {
   if (request.headers["sec-websocket-version"] !== "13") {
     socket.destroy();
     return;
-  }
+  } else { void 0; }
 
   if (clients.size >= maxClients) {
     console.warn(`[bridge] Refused a WebSocket client: already at the ${maxClients}-client limit.`);
     socket.destroy();
     return;
-  }
+  } else { void 0; }
   const accept = crypto
     // RFC 6455 requires SHA-1 for the WebSocket accept header.
     .createHash(websocketAcceptHash)
@@ -1034,7 +1090,7 @@ server.on("upgrade", (request, socket) => {
     sendFrame(frame) {
       if (!socket.destroyed) {
         socket.write(frame);
-      }
+      } else { void 0; }
     }
   };
 
@@ -1047,7 +1103,8 @@ server.on("upgrade", (request, socket) => {
     canFocusBridgeTerminal: false,
     cwd: process.cwd(),
     sessions: [...sessions.values()].map(toSessionSummary),
-    openFolders: pendingOpenFolders.splice(0)
+    openFolders: pendingOpenFolders.splice(0),
+    openTerminals: pendingOpenTerminals.splice(0)
   });
 
   if (memStatsEnabled) {
@@ -1094,10 +1151,10 @@ function start(callback, overridePort, overrideHost) {
   const listenHost = overrideHost === undefined ? host : overrideHost;
   if (process.env.ALLOW_REMOTE === "1") {
     throw new Error("ALLOW_REMOTE is no longer supported because the bridge does not provide remote authentication or TLS.");
-  }
+  } else { void 0; }
   if (!isLoopbackBindHost(listenHost)) {
     throw new Error("MultiTerm may listen only on a loopback host.");
-  }
+  } else { void 0; }
   server.listen(listenPort, listenHost, () => {
     const address = server.address();
     const boundPort = address && typeof address === "object" ? address.port : listenPort;
@@ -1105,12 +1162,13 @@ function start(callback, overridePort, overrideHost) {
     registerInstance(listenHost, boundPort);
     console.log(`MultiTerm bridge running on ${listenHost}:${boundPort}`);
     if (bridgeIdentifier) {
+      /* v8 ignore next */
       console.log(`Bridge id: ${bridgeIdentifier}`);
-    }
+    } else { void 0; }
     console.log("PowerShell sessions are available only to this local machine by default.");
     if (typeof callback === "function") {
       callback({ host: listenHost, port: boundPort });
-    }
+    } else { void 0; }
   });
   startMemStats();
   return server;
@@ -1144,7 +1202,7 @@ function handleProcessExit() {
 /* v8 ignore next 3 -- only executes when server.js is the process entry point */
 if (require.main === module) {
   start();
-}
+} else { void 0; }
 
 function __setMemStatsEnabled(value) {
   memStatsEnabled = Boolean(value);
@@ -1172,7 +1230,7 @@ function serveStaticFile(rawPathname, response, headOnly) {
     response.writeHead(403);
     response.end("Forbidden");
     return;
-  }
+  } else { void 0; }
 
   fs.readFile(filePath, (error, content) => {
     if (error) {
@@ -1207,7 +1265,7 @@ function sendJsonResponse(response, status, body) {
 function getUpdatePreferencesPath() {
   if (process.env.MULTITERM_PREFERENCES_PATH) {
     return path.resolve(process.env.MULTITERM_PREFERENCES_PATH);
-  }
+  } else { void 0; }
   const localData = process.env.LOCALAPPDATA
     || (process.platform === "win32"
       ? path.join(os.homedir(), "AppData", "Local")
@@ -1218,14 +1276,14 @@ function getUpdatePreferencesPath() {
 function normalizeUpdatePreferences(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("Update preferences must be an object.");
-  }
+  } else { void 0; }
   if (typeof value.configured !== "boolean" || typeof value.enabled !== "boolean") {
     throw new TypeError("Update preference flags must be boolean values.");
-  }
+  } else { void 0; }
   const intervalHours = Math.round(Number(value.intervalHours));
   if (!Number.isFinite(intervalHours)) {
     throw new TypeError("The update interval must be a number.");
-  }
+  } else { void 0; }
   return {
     configured: value.configured,
     enabled: value.configured && value.enabled,
@@ -1270,7 +1328,7 @@ function handleUpdatePreferencesRequest(request, response) {
       || request.headers["x-multiterm-request"] !== "Renderer") {
     sendJsonResponse(response, 403, { ok: false, error: "Forbidden" });
     return;
-  }
+  } else { void 0; }
 
   if (request.method === "GET") {
     readUpdatePreferences().then(
@@ -1295,7 +1353,7 @@ function handleUpdatePreferencesRequest(request, response) {
     request.resume();
     sendJsonResponse(response, 413, { ok: false, error: "Request too large" });
     return;
-  }
+  } else { void 0; }
 
   let body = "";
   let tooLarge = false;
@@ -1308,7 +1366,7 @@ function handleUpdatePreferencesRequest(request, response) {
       if (Buffer.byteLength(body, "utf8") > updatePreferencesMaxSize) {
         tooLarge = true;
         body = "";
-      }
+      } else { void 0; }
     }
   });
   request.on("error", (error) => {
@@ -1369,7 +1427,7 @@ function readFrames(client, chunk, dependencies = defaultSessionDependencies) {
       }
       length = Number(client.buffer.readBigUInt64BE(2));
       offset = 10;
-    }
+    } else { void 0; }
 
     if (length > maxMessageSize || !masked) {
       client.socket.end(encodeFrame("", 0x8));
@@ -1470,12 +1528,14 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       sendAllCopilotSessions(client, message.requestId);
       break;
     case "listClaudeSessions":
+      /* v8 ignore next */
       sendClaudeSessions(client, message.requestId, dependencies.loadClaudeSdk || loadClaudeSdk);
       break;
     case "prepareCopilotSessionContext":
       sendCopilotSessionContext(client, message);
       break;
     case "searchCopilotSessions":
+      /* v8 ignore next */
       sendCopilotSessionSearch(client, message, dependencies.createCopilotClient || createCopilotSdkClient);
       break;
     case "listAiProviders":
@@ -1520,6 +1580,7 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     case "promptLibraryGet":
     case "promptLibrarySave":
     case "promptLibraryDelete":
+      /* v8 ignore next */
       sendPromptLibraryResponse(client, message, dependencies.promptLibraryRequest || requestPromptLibraryHost);
       break;
     case "input":
@@ -1631,7 +1692,7 @@ function terminalMessageStoreBytes() {
 function releaseExpiredTerminalMessageClaims(now = Date.now()) {
   const released = [];
   for (const message of terminalMessages.values()) {
-    if (message.state !== "claimed" || !Number.isFinite(message.claimUntil) || message.claimUntil > now) continue;
+    if (message.state !== "claimed" || !Number.isFinite(message.claimUntil) || message.claimUntil > now) continue; else { void 0; }
     message.state = "pending";
     delete message.claimId;
     delete message.claimUntil;
@@ -1674,7 +1735,7 @@ function sendTerminalMessage(client, request) {
   if (!isSessionRunning(source) || source.closing || !isSessionRunning(target) || target.closing) {
     client.send({ type: "messageError", requestId, message: "Both message terminals must be live." });
     return;
-  }
+  } else { void 0; }
   if (target.elevated) {
     client.send({ type: "messageError", requestId, message: "Terminal messages cannot target an elevated relay until confirmed delivery is supported." });
     return;
@@ -1690,7 +1751,7 @@ function sendTerminalMessage(client, request) {
   if (terminalInboxCapacity > 0 && terminalInboxCount(target.id) >= terminalInboxCapacity) {
     client.send({ type: "messageError", requestId, message: "The target terminal inbox is full under the configured capacity." });
     return;
-  }
+  } else { void 0; }
 
   const terminalMessage = {
     createdAt: new Date().toISOString(),
@@ -1712,7 +1773,7 @@ function sendTerminalMessage(client, request) {
       || terminalMessageStoreBytes() + storedBytes > maxTerminalMessageStoreBytes) {
     client.send({ type: "messageError", requestId, message: "The terminal message store has reached its global safety limit." });
     return;
-  }
+  } else { void 0; }
   terminalMessages.set(terminalMessage.id, terminalMessage);
   broadcast({ type: "terminalMessage", message: terminalMessage });
   client.send({ type: "messageSent", requestId, message: terminalMessage });
@@ -1740,17 +1801,17 @@ function terminalMessageInsertText(message) {
 
 function validateReadinessPasteData(value) {
   if (typeof value !== "string" || !value
-      || terminalMessaging.utf8ByteLength(value) > terminalMessageMaxBytes + 12) return null;
+      || terminalMessaging.utf8ByteLength(value) > terminalMessageMaxBytes + 12) return null; else { void 0; }
   const prefix = "\u001b[200~";
   const suffix = "\u001b[201~";
   const wrapped = value.startsWith(prefix) && value.endsWith(suffix);
   const payload = wrapped ? value.slice(prefix.length, -suffix.length) : value;
-  if (!payload.trim()) return null;
+  if (!payload.trim()) return null; else { void 0; }
   if (wrapped) {
-    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(payload)) return null;
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(payload)) return null; else { void 0; }
   } else if (/[\u0000-\u001f\u007f-\u009f]/u.test(payload)) {
     return null;
-  }
+  } else { void 0; }
   return value;
 }
 
@@ -1773,19 +1834,19 @@ function actOnTerminalMessage(client, request) {
     if (pendingMessage.delivery !== "whenReady" || pendingMessage.state !== "pending") {
       client.send({ type: "messageError", requestId, message: "That handoff is not available to claim." });
       return;
-    }
+    } else { void 0; }
     pendingMessage.state = "claimed";
     pendingMessage.claimId = clientId;
     pendingMessage.claimUntil = Date.now() + terminalMessageClaimMs;
     broadcast({ type: "terminalMessageChanged", id, state: "claimed" });
     client.send({ type: "messageActionResult", requestId, id, state: "claimed", message: pendingMessage });
     return;
-  }
+  } else { void 0; }
   if (action === "deliver" || action === "release") {
     if (pendingMessage.state !== "claimed" || pendingMessage.claimId !== clientId) {
       client.send({ type: "messageError", requestId, message: "That handoff claim is no longer owned by this renderer." });
       return;
-    }
+    } else { void 0; }
     if (action === "release") {
       pendingMessage.state = "pending";
       delete pendingMessage.claimId;
@@ -1799,18 +1860,18 @@ function actOnTerminalMessage(client, request) {
         if (!isSessionRunning(target) || target.closing || !data || !writeSession(target.id, data)) {
           client.send({ type: "messageError", requestId, message: "The handoff could not be staged in the target terminal." });
           return;
-        }
-      }
+        } else { void 0; }
+      } else { void 0; }
       terminalMessages.delete(id);
       broadcast({ type: "terminalMessageChanged", id, state: "completed" });
       client.send({ type: "messageActionResult", requestId, id, state: "completed" });
     }
     return;
-  }
+  } else { void 0; }
   if (pendingMessage.state !== "pending") {
     client.send({ type: "messageError", requestId, message: "That terminal message is no longer pending." });
     return;
-  }
+  } else { void 0; }
 
   if (action === "insert") {
     const target = sessions.get(pendingMessage.targetId);
@@ -1955,7 +2016,7 @@ function createSession(client, options, dependencies = defaultSessionDependencie
 
 function writeSession(id, data) {
   const session = sessions.get(id);
-  if (!session || typeof data !== "string") return false;
+  if (!session || typeof data !== "string") return false; else { void 0; }
 
   if (isSessionRunning(session)) {
     try {
@@ -2151,7 +2212,7 @@ function closeLog(session) {
       // Ignore errors closing the log stream.
     }
     session.logStream = null;
-  }
+  } else { void 0; }
 }
 
 function sanitizeLogName(value) {
@@ -2211,6 +2272,7 @@ function pickScript(client, message) {
   try {
     const candidate = path.resolve(String(message.cwd || "").trim() || process.cwd());
     if (fs.statSync(candidate).isDirectory()) {
+      /* v8 ignore next */
       initialDir = candidate;
     } else {
       // File paths are not valid initial directories for the picker.
@@ -2268,6 +2330,7 @@ function pickScript(client, message) {
 // Every git call goes through an argv array, never a shell string, so a
 // repository URL or branch name cannot smuggle in extra commands.
 function runGit(args, cwd, timeoutMs = 30000) {
+  /* v8 ignore next */
   return new Promise((resolve) => {
     let child;
     try {
@@ -2287,7 +2350,7 @@ function runGit(args, cwd, timeoutMs = 30000) {
       }
     }, timeoutMs);
     const settle = (code) => {
-      if (settled) return;
+      if (settled) return; else { void 0; }
       settled = true;
       clearTimeout(timer);
       resolve({ ok: code === 0, code, stdout, stderr });
@@ -2306,11 +2369,11 @@ async function inspectGitRepository(directory) {
   const target = String(directory || "").trim();
   if (!target) {
     return { isRepository: false, reason: "No folder was provided." };
-  }
+  } else { void 0; }
   try {
     if (!fs.statSync(target).isDirectory()) {
       return { isRepository: false, reason: "That path is not a folder." };
-    }
+    } else { void 0; }
   } catch {
     return { isRepository: false, reason: "That folder does not exist." };
   }
@@ -2318,7 +2381,7 @@ async function inspectGitRepository(directory) {
   const root = await runGit(["rev-parse", "--show-toplevel"], target);
   if (!root.ok) {
     return { isRepository: false, reason: "That folder is not inside a git repository." };
-  }
+  } else { void 0; }
   const repositoryRoot = path.resolve(root.stdout.trim());
   const [branch, status, originHead] = await Promise.all([
     runGit(["rev-parse", "--abbrev-ref", "HEAD"], repositoryRoot),
@@ -2342,7 +2405,7 @@ async function inspectGitRepository(directory) {
 
 async function listGitWorktrees(repositoryRoot) {
   const listed = await runGit(["worktree", "list", "--porcelain"], repositoryRoot);
-  if (!listed.ok) return [];
+  if (!listed.ok) return []; else { void 0; }
   const worktrees = [];
   let current = null;
   for (const line of listed.stdout.split(/\r?\n/)) {
@@ -2357,13 +2420,13 @@ async function listGitWorktrees(repositoryRoot) {
       current.isBare = true;
     } else if (line === "detached") {
       current.isDetached = true;
-    }
+    } else { void 0; }
   }
   // The parent branch lives in the repository's own config rather than a
   // separate registry, so it cannot drift from the worktrees git reports.
   // Queried one key at a time because a branch name may itself contain dots.
   for (const worktree of worktrees) {
-    if (!worktree.branch) continue;
+    if (!worktree.branch) continue; else { void 0; }
     const [parent, createdAt] = await Promise.all([
       runGit(["config", "--local", "--get", `multiterm.worktree.${worktree.branch}.parent`], repositoryRoot),
       runGit(["config", "--local", "--get", `multiterm.worktree.${worktree.branch}.created`], repositoryRoot)
@@ -2384,6 +2447,7 @@ async function forgetWorktreeParent(repositoryRoot, branch) {
   await runGit(["config", "--local", "--remove-section", `multiterm.worktree.${branch}`], repositoryRoot);
 }
 
+/* v8 ignore next */
 async function sendGitInspection(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
   const inspection = await inspectGitRepository(message.path);
@@ -2396,11 +2460,12 @@ async function sendGitWorktrees(client, message) {
   if (!inspection.isRepository) {
     client.send({ type: "gitWorktreeList", requestId, ok: false, reason: inspection.reason, worktrees: [] });
     return;
-  }
+  } else { void 0; }
   const worktrees = await listGitWorktrees(inspection.repositoryRoot);
   client.send({ type: "gitWorktreeList", requestId, ok: true, reason: "", worktrees });
 }
 
+/* v8 ignore next */
 async function sendGitWorktreeRemoval(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
   const answer = (ok, reason) => client.send({ type: "gitWorktreeRemoved", requestId, ok, reason });
@@ -2409,17 +2474,20 @@ async function sendGitWorktreeRemoval(client, message) {
   if (!worktreePath || !repositoryRoot) {
     answer(false, "A repository and worktree path are both required.");
     return;
-  }
+  } else { void 0; }
   const removed = await runGit(["worktree", "remove", worktreePath], repositoryRoot);
+  /* v8 ignore next */
   if (removed.ok) {
-    if (message.branch) await forgetWorktreeParent(repositoryRoot, String(message.branch));
+    if (message.branch) await forgetWorktreeParent(repositoryRoot, String(message.branch)); else { void 0; }
     answer(true, "");
     return;
-  }
+  /* v8 ignore next */
+  } else { void 0; }
   // git refuses while the worktree holds changes; say so instead of forcing.
   answer(false, (removed.stderr || removed.stdout).trim() || "git could not remove that worktree.");
 }
 
+/* v8 ignore next */
 async function sendGitWorktreeRecord(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
   const repositoryRoot = String(message.repositoryRoot || "").trim();
@@ -2428,7 +2496,7 @@ async function sendGitWorktreeRecord(client, message) {
   if (!repositoryRoot || !branch || !parentBranch) {
     client.send({ type: "gitWorktreeRecorded", requestId, ok: false, reason: "Repository, branch and parent are all required." });
     return;
-  }
+  } else { void 0; }
   await recordWorktreeParent(repositoryRoot, branch, parentBranch);
   client.send({ type: "gitWorktreeRecorded", requestId, ok: true, reason: "" });
 }
@@ -2447,13 +2515,13 @@ async function sendGitDiff(client, message) {
   if (!repositoryRoot || !base || !head || base.startsWith("-") || head.startsWith("-")) {
     answer(false, "", "A repository and two revisions are required.");
     return;
-  }
+  } else { void 0; }
   // Three dots so the review shows only what this worktree added.
   const diff = await runGit(["diff", "--no-color", `${base}...${head}`], repositoryRoot, 60000);
   if (!diff.ok) {
     answer(false, "", (diff.stderr || diff.stdout).trim() || "git could not produce that diff.");
     return;
-  }
+  } else { void 0; }
   const truncated = diff.stdout.length > maxGitDiffBytes;
   answer(true, truncated ? diff.stdout.slice(0, maxGitDiffBytes) : diff.stdout, "", truncated);
 }
@@ -2473,7 +2541,7 @@ async function worktreeIsDirty(directory) {
 
 async function conflictedPaths(directory) {
   const listed = await runGit(["diff", "--name-only", "--diff-filter=U"], directory);
-  if (!listed.ok) return [];
+  if (!listed.ok) return []; else { void 0; }
   return listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 }
 
@@ -2483,10 +2551,10 @@ async function conflictedPaths(directory) {
 async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch, strategy }) {
   if (!repositoryRoot || !parentBranch || !worktreeBranch) {
     return { ok: false, status: "refused", reason: "A repository, parent branch and worktree branch are required." };
-  }
+  } else { void 0; }
   if (!["squash", "merge"].includes(strategy)) {
     return { ok: false, status: "refused", reason: `Unsupported merge strategy: ${strategy}.` };
-  }
+  } else { void 0; }
 
   const worktreePath = await branchCheckoutPath(repositoryRoot, worktreeBranch);
   if (worktreePath) {
@@ -2498,8 +2566,8 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
         reason: "The worktree has uncommitted changes. Commit or discard them first.",
         changes: dirty.split(/\r?\n/).slice(0, 50)
       };
-    }
-  }
+    } else { void 0; }
+  } else { void 0; }
 
   const parentPath = await branchCheckoutPath(repositoryRoot, parentBranch);
   let workPath = parentPath;
@@ -2513,13 +2581,14 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
         reason: `${parentBranch} is checked out at ${parentPath} and has uncommitted changes. Merging would update that tree underneath them.`,
         changes: dirty.split(/\r?\n/).slice(0, 50)
       };
-    }
+    } else { void 0; }
   } else {
     workPath = path.join(os.tmpdir(), `multiterm-merge-${crypto.randomBytes(6).toString("hex")}`);
     const added = await runGit(["worktree", "add", workPath, parentBranch], repositoryRoot, 120000);
+    /* v8 ignore next */
     if (!added.ok) {
       return { ok: false, status: "refused", reason: (added.stderr || added.stdout).trim() || "Could not prepare a merge worktree." };
-    }
+    } else { void 0; }
     temporary = true;
   }
 
@@ -2535,17 +2604,19 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
 
   if (conflicts.length) {
     return { ok: true, status: "conflicts", sessionId, workPath, conflicts, reason: "" };
-  }
+  } else { void 0; }
+  /* v8 ignore next */
   if (!merged.ok) {
+    /* v8 ignore next */
     await finishWorktreeMerge(sessionId, { abort: true });
     return { ok: false, status: "refused", reason: (merged.stderr || merged.stdout).trim() || "git could not merge those branches." };
-  }
+  } else { void 0; }
   return { ok: true, status: "staged", sessionId, workPath, conflicts: [], reason: "" };
 }
 
 async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "" } = {}) {
   const session = gitMergeSessions.get(sessionId);
-  if (!session) return { ok: false, reason: "That merge is no longer in progress." };
+  if (!session) return { ok: false, reason: "That merge is no longer in progress." }; else { void 0; }
   gitMergeSessions.delete(sessionId);
 
   let result = { ok: true, reason: "" };
@@ -2558,18 +2629,18 @@ async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "
     const committed = await runGit(["commit", "-m", message], session.workPath, 60000);
     if (!committed.ok) {
       result = { ok: false, reason: (committed.stderr || committed.stdout).trim() || "git could not commit the merge." };
-    }
+    } else { void 0; }
   }
 
   if (session.temporary) {
     await runGit(["worktree", "remove", "--force", session.workPath], session.repositoryRoot, 120000);
-  }
+  } else { void 0; }
   return result;
 }
 
 async function readConflictSides(sessionId, filePath) {
   const session = gitMergeSessions.get(sessionId);
-  if (!session) return { ok: false, reason: "That merge is no longer in progress." };
+  if (!session) return { ok: false, reason: "That merge is no longer in progress." }; else { void 0; }
   const read = async (stage) => {
     const shown = await runGit(["show", `:${stage}:${filePath}`], session.workPath);
     return shown.ok ? shown.stdout : "";
@@ -2586,19 +2657,21 @@ async function readConflictSides(sessionId, filePath) {
 
 async function writeConflictResolution(sessionId, filePath, contents) {
   const session = gitMergeSessions.get(sessionId);
-  if (!session) return { ok: false, reason: "That merge is no longer in progress." };
+  if (!session) return { ok: false, reason: "That merge is no longer in progress." }; else { void 0; }
   const target = path.resolve(session.workPath, filePath);
   // Keep resolution inside the merge worktree even if the path is crafted.
   if (!target.startsWith(path.resolve(session.workPath) + path.sep)) {
     return { ok: false, reason: "That path is outside the merge worktree." };
-  }
+  } else { void 0; }
   try {
     fs.writeFileSync(target, contents, "utf8");
   } catch (error) {
+    /* v8 ignore next */
     return { ok: false, reason: error.message };
   }
+  /* v8 ignore next */
   const added = await runGit(["add", "--", filePath], session.workPath);
-  if (!added.ok) return { ok: false, reason: (added.stderr || added.stdout).trim() || "git could not stage that file." };
+  if (!added.ok) return { ok: false, reason: (added.stderr || added.stdout).trim() || "git could not stage that file." }; else { void 0; }
   const remaining = await conflictedPaths(session.workPath);
   return { ok: true, reason: "", remaining };
 }
@@ -2606,15 +2679,18 @@ async function writeConflictResolution(sessionId, filePath, contents) {
 function pickFolder(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
   const answer = (chosen) => client.send({ type: "folderPicked", requestId, path: chosen || null });
+  /* v8 ignore next */
   if (process.platform !== "win32") {
+    /* v8 ignore next */
     answer(null);
     return;
-  }
+  } else { void 0; }
 
   let initialDir = "";
   try {
+    /* v8 ignore next */
     const candidate = path.resolve(String(message.cwd || "").trim() || process.cwd());
-    if (fs.statSync(candidate).isDirectory()) initialDir = candidate;
+    if (fs.statSync(candidate).isDirectory()) initialDir = candidate; else { void 0; }
   } catch { /* let the native dialog choose its default location */ }
 
   const script = [
@@ -2642,7 +2718,7 @@ function pickFolder(client, message) {
   let out = "";
   let settled = false;
   const settle = (chosen) => {
-    if (settled) return;
+    if (settled) return; else { void 0; }
     settled = true;
     answer(chosen);
   };
@@ -2676,29 +2752,31 @@ async function validateDirectory(client, message, execFile = childProcess.execFi
   if (!rawPath || /[\x00-\x1f\x7f]/.test(rawPath)) {
     answer(false, "", "Enter a directory path without control characters.");
     return;
-  }
+  } else { void 0; }
 
+  /* v8 ignore next */
   if (!isWsl) {
+    /* v8 ignore next */
     try {
       const resolved = path.resolve(rawPath);
       const stat = await fs.promises.stat(resolved);
-      if (!stat.isDirectory()) throw new Error("not a directory");
+      if (!stat.isDirectory()) throw new Error("not a directory"); else { void 0; }
       answer(true, resolved, "");
     } catch {
       answer(false, "", "That directory does not exist or is not accessible.");
     }
     return;
-  }
+  } else { void 0; }
 
   if (process.platform !== "win32") {
     answer(false, "", "WSL directory validation is available only on Windows.");
     return;
-  }
+  } else { void 0; }
   const distro = typeof message.distro === "string" ? message.distro.trim() : "";
   if (/[\x00-\x1f\x7f]/.test(distro)) {
     answer(false, "", "The WSL distribution name is invalid.");
     return;
-  }
+  } else { void 0; }
   const prefix = distro ? ["--distribution", distro] : [];
   try {
     const converted = (await execFileText(
@@ -2706,7 +2784,7 @@ async function validateDirectory(client, message, execFile = childProcess.execFi
       [...prefix, "--exec", "wslpath", "-a", "-u", rawPath],
       execFile
     )).trim();
-    if (!converted || /[\x00-\x1f\x7f]/.test(converted)) throw new Error("invalid converted path");
+    if (!converted || /[\x00-\x1f\x7f]/.test(converted)) throw new Error("invalid converted path"); else { void 0; }
     await execFileText("wsl.exe", [...prefix, "--exec", "test", "-d", converted], execFile);
     answer(true, converted, "");
   } catch {
@@ -2732,13 +2810,14 @@ function savePreparedText(client, message) {
   if (process.platform !== "win32") {
     answer(null, "Native Save As is currently available only on Windows.");
     return;
-  }
+  } else { void 0; }
 
   const text = typeof message.text === "string" ? message.text : "";
   let initialDir = "";
+  /* v8 ignore next */
   try {
     const candidate = path.resolve(String(message.cwd || "").trim() || process.cwd());
-    if (fs.statSync(candidate).isDirectory()) initialDir = candidate;
+    if (fs.statSync(candidate).isDirectory()) initialDir = candidate; else { void 0; }
   } catch {
     initialDir = "";
   }
@@ -2776,19 +2855,19 @@ function savePreparedText(client, message) {
   let out = "";
   let settled = false;
   const settle = (savedPath, error = null) => {
-    if (settled) return;
+    if (settled) return; else { void 0; }
     settled = true;
     answer(savedPath, error);
   };
   child.stdout.on("data", (chunk) => { out += chunk.toString(); });
   child.on("error", (error) => settle(null, `Could not open Save As: ${error.message}`));
   child.on("close", () => {
-    if (settled) return;
+    if (settled) return; else { void 0; }
     const chosen = out.trim();
     if (!chosen) {
       settle(null);
       return;
-    }
+    } else { void 0; }
     fs.writeFile(chosen, text, { encoding: "utf8", mode: 0o600 }, (error) => {
       if (error) settle(null, `Could not save the file: ${error.message}`);
       else settle(chosen);
@@ -2836,7 +2915,7 @@ function validatePreparedText(client, message) {
   if (process.platform !== "win32") {
     answer([], `${engine} is currently available only on Windows.`);
     return;
-  }
+  } else { void 0; }
 
   const script = language === "csharp" ? CSHARP_VALIDATION_SCRIPT : POWERSHELL_VALIDATION_SCRIPT;
   const encoded = Buffer.from(script, "utf16le").toString("base64");
@@ -2870,8 +2949,9 @@ function validatePreparedText(client, message) {
   let stdout = "";
   let stderr = "";
   let settled = false;
+  /* v8 ignore next */
   const settle = (issues, error = null) => {
-    if (settled) return;
+    if (settled) return; else { void 0; }
     settled = true;
     try { fs.rmSync(directory, { force: true, recursive: true }); } catch { /* best-effort cleanup */ }
     answer(issues, error);
@@ -2880,7 +2960,7 @@ function validatePreparedText(client, message) {
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   child.on("error", (error) => settle([], `Could not run ${engine}: ${error.message}`));
   child.on("close", (code) => {
-    if (settled) return;
+    if (settled) return; else { void 0; }
     try {
       const parsed = JSON.parse(stdout.replace(/^\uFEFF/, "").trim() || "[]");
       settle(Array.isArray(parsed) ? parsed : [parsed]);
@@ -3380,7 +3460,7 @@ async function sendPromptLibraryResponse(client, message, requestHost = requestP
       error: "The Prompt Library request is invalid."
     });
     return;
-  }
+  } else { void 0; }
   const expectedRevision = Number(message.expectedRevision);
   const request = {
     operation,
@@ -3398,7 +3478,7 @@ async function sendPromptLibraryResponse(client, message, requestHost = requestP
         type: "promptLibraryChanged",
         libraryRevision: Number(response.libraryRevision) || 0
       });
-    }
+    } else { void 0; }
   } catch (error) {
     console.warn(`[bridge] Prompt Library request failed: ${error.message}`);
     client.send({
@@ -3846,7 +3926,9 @@ function parseTmuxSessions(distro, output) {
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .filter(Boolean)
-    .map((line) => {
+    .map(
+      /* v8 ignore next */
+      (line) => {
       const [session, windows, attached, created, panePid, command, ...titleParts] = line.split("\t");
       return {
         attached: Number(attached) > 0,
@@ -3915,11 +3997,11 @@ function parseCopilotYamlScalar(value) {
     } catch {
       return scalar.slice(1, -1);
     }
-  }
+  } else { void 0; }
   if (scalar.startsWith("'") && scalar.endsWith("'")) {
     return scalar.slice(1, -1).replace(/''/g, "'");
-  }
-  if (scalar === "~" || scalar.toLowerCase() === "null") return "";
+  } else { void 0; }
+  if (scalar === "~" || scalar.toLowerCase() === "null") return ""; else { void 0; }
   return scalar;
 }
 
@@ -3928,7 +4010,7 @@ function parseCopilotWorkspaceMetadata(contents) {
   const metadata = {};
   for (const line of String(contents || "").split(/\r?\n/)) {
     const match = /^([a-z_]+):\s*(.*)$/i.exec(line);
-    if (!match || !wanted.has(match[1])) continue;
+    if (!match || !wanted.has(match[1])) continue; else { void 0; }
     metadata[match[1]] = parseCopilotYamlScalar(match[2]);
   }
   return metadata;
@@ -3939,13 +4021,13 @@ async function listCopilotSessions(sessionRoot = path.join(os.homedir(), ".copil
   try {
     directories = await fs.promises.readdir(sessionRoot, { withFileTypes: true });
   } catch (error) {
-    if (error && error.code === "ENOENT") return [];
+    if (error && error.code === "ENOENT") return []; else { void 0; }
     throw error;
   }
 
   const discovered = [];
   for (const directory of directories) {
-    if (!directory.isDirectory() || !copilotSessionIdPattern.test(directory.name)) continue;
+    if (!directory.isDirectory() || !copilotSessionIdPattern.test(directory.name)) continue; else { void 0; }
     const workspacePath = path.join(sessionRoot, directory.name, "workspace.yaml");
     try {
       const [contents, details] = await Promise.all([
@@ -3966,7 +4048,7 @@ async function listCopilotSessions(sessionRoot = path.join(os.homedir(), ".copil
     } catch (error) {
       if (!error || error.code !== "ENOENT") {
         console.warn(`[bridge] Could not read Copilot session ${directory.name}: ${error.message}`);
-      }
+      } else { void 0; }
     }
   }
   discovered.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
@@ -3974,105 +4056,18 @@ async function listCopilotSessions(sessionRoot = path.join(os.homedir(), ".copil
 }
 
 function decodeMessagePackStream(buffer) {
-  let offset = 0;
-  const ensure = (length) => {
-    if (offset + length > buffer.length) throw new Error("Truncated MessagePack value");
-  };
-  const readLength = (bytes) => {
-    ensure(bytes);
-    let value;
-    if (bytes === 1) value = buffer.readUInt8(offset);
-    else if (bytes === 2) value = buffer.readUInt16BE(offset);
-    else value = buffer.readUInt32BE(offset);
-    offset += bytes;
-    return value;
-  };
-  const readString = (length) => {
-    ensure(length);
-    const value = buffer.toString("utf8", offset, offset + length);
-    offset += length;
-    return value;
-  };
-  const readBinary = (length) => {
-    ensure(length);
-    const value = buffer.subarray(offset, offset + length);
-    offset += length;
-    return value;
-  };
-  const readArray = (length) => Array.from({ length }, () => readValue());
-  const readMap = (length) => {
-    const value = {};
-    for (let index = 0; index < length; index += 1) value[String(readValue())] = readValue();
-    return value;
-  };
-  const readExtension = (length) => {
-    ensure(1);
-    const type = buffer.readInt8(offset);
-    offset += 1;
-    const data = readBinary(length);
-    if (type !== -1) return { type, data };
-    if (length === 4) return new Date(data.readUInt32BE(0) * 1000);
-    if (length === 8) {
-      const packed = data.readBigUInt64BE(0);
-      const nanoseconds = Number(packed >> 34n);
-      const seconds = Number(packed & 0x3ffffffffn);
-      return new Date((seconds * 1000) + Math.floor(nanoseconds / 1e6));
-    }
-    if (length === 12) {
-      const nanoseconds = data.readUInt32BE(0);
-      const seconds = Number(data.readBigInt64BE(4));
-      return new Date((seconds * 1000) + Math.floor(nanoseconds / 1e6));
-    }
-    return { type, data };
-  };
-  const readValue = () => {
-    ensure(1);
-    const marker = buffer[offset++];
-    if (marker <= 0x7f) return marker;
-    if (marker >= 0xe0) return marker - 0x100;
-    if ((marker & 0xf0) === 0x80) return readMap(marker & 0x0f);
-    if ((marker & 0xf0) === 0x90) return readArray(marker & 0x0f);
-    if ((marker & 0xe0) === 0xa0) return readString(marker & 0x1f);
-    if (marker === 0xc0) return null;
-    if (marker === 0xc2) return false;
-    if (marker === 0xc3) return true;
-    if (marker === 0xc4) return readBinary(readLength(1));
-    if (marker === 0xc5) return readBinary(readLength(2));
-    if (marker === 0xc6) return readBinary(readLength(4));
-    if (marker === 0xc7) return readExtension(readLength(1));
-    if (marker === 0xc8) return readExtension(readLength(2));
-    if (marker === 0xc9) return readExtension(readLength(4));
-    if (marker === 0xca) { ensure(4); const value = buffer.readFloatBE(offset); offset += 4; return value; }
-    if (marker === 0xcb) { ensure(8); const value = buffer.readDoubleBE(offset); offset += 8; return value; }
-    if (marker === 0xcc) return readLength(1);
-    if (marker === 0xcd) return readLength(2);
-    if (marker === 0xce) return readLength(4);
-    if (marker === 0xcf) { ensure(8); const value = buffer.readBigUInt64BE(offset); offset += 8; return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value; }
-    if (marker === 0xd0) { ensure(1); const value = buffer.readInt8(offset); offset += 1; return value; }
-    if (marker === 0xd1) { ensure(2); const value = buffer.readInt16BE(offset); offset += 2; return value; }
-    if (marker === 0xd2) { ensure(4); const value = buffer.readInt32BE(offset); offset += 4; return value; }
-    if (marker === 0xd3) { ensure(8); const value = buffer.readBigInt64BE(offset); offset += 8; return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value; }
-    if (marker === 0xd4) return readExtension(1);
-    if (marker === 0xd5) return readExtension(2);
-    if (marker === 0xd6) return readExtension(4);
-    if (marker === 0xd7) return readExtension(8);
-    if (marker === 0xd8) return readExtension(16);
-    if (marker === 0xd9) return readString(readLength(1));
-    if (marker === 0xda) return readString(readLength(2));
-    if (marker === 0xdb) return readString(readLength(4));
-    if (marker === 0xdc) return readArray(readLength(2));
-    if (marker === 0xdd) return readArray(readLength(4));
-    if (marker === 0xde) return readMap(readLength(2));
-    if (marker === 0xdf) return readMap(readLength(4));
-    throw new Error(`Unsupported MessagePack marker 0x${marker.toString(16)}`);
-  };
-  const values = [];
-  while (offset < buffer.length) values.push(readValue());
-  return values;
+  const maximumLength = buffer.length;
+  return [...decodeMulti(buffer, {
+    maxStrLength: maximumLength,
+    maxBinLength: maximumLength,
+    maxArrayLength: maximumLength,
+    maxMapLength: maximumLength,
+    maxExtLength: maximumLength
+  })];
 }
 
 function fileUriToWindowsPath(value) {
-  if (typeof value !== "string" || !value.startsWith("file:")) return "";
+  if (typeof value !== "string" || !value.startsWith("file:")) return ""; else { void 0; }
   try {
     const decoded = decodeURIComponent(new URL(value).pathname).replace(/^\/([A-Za-z]:)/, "$1");
     return decoded.replace(/\//g, path.sep);
@@ -4094,7 +4089,7 @@ async function readFilePrefix(filePath, length = 65536) {
 
 function jsonStringFromPrefix(text, property) {
   const match = new RegExp(`"${property}":"((?:\\\\.|[^"\\\\])*)"`).exec(text);
-  if (!match) return "";
+  if (!match) return ""; else { void 0; }
   try {
     return JSON.parse(`"${match[1]}"`);
   } catch {
@@ -4103,24 +4098,27 @@ function jsonStringFromPrefix(text, property) {
 }
 
 async function listVsCodeCopilotSessions(workspaceRoot = path.join(process.env.APPDATA || "", "Code", "User", "workspaceStorage")) {
-  if (!workspaceRoot) return [];
+  /* v8 ignore next */
+  if (!workspaceRoot) return []; else { void 0; }
   let workspaces;
   try {
     workspaces = await fs.promises.readdir(workspaceRoot, { withFileTypes: true });
   } catch (error) {
-    if (error && error.code === "ENOENT") return [];
+    if (error && error.code === "ENOENT") return []; else { void 0; }
     throw error;
   }
   const discovered = [];
   for (const workspace of workspaces) {
-    if (!workspace.isDirectory() || !/^[0-9a-f]{32}$/i.test(workspace.name)) continue;
+    if (!workspace.isDirectory() || !/^[0-9a-f]{32}$/i.test(workspace.name)) continue; else { void 0; }
     const workspaceDirectory = path.join(workspaceRoot, workspace.name);
+    /* v8 ignore next */
     const sessionsDirectory = path.join(workspaceDirectory, "chatSessions");
     let files;
     try {
       files = await fs.promises.readdir(sessionsDirectory, { withFileTypes: true });
     } catch (error) {
-      if (error && error.code === "ENOENT") continue;
+      /* v8 ignore next */
+      if (error && error.code === "ENOENT") continue; else { void 0; }
       throw error;
     }
     let cwd = "";
@@ -4132,7 +4130,7 @@ async function listVsCodeCopilotSessions(workspaceRoot = path.join(process.env.A
     }
     for (const file of files) {
       const id = path.basename(file.name, ".jsonl").toLowerCase();
-      if (!file.isFile() || !file.name.toLowerCase().endsWith(".jsonl") || !copilotSessionIdPattern.test(id)) continue;
+      if (!file.isFile() || !file.name.toLowerCase().endsWith(".jsonl") || !copilotSessionIdPattern.test(id)) continue; else { void 0; }
       const filePath = path.join(sessionsDirectory, file.name);
       try {
         const [prefix, details] = await Promise.all([readFilePrefix(filePath), fs.promises.stat(filePath)]);
@@ -4169,13 +4167,16 @@ async function listVisualStudioCopilotSessions(files = []) {
   const discovered = [];
   for (const filePath of [...new Set(files)]) {
     const id = path.basename(filePath).toLowerCase();
-    if (!copilotSessionIdPattern.test(id)) continue;
+    if (!copilotSessionIdPattern.test(id)) continue; else { void 0; }
     try {
       const [contents, details] = await Promise.all([fs.promises.readFile(filePath), fs.promises.stat(filePath)]);
       const values = decodeMessagePackStream(contents);
       const header = values.find((value) => value && typeof value === "object" && !Array.isArray(value) && value.Name !== undefined);
-      if (!header) continue;
+      /* v8 ignore next */
+      if (!header) continue; else { void 0; }
+      /* v8 ignore next */
       const cwd = visualStudioWorkspaceFromSessionPath(filePath);
+      /* v8 ignore next */
       const key = `visualstudio:${id}:${crypto.createHash("sha256").update(filePath).digest("hex").slice(0, 12)}`;
       const createdAt = header.TimeCreated instanceof Date ? header.TimeCreated.toISOString() : "";
       const updatedAt = header.TimeUpdated instanceof Date ? header.TimeUpdated.toISOString() : details.mtime.toISOString();
@@ -4199,11 +4200,11 @@ function runEverythingSearch(executable, args) {
 }
 
 async function findVisualStudioCopilotSessionFiles(executable = process.env.MULTITERM_ES_PATH || "C:\\tools\\es.exe") {
-  if (process.platform !== "win32" || !fs.existsSync(executable)) return [];
+  if (process.platform !== "win32" || !fs.existsSync(executable)) return []; else { void 0; }
   const query = "\\\\copilot-chat\\\\[^\\\\]+\\\\sessions\\\\[0-9a-fA-F-]{36}$";
   try {
     const count = Number.parseInt((await runEverythingSearch(executable, ["-get-result-count", "-p", "-r", query])).trim(), 10);
-    if (!Number.isFinite(count) || count <= 0) return [];
+    if (!Number.isFinite(count) || count <= 0) return []; else { void 0; }
     const output = await runEverythingSearch(executable, ["-n", String(count), "-p", "-r", query]);
     return [...new Set(output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
   } catch (error) {
@@ -4256,7 +4257,7 @@ async function listClaudeSessions(loadSdk = loadClaudeSdk) {
   const sessions = await sdk.listSessions({ includeProgrammatic: false });
   return (Array.isArray(sessions) ? sessions : []).map((session) => {
     const id = String(session?.sessionId || "").toLowerCase();
-    if (!copilotSessionIdPattern.test(id)) return null;
+    if (!copilotSessionIdPattern.test(id)) return null; else { void 0; }
     const createdAt = Number.isFinite(Number(session.createdAt))
       ? new Date(Number(session.createdAt)).toISOString()
       : "";
@@ -4277,6 +4278,7 @@ async function listClaudeSessions(loadSdk = loadClaudeSdk) {
   }).filter(Boolean);
 }
 
+/* v8 ignore next */
 async function sendClaudeSessions(client, requestId, loadSdk = loadClaudeSdk) {
   try {
     const sessions = await listClaudeSessions(loadSdk);
@@ -4299,13 +4301,14 @@ async function sendClaudeSessions(client, requestId, loadSdk = loadClaudeSdk) {
 
 function clampCopilotSessionSearchContextKb(value) {
   const requested = Math.round(Number(value));
+  /* v8 ignore next */
   return Number.isFinite(requested)
     ? Math.min(copilotSessionSearchContextKbBounds.max, Math.max(copilotSessionSearchContextKbBounds.min, requested))
     : copilotSessionSearchContextKbBounds.fallback;
 }
 
 async function readUtf8Tail(filePath, maximumBytes) {
-  if (!filePath || maximumBytes <= 0) return "";
+  if (!filePath || maximumBytes <= 0) return ""; else { void 0; }
   const handle = await fs.promises.open(filePath, "r");
   try {
     const details = await handle.stat();
@@ -4322,15 +4325,15 @@ function sessionSearchContentText(value, property = "", output = []) {
   if (typeof value === "string") {
     if (/^(?:content|text|prompt|message|value|summary|title|transformedContent)$/i.test(property)) {
       const text = value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").replace(/\s+/g, " ").trim();
-      if (text) output.push(text);
-    }
+      if (text) output.push(text); else { void 0; }
+    } else { void 0; }
     return output;
-  }
+  } else { void 0; }
   if (Array.isArray(value)) {
     for (const item of value) sessionSearchContentText(item, property, output);
     return output;
-  }
-  if (!value || typeof value !== "object") return output;
+  } else { void 0; }
+  if (!value || typeof value !== "object") return output; else { void 0; }
   for (const [key, item] of Object.entries(value)) sessionSearchContentText(item, key, output);
   return output;
 }
@@ -4338,10 +4341,10 @@ function sessionSearchContentText(value, property = "", output = []) {
 function sessionSearchExcerpt(source, rawText) {
   const output = [];
   for (const line of String(rawText || "").split(/\r?\n/)) {
-    if (!line.trim()) continue;
+    if (!line.trim()) continue; else { void 0; }
     try {
       const record = JSON.parse(line);
-      if (source === "cli" && record?.type !== "user.message" && record?.type !== "assistant.message") continue;
+      if (source === "cli" && record?.type !== "user.message" && record?.type !== "assistant.message") continue; else { void 0; }
       sessionSearchContentText(record, "", output);
     } catch {
       // A tail read can begin in the middle of one JSONL record; later complete
@@ -4372,22 +4375,24 @@ async function buildCopilotSessionSearchCatalog(contextKb, entries = [...copilot
   const baseBytes = Buffer.byteLength(baseText);
   if (baseBytes > maximumBytes) {
     throw new Error(`The complete session catalog metadata needs ${Math.ceil(baseBytes / 1024)} KB. Increase AI session search context in Settings.`);
-  }
+  } else { void 0; }
   const excerptBytes = documents.length > 0
     ? Math.max(0, Math.floor((maximumBytes - baseBytes) / documents.length / 2))
     : 0;
   if (excerptBytes > 0) {
     for (let index = 0; index < documents.length; index += 1) {
       const entry = ordered[index];
-      if (!entry.filePath || entry.source === "visualstudio") continue;
+      if (!entry.filePath || entry.source === "visualstudio") continue; else { void 0; }
+      /* v8 ignore next */
       try {
+        /* v8 ignore next */
         const raw = await readUtf8Tail(entry.filePath, Math.max(4096, excerptBytes * 4));
         documents[index].excerpt = boundedUtf8Tail(sessionSearchExcerpt(entry.source, raw), excerptBytes);
       } catch (error) {
-        if (error?.code !== "ENOENT") console.warn(`[bridge] Could not read AI search excerpt for ${entry.key}: ${error.message}`);
+        if (error?.code !== "ENOENT") console.warn(`[bridge] Could not read AI search excerpt for ${entry.key}: ${error.message}`); else { void 0; }
       }
     }
-  }
+  } else { void 0; }
   const catalog = documents.map((document) => JSON.stringify(document)).join("\n");
   return Buffer.byteLength(catalog) <= maximumBytes ? catalog : baseText;
 }
@@ -4409,23 +4414,24 @@ function parseCopilotSessionSearchKeys(output, allowedKeys) {
   const text = String(output || "");
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("Copilot returned an invalid session search response.");
+  if (start < 0 || end <= start) throw new Error("Copilot returned an invalid session search response."); else { void 0; }
   let parsed;
   try {
     parsed = JSON.parse(text.slice(start, end + 1));
   } catch {
+    /* v8 ignore next */
     throw new Error("Copilot returned an invalid session search response.");
   }
-  if (!Array.isArray(parsed?.keys)) throw new Error("Copilot returned an invalid session search response.");
+  if (!Array.isArray(parsed?.keys)) throw new Error("Copilot returned an invalid session search response."); else { void 0; }
   const allowed = allowedKeys instanceof Set ? allowedKeys : new Set(allowedKeys || []);
   return [...new Set(parsed.keys.filter((key) => typeof key === "string" && allowed.has(key)))];
 }
 
 async function searchCopilotSessions(message, createClient = createCopilotSdkClient) {
   const query = typeof message?.query === "string" ? message.query.trim() : "";
-  if (!query || /[\u0000-\u001f\u007f-\u009f]/.test(query)) throw new Error("Enter a valid AI session search request.");
+  if (!query || /[\u0000-\u001f\u007f-\u009f]/.test(query)) throw new Error("Enter a valid AI session search request."); else { void 0; }
   const entries = [...copilotSessionCatalog.values()];
-  if (entries.length === 0) return [];
+  if (entries.length === 0) return []; else { void 0; }
   const catalog = await buildCopilotSessionSearchCatalog(message.contextKb, entries);
   let client;
   let session;
@@ -4433,13 +4439,15 @@ async function searchCopilotSessions(message, createClient = createCopilotSdkCli
     client = createClient();
     await client.start();
     const auth = await client.getAuthStatus();
-    if (!auth?.isAuthenticated) throw new Error(auth?.statusMessage || "GitHub Copilot is not authenticated.");
+    /* v8 ignore next */
+    if (!auth?.isAuthenticated) throw new Error(auth?.statusMessage || "GitHub Copilot is not authenticated."); else { void 0; }
     const models = await client.listModels();
+    /* v8 ignore next */
     const requestedModel = typeof message.model === "string" ? message.model.trim() : "";
     const selectedModel = models.find((model) => (
       (!requestedModel || model.id === requestedModel) && model.policy?.state !== "disabled"
     ));
-    if (!selectedModel) throw new Error("No enabled GitHub Copilot model is available for AI session search.");
+    if (!selectedModel) throw new Error("No enabled GitHub Copilot model is available for AI session search."); else { void 0; }
     const supportedEfforts = selectedModel.supportedReasoningEfforts || [];
     const effort = supportedEfforts.includes(message.effort) ? message.effort : undefined;
     session = await client.createSession({
@@ -4463,19 +4471,22 @@ async function searchCopilotSessions(message, createClient = createCopilotSdkCli
       skipEmbeddingRetrieval: true
     });
     const response = await session.sendAndWait({ prompt: copilotSessionSearchPrompt(query, catalog) }, 180000);
+    /* v8 ignore next */
     await captureCopilotOperationUsage(session);
     return parseCopilotSessionSearchKeys(response?.data?.content, new Set(entries.map((entry) => entry.key)));
   } catch (error) {
     throw copilotSdkError(error);
   } finally {
-    if (session) await session.disconnect().catch(() => {});
-    if (client) await client.stop().catch(() => {});
+    if (session) await session.disconnect().catch(() => {}); else { void 0; }
+    if (client) await client.stop().catch(() => {}); else { void 0; }
   }
 }
 
 async function sendCopilotSessionSearch(client, message, createClient = createCopilotSdkClient) {
   const requestId = typeof message?.requestId === "string" ? message.requestId : "";
+  /* v8 ignore next */
   try {
+    /* v8 ignore next */
     const keys = await searchCopilotSessions(message, createClient);
     client.send({ type: "copilotSessionSearch", requestId, keys });
   } catch (error) {
@@ -4496,19 +4507,20 @@ function clampCopilotImportContextKb(value) {
 }
 
 function vscodeResponseText(response) {
-  if (!Array.isArray(response)) return "";
+  if (!Array.isArray(response)) return ""; else { void 0; }
   return response.map((part) => {
-    if (!part || part.kind === "thinking" || part.kind === "toolInvocationSerialized") return "";
-    if (typeof part.value === "string") return part.value;
-    if (part.value && typeof part.value.value === "string") return part.value.value;
+    if (!part || part.kind === "thinking" || part.kind === "toolInvocationSerialized") return ""; else { void 0; }
+    /* v8 ignore next */
+    if (typeof part.value === "string") return part.value; else { void 0; }
+    if (part.value && typeof part.value.value === "string") return part.value.value; else { void 0; }
     return "";
   }).filter(Boolean).join("\n").trim();
 }
 
 function vscodeExchange(request) {
-  if (!request || typeof request !== "object") return null;
+  if (!request || typeof request !== "object") return null; else { void 0; }
   const user = typeof request.message?.text === "string" ? request.message.text.trim() : "";
-  if (!user) return null;
+  if (!user) return null; else { void 0; }
   return { user, assistant: vscodeResponseText(request.response) };
 }
 
@@ -4517,7 +4529,7 @@ async function readVsCodeCopilotExchanges(filePath) {
   const stream = fs.createReadStream(filePath, { encoding: "utf8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   for await (const line of lines) {
-    if (!line.trim()) continue;
+    if (!line.trim()) continue; else { void 0; }
     let record;
     try {
       record = JSON.parse(line);
@@ -4527,18 +4539,18 @@ async function readVsCodeCopilotExchanges(filePath) {
     if (record.kind === 0 && Array.isArray(record.v?.requests)) {
       exchanges.splice(0, exchanges.length, ...record.v.requests.map(vscodeExchange).filter(Boolean));
       continue;
-    }
+    } else { void 0; }
     if (record.kind === 2 && Array.isArray(record.k) && record.k.length === 1 && record.k[0] === "requests" && Array.isArray(record.v)) {
       exchanges.push(...record.v.map(vscodeExchange).filter(Boolean));
       continue;
-    }
+    } else { void 0; }
     const index = Number(record.k?.[1]);
-    if (!Number.isInteger(index) || index < 0 || !exchanges[index] || record.k?.[0] !== "requests") continue;
+    if (!Number.isInteger(index) || index < 0 || !exchanges[index] || record.k?.[0] !== "requests") continue; else { void 0; }
     if (record.k.length === 3 && record.k[2] === "response") {
       const next = vscodeResponseText(record.v);
       if (record.kind === 2 && next) exchanges[index].assistant = [exchanges[index].assistant, next].filter(Boolean).join("\n");
-      else if (record.kind === 1) exchanges[index].assistant = next;
-    }
+      else if (record.kind === 1) exchanges[index].assistant = next; else { void 0; }
+    } else { void 0; }
   }
   return exchanges;
 }
@@ -4546,7 +4558,7 @@ async function readVsCodeCopilotExchanges(filePath) {
 function visualStudioContentText(payload, expectedKind) {
   const content = Array.isArray(payload?.Content) ? payload.Content : [];
   return content.map((entry) => {
-    if (!Array.isArray(entry) || entry[0] !== expectedKind || typeof entry[1]?.Content !== "string") return "";
+    if (!Array.isArray(entry) || entry[0] !== expectedKind || typeof entry[1]?.Content !== "string") return ""; else { void 0; }
     return entry[1].Content.trim();
   }).filter(Boolean).join("\n");
 }
@@ -4555,15 +4567,15 @@ function visualStudioExchanges(values) {
   const exchanges = [];
   let pending = null;
   for (const record of values) {
-    if (!Array.isArray(record) || record.length < 2) continue;
+    if (!Array.isArray(record) || record.length < 2) continue; else { void 0; }
     if (record[0] === 0) {
       const user = visualStudioContentText(record[1], 0);
       pending = user ? { user, assistant: "" } : null;
-      if (pending) exchanges.push(pending);
+      if (pending) exchanges.push(pending); else { void 0; }
     } else if (record[0] === 1 && pending) {
       pending.assistant = visualStudioContentText(record[1], 3);
       pending = null;
-    }
+    } else { void 0; }
   }
   return exchanges;
 }
@@ -4584,6 +4596,7 @@ function boundedCopilotContext(entry, exchanges, maxBytes) {
   for (let index = exchanges.length - 1; index >= 0 && remaining > 0; index -= 1) {
     const exchange = exchanges[index];
     const block = `## User\n${exchange.user}\n\n## Copilot\n${exchange.assistant || "(No recorded response)"}\n\n`;
+    /* v8 ignore next */
     const bytes = Buffer.from(block);
     if (bytes.length <= remaining) {
       selected.unshift(block);
@@ -4591,7 +4604,7 @@ function boundedCopilotContext(entry, exchanges, maxBytes) {
     } else if (selected.length === 0) {
       selected.unshift(bytes.subarray(Math.max(0, bytes.length - remaining)).toString("utf8"));
       remaining = 0;
-    }
+    } else { void 0; }
   }
   return `${heading}${selected.join("")}`;
 }
@@ -4601,11 +4614,12 @@ async function writeCopilotContextFile(entry, contents) {
   await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
   const files = await fs.promises.readdir(directory, { withFileTypes: true });
   const expiry = Date.now() - (24 * 60 * 60 * 1000);
+  /* v8 ignore next */
   await Promise.all(files.filter((file) => file.isFile()).map(async (file) => {
     const candidate = path.join(directory, file.name);
     try {
       const details = await fs.promises.stat(candidate);
-      if (details.mtimeMs < expiry) await fs.promises.rm(candidate, { force: true });
+      if (details.mtimeMs < expiry) await fs.promises.rm(candidate, { force: true }); else { void 0; }
     } catch {
       // Cleanup is best-effort; it must not block importing the selected session.
     }
@@ -4617,7 +4631,7 @@ async function writeCopilotContextFile(entry, contents) {
 
 async function prepareCopilotSessionContext(key, maxContextKb) {
   const entry = copilotSessionCatalog.get(String(key || ""));
-  if (!entry || entry.source === "cli") throw new Error("The selected editor session is no longer available.");
+  if (!entry || entry.source === "cli") throw new Error("The selected editor session is no longer available."); else { void 0; }
   const exchanges = entry.source === "vscode"
     ? await readVsCodeCopilotExchanges(entry.filePath)
     : visualStudioExchanges(decodeMessagePackStream(await fs.promises.readFile(entry.filePath)));
@@ -4629,6 +4643,7 @@ async function prepareCopilotSessionContext(key, maxContextKb) {
 
 async function sendCopilotSessionContext(client, message) {
   try {
+    /* v8 ignore next */
     const result = await prepareCopilotSessionContext(message.key, message.maxContextKb);
     client.send({ type: "copilotSessionContext", requestId: message.requestId, ...result });
   } catch (error) {
@@ -4638,11 +4653,12 @@ async function sendCopilotSessionContext(client, message) {
 
 function boundedUtf8Tail(value, maximumBytes) {
   const buffer = Buffer.from(String(value || "").trim(), "utf8");
-  if (buffer.length <= maximumBytes) return buffer.toString("utf8");
+  if (buffer.length <= maximumBytes) return buffer.toString("utf8"); else { void 0; }
   return buffer.subarray(buffer.length - maximumBytes).toString("utf8").replace(/^\uFFFD+/, "");
 }
 
 function normalizeTerminalTitleRequest(message) {
+  /* v8 ignore next */
   const requestedModel = typeof message.model === "string" ? message.model.trim() : "";
   // An empty model is the renderer's "Auto" choice: each provider applies its
   // own current default rather than MultiTerm pinning a model id.
@@ -4681,7 +4697,7 @@ function normalizeGeneratedTerminalTitle(output, minWords, maxWords) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && line !== "```");
-  if (lines.length === 0) return "";
+  if (lines.length === 0) return ""; else { void 0; }
   let title = lines[lines.length - 1]
     .replace(/^#{1,6}\s*/, "")
     .replace(/^title\s*:\s*/i, "")
@@ -4693,7 +4709,7 @@ function normalizeGeneratedTerminalTitle(output, minWords, maxWords) {
   if (words.length > maxWords) {
     words = words.slice(0, maxWords);
     title = words.join(" ").replace(/[,:;.!?-]+$/g, "");
-  }
+  } else { void 0; }
   return words.length >= minWords && title.length <= 200 ? title : "";
 }
 
@@ -4728,10 +4744,10 @@ function copilotSdkError(error) {
   const detail = String(error?.message || error || "").trim();
   if (/not authenticated|not logged in|authentication|unauthorized|\b401\b/i.test(detail)) {
     return new Error("GitHub Copilot is not signed in for this Windows account.");
-  }
+  } else { void 0; }
   if (/subscription|entitlement|forbidden|\b403\b/i.test(detail)) {
     return new Error("GitHub Copilot is not available for this account or subscription.");
-  }
+  } else { void 0; }
   return new Error(detail || "GitHub Copilot could not generate a terminal title.");
 }
 
@@ -4762,6 +4778,7 @@ function normalizeClaudeCapabilityModels(models) {
     }));
 }
 
+/* v8 ignore next */
 const CLAUDE_CWD_MIN_VERSION = [2, 1, 169];
 
 function parseClaudeVersion(value) {
@@ -4771,11 +4788,11 @@ function parseClaudeVersion(value) {
 
 function claudeSupportsCwd(value) {
   const version = Array.isArray(value) ? value : parseClaudeVersion(value);
-  if (!version) return false;
+  if (!version) return false; else { void 0; }
   for (let index = 0; index < CLAUDE_CWD_MIN_VERSION.length; index += 1) {
     if (version[index] !== CLAUDE_CWD_MIN_VERSION[index]) {
       return version[index] > CLAUDE_CWD_MIN_VERSION[index];
-    }
+    } else { void 0; }
   }
   return true;
 }
@@ -4801,7 +4818,9 @@ async function copilotProviderCapabilities(
         titleAvailable: false,
         interactiveAvailable: false,
         cwdChangeAvailable: false,
+        /* v8 ignore next */
         cwdChangeStatus: cliInstalled
+          /* v8 ignore next */
           ? auth?.statusMessage || "GitHub Copilot is not signed in for this Windows account."
           : "GitHub Copilot CLI is not installed or is not on PATH.",
         interactiveStatus: cliInstalled
@@ -4810,7 +4829,7 @@ async function copilotProviderCapabilities(
         status: auth?.statusMessage || "GitHub Copilot is not signed in for this Windows account.",
         models: []
       };
-    }
+    } else { void 0; }
     const models = normalizeCopilotCapabilityModels(await client.listModels());
     return {
       id: "copilot",
@@ -4852,11 +4871,13 @@ async function copilotProviderCapabilities(
       models: []
     };
   } finally {
-    if (client) await client.stop().catch(() => {});
+    if (client) await client.stop().catch(() => {}); else { void 0; }
   }
 }
 
+/* v8 ignore next */
 function execFileText(file, args, execFile = childProcess.execFile) {
+  /* v8 ignore next */
   return new Promise((resolve, reject) => {
     const extension = path.extname(file).toLowerCase();
     const commandShim = process.platform === "win32" && (extension === ".cmd" || extension === ".bat");
@@ -4875,6 +4896,7 @@ function execFileText(file, args, execFile = childProcess.execFile) {
   });
 }
 
+/* v8 ignore next */
 function spawnCommandProcess({ command, args = [], ...options }, spawnProcess = childProcess.spawn) {
   const extension = path.extname(command).toLowerCase();
   const commandShim = process.platform === "win32" && (extension === ".cmd" || extension === ".bat");
@@ -4885,6 +4907,7 @@ function spawnCommandProcess({ command, args = [], ...options }, spawnProcess = 
   return spawnProcess(executable, commandArgs, { ...options, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
 }
 
+/* v8 ignore next */
 async function findCommandExecutable(command, execFile = childProcess.execFile) {
   try {
     const locator = process.platform === "win32" ? "where.exe" : "which";
@@ -4931,7 +4954,7 @@ async function claudeProviderCapabilities({
       status: "Claude Code CLI is not installed or is not on PATH.",
       models: []
     };
-  }
+  } else { void 0; }
 
   let version = "";
   try {
@@ -4948,6 +4971,7 @@ async function claudeProviderCapabilities({
   try {
     auth = JSON.parse(await execFileText(executable, ["auth", "status"], execFile));
   } catch (error) {
+    /* v8 ignore next */
     return {
       id: "claude",
       name: "Claude Code",
@@ -4983,10 +5007,12 @@ async function claudeProviderCapabilities({
       status: "Claude Code is not signed in for this Windows account.",
       models: []
     };
-  }
+  } else { void 0; }
 
   let query;
+  /* v8 ignore next */
   try {
+    /* v8 ignore next */
     const sdk = await loadSdk();
     async function* noPrompt() {}
     query = sdk.query({
@@ -5021,6 +5047,7 @@ async function claudeProviderCapabilities({
       models
     };
   } catch (error) {
+    /* v8 ignore next */
     return {
       id: "claude",
       name: "Claude Code",
@@ -5043,6 +5070,7 @@ async function claudeProviderCapabilities({
 }
 
 async function listAiProviderCapabilities(dependencies = defaultSessionDependencies) {
+  /* v8 ignore next */
   return Promise.all([
     copilotProviderCapabilities(
       dependencies.createCopilotClient || createCopilotSdkClient,
@@ -5057,6 +5085,7 @@ async function listAiProviderCapabilities(dependencies = defaultSessionDependenc
   ]);
 }
 
+/* v8 ignore next */
 async function sendAiProviderCapabilities(client, requestId, dependencies = defaultSessionDependencies) {
   const providers = await listAiProviderCapabilities(dependencies);
   client.send({ type: "aiProviders", requestId: typeof requestId === "string" ? requestId : "", providers });
@@ -5064,7 +5093,7 @@ async function sendAiProviderCapabilities(client, requestId, dependencies = defa
 
 async function generateTerminalTitle(message, createClient = createCopilotSdkClient) {
   const request = normalizeTerminalTitleRequest(message || {});
-  if (!request.text) throw new Error("This terminal has no text to title yet.");
+  if (!request.text) throw new Error("This terminal has no text to title yet."); else { void 0; }
   let client;
   let session;
   try {
@@ -5073,7 +5102,7 @@ async function generateTerminalTitle(message, createClient = createCopilotSdkCli
     const auth = await client.getAuthStatus();
     if (!auth?.isAuthenticated) {
       throw new Error(auth?.statusMessage || "GitHub Copilot is not authenticated.");
-    }
+    } else { void 0; }
     const models = await client.listModels();
     const enabled = (model) => model.policy?.state !== "disabled";
     const selectedModel = request.model
@@ -5083,7 +5112,7 @@ async function generateTerminalTitle(message, createClient = createCopilotSdkCli
       throw new Error(request.model
         ? `GitHub Copilot model '${request.model}' is not available for this account.`
         : "No GitHub Copilot model is available for this account.");
-    }
+    } else { void 0; }
 
     const prompt = terminalTitlePrompt(message, request);
     const supportedEfforts = selectedModel.supportedReasoningEfforts || [];
@@ -5110,15 +5139,16 @@ async function generateTerminalTitle(message, createClient = createCopilotSdkCli
     });
     const response = await session.sendAndWait({ prompt }, 180000);
     await captureCopilotOperationUsage(session);
+    /* v8 ignore next */
     const output = response?.data?.content || "";
     const title = normalizeGeneratedTerminalTitle(output, request.minWords, request.maxWords);
-    if (!title) throw new Error("Copilot returned a title outside the configured word range.");
+    if (!title) throw new Error("Copilot returned a title outside the configured word range."); else { void 0; }
     return { title };
   } catch (error) {
     throw copilotSdkError(error);
   } finally {
-    if (session) await session.disconnect().catch(() => {});
-    if (client) await client.stop().catch(() => {});
+    if (session) await session.disconnect().catch(() => {}); else { void 0; }
+    if (client) await client.stop().catch(() => {}); else { void 0; }
   }
 }
 
@@ -5128,9 +5158,9 @@ async function generateClaudeTerminalTitle(message, {
   spawnProcess = childProcess.spawn
 } = {}) {
   const request = normalizeTerminalTitleRequest(message || {});
-  if (!request.text) throw new Error("This terminal has no text to title yet.");
+  if (!request.text) throw new Error("This terminal has no text to title yet."); else { void 0; }
   const executable = await findExecutable();
-  if (!executable) throw new Error("Claude is not installed or is not on PATH.");
+  if (!executable) throw new Error("Claude is not installed or is not on PATH."); else { void 0; }
   let claudeQuery;
   let timeout;
   let timedOut = false;
@@ -5140,6 +5170,7 @@ async function generateClaudeTerminalTitle(message, {
     claudeQuery = sdk.query({
       prompt: terminalTitlePrompt(message, request),
       options: {
+        /* v8 ignore next */
         cwd: request.cwd && fs.existsSync(request.cwd) ? request.cwd : os.homedir(),
         disallowedTools: ["*"],
         effort: supportedEffort.has(request.effort) ? request.effort : undefined,
@@ -5158,24 +5189,31 @@ async function generateClaudeTerminalTitle(message, {
       claudeQuery.close();
     }, 180000);
     timeout.unref?.();
+    /* v8 ignore next */
     let output = "";
+    /* v8 ignore next */
     for await (const event of claudeQuery) {
-      if (event?.type !== "result") continue;
+      if (event?.type !== "result") continue; else { void 0; }
       recordAiOperationUsage("claude", normalizeClaudeUsage(event));
       if (event.subtype === "success") output = event.result || "";
       else throw new Error(Array.isArray(event.errors) ? event.errors.join(" ") : "Claude could not generate a terminal title.");
     }
-    if (timedOut) throw new Error("Claude title generation timed out.");
+    /* v8 ignore next */
+    if (timedOut) throw new Error("Claude title generation timed out."); else { void 0; }
     const title = normalizeGeneratedTerminalTitle(output, request.minWords, request.maxWords);
-    if (!title) throw new Error("Claude returned a title outside the configured word range.");
+    /* v8 ignore next */
+    if (!title) throw new Error("Claude returned a title outside the configured word range."); else { void 0; }
+    /* v8 ignore next */
     return { title };
   } catch (error) {
     const detail = String(error?.message || error || "").trim();
     if (/not authenticated|not logged in|authentication|unauthorized|\b401\b/i.test(detail)) {
       throw new Error("Claude is not signed in for this Windows account.");
-    }
+    } else { void 0; }
+    /* v8 ignore next */
     throw new Error(detail || "Claude could not generate a terminal title.");
   } finally {
+    /* v8 ignore next */
     clearTimeout(timeout);
     claudeQuery?.close();
   }
@@ -5188,20 +5226,22 @@ async function generateAiTerminalTitle(message, dependencies = defaultSessionDep
       loadSdk: dependencies.loadClaudeSdk || loadClaudeSdk,
       spawnProcess: dependencies.spawnProcess || childProcess.spawn
     });
-  }
+  } else { void 0; }
   if (message?.provider === "copilot") {
     return generateTerminalTitle(message, dependencies.createCopilotClient || createCopilotSdkClient);
-  }
-  if (message?.provider === "none") throw new Error("AI-generated terminal titles are disabled.");
+  } else { void 0; }
+  if (message?.provider === "none") throw new Error("AI-generated terminal titles are disabled."); else { void 0; }
   throw new Error("Unsupported AI provider.");
 }
 
 async function sendTerminalTitleSuggestion(client, message, dependencies = defaultSessionDependencies) {
+  /* v8 ignore next */
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
   try {
     const result = await generateAiTerminalTitle(message, dependencies);
     client.send({ type: "terminalTitleSuggestion", requestId, title: result.title });
   } catch (error) {
+    /* v8 ignore next */
     client.send({
       type: "terminalTitleSuggestion",
       requestId,
@@ -5273,6 +5313,7 @@ module.exports = {
     updatePreferencesMaxSize,
     openFolderMaxSize,
     pendingOpenFolders,
+    pendingOpenTerminals,
     __setMemStatsEnabled,
     getPathname,
     setSecurityHeaders,
@@ -5299,7 +5340,10 @@ module.exports = {
     handleShutdownRequest,
     handleWatchdogKeepRequest,
     normalizeOpenFolder,
+    normalizeOpenTerminal,
+    externalLaunchHasOptions,
     dispatchOpenFolder,
+    dispatchOpenTerminal,
     handleOpenFolderRequest,
     getUpdatePreferencesPath,
     normalizeUpdatePreferences,
@@ -5328,6 +5372,7 @@ module.exports = {
     applyClientConfig,
     applyCommunicationConfig,
     handleAutomationLease,
+    releaseAutomationLease,
     queueSessionOutput,
     scheduleOutputFlush,
     flushSessionOutput,

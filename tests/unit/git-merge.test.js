@@ -1,8 +1,15 @@
 const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs");
+const { EventEmitter } = require("node:events");
+const childProcess = require("node:child_process");
 const { execFileSync } = require("node:child_process");
 const {
+  handleClientMessage,
+  inspectGitRepository,
+  listGitWorktrees,
+  recordWorktreeParent,
+  forgetWorktreeParent,
   startWorktreeMerge,
   finishWorktreeMerge,
   readConflictSides,
@@ -43,7 +50,215 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+describe("git repository and worktree bridge", () => {
+  test("reports Git spawn, stream error, and timeout outcomes", async () => {
+    const spawn = vi.spyOn(childProcess, "spawn");
+    spawn.mockImplementationOnce(() => { throw new Error("spawn denied"); });
+    await expect(require("../../server.js").runGit(["status"], root)).resolves.toEqual({
+      ok: false, code: -1, stdout: "", stderr: "spawn denied"
+    });
+
+    const failed = new EventEmitter();
+    failed.stdout = new EventEmitter();
+    failed.stderr = new EventEmitter();
+    failed.kill = vi.fn();
+    spawn.mockReturnValueOnce(failed);
+    const failedResult = require("../../server.js").runGit(["status"], root);
+    failed.stdout.emit("data", Buffer.from("partial out"));
+    failed.stderr.emit("data", Buffer.from("partial err"));
+    failed.emit("error", new Error("process failed"));
+    failed.emit("close", 1);
+    await expect(failedResult).resolves.toEqual({
+      ok: false, code: -1, stdout: "partial out", stderr: "partial errprocess failed"
+    });
+
+    vi.useFakeTimers();
+    const timed = new EventEmitter();
+    timed.stdout = new EventEmitter();
+    timed.stderr = new EventEmitter();
+    timed.kill = vi.fn(() => { throw new Error("already exited"); });
+    spawn.mockReturnValueOnce(timed);
+    const timedResult = require("../../server.js").runGit(["status"], root, 1);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(timed.kill).toHaveBeenCalledOnce();
+    timed.emit("close", 9);
+    await expect(timedResult).resolves.toMatchObject({ ok: false, code: 9 });
+    vi.useRealTimers();
+  });
+
+  test("inspects missing, invalid, non-repository, clean, and dirty folders", async () => {
+    const plain = path.join(root, "plain-folder");
+    const plainFile = path.join(root, "plain-file.txt");
+    fs.mkdirSync(plain, { recursive: true });
+    fs.writeFileSync(plainFile, "not a folder");
+
+    await expect(inspectGitRepository("")).resolves.toEqual({
+      isRepository: false,
+      reason: "No folder was provided."
+    });
+    await expect(inspectGitRepository(plainFile)).resolves.toEqual({
+      isRepository: false,
+      reason: "That path is not a folder."
+    });
+    await expect(inspectGitRepository(path.join(root, "missing"))).resolves.toEqual({
+      isRepository: false,
+      reason: "That folder does not exist."
+    });
+    await expect(inspectGitRepository(plain)).resolves.toEqual({
+      isRepository: false,
+      reason: "That folder is not inside a git repository."
+    });
+
+    const { repo } = makeRepo("inspection");
+    const clean = await inspectGitRepository(repo);
+    expect(clean).toMatchObject({
+      isRepository: true,
+      repositoryRoot: path.resolve(repo),
+      currentBranch: "main",
+      defaultBranch: "main",
+      isDirty: false,
+      parentDirectory: path.dirname(repo)
+    });
+    fs.writeFileSync(path.join(repo, "dirty.txt"), "pending");
+    await expect(inspectGitRepository(repo)).resolves.toMatchObject({ isRepository: true, isDirty: true });
+  });
+
+  test("records, lists, and forgets managed worktree metadata", async () => {
+    const { repo, worktree } = makeRepo("registry");
+    await recordWorktreeParent(repo, "agent", "main");
+
+    let listed = await listGitWorktrees(repo);
+    expect(listed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: worktree.replace(/\\/g, "/"), branch: "agent", parentBranch: "main", createdByMultiTerm: true })
+    ]));
+    expect(listed.find((entry) => entry.branch === "agent").createdAt).not.toBe("");
+
+    await forgetWorktreeParent(repo, "agent");
+    listed = await listGitWorktrees(repo);
+    expect(listed.find((entry) => entry.branch === "agent")).toMatchObject({
+      parentBranch: "",
+      createdAt: "",
+      createdByMultiTerm: false
+    });
+
+    const detachedPath = path.join(root, "registry-detached");
+    execFileSync("git", ["worktree", "add", "--detach", detachedPath, "HEAD"], { cwd: repo, stdio: "ignore" });
+    expect(await listGitWorktrees(repo)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: detachedPath.replace(/\\/g, "/"), branch: "", isDetached: true })
+    ]));
+
+    const bare = path.join(root, "bare.git");
+    execFileSync("git", ["init", "--bare", bare], { stdio: "ignore" });
+    expect(await listGitWorktrees(bare)).toEqual([
+      expect.objectContaining({ path: bare.replace(/\\/g, "/"), branch: "", isBare: true })
+    ]);
+  });
+
+  test("routes inspection, listing, record, diff, and removal messages", async () => {
+    const { repo, worktree } = makeRepo("protocol");
+    const client = { send: vi.fn() };
+    const send = (message) => handleClientMessage(client, JSON.stringify(message));
+
+    send({ type: "gitInspect", requestId: "inspect", path: repo });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitInspection", requestId: "inspect", isRepository: true
+    })));
+
+    send({ type: "gitWorktrees", requestId: "list-invalid", path: "" });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "gitWorktreeList",
+      requestId: "list-invalid",
+      ok: false,
+      reason: "No folder was provided.",
+      worktrees: []
+    }));
+    send({ type: "gitWorktrees", requestId: "list", path: repo });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitWorktreeList", requestId: "list", ok: true, reason: "", worktrees: expect.any(Array)
+    })));
+
+    send({ type: "gitWorktreeRecord", requestId: "record-invalid", repositoryRoot: repo });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitWorktreeRecorded", requestId: "record-invalid", ok: false
+    })));
+    send({ type: "gitWorktreeRecord", requestId: "record", repositoryRoot: repo, branch: "agent", parentBranch: "main" });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "gitWorktreeRecorded", requestId: "record", ok: true, reason: ""
+    }));
+
+    for (const [requestId, base, head] of [["diff-missing", "", "agent"], ["diff-option", "-main", "agent"]]) {
+      send({ type: "gitDiff", requestId, repositoryRoot: repo, base, head });
+      await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+        type: "gitDiffResult", requestId, ok: false, diff: "",
+        reason: "A repository and two revisions are required.", truncated: false
+      }));
+    }
+    send({ type: "gitDiff", requestId: "diff", repositoryRoot: repo, base: "main", head: "agent" });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitDiffResult", requestId: "diff", ok: true, reason: "", truncated: false,
+      diff: expect.stringContaining("AGENT")
+    })));
+    send({ type: "gitDiff", requestId: "diff-failure", repositoryRoot: repo, base: "missing", head: "agent" });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitDiffResult", requestId: "diff-failure", ok: false, diff: "", truncated: false
+    })));
+
+    send({ type: "gitWorktreeRemove", requestId: "remove-invalid" });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitWorktreeRemoved", requestId: "remove-invalid", ok: false
+    })));
+    fs.writeFileSync(path.join(worktree, "dirty.txt"), "pending");
+    send({ type: "gitWorktreeRemove", requestId: "remove-dirty", repositoryRoot: repo, path: worktree, branch: "agent" });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitWorktreeRemoved", requestId: "remove-dirty", ok: false
+    })));
+    fs.rmSync(path.join(worktree, "dirty.txt"));
+    send({ type: "gitWorktreeRemove", requestId: "remove", repositoryRoot: repo, path: worktree, branch: "agent" });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "gitWorktreeRemoved", requestId: "remove", ok: true, reason: ""
+    }));
+  });
+
+  test("caps a large worktree diff and marks it as truncated", async () => {
+    const { repo, worktree } = makeRepo("large-diff");
+    fs.writeFileSync(path.join(worktree, "large.txt"), "x".repeat((2 * 1024 * 1024) + 2048));
+    execFileSync("git", ["add", "large.txt"], { cwd: worktree });
+    execFileSync("git", ["commit", "-m", "large diff"], { cwd: worktree });
+    const client = { send: vi.fn() };
+
+    handleClientMessage(client, JSON.stringify({
+      type: "gitDiff",
+      requestId: "large",
+      repositoryRoot: repo,
+      base: "main",
+      head: "agent"
+    }));
+
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitDiffResult", requestId: "large", ok: true, reason: "", truncated: true
+    })), { timeout: 10000 });
+    expect(client.send.mock.calls.at(-1)[0].diff).toHaveLength(2 * 1024 * 1024);
+  });
+});
+
 describe("worktree merge-back", () => {
+  test("rejects missing merge inputs and missing branches", async () => {
+    await expect(startWorktreeMerge({})).resolves.toMatchObject({ status: "refused", reason: expect.stringContaining("required") });
+    const { repo } = makeRepo("missing-branches");
+    await expect(startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "missing-parent",
+      worktreeBranch: "agent",
+      strategy: "squash"
+    })).resolves.toMatchObject({ status: "refused" });
+    await expect(startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      worktreeBranch: "missing-agent",
+      strategy: "merge"
+    })).resolves.toMatchObject({ status: "refused" });
+  });
+
   test("squashes a clean worktree into its parent as one commit", async () => {
     const { repo } = makeRepo("clean");
     const started = await startWorktreeMerge({ repositoryRoot: repo, parentBranch: "main", worktreeBranch: "agent", strategy: "squash" });
@@ -116,5 +331,51 @@ describe("worktree merge-back", () => {
     const started = await startWorktreeMerge({ repositoryRoot: repo, parentBranch: "main", worktreeBranch: "agent", strategy: "rebase" });
     expect(started.status).toBe("refused");
     expect(started.reason).toContain("Unsupported merge strategy");
+  });
+
+  test("uses the default commit message and reports an empty staged commit", async () => {
+    const completed = makeRepo("default-commit");
+    const started = await startWorktreeMerge({
+      repositoryRoot: completed.repo,
+      parentBranch: "main",
+      worktreeBranch: "agent",
+      strategy: "squash"
+    });
+    await expect(finishWorktreeMerge(started.sessionId)).resolves.toEqual({ ok: true, reason: "" });
+    expect(execFileSync("git", ["log", "-1", "--pretty=%s"], { cwd: completed.repo, encoding: "utf8" }).trim())
+      .toBe("Merge agent into main");
+
+    const empty = makeRepo("empty-commit");
+    const emptyStarted = await startWorktreeMerge({
+      repositoryRoot: empty.repo,
+      parentBranch: "main",
+      worktreeBranch: "agent",
+      strategy: "squash"
+    });
+    execFileSync("git", ["reset", "--hard"], { cwd: empty.repo, stdio: "ignore" });
+    await expect(finishWorktreeMerge(emptyStarted.sessionId)).resolves.toMatchObject({ ok: false, reason: expect.any(String) });
+    await expect(finishWorktreeMerge("missing-session")).resolves.toEqual({
+      ok: false,
+      reason: "That merge is no longer in progress."
+    });
+  });
+
+  test("handles missing conflict sessions and unreadable or unwritable files", async () => {
+    await expect(readConflictSides("missing-session", "shared.txt")).resolves.toEqual({
+      ok: false,
+      reason: "That merge is no longer in progress."
+    });
+    await expect(writeConflictResolution("missing-session", "shared.txt", "value")).resolves.toEqual({
+      ok: false,
+      reason: "That merge is no longer in progress."
+    });
+
+    const { repo } = makeRepo("conflict-errors", { conflict: true });
+    const started = await startWorktreeMerge({ repositoryRoot: repo, parentBranch: "main", worktreeBranch: "agent", strategy: "merge" });
+    fs.rmSync(path.join(repo, "shared.txt"));
+    await expect(readConflictSides(started.sessionId, "shared.txt")).resolves.toMatchObject({ ok: true, merged: "" });
+    await expect(writeConflictResolution(started.sessionId, "missing\\child.txt", "value"))
+      .resolves.toMatchObject({ ok: false, reason: expect.any(String) });
+    await finishWorktreeMerge(started.sessionId, { abort: true });
   });
 });

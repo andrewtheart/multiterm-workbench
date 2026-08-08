@@ -195,6 +195,61 @@ describe("Node bridge terminal messaging", () => {
     expect(message.state).toBe("claimed");
   });
 
+  it("rejects invalid readiness claims, foreign ownership, and unavailable delivery targets", () => {
+    server.sendTerminalMessage(client("sender"), {
+      kind: "text",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "ordinary message"
+    });
+    const ordinary = [...server.terminalMessages.values()][0];
+    const actor = client("renderer-a");
+    server.actOnTerminalMessage(actor, { requestId: "ordinary-claim", id: ordinary.id, action: "claim" });
+    expect(actor.send).toHaveBeenLastCalledWith(expect.objectContaining({ message: expect.stringContaining("not available") }));
+
+    server.terminalMessages.clear();
+    server.sendTerminalMessage(client("sender"), {
+      delivery: "whenReady",
+      kind: "task",
+      sourceId: "source001",
+      targetId: "target001",
+      text: "claimed task"
+    });
+    const claimed = [...server.terminalMessages.values()][0];
+    const anonymous = client();
+    delete anonymous.id;
+    server.actOnTerminalMessage(anonymous, { id: claimed.id, action: "claim" });
+
+    const foreign = client("renderer-b");
+    server.actOnTerminalMessage(foreign, { requestId: "foreign-release", id: claimed.id, action: "release" });
+    server.actOnTerminalMessage(foreign, { requestId: "foreign-deliver", id: claimed.id, action: "deliver", data: "safe" });
+    expect(foreign.send).toHaveBeenCalledTimes(2);
+    expect(foreign.send).toHaveBeenLastCalledWith(expect.objectContaining({ message: expect.stringContaining("no longer owned") }));
+
+    server.sessions.delete("target001");
+    server.actOnTerminalMessage(anonymous, { requestId: "missing-target", id: claimed.id, action: "deliver", data: "safe" });
+    expect(anonymous.send).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("could not be staged") }));
+    expect(server.terminalMessages.has(claimed.id)).toBe(true);
+
+    server.sessions.set("target001", session("target001", "Tests"));
+    server.actOnTerminalMessage(anonymous, { id: claimed.id, action: "release" });
+    claimed.state = "claimed";
+    server.actOnTerminalMessage(anonymous, { requestId: "claimed-insert", id: claimed.id, action: "insert" });
+    expect(anonymous.send).toHaveBeenLastCalledWith(expect.objectContaining({ message: expect.stringContaining("no longer pending") }));
+  });
+
+  it("validates plain and bracketed readiness payload boundaries", () => {
+    expect(server.validateReadinessPasteData(null)).toBeNull();
+    expect(server.validateReadinessPasteData("")).toBeNull();
+    expect(server.validateReadinessPasteData("   ")).toBeNull();
+    expect(server.validateReadinessPasteData("plain text")).toBe("plain text");
+    expect(server.validateReadinessPasteData("plain\ntext")).toBeNull();
+    expect(server.validateReadinessPasteData("\u001b[200~line one\nline two\u001b[201~"))
+      .toBe("\u001b[200~line one\nline two\u001b[201~");
+    expect(server.validateReadinessPasteData("\u001b[200~\u0007bell\u001b[201~")).toBeNull();
+    expect(server.validateReadinessPasteData("x".repeat((64 * 1024) + 13))).toBeNull();
+  });
+
   it("does not resurrect a delivered handoff when its acknowledgement is lost", () => {
     server.sendTerminalMessage(client("sender"), {
       delivery: "whenReady",
@@ -618,6 +673,44 @@ describe("Node bridge terminal messaging", () => {
       acquired: true
     }));
     server.handleAutomationLease(second, { action: "release" });
+  });
+
+  it("dispatches scheduler lease acquisition and ignores a foreign release", () => {
+    const owner = client("lease-owner");
+    const foreign = client("lease-foreign");
+    server.handleClientMessage(owner, JSON.stringify({
+      type: "automationLease",
+      requestId: "lease-dispatch",
+      action: "acquire",
+      ttlMs: 1
+    }));
+    expect(owner.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "automationLease",
+      requestId: "lease-dispatch",
+      acquired: true
+    }));
+    server.handleAutomationLease(foreign, { requestId: "foreign-release", action: "release" });
+    expect(foreign.send).toHaveBeenCalledWith(expect.objectContaining({ released: false }));
+    server.releaseAutomationLease(foreign);
+    server.releaseAutomationLease(owner);
+    server.handleAutomationLease(foreign, { requestId: "after-release", action: "acquire", ttlMs: 4000 });
+    expect(foreign.send).toHaveBeenLastCalledWith(expect.objectContaining({ acquired: true }));
+    server.handleAutomationLease(owner, { action: "release" });
+    server.handleAutomationLease(foreign, { action: "release" });
+  });
+
+  it("rejects malformed or stale automation occurrence claims", () => {
+    const owner = client("occurrence-owner");
+    server.handleAutomationLease(owner, { action: "acquire", ttlMs: 4000 });
+    for (const message of [
+      { ruleId: "short", dueAt: "2026-08-07T00:00:00Z" },
+      { ruleId: "valid-rule-id", dueAt: "not-a-date" },
+      { ruleId: 42, dueAt: "2026-08-07T00:00:00Z" }
+    ]) {
+      server.handleAutomationLease(owner, { requestId: "invalid-occurrence", action: "claimOccurrence", ...message });
+      expect(owner.send).toHaveBeenLastCalledWith(expect.objectContaining({ occurrenceClaimed: false }));
+    }
+    server.handleAutomationLease(owner, { action: "release" });
   });
 
   it("fences a due occurrence after lease ownership changes", () => {

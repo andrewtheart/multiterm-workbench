@@ -81,6 +81,20 @@ describe("File Explorer integration", () => {
     expect(renderer).toContain('visible: document.visibilityState === "visible"');
   });
 
+  it("forwards structured terminal and assistant options through the installed bridge", () => {
+    for (const parameter of [
+      "TerminalTitle", "TerminalCommand", "AssistantType", "AssistantModel", "AssistantEffort", "AssistantContext"
+    ]) {
+      expect(bridge).toContain(`[string]$${parameter} = ""`);
+    }
+    expect(bridge).toContain("private string NormalizeOpenTerminal(Dictionary<string, string> value, out bool hasOptions)");
+    expect(bridge).toContain("private void DispatchOpenTerminal(string launch)");
+    expect(bridge).toContain("private bool SendOpenTerminalToExisting(string launch)");
+    expect(bridge).toContain('\\"type\\":\\"openTerminal\\"');
+    expect(bridge).toContain('\\"openTerminals\\":');
+    expect(renderer).toContain('if (message.type === "openTerminal")');
+  });
+
   // A bridge whose window is closed still answers /open-folder, so forwarding
   // there queues the folder out of sight and looks like the click did nothing.
   it("only forwards a folder to a bridge that still has a renderer", () => {

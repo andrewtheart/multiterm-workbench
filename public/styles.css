@@ -3205,6 +3205,136 @@ body[data-pager-placement="top"] .pager {
   display: none;
 }
 
+.pager-move {
+  align-items: center;
+  align-self: stretch;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: grab;
+  display: inline-flex;
+  flex: 0 0 28px;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0;
+  touch-action: none;
+  width: 28px;
+}
+
+.pager-move:hover,
+.pager-move:focus-visible {
+  background: var(--hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.pager-move:active,
+.pager.is-dock-dragging .pager-move {
+  cursor: grabbing;
+}
+
+.pager-move svg {
+  height: 16px;
+  width: 16px;
+}
+
+body[data-pager-placement="left"] .pager-move,
+body[data-pager-placement="right"] .pager-move {
+  align-self: stretch;
+  flex-basis: 24px;
+  min-height: 24px;
+  order: 1;
+  width: 100%;
+}
+
+body[data-pager-placement="left"] .pager-header,
+body[data-pager-placement="right"] .pager-header {
+  order: 0;
+}
+
+body[data-pager-placement="left"] .pager-list,
+body[data-pager-placement="right"] .pager-list {
+  order: 2;
+}
+
+body[data-pager-placement="left"] .pager-add,
+body[data-pager-placement="right"] .pager-add {
+  order: 3;
+}
+
+body[data-pager-placement="left"] .pager-move svg,
+body[data-pager-placement="right"] .pager-move svg {
+  transform: rotate(90deg);
+}
+
+.pager-dock-targets {
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 1000;
+}
+
+.pager-dock-targets[hidden],
+.pager-dock-target[hidden] {
+  display: none;
+}
+
+.pager-dock-target {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface-high) 94%, transparent);
+  border: 2px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--elev-3);
+  color: var(--muted);
+  display: flex;
+  justify-content: center;
+  position: absolute;
+  transition: background 100ms ease, border-color 100ms ease, color 100ms ease, transform 100ms ease;
+}
+
+.pager-dock-target.is-targeted {
+  background: var(--primary-container);
+  border-color: var(--accent);
+  color: var(--text);
+  transform: scale(1.08);
+}
+
+.pager-dock-target svg {
+  height: 28px;
+  width: 28px;
+}
+
+.pager-dock-target-top,
+.pager-dock-target-bottom {
+  height: 64px;
+  left: 28%;
+  width: 44%;
+}
+
+.pager-dock-target-top {
+  top: 14px;
+}
+
+.pager-dock-target-bottom {
+  bottom: 14px;
+}
+
+.pager-dock-target-left,
+.pager-dock-target-right {
+  height: 44%;
+  top: 28%;
+  width: 64px;
+}
+
+.pager-dock-target-left {
+  left: 14px;
+}
+
+.pager-dock-target-right {
+  right: 14px;
+}
+
 body[data-pager-placement="left"] .workbench {
   grid-template-areas: "settings pager stage";
   grid-template-columns: var(--sidecar-width) var(--pager-side-width) minmax(0, 1fr);
