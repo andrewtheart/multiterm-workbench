@@ -274,7 +274,13 @@ function Get-PreviousPublishedReleaseTag {
     $payload = (ConvertTo-NativeText $releaseList.Output).Trim()
     if ([string]::IsNullOrWhiteSpace($payload)) { return $null }
 
-    $items = @($payload | ConvertFrom-Json)
+    # Assigned before wrapping on purpose: Windows PowerShell 5.1 writes the
+    # deserialised array as a single pipeline object, so @($payload |
+    # ConvertFrom-Json) collapses every release into one element and the
+    # filter below finds nothing. Assigning first makes @() see the elements
+    # on both PowerShell 5.1 and 7.
+    $parsed = $payload | ConvertFrom-Json
+    $items = @($parsed)
     $eligible = @(
         $items |
             Where-Object { -not $_.isDraft -and $_.tagName -ne $CurrentTag -and -not [string]::IsNullOrWhiteSpace($_.publishedAt) } |

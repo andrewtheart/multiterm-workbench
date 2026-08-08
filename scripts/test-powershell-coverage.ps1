@@ -25,3 +25,23 @@ if ($coverage.NumberOfCommandsMissed -gt 0) {
 }
 
 Write-Host "PowerShell command coverage: $($coverage.NumberOfCommandsExecuted)/$($coverage.NumberOfCommandsAnalyzed) (100%)."
+
+# The remaining PowerShell suites are run without a coverage gate: they exercise
+# release tooling whose branches depend on git and GitHub state that cannot be
+# reached from a unit test.
+$additionalSuites = @(
+    (Join-Path $repoRoot "tests\powershell\ReleaseNotesBase.Tests.ps1")
+)
+
+foreach ($suite in $additionalSuites) {
+    if (-not (Test-Path -LiteralPath $suite -PathType Leaf)) {
+        throw "PowerShell test suite not found: $suite"
+    }
+
+    $suiteResult = Invoke-Pester -Script $suite -PassThru
+    if ($suiteResult.FailedCount -gt 0) {
+        throw "$($suiteResult.FailedCount) PowerShell test(s) failed in $(Split-Path -Leaf $suite)."
+    }
+
+    Write-Host "$(Split-Path -Leaf $suite): $($suiteResult.PassedCount) test(s) passed."
+}
