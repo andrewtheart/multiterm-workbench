@@ -138,7 +138,9 @@ test.describe("Terminal notes and command queue", () => {
 
     const more = page.locator('.terminal-pane [data-action="more"]');
     await more.click();
-    await page.getByRole("menuitem", { name: "Notes & command queue", exact: true }).click();
+    // The row also advertises the action's remappable shortcut, so match the
+    // label rather than the whole accessible name.
+    await page.locator('#contextMenu [data-header-action="artifacts"]').click();
 
     await expect(page.locator("#contextMenu")).toBeHidden();
     await expect(page.locator("#terminalNotesFlyout")).toBeVisible();

@@ -64,6 +64,7 @@ const defaultSettings = {
   gap: 10,
   headerHidden: false,
   headerActionDragScope: "ask",
+  headerActionShortcuts: {},
   headerActionsInMenu: ["move-left", "move-right", "find", "clear", "copy", "color", "restart", "duplicate"],
   highlightInputPrompts: true,
   keepSessionsOnClose: true,
@@ -241,6 +242,32 @@ const HEADER_ACTIONS = Object.freeze({
   maximize: { label: "Maximize", icon: "maximize-2" },
   duplicate: { label: "Duplicate", icon: "copy-plus" },
   close: { label: "Close", icon: "x", hint: "Ctrl+Shift+W", danger: true }
+});
+// Every header action also answers to a keyboard shortcut. Ctrl+Alt+Shift is
+// deliberately chosen: no built-in binding, and no common shell binding, uses
+// that combination, so these defaults collide with nothing out of the box.
+// headerActionShortcutDefaultConflicts() proves that on boot.
+// Declared beside the header action defaults rather than beside the rest of the
+// shortcut machinery because loadSettings() normalizes stored bindings during
+// module initialization, long before that machinery is reached. Leaving it
+// there put it in the temporal dead zone, and loadSettings()'s catch turned the
+// resulting ReferenceError into a silent reset of every setting.
+const GLOBAL_SHORTCUT_MODIFIER_KEYS = new Set(["alt", "altgraph", "control", "meta", "shift"]);
+const HEADER_ACTION_SHORTCUT_DEFAULTS = Object.freeze({
+  "move-left": { ctrl: true, alt: true, shift: true, key: "arrowleft" },
+  "move-right": { ctrl: true, alt: true, shift: true, key: "arrowright" },
+  find: { ctrl: true, alt: true, shift: true, key: "f" },
+  clear: { ctrl: true, alt: true, shift: true, key: "l" },
+  copy: { ctrl: true, alt: true, shift: true, key: "c" },
+  color: { ctrl: true, alt: true, shift: true, key: "k" },
+  restart: { ctrl: true, alt: true, shift: true, key: "r" },
+  dequeue: { ctrl: true, alt: true, shift: true, key: "n" },
+  artifacts: { ctrl: true, alt: true, shift: true, key: "a" },
+  minimize: { ctrl: true, alt: true, shift: true, key: "m" },
+  focus: { ctrl: true, alt: true, shift: true, key: "o" },
+  maximize: { ctrl: true, alt: true, shift: true, key: "x" },
+  duplicate: { ctrl: true, alt: true, shift: true, key: "d" },
+  close: { ctrl: true, alt: true, shift: true, key: "w" }
 });
 
 // Bumped on each rebuild. See /memories/repo for the convention.
@@ -656,6 +683,16 @@ const elements = {
   headerActionScopeRemember: document.querySelector("#headerActionScopeRemember"),
   headerActionScopeText: document.querySelector("#headerActionScopeText"),
   headerActionScopeTitle: document.querySelector("#headerActionScopeTitle"),
+  headerActionShortcutFlyout: document.querySelector("#headerActionShortcutFlyout"),
+  headerActionShortcutTitle: document.querySelector("#headerActionShortcutTitle"),
+  headerActionShortcutText: document.querySelector("#headerActionShortcutText"),
+  headerActionShortcutCapture: document.querySelector("#headerActionShortcutCapture"),
+  headerActionShortcutBinding: document.querySelector("#headerActionShortcutBinding"),
+  headerActionShortcutStatus: document.querySelector("#headerActionShortcutStatus"),
+  headerActionShortcutReset: document.querySelector("#headerActionShortcutReset"),
+  headerActionShortcutClear: document.querySelector("#headerActionShortcutClear"),
+  headerActionShortcutCancel: document.querySelector("#headerActionShortcutCancel"),
+  headerActionShortcutSave: document.querySelector("#headerActionShortcutSave"),
   headerActionDragScope: document.querySelector("#headerActionDragScope"),
   helpToggle: document.querySelector("#helpToggle"),
   helpDocToggle: document.querySelector("#helpDocToggle"),
@@ -923,6 +960,8 @@ const fullscreenFocus = {
 };
 let draggedHeaderAction = null;
 let pendingHeaderActionMove = null;
+let pendingHeaderActionShortcut = null;
+let headerActionShortcutCapturing = false;
 let terminalNotificationFlyoutId = null;
 let terminalNotificationFlyoutAnchor = null;
 let terminalNotesFlyoutId = null;
@@ -1084,6 +1123,12 @@ window.addEventListener("DOMContentLoaded", () => {
   bindControls();
   bindAiSetup();
   bindHeaderActionCustomization();
+  // A default that silently shadows a real binding would be undiscoverable, so
+  // surface it at boot rather than letting it reach a user.
+  const shortcutConflicts = headerActionShortcutDefaultConflicts();
+  if (shortcutConflicts.length) {
+    log.warn("ui", "Default header action shortcuts conflict", { conflicts: shortcutConflicts });
+  }
   bindTerminalNotificationFlyout();
   bindTerminalNotesFlyout();
   applyVersion();
@@ -2191,6 +2236,7 @@ function handleBridgeMessage(message) {
               headerBackground: meta.headerBackground,
               fontSizeOverride: meta.fontSizeOverride,
               headerActionOverrides: meta.headerActionOverrides,
+              headerActionShortcutOverrides: meta.headerActionShortcutOverrides,
               notificationOverrides: meta.notificationOverrides,
               tmux: meta.tmux
             });
@@ -2697,6 +2743,9 @@ function addTerminal(options = {}) {
     fontSizeOverride,
     headerBackground: normalizeHeaderBackground(savedMeta?.headerBackground ?? options.headerBackground),
     headerActionOverrides: normalizeHeaderActionOverrides(savedMeta?.headerActionOverrides ?? options.headerActionOverrides),
+    headerActionShortcutOverrides: normalizeHeaderActionShortcuts(
+      savedMeta?.headerActionShortcutOverrides ?? options.headerActionShortcutOverrides
+    ),
     fontZoomIndicator,
     fontZoomIndicatorTimer: 0,
     fontZoomWheelDelta: 0,
@@ -3399,6 +3448,7 @@ function applyHeaderActionPlacement(terminal) {
     if (action !== "close") button.dataset.reveal = "hover";
   }
   updateHeaderActionOverflow(terminal);
+  refreshHeaderActionShortcutHints(terminal);
 }
 
 function clearHeaderActionDragStyles() {
@@ -3460,8 +3510,7 @@ function closeHeaderActionScopeFlyout({ restoreFocus = false } = {}) {
   if (restoreFocus && focusTarget?.isConnected) focusTarget.focus({ preventScroll: true });
 }
 
-function positionHeaderActionScopeFlyout(anchorRect) {
-  const flyout = elements.headerActionScopeFlyout;
+function positionHeaderActionScopeFlyout(anchorRect, flyout = elements.headerActionScopeFlyout) {
   const rect = flyout.getBoundingClientRect();
   const left = Math.max(8, Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - 8));
   const below = anchorRect.bottom + 8;
@@ -3503,6 +3552,7 @@ function requestHeaderActionPlacement(terminal, action, placement, anchor) {
 }
 
 function bindHeaderActionCustomization() {
+  bindHeaderActionShortcutFlyout();
   elements.headerActionScopeCancel.addEventListener("click", () => closeHeaderActionScopeFlyout({ restoreFocus: true }));
   elements.headerActionScopeApply.addEventListener("click", () => {
     if (!pendingHeaderActionMove) return;
@@ -3527,6 +3577,191 @@ function bindHeaderActionCustomization() {
       closeHeaderActionScopeFlyout();
     }
   }, true);
+}
+
+function closeHeaderActionShortcutFlyout({ restoreFocus = false } = {}) {
+  const focusTarget = pendingHeaderActionShortcut?.focusTarget;
+  elements.headerActionShortcutFlyout.hidden = true;
+  headerActionShortcutCapturing = false;
+  pendingHeaderActionShortcut = null;
+  if (restoreFocus && focusTarget?.isConnected) focusTarget.focus({ preventScroll: true });
+}
+
+function renderHeaderActionShortcutFlyout() {
+  const pending = pendingHeaderActionShortcut;
+  if (!pending) return;
+  const terminal = state.terminals.get(pending.terminalId);
+  const label = formatGlobalShortcut(pending.binding);
+  elements.headerActionShortcutBinding.textContent = headerActionShortcutCapturing
+    ? "Press a combination\u2026"
+    : (label || "Not set");
+  elements.headerActionShortcutCapture.classList.toggle("is-capturing", headerActionShortcutCapturing);
+  elements.headerActionShortcutCapture.setAttribute("aria-pressed", headerActionShortcutCapturing ? "true" : "false");
+
+  const conflict = headerActionShortcutConflict(
+    globalShortcutSignature(pending.binding),
+    pending.action,
+    pending.scope,
+    terminal
+  );
+  let status = "";
+  let blocked = false;
+  if (conflict?.kind === "global") {
+    status = `${label} is already used by "${conflict.label}". Pick another combination.`;
+    blocked = true;
+  } else if (conflict?.kind === "header") {
+    status = `${label} will be taken away from "${conflict.label}".`;
+  } else if (!pending.binding) {
+    status = "No shortcut assigned.";
+  } else if (pending.scope === "terminal") {
+    status = "Applies only while this terminal is focused.";
+  }
+  elements.headerActionShortcutStatus.textContent = status;
+  elements.headerActionShortcutStatus.classList.toggle("is-error", blocked);
+  elements.headerActionShortcutSave.disabled = blocked || headerActionShortcutCapturing;
+  elements.headerActionShortcutReset.disabled = !headerActionShortcutIsCustom(pending.action, terminal, pending.scope);
+}
+
+function showHeaderActionShortcutFlyout(terminal, action, anchor) {
+  if (!HEADER_ACTION_ID_SET.has(action) || !terminal) return;
+  const label = HEADER_ACTIONS[action].label.replace("\u2026", "");
+  const anchorRect = anchor.getBoundingClientRect();
+  pendingHeaderActionShortcut = {
+    terminalId: terminal.id,
+    action,
+    scope: "all",
+    binding: headerActionShortcut(action),
+    focusTarget: anchor
+  };
+  headerActionShortcutCapturing = false;
+  elements.headerActionShortcutTitle.textContent = `Shortcut for ${label}`;
+  elements.headerActionShortcutText.textContent = "Click the box, then press the keys you want.";
+  elements.headerActionShortcutFlyout.querySelector('input[name="headerActionShortcutScope"][value="all"]').checked = true;
+  closeHeaderActionScopeFlyout();
+  hideContextMenu();
+  elements.headerActionShortcutFlyout.hidden = false;
+  refreshIcons(elements.headerActionShortcutFlyout);
+  renderHeaderActionShortcutFlyout();
+  positionHeaderActionScopeFlyout(anchorRect, elements.headerActionShortcutFlyout);
+  elements.headerActionShortcutCapture.focus({ preventScroll: true });
+}
+
+function bindHeaderActionShortcutFlyout() {
+  const flyout = elements.headerActionShortcutFlyout;
+  if (!flyout) return;
+  elements.headerActionShortcutCapture.addEventListener("click", () => {
+    if (!pendingHeaderActionShortcut) return;
+    headerActionShortcutCapturing = !headerActionShortcutCapturing;
+    renderHeaderActionShortcutFlyout();
+  });
+  for (const radio of flyout.querySelectorAll('input[name="headerActionShortcutScope"]')) {
+    radio.addEventListener("change", () => {
+      if (!pendingHeaderActionShortcut) return;
+      const terminal = state.terminals.get(pendingHeaderActionShortcut.terminalId);
+      pendingHeaderActionShortcut.scope = radio.value === "terminal" ? "terminal" : "all";
+      // Each scope has its own current value, so re-seed the draft when it flips.
+      pendingHeaderActionShortcut.binding = headerActionShortcut(
+        pendingHeaderActionShortcut.action,
+        pendingHeaderActionShortcut.scope === "terminal" ? terminal : null
+      );
+      headerActionShortcutCapturing = false;
+      renderHeaderActionShortcutFlyout();
+    });
+  }
+  elements.headerActionShortcutClear.addEventListener("click", () => {
+    if (!pendingHeaderActionShortcut) return;
+    pendingHeaderActionShortcut.binding = null;
+    headerActionShortcutCapturing = false;
+    renderHeaderActionShortcutFlyout();
+  });
+  elements.headerActionShortcutReset.addEventListener("click", () => {
+    if (!pendingHeaderActionShortcut) return;
+    const pending = pendingHeaderActionShortcut;
+    const label = HEADER_ACTIONS[pending.action].label.replace("\u2026", "");
+    resetHeaderActionShortcut(pending.terminalId, pending.action, pending.scope);
+    closeHeaderActionShortcutFlyout({ restoreFocus: true });
+    toast(`${label} shortcut reset`, "success", 1800);
+  });
+  elements.headerActionShortcutCancel.addEventListener("click", () => closeHeaderActionShortcutFlyout({ restoreFocus: true }));
+  elements.headerActionShortcutSave.addEventListener("click", () => {
+    const pending = pendingHeaderActionShortcut;
+    if (!pending) return;
+    const terminal = state.terminals.get(pending.terminalId);
+    if (pending.scope === "terminal" && !terminal) {
+      closeHeaderActionShortcutFlyout();
+      toast("That terminal is gone", "warn", 2200);
+      return;
+    }
+    const conflict = headerActionShortcutConflict(
+      globalShortcutSignature(pending.binding),
+      pending.action,
+      pending.scope,
+      terminal
+    );
+    if (conflict?.kind === "global") {
+      renderHeaderActionShortcutFlyout();
+      return;
+    }
+    const label = HEADER_ACTIONS[pending.action].label.replace("\u2026", "");
+    if (!setHeaderActionShortcut(pending.terminalId, pending.action, pending.binding, pending.scope)) {
+      toast("Could not save that shortcut", "warn", 2200);
+      return;
+    }
+    const where = pending.scope === "terminal" ? "this terminal" : "all terminals";
+    const text = pending.binding
+      ? `${label}: ${formatGlobalShortcut(pending.binding)} for ${where}`
+      : `${label} shortcut cleared for ${where}`;
+    closeHeaderActionShortcutFlyout({ restoreFocus: true });
+    toast(text, "success", 2200);
+  });
+  flyout.addEventListener("keydown", (event) => {
+    if (headerActionShortcutCapturing || event.key !== "Escape") return;
+    event.preventDefault();
+    closeHeaderActionShortcutFlyout({ restoreFocus: true });
+  });
+  // Registered before the global shortcut handlers and in the capture phase, so
+  // a combination being recorded is consumed here instead of firing its action
+  // on the way down. A bubble-phase listener on the flyout would be too late.
+  window.addEventListener("keydown", (event) => {
+    if (!headerActionShortcutCapturing || !pendingHeaderActionShortcut) return;
+    if (GLOBAL_SHORTCUT_MODIFIER_KEYS.has(String(event.key).toLowerCase())) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.key === "Escape") {
+      headerActionShortcutCapturing = false;
+      renderHeaderActionShortcutFlyout();
+      return;
+    }
+    const binding = globalShortcutFromEvent(event);
+    if (!binding) return;
+    pendingHeaderActionShortcut.binding = binding;
+    headerActionShortcutCapturing = false;
+    renderHeaderActionShortcutFlyout();
+  }, true);
+  document.addEventListener("pointerdown", (event) => {
+    if (!flyout.hidden && !flyout.contains(event.target)) closeHeaderActionShortcutFlyout();
+  }, true);
+}
+
+// Tooltips are the only place most people will ever see these bindings, so they
+// have to track every reassignment.
+function refreshHeaderActionShortcutHints(terminal = null) {
+  const terminals = terminal ? [terminal] : [...state.terminals.values()];
+  for (const current of terminals) {
+    if (!current?.pane) continue;
+    for (const action of HEADER_ACTION_IDS) {
+      const button = current.pane.querySelector(`.pane-actions button[data-action="${action}"]`);
+      if (!button) continue;
+      const binding = headerActionShortcut(action, current);
+      // The first tooltip line belongs to whoever set it (placement, global
+      // shortcut hints); this pass only owns the appended shortcut line.
+      const base = (button.title || HEADER_ACTIONS[action].label).split("\n")[0];
+      button.title = binding ? `${base}\nShortcut: ${formatGlobalShortcut(binding)}` : base;
+      const aria = [button.dataset.baseKeyshortcuts || "", globalShortcutAria(binding)].filter(Boolean).join(" ");
+      if (aria) button.setAttribute("aria-keyshortcuts", aria);
+      else button.removeAttribute("aria-keyshortcuts");
+    }
+  }
 }
 
 function terminalNotificationOverrideValue(terminal, channel) {
@@ -3754,6 +3989,7 @@ function runHeaderAction(terminal, action, anchor = null) {
       fontSizeOverride: terminal.fontSizeOverride,
       headerBackground: cloneHeaderBackground(terminal.headerBackground),
       headerActionOverrides: { ...terminal.headerActionOverrides },
+      headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
       notificationOverrides: { ...terminal.notificationOverrides }
     });
   } else if (action === "move-left") {
@@ -3833,6 +4069,18 @@ function bindPaneControls(terminal) {
     startHeaderActionDrag(event, terminal.id, action, button);
   });
   paneActions.addEventListener("dragend", finishHeaderActionDrag);
+  // Right-clicking an action icon edits its shortcut. Without stopPropagation
+  // the pane's own context handler would answer instead, and with "right-click
+  // pastes" configured that would push the clipboard into the shell.
+  paneActions.addEventListener("contextmenu", (event) => {
+    const button = event.target.closest("button[data-action]");
+    const action = button?.dataset.action;
+    if (!button || !HEADER_ACTION_ID_SET.has(action)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveTerminal(terminal.id);
+    showHeaderActionShortcutFlyout(terminal, action, button);
+  });
   paneActions.addEventListener("dragover", (event) => {
     if (!draggedHeaderAction || draggedHeaderAction.terminalId !== terminal.id) return;
     const more = event.target.closest('button[data-action="more"]');
@@ -5204,6 +5452,7 @@ function disposeTerminal(terminal) {
   if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
   if (terminalNotesFlyoutId === id) closeTerminalNotesFlyout();
   if (headerBackgroundTerminalId === id) closeHeaderBackgroundEditor({ restoreFocus: false });
+  if (pendingHeaderActionShortcut?.terminalId === id) closeHeaderActionShortcutFlyout({ restoreFocus: false });
   if (state.snap?.id === id) {
     state.snap = null;
   }
@@ -7446,6 +7695,7 @@ function loadSettings() {
   try {
     const settings = { ...defaultSettings, ...JSON.parse(localStorage.getItem("multiterm.settings") || "{}") };
     settings.headerActionDragScope = normalizeHeaderActionDragScope(settings.headerActionDragScope);
+    settings.headerActionShortcuts = normalizeHeaderActionShortcuts(settings.headerActionShortcuts);
     settings.headerActionsInMenu = normalizeHeaderActionsInMenu(settings.headerActionsInMenu);
     settings.autoTitleSuppressions = normalizeAutoTitleSuppressions(settings.autoTitleSuppressions);
     settings.pageCloseAction = normalizePageCloseAction(settings.pageCloseAction);
@@ -7814,6 +8064,163 @@ function normalizeHeaderActionOverrides(value) {
   return Object.fromEntries(Object.entries(value).filter(([action, placement]) => (
     HEADER_ACTION_ID_SET.has(action) && (placement === "header" || placement === "menu")
   )));
+}
+
+// A stored entry is either a binding or an explicit null, which means "this
+// scope deliberately has no shortcut" and must not fall back to the default.
+function normalizeHeaderActionShortcuts(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const result = {};
+  for (const [action, binding] of Object.entries(value)) {
+    if (!HEADER_ACTION_ID_SET.has(action)) continue;
+    if (binding === null) {
+      result[action] = null;
+      continue;
+    }
+    const normalized = normalizeGlobalShortcutBinding(binding);
+    if (normalized) result[action] = normalized;
+  }
+  return result;
+}
+
+function headerActionShortcutScopeSource(scope, terminal) {
+  return scope === "terminal"
+    ? (terminal?.headerActionShortcutOverrides || {})
+    : (state.settings.headerActionShortcuts || {});
+}
+
+// Global bindings fall back to the shipped default; per-terminal bindings fall
+// back to whatever the global scope resolved to.
+function headerActionShortcut(action, terminal = null) {
+  if (!HEADER_ACTION_ID_SET.has(action)) return null;
+  const overrides = terminal?.headerActionShortcutOverrides;
+  if (overrides && Object.prototype.hasOwnProperty.call(overrides, action)) {
+    return normalizeGlobalShortcutBinding(overrides[action]);
+  }
+  const global = state.settings.headerActionShortcuts;
+  if (global && Object.prototype.hasOwnProperty.call(global, action)) {
+    return normalizeGlobalShortcutBinding(global[action]);
+  }
+  return normalizeGlobalShortcutBinding(HEADER_ACTION_SHORTCUT_DEFAULTS[action]);
+}
+
+function headerActionShortcutIsCustom(action, terminal, scope) {
+  const source = headerActionShortcutScopeSource(scope, terminal);
+  return Boolean(source && Object.prototype.hasOwnProperty.call(source, action));
+}
+
+function formatHeaderActionShortcut(action, terminal = null) {
+  return formatGlobalShortcut(headerActionShortcut(action, terminal));
+}
+
+// Returns the thing that already owns this combination, so the editor can
+// explain the clash instead of silently shadowing an existing binding.
+function headerActionShortcutConflict(signature, action, scope, terminal) {
+  if (!signature) return null;
+  const globalAction = GLOBAL_SHORTCUT_ACTIONS.find((candidate) => (
+    globalShortcutBindings(candidate.id).some((binding) => globalShortcutSignature(binding) === signature)
+  ));
+  if (globalAction) return { kind: "global", label: globalAction.label };
+  const clash = HEADER_ACTION_IDS.find((candidate) => (
+    candidate !== action
+    && globalShortcutSignature(headerActionShortcut(candidate, scope === "terminal" ? terminal : null)) === signature
+  ));
+  if (clash) return { kind: "header", action: clash, label: HEADER_ACTIONS[clash].label.replace("\u2026", "") };
+  return null;
+}
+
+function headerActionShortcutDefaultConflicts() {
+  const seen = new Map();
+  const conflicts = [];
+  for (const [action, binding] of Object.entries(HEADER_ACTION_SHORTCUT_DEFAULTS)) {
+    const signature = globalShortcutSignature(binding);
+    if (!signature) {
+      conflicts.push({ action, reason: "invalid" });
+      continue;
+    }
+    if (seen.has(signature)) conflicts.push({ action, reason: `duplicate of ${seen.get(signature)}` });
+    else seen.set(signature, action);
+    const globalAction = GLOBAL_SHORTCUT_ACTIONS.find((candidate) => (
+      (candidate.defaults || []).some((entry) => globalShortcutSignature(entry) === signature)
+    ));
+    if (globalAction) conflicts.push({ action, reason: `shipped binding for ${globalAction.id}` });
+  }
+  return conflicts;
+}
+
+function setHeaderActionShortcut(terminalId, action, binding, scope) {
+  const terminal = state.terminals.get(terminalId);
+  if (!HEADER_ACTION_ID_SET.has(action)) return false;
+  if (scope === "terminal" && !terminal) return false;
+  const normalized = binding === null ? null : normalizeGlobalShortcutBinding(binding);
+  if (binding !== null && !normalized) return false;
+  const signature = globalShortcutSignature(normalized);
+
+  if (scope === "all") {
+    const next = { ...normalizeHeaderActionShortcuts(state.settings.headerActionShortcuts) };
+    // Two header actions answering to one combination would make dispatch
+    // order-dependent, so the loser is explicitly unassigned instead.
+    if (signature) {
+      for (const candidate of HEADER_ACTION_IDS) {
+        if (candidate === action) continue;
+        if (globalShortcutSignature(headerActionShortcut(candidate)) === signature) next[candidate] = null;
+      }
+    }
+    next[action] = normalized;
+    state.settings.headerActionShortcuts = next;
+    saveSettings();
+  } else {
+    const next = { ...normalizeHeaderActionShortcuts(terminal.headerActionShortcutOverrides) };
+    if (signature) {
+      for (const candidate of HEADER_ACTION_IDS) {
+        if (candidate === action) continue;
+        if (globalShortcutSignature(headerActionShortcut(candidate, terminal)) === signature) next[candidate] = null;
+      }
+    }
+    next[action] = normalized;
+    terminal.headerActionShortcutOverrides = next;
+  }
+
+  refreshHeaderActionShortcutHints();
+  saveSessionSnapshot();
+  return true;
+}
+
+function resetHeaderActionShortcut(terminalId, action, scope) {
+  const terminal = state.terminals.get(terminalId);
+  if (!HEADER_ACTION_ID_SET.has(action)) return false;
+  if (scope === "all") {
+    const next = { ...normalizeHeaderActionShortcuts(state.settings.headerActionShortcuts) };
+    delete next[action];
+    state.settings.headerActionShortcuts = next;
+    saveSettings();
+  } else {
+    if (!terminal) return false;
+    const next = { ...normalizeHeaderActionShortcuts(terminal.headerActionShortcutOverrides) };
+    delete next[action];
+    terminal.headerActionShortcutOverrides = next;
+  }
+  refreshHeaderActionShortcutHints();
+  saveSessionSnapshot();
+  return true;
+}
+
+// The active terminal owns the keyboard, so its own overrides decide what a
+// combination means while it is focused.
+function runHeaderActionShortcut(event) {
+  const terminal = state.activeId ? state.terminals.get(state.activeId) : null;
+  if (!terminal) return false;
+  const signature = globalShortcutSignature(globalShortcutFromEvent(event));
+  if (!signature) return false;
+  const action = HEADER_ACTION_IDS.find((candidate) => (
+    globalShortcutSignature(headerActionShortcut(candidate, terminal)) === signature
+  ));
+  if (!action) return false;
+  event.preventDefault();
+  const anchor = terminal.pane.querySelector(`.pane-actions button[data-action="${action}"]`)
+    || terminal.pane.querySelector('button[data-action="more"]');
+  runHeaderAction(terminal, action, anchor);
+  return true;
 }
 
 function normalizeNotificationOverrides(value) {
@@ -9881,7 +10288,6 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
 const GLOBAL_SHORTCUT_ACTION_BY_ID = new Map(GLOBAL_SHORTCUT_ACTIONS.map((action) => [action.id, action]));
 const TOP_BAR_SHORTCUT_ACTIONS = GLOBAL_SHORTCUT_ACTIONS.filter((action) => action.section === TOP_BAR_SHORTCUT_SECTION);
 const TOP_BAR_SHORTCUT_ACTION_IDS = TOP_BAR_SHORTCUT_ACTIONS.map((action) => action.id);
-const GLOBAL_SHORTCUT_MODIFIER_KEYS = new Set(["alt", "altgraph", "control", "meta", "shift"]);
 
 function normalizeGlobalShortcutBinding(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -10026,6 +10432,11 @@ function bindGlobalShortcuts() {
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
 
+    // Both capture UIs must claim the key before any dispatch below: this
+    // listener runs in the capture phase, so a preventDefault in the dialog's
+    // own bubble-phase handler would arrive far too late to stop the action.
+    if (headerActionShortcutCapturing) return;
+
     if (!elements.shortcutsOverlay.hidden && shortcutEditor.capture) {
       handleShortcutsOverlayKey(event);
       return;
@@ -10132,6 +10543,7 @@ function bindGlobalShortcuts() {
       "terminal.zoom-out", "terminal.zoom-reset", "page.next", "page.previous", "app.zoom-in",
       "app.zoom-out", "app.zoom-reset"
     ])) return;
+    if (runHeaderActionShortcut(event)) return;
     if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
       const page = state.pages[Number(event.key) - 1];
       if (page) {
@@ -10340,6 +10752,7 @@ function restartSession(id) {
     headerBackground: cloneHeaderBackground(terminal.headerBackground),
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
+    headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
     notificationOverrides: { ...terminal.notificationOverrides },
     pageId: terminal.pageId,
     tmux: terminal.tmux
@@ -10358,6 +10771,7 @@ function restartSession(id) {
     headerBackground: meta.headerBackground,
     fontSizeOverride: meta.fontSizeOverride,
     headerActionOverrides: meta.headerActionOverrides,
+    headerActionShortcutOverrides: meta.headerActionShortcutOverrides,
     notificationOverrides: meta.notificationOverrides,
     pageId: meta.pageId,
     tmux: meta.tmux
@@ -14573,6 +14987,7 @@ function saveWorkspace(rawName) {
       headerBackground: cloneHeaderBackground(terminal.headerBackground),
       fontSizeOverride: terminal.fontSizeOverride,
       headerActionOverrides: { ...terminal.headerActionOverrides },
+      headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
       notificationOverrides: { ...terminal.notificationOverrides },
       pageId: terminal.pageId
     }))
@@ -14638,6 +15053,7 @@ function restoreWorkspace(name) {
         headerBackground: meta.headerBackground,
         fontSizeOverride: meta.fontSizeOverride,
         headerActionOverrides: meta.headerActionOverrides,
+        headerActionShortcutOverrides: meta.headerActionShortcutOverrides,
         notificationOverrides: meta.notificationOverrides,
         pageId: meta.pageId
       });
@@ -15257,6 +15673,7 @@ function saveSessionSnapshot() {
     headerBackground: cloneHeaderBackground(terminal.headerBackground),
     fontSizeOverride: terminal.fontSizeOverride,
     headerActionOverrides: { ...terminal.headerActionOverrides },
+    headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
     notificationOverrides: { ...terminal.notificationOverrides },
     minimized: terminal.minimized,
     pageId: terminal.pageId,
@@ -18877,11 +19294,17 @@ function refreshGlobalShortcutHints() {
     const aria = bindings.map(globalShortcutAria).filter(Boolean).join(" ");
     for (const element of document.querySelectorAll(selector)) {
       element.title = title;
-      if (aria) element.setAttribute("aria-keyshortcuts", aria);
-      else element.removeAttribute("aria-keyshortcuts");
+      if (aria) {
+        element.setAttribute("aria-keyshortcuts", aria);
+        element.dataset.baseKeyshortcuts = aria;
+      } else {
+        element.removeAttribute("aria-keyshortcuts");
+        delete element.dataset.baseKeyshortcuts;
+      }
     }
   }
   refreshTopBarShortcutHints();
+  refreshHeaderActionShortcutHints();
 }
 
 function focusGlobalShortcutAction(actionId, captureIndex = null) {
@@ -19193,6 +19616,12 @@ function shortcutCatalogText() {
     }
     lines.push("");
   }
+  lines.push("Terminal header actions (right-click an action icon to remap)");
+  for (const action of HEADER_ACTION_IDS) {
+    const label = HEADER_ACTIONS[action].label.replace("\u2026", "");
+    lines.push(`${label}: ${formatHeaderActionShortcut(action) || "Not assigned"}`);
+  }
+  lines.push("");
   return lines.join("\r\n");
 }
 
@@ -20547,6 +20976,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         fontSizeOverride: terminal.fontSizeOverride,
         headerBackground: cloneHeaderBackground(terminal.headerBackground),
         headerActionOverrides: { ...terminal.headerActionOverrides },
+        headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
         notificationOverrides: { ...terminal.notificationOverrides }
       })
     },
@@ -20808,8 +21238,12 @@ function buildPaneOverflowMenu(terminal) {
     .map((action) => {
       const definition = HEADER_ACTIONS[action];
       const button = terminal.pane.querySelector(`.pane-actions button[data-action="${action}"]`);
+      const shortcut = formatHeaderActionShortcut(action, terminal);
       return {
         ...definition,
+        // The remappable binding is the one worth advertising here; the static
+        // hint only stands in when the action has no shortcut of its own.
+        hint: shortcut || definition.hint,
         disabled: action === "move-left"
           ? !terminal.pane.previousElementSibling
           : action === "move-right"
@@ -21915,6 +22349,13 @@ function renderContextMenu(items, {
         startHeaderActionDrag(event, item.headerActionTerminalId, item.headerAction, el);
       });
       el.addEventListener("dragend", finishHeaderActionDrag);
+      el.addEventListener("contextmenu", (event) => {
+        const terminal = state.terminals.get(item.headerActionTerminalId);
+        if (!terminal) return;
+        event.preventDefault();
+        event.stopPropagation();
+        showHeaderActionShortcutFlyout(terminal, item.headerAction, el);
+      });
     }
     el.dataset.searchText = [item.label, item.title, item.hint]
       .filter(Boolean)

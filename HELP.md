@@ -81,6 +81,31 @@ On Windows, MultiTerm detects an existing [Everything](https://www.voidtools.com
 
 Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to **All terminals**; choose **This terminal** for a per-terminal layout, or select **Always take this action (don't ask me again)** to remember the scope. Change **Header drag scope** under **Terminal** to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.
 
+#### Terminal header action shortcuts
+
+Every terminal-header action also answers to a keyboard shortcut, whether the action sits in the title bar or in the hamburger menu. The shipped defaults all use <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>, which nothing else in MultiTerm binds:
+
+| Action | Default | Action | Default |
+| --- | --- | --- | --- |
+| Move left | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>←</kbd> | Notes & command queue | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> |
+| Move right | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>→</kbd> | Minimize | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
+| Find | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | Focus | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd> |
+| Clear | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> | Maximize | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> |
+| Copy output | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> | Duplicate | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
+| Cycle label color | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> | Restart | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
+| Run next queued command | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> | Close | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> |
+
+A shortcut always acts on the terminal that currently has focus.
+
+To change one, right-click the action's icon in the terminal header — or right-click its row in the hamburger menu, for actions that live there. In the flyout, select the shortcut box, press the combination you want, then choose the scope:
+
+- **All terminals** changes the shared binding. This is the default.
+- **This terminal** binds the combination for the focused terminal only and leaves every other terminal on the shared binding.
+
+**Clear** removes the shortcut for the selected scope, and **Reset** drops the override so the scope falls back to the shared binding (or, for **All terminals**, to the shipped default). Combinations already claimed by a built-in shortcut are refused with the name of the action that owns them; taking a combination from another header action simply unassigns that action, which the flyout warns about before you save.
+
+Resolved shortcuts appear in each action's tooltip, beside its row in the hamburger menu, and in the **Terminal header actions** section of the exported shortcut list. Both shared and per-terminal bindings persist across reloads and saved workspaces.
+
 #### Custom context-menu shortcuts
 
 Open a terminal's context menu and select the keyboard button beside Search to edit shortcuts in place. Select **Set** beside an executable action, then press either:

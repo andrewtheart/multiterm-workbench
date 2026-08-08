@@ -2122,6 +2122,37 @@
       </div>
     </div>
 
+    <div id="headerActionShortcutFlyout" class="header-action-scope-flyout header-action-shortcut-flyout" role="dialog" aria-modal="false" aria-labelledby="headerActionShortcutTitle" hidden>
+      <div class="header-action-scope-head">
+        <i data-lucide="keyboard"></i>
+        <div>
+          <h2 id="headerActionShortcutTitle">Shortcut</h2>
+          <p id="headerActionShortcutText"></p>
+        </div>
+      </div>
+      <button id="headerActionShortcutCapture" type="button" class="header-action-shortcut-capture">
+        <span id="headerActionShortcutBinding">Not set</span>
+      </button>
+      <p id="headerActionShortcutStatus" class="header-action-shortcut-status" role="status" aria-live="polite"></p>
+      <fieldset class="header-action-scope-options">
+        <legend>Apply to</legend>
+        <label>
+          <input type="radio" name="headerActionShortcutScope" value="all" checked>
+          <span>All terminals</span>
+        </label>
+        <label>
+          <input type="radio" name="headerActionShortcutScope" value="terminal">
+          <span>This terminal</span>
+        </label>
+      </fieldset>
+      <div class="header-action-scope-actions header-action-shortcut-actions">
+        <button id="headerActionShortcutReset" type="button" class="ghost">Reset</button>
+        <button id="headerActionShortcutClear" type="button" class="ghost">Clear</button>
+        <button id="headerActionShortcutCancel" type="button" class="confirm-cancel">Cancel</button>
+        <button id="headerActionShortcutSave" type="button" class="confirm-proceed">Save</button>
+      </div>
+    </div>
+
     <div id="terminalNotificationFlyout" class="terminal-notification-flyout" role="dialog" aria-modal="false" aria-labelledby="terminalNotificationTitle" hidden>
       <div class="terminal-notification-head">
         <i data-lucide="bell"></i>

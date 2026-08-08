@@ -924,19 +924,20 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(overflow).toHaveAttribute("aria-expanded", "true");
     const menu = page.locator("#contextMenu");
     await expect(menu).toBeVisible();
+    // Every header action advertises its own remappable shortcut here.
     await expect(menu.locator(".ctx-item")).toHaveText([
       "Notifications\u2026",
-      "Notes & command queue",
-      "Minimize",
-      "Maximize",
-      "Move left",
-      "Move right",
-      "Find\u2026Ctrl+F",
-      "Clear",
-      "Copy output",
-      "Cycle label color",
-      "RestartCtrl+Shift+R",
-      "Duplicate"
+      "Notes & command queueCtrl+Alt+Shift+A",
+      "MinimizeCtrl+Alt+Shift+M",
+      "MaximizeCtrl+Alt+Shift+X",
+      "Move leftCtrl+Alt+Shift+Left",
+      "Move rightCtrl+Alt+Shift+Right",
+      "Find\u2026Ctrl+Alt+Shift+F",
+      "ClearCtrl+Alt+Shift+L",
+      "Copy outputCtrl+Alt+Shift+C",
+      "Cycle label colorCtrl+Alt+Shift+K",
+      "RestartCtrl+Alt+Shift+R",
+      "DuplicateCtrl+Alt+Shift+D"
     ]);
     await menu.locator(".ctx-item", { hasText: "Notifications" }).click();
     await expect(page.locator("#terminalNotificationFlyout")).toBeVisible();
@@ -987,14 +988,14 @@ test.describe("MultiTerm Workbench UI", () => {
     await firstPane.locator('[data-action="more"]').click();
     const menu = page.locator("#contextMenu");
     await expect(menu.locator(".ctx-item")).toHaveText([
-      "Move left",
-      "Move right",
-      "Find\u2026Ctrl+F",
-      "Clear",
-      "Copy output",
-      "Cycle label color",
-      "RestartCtrl+Shift+R",
-      "Duplicate"
+      "Move leftCtrl+Alt+Shift+Left",
+      "Move rightCtrl+Alt+Shift+Right",
+      "Find\u2026Ctrl+Alt+Shift+F",
+      "ClearCtrl+Alt+Shift+L",
+      "Copy outputCtrl+Alt+Shift+C",
+      "Cycle label colorCtrl+Alt+Shift+K",
+      "RestartCtrl+Alt+Shift+R",
+      "DuplicateCtrl+Alt+Shift+D"
     ]);
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
@@ -1287,7 +1288,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("uses the traditional copy glyph for the title-bar copy action", async () => {
     const copy = page.locator('.terminal-pane').first().locator('[data-action="copy"]');
-    await expect(copy).toHaveAttribute("title", "Copy output (Ctrl+Shift+C)");
+    await expect(copy).toHaveAttribute("title", "Copy output (Ctrl+Shift+C)\nShortcut: Ctrl+Alt+Shift+C");
     await expect(copy.locator("svg")).toHaveAttribute("data-lucide", "copy");
   });
 

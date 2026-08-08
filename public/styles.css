@@ -8163,6 +8163,57 @@ button.shortcut-binding.is-capturing {
   margin-top: 14px;
 }
 
+.header-action-shortcut-capture {
+  align-items: center;
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  color: var(--text);
+  display: flex;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 13px;
+  justify-content: center;
+  margin-top: 12px;
+  min-height: 38px;
+  width: 100%;
+}
+
+.header-action-shortcut-capture:hover {
+  background: var(--state-hover);
+}
+
+.header-action-shortcut-capture.is-capturing {
+  border-color: var(--primary);
+  border-style: solid;
+  color: var(--primary);
+}
+
+.header-action-shortcut-status {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 8px 0 0;
+  min-height: 17px;
+}
+
+.header-action-shortcut-status.is-error {
+  color: var(--danger, #ef5f5f);
+}
+
+/* Reset and Clear are secondary to the commit pair, so they sit apart from it. */
+.header-action-shortcut-actions {
+  justify-content: space-between;
+}
+
+.header-action-shortcut-actions .confirm-cancel {
+  margin-left: auto;
+}
+
+.header-action-shortcut-actions button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .terminal-notification-flyout {
   background: var(--surface-high);
   border: 1px solid var(--border-strong);
