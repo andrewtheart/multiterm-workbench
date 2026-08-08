@@ -376,11 +376,15 @@ test.describe("Pages and the quick switcher", () => {
     await page.keyboard.press("Escape");
   });
 
-  test("Ctrl+P creates a page without opening the browser print command", async () => {
+  test("Ctrl+T and Ctrl+P both create pages without opening browser commands", async () => {
     await reset(0);
-    await page.keyboard.press("Control+P");
+    await page.keyboard.press("Control+T");
     await expect(page.locator(".pager-chip")).toHaveCount(2);
-    await expect(page.locator(".pager-chip").last().locator(".pager-name")).toHaveText("Page 2");
+    await expect(page.locator(".terminal-pane")).toHaveCount(0);
+    await page.keyboard.press("Control+P");
+    await expect(page.locator(".pager-chip")).toHaveCount(3);
+    await expect(page.locator(".pager-chip").last().locator(".pager-name")).toHaveText("Page 3");
+    await expect(page.locator(".terminal-pane")).toHaveCount(0);
   });
 
   test("moves the pager around the workbench and collapses vertical panels", async () => {

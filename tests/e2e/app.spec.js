@@ -63,8 +63,8 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#bridgeStatus")).toHaveText(/Bridge connected/i);
     await expect(page.locator("#statusSessions")).toHaveText("1 session");
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
-    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+T)");
-    await expect(page.locator("#addTerminal")).toHaveAttribute("aria-keyshortcuts", "Control+T");
+    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+N)");
+    await expect(page.locator("#addTerminal")).toHaveAttribute("aria-keyshortcuts", "Control+N Control+Shift+T");
     await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("title", "Collapse top bar");
     await expect(page.locator("#toggleHeaderTop")).toHaveAttribute("aria-label", "Collapse top bar");
     await expect(page.locator(".action-cluster > :last-child")).toHaveAttribute("id", "addTerminal");
@@ -120,10 +120,10 @@ test.describe("MultiTerm Workbench UI", () => {
         await page.setViewportSize({ width, height: 768 });
         const addTerminalButton = page.locator("#addTerminal");
         const headerToggle = page.locator("#toggleHeaderTop");
+        const minimizeButton = page.locator("#minimizeApp");
         await expect(addTerminalButton).toBeVisible();
         await expect(headerToggle).toBeVisible();
-        await addTerminalButton.click({ trial: true });
-        await headerToggle.click({ trial: true });
+        await expect(minimizeButton).toBeVisible();
 
         const layout = await page.evaluate(() => {
           const bounds = (selector) => {
@@ -138,6 +138,7 @@ test.describe("MultiTerm Workbench UI", () => {
           };
           return {
             add: bounds("#addTerminal"),
+            minimize: bounds("#minimizeApp"),
             toggle: bounds("#toggleHeaderTop"),
             shellWidth: document.querySelector(".shell-field").getBoundingClientRect().width,
             cwdWidth: document.querySelector("#cwdInput").getBoundingClientRect().width,
@@ -156,6 +157,7 @@ test.describe("MultiTerm Workbench UI", () => {
           expect(layout.add.width, `${width}px full add width`).toBeGreaterThan(38);
         }
         expect(layout.add.hit, `${width}px add hit target`).toBe(true);
+        expect(layout.minimize.hit, `${width}px minimize hit target`).toBe(true);
         expect(layout.toggle.right, `${width}px toggle right`).toBeLessThanOrEqual(layout.viewportWidth);
         expect(layout.toggle.hit, `${width}px toggle hit target`).toBe(true);
         expect(layout.toggle.right, `${width}px collapse precedes add`).toBeLessThan(layout.add.left);
@@ -1244,7 +1246,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("uses the traditional copy glyph for the title-bar copy action", async () => {
     const copy = page.locator('.terminal-pane').first().locator('[data-action="copy"]');
-    await expect(copy).toHaveAttribute("title", "Copy output");
+    await expect(copy).toHaveAttribute("title", "Copy output (Ctrl+Shift+C)");
     await expect(copy.locator("svg")).toHaveAttribute("data-lucide", "copy");
   });
 
@@ -1639,23 +1641,93 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(reachable.body).toContain("#f0b35a");
   });
 
-  test("opens the keyboard shortcuts dialog", async () => {
+  test("edits, persists, prints, and exports keyboard shortcuts", async () => {
+    await page.evaluate(() => {
+      window.__shortcutOriginalPrint = window.print;
+      window.__shortcutOriginalRequestBridge = requestBridge;
+    });
     await page.evaluate(() => assignContextMenuShortcut("terminal.copy-all", {
       ctrl: true, alt: true, shift: false, meta: false, key: "c"
     }));
     await page.locator("#helpToggle").click();
     await expect(page.locator("#shortcutsOverlay")).toBeVisible();
     await expect(page.locator(".shortcuts-section h3")).toContainText([
-      "Terminal right-click menu shortcuts",
-      "Page right-click menu shortcuts",
-      "App shortcuts (available at any time)",
+      "App shortcuts",
+      "Page shortcuts",
+      "Terminal shortcuts",
+      "Contextual controls",
       "Custom terminal right-click shortcuts"
     ]);
     await expect(page.locator("#shortcutsCatalog")).toContainText("Creates and opens a new page");
     await expect(page.locator("#shortcutsCatalog")).toContainText("Ctrl+Alt+C");
+    await expect(page.locator("#shortcutsPrint")).toBeVisible();
+    await expect(page.locator("#shortcutsExport")).toBeVisible();
+
+    const terminalRow = page.locator('[data-shortcut-action="terminal.new"]').first();
+    const terminalBindings = terminalRow.locator(".shortcut-binding");
+    await expect(terminalBindings).toContainText(["Ctrl+N", "Ctrl+Shift+T"]);
+    await terminalBindings.first().click();
+    await expect(page.locator("#shortcutsStatus")).toContainText("Press the new shortcut");
+    await page.keyboard.press("Control+Alt+N");
+    await expect(terminalRow.locator(".shortcut-binding")).toContainText(["Ctrl+Alt+N", "Ctrl+Shift+T"]);
+    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+Alt+N)");
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).keyboardShortcuts["terminal.new"][0]))
+      .toEqual({ alt: true, ctrl: true, key: "n", meta: false, shift: false });
+
+    await terminalRow.hover();
+    await expect(terminalRow).not.toHaveClass(/show-shortcut-controls/);
+    await expect(terminalRow).toHaveClass(/show-shortcut-controls/, { timeout: 1500 });
+    await terminalRow.locator(".shortcut-edit-controls .shortcut-binding").click();
+    await page.keyboard.press("Control+Alt+T");
+    await expect(terminalRow.locator(".shortcut-binding")).toContainText(["Ctrl+Alt+N", "Ctrl+Shift+T", "Ctrl+Alt+T"]);
+
+    const pageRow = page.locator('[data-shortcut-action="page.new"]').first();
+    await pageRow.hover();
+    await expect(pageRow).toHaveClass(/show-shortcut-controls/, { timeout: 1500 });
+    await pageRow.locator(".shortcut-edit-controls .shortcut-binding").click();
+    await page.keyboard.press("Control+Alt+N");
+    await expect(page.locator("#shortcutsStatus")).toContainText("reassigned from New terminal");
+    await expect(pageRow.locator(".shortcut-binding")).toContainText(["Ctrl+T", "Ctrl+P", "Ctrl+Alt+N"]);
+    await expect(terminalRow.locator(".shortcut-binding")).toContainText(["Ctrl+Shift+T", "Ctrl+Alt+T"]);
+
+    const printCalled = await page.evaluate(() => {
+      window.__shortcutPrintCalled = false;
+      window.print = () => { window.__shortcutPrintCalled = true; };
+      return window.__shortcutPrintCalled;
+    });
+    expect(printCalled).toBe(false);
+    await page.locator("#shortcutsPrint").click();
+    await expect.poll(() => page.evaluate(() => window.__shortcutPrintCalled)).toBe(true);
+
+    await page.evaluate(() => {
+      window.__shortcutExport = null;
+      requestBridge = async (message) => {
+        window.__shortcutExport = message;
+        return { path: "D:\\tmp\\MultiTerm-keyboard-shortcuts.txt" };
+      };
+    });
+    await page.locator("#shortcutsExport").click();
+    await expect.poll(() => page.evaluate(() => window.__shortcutExport?.type)).toBe("prepareSave");
+    await expect.poll(() => page.evaluate(() => window.__shortcutExport?.text)).toContain("New terminal: Ctrl+Shift+T, Ctrl+Alt+T");
+
+    await page.evaluate(() => {
+      state.settings.keyboardShortcuts = {};
+      saveSettings();
+      refreshGlobalShortcutHints();
+      renderShortcutCatalog();
+    });
+    await expect(page.locator("#addTerminal")).toHaveAttribute("title", "New terminal (Ctrl+N)");
     await page.locator("#shortcutsClose").click();
     await expect(page.locator("#shortcutsOverlay")).toBeHidden();
-    await page.evaluate(() => clearContextMenuShortcut("terminal.copy-all"));
+    await page.evaluate(() => {
+      clearContextMenuShortcut("terminal.copy-all");
+      window.print = window.__shortcutOriginalPrint;
+      requestBridge = window.__shortcutOriginalRequestBridge;
+      delete window.__shortcutOriginalPrint;
+      delete window.__shortcutOriginalRequestBridge;
+      delete window.__shortcutPrintCalled;
+      delete window.__shortcutExport;
+    });
   });
 
   test("uses F11 fullscreen focus mode and restores the prior UI with Escape", async () => {
@@ -1899,8 +1971,10 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("handles keyboard shortcuts and palette commands", async () => {
     const before = await page.locator(".terminal-pane").count();
-    await page.keyboard.press("Control+Shift+T");
+    await page.keyboard.press("Control+N");
     await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
+    await page.keyboard.press("Control+Shift+T");
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 2);
 
     await page.keyboard.press("Control+Shift+P");
     await expect(page.locator("#paletteOverlay")).toBeVisible();
@@ -1917,7 +1991,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#paletteInput").fill("New terminal");
     await page.keyboard.press("Enter");
     await expect(page.locator("#paletteOverlay")).toBeHidden();
-    await expect(page.locator(".terminal-pane")).toHaveCount(before + 2);
+    await expect(page.locator(".terminal-pane")).toHaveCount(before + 3);
   });
 
   test("selects all output in the focused terminal with Ctrl+A", async () => {

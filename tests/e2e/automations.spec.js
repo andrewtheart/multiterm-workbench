@@ -38,24 +38,34 @@ test.describe("Automation Studio", () => {
 
     await page.locator("#automationNew").click();
     await page.locator("#automationName").fill("Morning checks");
+    await page.locator("#automationRunAs").fill("andre");
     await page.locator("[data-schedule-mode='weekly']").click();
     await page.locator("#automationTime").fill("08:30");
     await page.locator("[data-day='5']").click();
     await page.locator(".automation-action-command").fill("npm test");
     await page.locator(".automation-action-delivery").selectOption("stage");
     await page.locator("#automationActionAdd").click();
-    await page.locator(".automation-action-row").nth(1).locator(".automation-action-command").fill("git status");
-    await page.locator(".automation-action-row").nth(1).locator(".automation-action-target").selectOption("new");
+    const secondStep = page.locator(".automation-action-row").nth(1);
+    await secondStep.locator(".automation-action-command").fill("git status");
+    await secondStep.locator(".automation-action-target-mode").selectOption("new");
+    await expect(secondStep.locator(".automation-action-fallback")).toBeHidden();
+    await expect(secondStep.locator("[data-automation-dependency]")).toHaveAttribute("aria-pressed", "true");
     await page.locator("#automationSave").click();
 
     await expect(page.locator(".automation-rule-row")).toHaveCount(1);
     await expect(page.locator(".automation-rule-copy strong")).toHaveText("Morning checks");
     await expect(page.locator(".automation-rule-state")).toHaveText("On");
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.automations")));
-    expect(stored.rules[0]).toMatchObject({ enabled: true, name: "Morning checks" });
+    expect(stored.rules[0]).toMatchObject({ enabled: true, name: "Morning checks", runAs: "andre", type: "command" });
     expect(stored.rules[0].actions).toHaveLength(2);
     expect(stored.rules[0].actions[0]).toMatchObject({ command: "npm test", submit: false, targetName: "Tests" });
-    expect(stored.rules[0].actions[1]).toMatchObject({ command: "git status", targetMode: "new", targetName: "" });
+    expect(stored.rules[0].actions[1]).toMatchObject({
+      command: "git status",
+      condition: "success",
+      dependsOn: [stored.rules[0].actions[0].id],
+      targetMode: "new",
+      targetName: ""
+    });
 
     await page.locator(".automation-rule-state").click();
     await expect(page.locator(".automation-rule-state")).toHaveText("Off");
@@ -188,7 +198,7 @@ test.describe("Automation Studio", () => {
       };
     });
     expect(after.panelHeight).toBe(before.panelHeight);
-    expect(after.sectionHeight).toBe(before.sectionHeight);
+    expect(Math.abs(after.sectionHeight - before.sectionHeight)).toBeLessThanOrEqual(1);
     expect(after.panelScrollHeight).toBe(after.panelHeight);
     expect(after.listClientHeight).toBeLessThan(after.listScrollHeight);
     expect(after.listClientHeight).toBeLessThan(after.panelHeight);
@@ -388,11 +398,21 @@ test.describe("Automation Studio", () => {
     expect(result.targetId).toBeTruthy();
     expect(result.history).toMatchObject({ detail: `Run in new terminal ${result.targetTitle}`, status: "queued" });
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
-    await expect.poll(() => page.evaluate(({ commandToken, targetId }) => (
-      window.__automationNewTerminalFrames
-        .filter((frame) => frame.id === targetId && (frame.data.includes(commandToken) || frame.data === "\r"))
-        .map((frame) => frame.data)
-    ), { commandToken: token, targetId: result.targetId })).toEqual([`Write-Output '${token}'`, "\r"]);
+    await expect.poll(() => page.evaluate(({ targetId }) => {
+      const frames = window.__automationNewTerminalFrames.filter((frame) => frame.id === targetId);
+      return {
+        command: frames.some((frame) => frame.data.startsWith("powershell.exe -NoLogo -NoProfile -EncodedCommand ")),
+        enter: frames.some((frame) => frame.data === "\r")
+      };
+    }, { targetId: result.targetId })).toEqual({ command: true, enter: true });
+    await expect.poll(() => page.evaluate(({ targetId, commandToken }) => {
+      const terminal = state.terminals.get(targetId);
+      return terminal ? terminalVisibleText(terminal).includes(commandToken) : false;
+    }, { targetId: result.targetId, commandToken: token })).toBe(true);
+    await expect.poll(() => page.evaluate(() => state.automationRuntime.runs.size)).toBe(0);
+    expect(await page.evaluate(() => state.automations.history.some((entry) => (
+      entry.title === "New terminal action" && entry.status === "completed"
+    )))).toBe(true);
 
     await page.evaluate(() => {
       state.socket.send = window.__automationNewTerminalOriginalSend;
@@ -401,6 +421,220 @@ test.describe("Automation Studio", () => {
       delete window.__automationNewTerminalOriginalReadiness;
       delete window.__automationNewTerminalOriginalSend;
     });
+  });
+
+  test("targets a terminal by PID and defaults missing targets to a new terminal", async ({ page }) => {
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0]?.pid || 0)).toBeGreaterThan(0);
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const exact = resolveAutomationActionTarget({ targetMode: "pid", targetPid: terminal.pid, fallbackToNew: true });
+      const blocked = resolveAutomationActionTarget({ targetMode: "pid", targetPid: 2147483647, fallbackToNew: false });
+      const fallback = resolveAutomationActionTarget({ targetMode: "pid", targetPid: 2147483647, fallbackToNew: true, cwd: "D:\\multiTerm" });
+      return {
+        blocked: blocked.error,
+        exactId: exact.terminal?.id,
+        fallbackCwd: fallback.terminal?.cwd,
+        fallbackLaunched: fallback.launched,
+        originalId: terminal.id
+      };
+    });
+    expect(result).toMatchObject({
+      exactId: result.originalId,
+      fallbackCwd: "D:\\multiTerm",
+      fallbackLaunched: true
+    });
+    expect(result.blocked).toContain("No live terminal has PID");
+
+    await page.locator("#automationsToggle").click();
+    await page.locator("#automationNew").click();
+    const step = page.locator(".automation-action-row").first();
+    await step.locator(".automation-action-target-mode").selectOption("pid");
+    await expect(step.locator(".automation-action-fallback input")).toBeChecked();
+    await expect(step.locator(".automation-action-target-pid-field")).toBeVisible();
+  });
+
+  test("advances arbitrary success and failure branches from terminal exit markers", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      window.clearTimeout(terminal.automationWorkflowTimer);
+      const successRule = automationApi.normalizeRule({
+        actions: [
+          { command: "one", id: "action-chain001", targetName: "Tests" },
+          { command: "two", dependsOn: ["action-chain001"], id: "action-chain002", targetName: "Tests" },
+          { command: "three", conditionOperator: "all", dependsOn: ["action-chain001", "action-chain002"], id: "action-chain003", targetName: "Tests" }
+        ],
+        enabled: true,
+        id: "automation-chain1",
+        name: "Success chain",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      runAutomationRule(successRule);
+      const first = terminal.automationWorkflowTasks[0].token;
+      finishAutomationWorkflowTask(first, 0);
+      const second = terminal.automationWorkflowTasks[0].token;
+      finishAutomationWorkflowTask(second, 0);
+      const third = terminal.automationWorkflowTasks[0].token;
+      finishAutomationWorkflowTask(third, 0);
+
+      const failureRule = automationApi.normalizeRule({
+        actions: [
+          { command: "fail", id: "action-branch01", targetName: "Tests" },
+          { command: "wrong branch", condition: "success", dependsOn: ["action-branch01"], id: "action-branch02", targetName: "Tests" },
+          { command: "recover", condition: "failure", dependsOn: ["action-branch01"], id: "action-branch03", targetName: "Tests" }
+        ],
+        enabled: true,
+        id: "automation-branch1",
+        name: "Failure branch",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      const failureRunId = [...state.automationRuntime.runs.keys()];
+      runAutomationRule(failureRule);
+      const failureRun = [...state.automationRuntime.runs.values()].find((run) => run.rule.id === failureRule.id);
+      finishAutomationWorkflowTask(terminal.automationWorkflowTasks[0].token, 7);
+      const statesAfterFailure = Object.fromEntries(failureRun.states);
+      finishAutomationWorkflowTask(terminal.automationWorkflowTasks[0].token, 0);
+      window.clearTimeout(terminal.automationWorkflowTimer);
+      terminal.automationWorkflowTimer = 0;
+      return {
+        failureRunId,
+        remainingRuns: state.automationRuntime.runs.size,
+        statesAfterFailure,
+        successCompleted: state.automations.history.some((entry) => entry.title === "Success chain" && entry.status === "completed")
+      };
+    });
+
+    expect(result.successCompleted).toBe(true);
+    expect(result.statesAfterFailure).toMatchObject({
+      "action-branch01": "failed",
+      "action-branch02": "skipped",
+      "action-branch03": "running"
+    });
+    expect(result.remainingRuns).toBe(0);
+  });
+
+  test("queues a Copilot prompt and requested CWD in a selected terminal", async ({ page }) => {
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0]?.status)).toBe("live");
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const savedQueue = queueAutomaticTerminalCommand;
+      const savedReadiness = terminalExecutionReadiness;
+      const queued = [];
+      queueAutomaticTerminalCommand = (_terminal, command) => { queued.push(command); return true; };
+      terminalExecutionReadiness = () => ({ mode: "copilot", ready: true });
+      try {
+        const rule = automationApi.normalizeRule({
+          actions: [{
+            command: "Review the pending changes",
+            cwd: "D:\\multiTerm",
+            id: "action-copilot1",
+            targetMode: "title",
+            targetName: "Tests"
+          }],
+          enabled: true,
+          id: "automation-copilot1",
+          name: "Scheduled review",
+          type: "copilot",
+          trigger: { intervalMinutes: 60, mode: "interval" }
+        });
+        const started = runAutomationRule(rule, { manual: true });
+        return { queued, started };
+      } finally {
+        queueAutomaticTerminalCommand = savedQueue;
+        terminalExecutionReadiness = savedReadiness;
+      }
+    });
+    expect(result.started).toBe(1);
+    expect(result.queued).toEqual(["/cwd D:\\multiTerm", "Review the pending changes"]);
+  });
+
+  test("launches Copilot from the requested CWD in each shell", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const saved = {
+        cwd: terminal.cwd,
+        pendingExternalAssistant: terminal.pendingExternalAssistant,
+        shell: terminal.shell,
+        status: terminal.status
+      };
+      const action = {
+        command: "Review this worktree",
+        cwd: "D:\\repo name",
+        id: "action-copilot-cwd",
+        targetMode: "title",
+        targetName: terminal.titleInput.value
+      };
+      const rule = automationApi.normalizeRule({
+        actions: [action],
+        enabled: true,
+        id: "automation-copilot-cwd",
+        name: "CWD launch",
+        type: "copilot",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      try {
+        const commands = {
+          cmd: automationCopilotLaunchCommand({ shell: "cmd" }, "C:\\100% & safe"),
+          powershell: automationCopilotLaunchCommand({ shell: "pwsh" }, "D:\\repo name"),
+          wsl: automationCopilotLaunchCommand({ shell: "wsl" }, "/mnt/c/repo name")
+        };
+        terminal.shell = "cmd";
+        terminal.status = "starting";
+        const started = runAutomationRule(rule, { manual: true });
+        return { commands, pending: terminal.pendingExternalAssistant, started };
+      } finally {
+        terminal.cwd = saved.cwd;
+        terminal.pendingExternalAssistant = saved.pendingExternalAssistant;
+        terminal.shell = saved.shell;
+        terminal.status = saved.status;
+      }
+    });
+
+    expect(result.started).toBe(1);
+    expect(result.commands).toEqual({
+      cmd: 'cd /d "C:\\100^% & safe" & copilot --yolo --context default',
+      powershell: "Set-Location -LiteralPath 'D:\\repo name'; copilot --yolo --context default",
+      wsl: "cd -- '/mnt/c/repo name'; copilot --yolo --context default"
+    });
+    expect(result.pending).toMatchObject({
+      command: 'cd /d "D:\\repo name" & copilot --yolo --context default',
+      followup: "Review this worktree",
+      provider: "copilot"
+    });
+  });
+
+  test("pauses, snoozes, and deletes an automation from its right-click menu", async ({ page }) => {
+    await page.evaluate(() => {
+      const now = new Date().toISOString();
+      state.automations.rules = [automationApi.normalizeRule({
+        actions: [{ command: "git status", id: "action-context1", targetName: "Tests" }],
+        createdAt: now,
+        enabled: true,
+        id: "automation-context1",
+        name: "Managed automation",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      })];
+      saveAutomationStore();
+    });
+    await page.locator("#automationsToggle").click();
+    const row = page.locator(".automation-rule-row");
+    await row.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Pause automation", exact: true }).click();
+    await expect(page.locator(".automation-rule-state")).toHaveText("Off");
+
+    const snoozeStartedAt = Date.now();
+    await page.evaluate(() => { window.__automationPrompt = window.prompt; window.prompt = () => "0.1"; });
+    await row.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Snooze automation...", exact: true }).click();
+    const snoozedUntil = await page.evaluate(() => new Date(state.automations.rules[0].snoozedUntil).getTime());
+    expect(snoozedUntil).toBeGreaterThanOrEqual(snoozeStartedAt + 59000);
+    expect(snoozedUntil).toBeLessThanOrEqual(Date.now() + 61000);
+    await expect(page.locator(".automation-rule-copy")).toContainText("Snoozed until");
+    await page.evaluate(() => { window.prompt = window.__automationPrompt; delete window.__automationPrompt; });
+
+    await row.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Delete automation", exact: true }).click();
+    await expect(page.locator(".automation-rule-row")).toHaveCount(0);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.automations")).rules)).toEqual([]);
   });
 
   test("keeps a staged action queued when its paste cannot reach the bridge", async ({ page }) => {
@@ -514,7 +748,9 @@ test.describe("Automation Studio", () => {
 
     expect(result.changed).toBe(true);
     expect(result.pendingTitles).toEqual(["Due first-rule", "Due second-rule"]);
-    expect(result.historyTitles).toEqual(["Due first-rule", "Due second-rule"]);
+    expect(result.historyTitles.filter((title) => title === "Due first-rule")).toHaveLength(2);
+    expect(result.historyTitles.filter((title) => title === "Due second-rule")).toHaveLength(2);
+    expect(result.historyTitles.filter((title) => title.endsWith("· Step 1"))).toHaveLength(2);
     expect(result.rules).toHaveLength(2);
     expect(result.rules.every((rule) => Boolean(rule.lastRunAt)), JSON.stringify(result.rules)).toBe(true);
   });

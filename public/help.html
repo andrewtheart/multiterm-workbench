@@ -513,7 +513,7 @@
 <ol type="1">
 <li>Choose a shell from the header.</li>
 <li>Optionally enter a name and working directory.</li>
-<li>Select <strong>Add terminal</strong> or press <kbd>Ctrl+T</kbd>.</li>
+<li>Select <strong>Add terminal</strong> or press <kbd>Ctrl+N</kbd> or <kbd>Ctrl+Shift+T</kbd>.</li>
 <li>Click a pane to make it active, then type normally.</li>
 </ol>
 <p>Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>F1</kbd> to open this in-app help guide, or <kbd>Ctrl+Shift+P</kbd> to search the command palette. While Help is open, <kbd>Ctrl+F</kbd> searches this guide and highlights every match. Use <kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> for the next / previous match; select <code>.*</code> only when the query should be treated as a regular expression.</p>
@@ -563,6 +563,8 @@
 <p>Copilot searches native CLI, VS Code, and Visual Studio sessions; native CLI sessions use <code>--resume</code>, while editor histories use a private temporary context file containing the most recent conversation text. Claude searches native Claude Code sessions and resumes them with Claude's <code>--resume</code> option. Native sessions first resume from their saved project so the provider can locate the session; if you chose another folder, MultiTerm sends Copilot <code>/cwd</code> or Claude <code>/cd</code> as soon as the resumed assistant is ready. Editor imports start directly in the confirmed folder. Configure <strong>Imported Copilot context (KB)</strong> under Session to control how much editor history is carried forward. Results show their source, title, working directory, ID, and last-updated time; search filters the complete catalog, and <strong>Load more</strong> pages through large result sets.</p>
 <p>In the GitHub Copilot session picker, enter a natural-language request such as <strong>Find sessions where I worked on database migration or OAuth refresh</strong>, then select the sparkle button beside Search. Copilot searches the complete local catalog using session metadata and a fair share of recent transcript text, then filters the picker to exact validated session keys. Typing in Search again returns to ordinary literal filtering. <strong>AI session search context (KB)</strong> under AI assistants controls the total metadata and transcript budget for one search. If that budget cannot represent metadata for every session, MultiTerm asks you to increase it instead of silently excluding sessions.</p>
 <p>Use <strong>Change working directory...</strong> from a terminal menu, the blank-workspace menu, or the command palette to move the selected terminal independently of session resume. The dialog shows the live Copilot directory when <code>/cwd</code> can report it; otherwise it labels the tracked value as last known. Paste a path or select the folder button to browse on disk. MultiTerm validates the folder and waits for an idle shell or ready assistant prompt before enabling <strong>Send</strong>, so it never inserts <code>cd</code> into an unrelated foreground program. PowerShell, Command Prompt, and WSL receive their native directory command; Windows folders selected for WSL are converted and checked inside the target distribution. Claude uses <code>/cd</code>, which requires Claude Code 2.1.169 or newer and may show Claude's own trust prompt for a new folder. MultiTerm does not approve that prompt automatically.</p>
+<p>Folder buttons open the same inline picker for working directories, repositories, and worktree locations. Enter a path directly or use Back, Forward, Up, roots, and breadcrumbs to move through the hierarchy. Typing a partial path shows matching completions. Search finds partial folder-name or path matches recursively below the current folder, highlights the matching text, and returns 100 results at a time with <strong>Load more</strong> when more are available. Select a row to choose it, open it with its arrow or a double-click, or create a direct child with <strong>New folder</strong>. An explicit path that does not exist or cannot be opened is reported instead of silently switching elsewhere.</p>
+<p>On Windows, MultiTerm detects an existing <a href="https://www.voidtools.com/downloads/">Everything</a> desktop/service installation with its <code>es.exe</code> command-line interface and then enables <strong>Everywhere</strong> for instant whole-computer folder search. This integration is optional: MultiTerm never downloads or installs Everything. Without it, <strong>Current</strong> search continues to use MultiTerm's cross-platform filesystem search. The optional reminder can be dismissed permanently with <strong>Don't remind me again</strong>.</p>
 <p>Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to <strong>All terminals</strong>; choose <strong>This terminal</strong> for a per-terminal layout, or select <strong>Always take this action (don't ask me again)</strong> to remember the scope. Change <strong>Header drag scope</strong> under <strong>Terminal</strong> to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.</p>
 <h4 id="custom-context-menu-shortcuts">Custom context-menu shortcuts</h4>
 <p>Open a terminal's context menu and select the keyboard button beside Search to edit shortcuts in place. Select <strong>Set</strong> beside an executable action, then press either:</p>
@@ -676,16 +678,19 @@
 </ul>
 <p>If a terminal exits while commands remain, its queue moves to <strong>Unparented queues</strong>. Unparented commands remain reusable and can be inserted into another live terminal.</p>
 <h2 id="automations">Automations</h2>
-<p>Open <strong>Automations</strong> from the workflow button in the header or the command palette. The Studio separates <strong>Schedules</strong>, <strong>Handoff routes</strong>, and <strong>Activity</strong> so recurring commands and terminal-to-terminal work remain visible and reviewable.</p>
+<p>Open <strong>Automations</strong> from the workflow button in the header or the command palette. The Studio separates <strong>Schedules</strong>, <strong>Handoff routes</strong>, and <strong>Run History</strong> so recurring commands and terminal-to-terminal work remain visible and reviewable.</p>
 <h3 id="scheduled-terminal-work">Scheduled terminal work</h3>
-<p>Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. A destination can be a named live terminal or <strong>New terminal</strong>. Named destinations should have distinct titles. <strong>New terminal</strong> opens a fresh terminal for that action each time the schedule runs, then applies the selected delivery mode when its shell is ready.</p>
+<p>Choose <strong>Command based automation</strong> for ad-hoc shell commands, ad-hoc PowerShell, or <code>.ps1</code>, <code>.cmd</code>, and <code>.bat</code> script paths. Choose <strong>Copilot automation</strong> for scheduled Copilot CLI prompts. Create an interval, daily, or selected-weekday schedule, then build the workflow from connected visual step cards.</p>
+<p>A step can target a terminal by exact title, exact PID, or <strong>New terminal</strong>. Title and PID targets offer <strong>Send to new terminal if selected terminal cannot be located</strong>, enabled by default. Each step can specify a working directory; new terminals start there, and existing command steps run there without permanently moving the terminal. Script steps include a file picker. Copilot steps launch Copilot when needed, optionally change its working directory, and queue the prompt for its empty composer.</p>
+<p>The rule's <strong>Run as user</strong> defaults to the current account reported by the bridge. Entering another Windows account does not store a password: Windows displays its credential prompt when the workflow runs, waits for that process, and returns its exit result to the workflow.</p>
+<p>Every step after the first has a graphical conditional gate. Select any prior steps, choose <strong>all</strong> or <strong>any</strong>, and run when those steps <strong>succeed</strong>, <strong>fail</strong>, or <strong>finish</strong>. Use the arrow controls to reorder cards and <strong>Add another action</strong> for an arbitrary-length chain. Command workflows emit a hidden terminal completion marker containing the exit code, so dependent branches advance from the real command result rather than a timer.</p>
 <p>Each action has an explicit delivery mode:</p>
 <ul>
-<li><strong>Run when ready</strong> uses the existing automatic command queue and presses Enter only after a regular shell prompt or empty Copilot or Claude prompt is confirmed.</li>
+<li><strong>Run when ready</strong> presses Enter only after a regular shell prompt is confirmed and reports the process exit code to the visual workflow.</li>
 <li><strong>Stage when ready</strong> pastes the command or prompt without Enter, leaving it visible for review. Accepted staged actions survive a UI reload while their terminal session remains available.</li>
 </ul>
 <p>Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. <strong>Run once after sleep or reconnect</strong> catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.</p>
-<p>Use the global <strong>Pause</strong> control to stop both scheduled delivery and automatic handoffs. The Activity view records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible <strong>Keep _ events</strong> setting controls persisted history retention; <code>0</code> keeps no history.</p>
+<p>Use the global <strong>Pause</strong> control to stop both scheduled delivery and automatic handoffs. Right-click an automation name to pause or unpause that rule, snooze it for a specified duration, or delete it. <strong>Run History</strong> records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible <strong>Keep _ events</strong> setting controls persisted history retention; <code>0</code> keeps no history.</p>
 <h3 id="visual-handoff-routes">Visual handoff routes</h3>
 <p>Hover a terminal body to reveal its small side grips. Drag the producer's right output grip to the consumer's left input grip. Keyboard users can activate the producer grip and then the consumer grip. The resulting solid directional arrow reuses MultiTerm's existing terminal-link graph; creating a grip route upgrades an existing message-only link to allow handoffs. In <strong>Handoff routes</strong>, turn handoffs off temporarily without deleting the saved directional link.</p>
 <p>A connected Copilot or Claude producer can request a handoff by ending a completed response with a marker and payload:</p>
@@ -826,6 +831,7 @@ Continue this investigation from the context below.</code></pre>
 <p><strong>Title size</strong> scales terminal-title text from 80% to 150% and defaults to 110%. Choose 100% to restore the original title size.</p>
 <p>Changes are stored locally in the app's browser profile. Use <strong>Reset settings</strong> to return to defaults.</p>
 <h2 id="keyboard-shortcuts">Keyboard shortcuts</h2>
+<p>Open the keyboard-shortcut catalog from the top bar or with <kbd>Ctrl+/</kbd>. Click any key combination to replace it. Hover an action for one second to reveal controls for adding another combination, removing one, or restoring that action's defaults. Global shortcuts are stored with the other settings; terminal right-click menu shortcuts remain a separate customization. The catalog can also be printed or saved as a UTF-8 text reference.</p>
 <table>
 <thead>
 <tr>
@@ -835,11 +841,11 @@ Continue this investigation from the context below.</code></pre>
 </thead>
 <tbody>
 <tr>
-<td><kbd>Ctrl+T</kbd></td>
+<td><kbd>Ctrl+N</kbd> / <kbd>Ctrl+Shift+T</kbd></td>
 <td>New terminal</td>
 </tr>
 <tr>
-<td><kbd>Ctrl+P</kbd></td>
+<td><kbd>Ctrl+T</kbd> / <kbd>Ctrl+P</kbd></td>
 <td>New page</td>
 </tr>
 <tr>

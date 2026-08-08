@@ -1556,6 +1556,8 @@ namespace MultiTerm.PowerShellBridge
         private const int TerminalMessageClaimSeconds = 15;
         private readonly ConcurrentDictionary<string, OutputBatch> outputBatches = new ConcurrentDictionary<string, OutputBatch>();
         private int outputCoalesceMs = 8;
+        private readonly object gitMergeLock = new object();
+        private readonly Dictionary<string, GitMergeSession> gitMergeSessions = new Dictionary<string, GitMergeSession>(StringComparer.Ordinal);
 
         // What MultiTerm's own AI operations have cost, per provider. "app" is work the
         // bridge performs (titles, session search); "tui" is reserved for assistants the
@@ -2091,9 +2093,40 @@ namespace MultiTerm.PowerShellBridge
             public string StandardError = String.Empty;
         }
 
+        private sealed class GitSnapshot
+        {
+            public bool Ok;
+            public string Reason = String.Empty;
+            public string Head = String.Empty;
+            public string IndexTree = String.Empty;
+            public string Tree = String.Empty;
+            public string Commit = String.Empty;
+            public string Status = String.Empty;
+        }
+
+        private sealed class GitImportedOverlap
+        {
+            public bool Unverifiable;
+            public List<string> Paths = new List<string>();
+        }
+
+        private sealed class GitMergeSession
+        {
+            public string RepositoryRoot = String.Empty;
+            public string WorkPath = String.Empty;
+            public bool Temporary;
+            public string ParentBranch = String.Empty;
+            public string ParentPath = String.Empty;
+            public GitSnapshot ParentSnapshot;
+            public string WorktreeBranch = String.Empty;
+            public string WorktreePath = String.Empty;
+            public GitSnapshot WorktreeSnapshot;
+            public string Strategy = String.Empty;
+        }
+
         // Arguments are passed as a pre-quoted argv string to git itself, never
         // through a shell, so a repository URL cannot smuggle in extra commands.
-        private static GitResult RunGit(string[] arguments, string workingDirectory, int timeoutMilliseconds)
+        private static GitResult RunGit(string[] arguments, string workingDirectory, int timeoutMilliseconds, Dictionary<string, string> environment = null)
         {
             GitResult result = new GitResult();
             try
@@ -2112,6 +2145,13 @@ namespace MultiTerm.PowerShellBridge
                 startInfo.CreateNoWindow = true;
                 startInfo.RedirectStandardOutput = true;
                 startInfo.RedirectStandardError = true;
+                if (environment != null)
+                {
+                    foreach (KeyValuePair<string, string> entry in environment)
+                    {
+                        startInfo.EnvironmentVariables[entry.Key] = entry.Value;
+                    }
+                }
                 using (Process process = Process.Start(startInfo))
                 {
                     string output = process.StandardOutput.ReadToEnd();
@@ -2337,6 +2377,690 @@ namespace MultiTerm.PowerShellBridge
             }
             client.Send("{\"type\":\"gitWorktreeRecorded\",\"requestId\":" + Json.Quote(requestId)
                 + ",\"ok\":" + (ok ? "true" : "false") + ",\"reason\":" + Json.Quote(reason) + "}");
+        }
+
+        private static void DiscardCreatedWorktree(string repositoryRoot, string worktreePath, string branch)
+        {
+            RunGit(new string[] { "worktree", "remove", "--force", worktreePath }, repositoryRoot, 120000);
+            RunGit(new string[] { "branch", "-D", branch }, repositoryRoot, 30000);
+        }
+
+        private void SendGitWorktreeCreate(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string requestedRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
+            string parentBranch = (Json.Get(message, "parentBranch") ?? String.Empty).Trim();
+            string branch = (Json.Get(message, "branch") ?? String.Empty).Trim();
+            string worktreePath = (Json.Get(message, "worktreePath") ?? String.Empty).Trim();
+            bool importPending = String.Equals(Json.Get(message, "importPending"), "true", StringComparison.OrdinalIgnoreCase);
+            bool ok = false;
+            bool importedPending = false;
+            string snapshotCommit = String.Empty;
+            string reason = "Repository, parent branch, worktree branch and path are all required.";
+
+            if (requestedRoot.Length > 0 && parentBranch.Length > 0 && branch.Length > 0 && worktreePath.Length > 0)
+            {
+                string repositoryRoot;
+                GitInspectionJson(requestedRoot, out repositoryRoot);
+                bool exactRoot = repositoryRoot.Length > 0
+                    && String.Equals(repositoryRoot, Path.GetFullPath(requestedRoot), StringComparison.OrdinalIgnoreCase);
+                if (!exactRoot)
+                {
+                    reason = "That repository path is not a checkout root.";
+                }
+                else
+                {
+                    GitResult validParent = RunGit(new string[] { "check-ref-format", "--branch", parentBranch }, repositoryRoot, 30000);
+                    GitResult validBranch = RunGit(new string[] { "check-ref-format", "--branch", branch }, repositoryRoot, 30000);
+                    if (!validParent.Ok || !validBranch.Ok)
+                    {
+                        reason = "The parent or worktree branch name is not valid.";
+                    }
+                    else
+                    {
+                        GitSnapshot snapshot = null;
+                        GitResult status = RunGit(new string[] { "status", "--porcelain=v1", "--untracked-files=all" }, repositoryRoot, 30000);
+                        if (importPending && status.Ok && status.StandardOutput.Trim().Length > 0)
+                        {
+                            snapshot = SnapshotGitWorktree(repositoryRoot, "MultiTerm imported pending changes from " + parentBranch);
+                            if (!snapshot.Ok) reason = snapshot.Reason;
+                        }
+                        if (snapshot == null || snapshot.Ok)
+                        {
+                            GitResult added = RunGit(new string[] { "worktree", "add", "-b", branch, worktreePath, parentBranch }, repositoryRoot, 120000);
+                            if (!added.Ok)
+                            {
+                                reason = GitResultReason(added, "Git could not create that worktree.");
+                            }
+                            else
+                            {
+                                bool materialized = true;
+                                if (snapshot != null)
+                                {
+                                    GitResult read = RunGit(new string[] { "read-tree", "--reset", "-u", snapshot.Commit }, worktreePath, 120000);
+                                    GitResult reset = read.Ok
+                                        ? RunGit(new string[] { "reset", "--mixed", "HEAD" }, worktreePath, 30000)
+                                        : new GitResult();
+                                    if (!read.Ok || !reset.Ok)
+                                    {
+                                        materialized = false;
+                                        reason = GitResultReason(!read.Ok ? read : reset, "Git could not import the pending changes into the new worktree.");
+                                    }
+                                    else
+                                    {
+                                        GitSnapshot verified = SnapshotGitWorktree(worktreePath, "MultiTerm imported snapshot verification");
+                                        if (!verified.Ok || !String.Equals(verified.Tree, snapshot.Tree, StringComparison.Ordinal))
+                                        {
+                                            materialized = false;
+                                            reason = verified.Reason.Length > 0 ? verified.Reason : "The imported worktree did not match the parent snapshot.";
+                                        }
+                                    }
+                                }
+                                if (!materialized)
+                                {
+                                    DiscardCreatedWorktree(repositoryRoot, worktreePath, branch);
+                                }
+                                else
+                                {
+                                    RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".parent", parentBranch }, repositoryRoot, 15000);
+                                    RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".created", DateTime.UtcNow.ToString("o") }, repositoryRoot, 15000);
+                                    if (snapshot != null)
+                                    {
+                                        importedPending = true;
+                                        snapshotCommit = snapshot.Commit;
+                                        RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".importedSnapshot", snapshotCommit }, repositoryRoot, 15000);
+                                        RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".importedAt", DateTime.UtcNow.ToString("o") }, repositoryRoot, 15000);
+                                    }
+                                    ok = true;
+                                    reason = String.Empty;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            client.Send("{\"type\":\"gitWorktreeCreated\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (ok ? "true" : "false")
+                + ",\"importedPending\":" + (importedPending ? "true" : "false")
+                + ",\"snapshotCommit\":" + Json.Quote(snapshotCommit)
+                + ",\"reason\":" + Json.Quote(reason) + "}");
+        }
+
+        private static string GitResultReason(GitResult result, string fallback)
+        {
+            string reason = (result.StandardError + result.StandardOutput).Trim();
+            return reason.Length > 0 ? reason : fallback;
+        }
+
+        private static GitSnapshot SnapshotGitWorktree(string directory, string label)
+        {
+            GitSnapshot snapshot = new GitSnapshot();
+            GitResult head = RunGit(new string[] { "rev-parse", "HEAD" }, directory, 30000);
+            GitResult status = RunGit(new string[] { "status", "--porcelain=v1", "--untracked-files=all" }, directory, 30000);
+            GitResult indexTree = RunGit(new string[] { "write-tree" }, directory, 30000);
+            if (!head.Ok || !status.Ok || !indexTree.Ok)
+            {
+                snapshot.Reason = GitResultReason(!head.Ok ? head : (!status.Ok ? status : indexTree), "Git could not snapshot that worktree.");
+                return snapshot;
+            }
+
+            string indexPath = Path.Combine(Path.GetTempPath(), "multiterm-index-" + Guid.NewGuid().ToString("N"));
+            Dictionary<string, string> environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "GIT_INDEX_FILE", indexPath },
+                { "GIT_AUTHOR_NAME", "MultiTerm" },
+                { "GIT_AUTHOR_EMAIL", "multiterm@localhost" },
+                { "GIT_COMMITTER_NAME", "MultiTerm" },
+                { "GIT_COMMITTER_EMAIL", "multiterm@localhost" }
+            };
+            try
+            {
+                GitResult read = RunGit(new string[] { "read-tree", head.StandardOutput.Trim() }, directory, 30000, environment);
+                if (!read.Ok) { snapshot.Reason = GitResultReason(read, "Git could not prepare a snapshot index."); return snapshot; }
+                GitResult added = RunGit(new string[] { "add", "-A", "--", "." }, directory, 120000, environment);
+                if (!added.Ok) { snapshot.Reason = GitResultReason(added, "Git could not add pending files to the snapshot."); return snapshot; }
+                GitResult tree = RunGit(new string[] { "write-tree" }, directory, 30000, environment);
+                if (!tree.Ok) { snapshot.Reason = GitResultReason(tree, "Git could not write the snapshot tree."); return snapshot; }
+                GitResult committed = RunGit(new string[] { "commit-tree", tree.StandardOutput.Trim(), "-p", head.StandardOutput.Trim(), "-m", label }, directory, 30000, environment);
+                if (!committed.Ok) { snapshot.Reason = GitResultReason(committed, "Git could not write the snapshot commit."); return snapshot; }
+                snapshot.Ok = true;
+                snapshot.Head = head.StandardOutput.Trim();
+                snapshot.IndexTree = indexTree.StandardOutput.Trim();
+                snapshot.Tree = tree.StandardOutput.Trim();
+                snapshot.Commit = committed.StandardOutput.Trim();
+                snapshot.Status = status.StandardOutput;
+                return snapshot;
+            }
+            finally
+            {
+                try { File.Delete(indexPath); } catch { }
+            }
+        }
+
+        private static string BranchCheckoutPath(string repositoryRoot, string branch)
+        {
+            GitResult listed = RunGit(new string[] { "worktree", "list", "--porcelain" }, repositoryRoot, 30000);
+            if (!listed.Ok) return String.Empty;
+            string currentPath = String.Empty;
+            foreach (string line in listed.StandardOutput.Replace("\r\n", "\n").Split('\n'))
+            {
+                if (line.StartsWith("worktree ", StringComparison.Ordinal)) currentPath = line.Substring(9).Trim();
+                else if (line == "branch refs/heads/" + branch) return currentPath;
+            }
+            return String.Empty;
+        }
+
+        private static List<string> GitConflictedPaths(string directory)
+        {
+            List<string> paths = new List<string>();
+            GitResult listed = RunGit(new string[] { "diff", "--name-only", "--diff-filter=U" }, directory, 30000);
+            if (!listed.Ok) return paths;
+            foreach (string line in listed.StandardOutput.Replace("\r\n", "\n").Split('\n'))
+            {
+                string candidate = line.Trim();
+                if (candidate.Length > 0) paths.Add(candidate);
+            }
+            return paths;
+        }
+
+        private static string JsonStringArray(IEnumerable<string> values)
+        {
+            StringBuilder builder = new StringBuilder("[");
+            bool first = true;
+            foreach (string value in values)
+            {
+                if (!first) builder.Append(',');
+                builder.Append(Json.Quote(value));
+                first = false;
+            }
+            return builder.Append(']').ToString();
+        }
+
+        private static HashSet<string> NulSeparatedPaths(string output)
+        {
+            HashSet<string> paths = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string value in (output ?? String.Empty).Split('\0'))
+            {
+                if (value.Length > 0) paths.Add(value);
+            }
+            return paths;
+        }
+
+        private static GitImportedOverlap ImportedPendingOverlap(string repositoryRoot, string parentPath, string worktreeBranch)
+        {
+            GitImportedOverlap overlap = new GitImportedOverlap();
+            if (parentPath.Length == 0) return overlap;
+            GitResult imported = RunGit(new string[] {
+                "config", "--local", "--get", "multiterm.worktree." + worktreeBranch + ".importedSnapshot"
+            }, repositoryRoot, 30000);
+            string snapshot = imported.Ok ? imported.StandardOutput.Trim() : String.Empty;
+            if (snapshot.Length == 0) return overlap;
+
+            GitResult importedDiff = RunGit(new string[] { "diff", "--name-only", "-z", snapshot + "^", snapshot }, repositoryRoot, 30000);
+            GitResult branchDiff = RunGit(new string[] { "diff", "--name-only", "-z", snapshot + "^", worktreeBranch }, repositoryRoot, 30000);
+            GitResult unstaged = RunGit(new string[] { "diff", "--name-only", "-z" }, parentPath, 30000);
+            GitResult staged = RunGit(new string[] { "diff", "--cached", "--name-only", "-z" }, parentPath, 30000);
+            GitResult untracked = RunGit(new string[] { "ls-files", "--others", "--exclude-standard", "-z" }, parentPath, 30000);
+            if (!importedDiff.Ok || !branchDiff.Ok || !unstaged.Ok || !staged.Ok || !untracked.Ok)
+            {
+                overlap.Unverifiable = true;
+                return overlap;
+            }
+            HashSet<string> importedPaths = NulSeparatedPaths(importedDiff.StandardOutput);
+            HashSet<string> branchPaths = NulSeparatedPaths(branchDiff.StandardOutput);
+            HashSet<string> pendingPaths = NulSeparatedPaths(unstaged.StandardOutput);
+            pendingPaths.UnionWith(NulSeparatedPaths(staged.StandardOutput));
+            pendingPaths.UnionWith(NulSeparatedPaths(untracked.StandardOutput));
+            foreach (string filePath in importedPaths)
+            {
+                if (branchPaths.Contains(filePath) && pendingPaths.Contains(filePath)) overlap.Paths.Add(filePath);
+            }
+            overlap.Paths.Sort(StringComparer.Ordinal);
+            return overlap;
+        }
+
+        private static string ExactStashSelector(string directory, string stashOid)
+        {
+            if (String.IsNullOrEmpty(stashOid)) return String.Empty;
+            GitResult listed = RunGit(new string[] { "stash", "list", "--format=%gd%x09%H" }, directory, 30000);
+            if (!listed.Ok) return String.Empty;
+            foreach (string line in listed.StandardOutput.Replace("\r\n", "\n").Split('\n'))
+            {
+                string[] parts = line.Split('\t');
+                if (parts.Length == 2 && parts[1] == stashOid) return parts[0];
+            }
+            return String.Empty;
+        }
+
+        private static GitResult DropExactStash(string directory, string stashOid)
+        {
+            GitResult result = new GitResult { Ok = true };
+            if (String.IsNullOrEmpty(stashOid)) return result;
+            string selector = ExactStashSelector(directory, stashOid);
+            if (selector.Length == 0)
+            {
+                result.Ok = false;
+                result.StandardError = "Safety stash " + stashOid + " was retained because it could not be identified safely.";
+                return result;
+            }
+            return RunGit(new string[] { "stash", "drop", selector }, directory, 30000);
+        }
+
+        private static void CleanupPendingMergeSession(GitMergeSession session)
+        {
+            RunGit(new string[] { "merge", "--abort" }, session.WorkPath, 30000);
+            RunGit(new string[] { "worktree", "remove", "--force", session.WorkPath }, session.RepositoryRoot, 120000);
+        }
+
+        private static GitResult RestoreParentSafetyStash(GitMergeSession session, string stashOid)
+        {
+            RunGit(new string[] { "reset", "--hard", session.ParentSnapshot.Head }, session.ParentPath, 30000);
+            RunGit(new string[] { "clean", "-fd" }, session.ParentPath, 30000);
+            if (String.IsNullOrEmpty(stashOid)) return new GitResult { Ok = true };
+            GitResult restored = RunGit(new string[] { "stash", "apply", "--index", stashOid }, session.ParentPath, 120000);
+            if (!restored.Ok) return restored;
+            GitSnapshot current = SnapshotGitWorktree(session.ParentPath, "MultiTerm restore verification");
+            if (!current.Ok || current.Head != session.ParentSnapshot.Head || current.Tree != session.ParentSnapshot.Tree
+                || current.IndexTree != session.ParentSnapshot.IndexTree || current.Status != session.ParentSnapshot.Status)
+            {
+                return new GitResult { Ok = false, StandardError = "The parent checkout could not be verified. Safety stash " + stashOid + " was retained." };
+            }
+            return DropExactStash(session.ParentPath, stashOid);
+        }
+
+        private void SendGitMergeStart(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string repositoryRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
+            string parentBranch = (Json.Get(message, "parentBranch") ?? String.Empty).Trim();
+            string worktreeBranch = (Json.Get(message, "worktreeBranch") ?? String.Empty).Trim();
+            string strategy = (Json.Get(message, "strategy") ?? String.Empty).Trim();
+            string reason = String.Empty;
+            string status = "refused";
+            string sessionId = String.Empty;
+            string workPath = String.Empty;
+            List<string> conflicts = new List<string>();
+            List<string> changes = new List<string>();
+            bool ok = false;
+            if (repositoryRoot.Length == 0 || parentBranch.Length == 0 || worktreeBranch.Length == 0)
+            {
+                reason = "A repository, parent branch and worktree branch are required.";
+            }
+            else if (strategy != "pending" && strategy != "squash" && strategy != "merge")
+            {
+                reason = "Unsupported merge strategy: " + strategy + ".";
+            }
+            else
+            {
+                string sourcePath = BranchCheckoutPath(repositoryRoot, worktreeBranch);
+                string parentPath = BranchCheckoutPath(repositoryRoot, parentBranch);
+                GitMergeSession session = new GitMergeSession
+                {
+                    RepositoryRoot = repositoryRoot,
+                    ParentBranch = parentBranch,
+                    ParentPath = parentPath,
+                    WorktreeBranch = worktreeBranch,
+                    WorktreePath = sourcePath,
+                    Strategy = strategy
+                };
+                if (strategy == "pending")
+                {
+                    if (sourcePath.Length == 0) reason = worktreeBranch + " is not checked out in a worktree.";
+                    else if (parentPath.Length == 0) reason = parentBranch + " must be checked out so the result can remain pending there.";
+                    else
+                    {
+                        session.ParentSnapshot = SnapshotGitWorktree(parentPath, "MultiTerm snapshot of " + parentBranch);
+                        session.WorktreeSnapshot = SnapshotGitWorktree(sourcePath, "MultiTerm snapshot of " + worktreeBranch);
+                        if (!session.ParentSnapshot.Ok || !session.WorktreeSnapshot.Ok)
+                        {
+                            reason = session.ParentSnapshot.Reason.Length > 0 ? session.ParentSnapshot.Reason : session.WorktreeSnapshot.Reason;
+                        }
+                        else
+                        {
+                            workPath = Path.Combine(Path.GetTempPath(), "multiterm-merge-" + Guid.NewGuid().ToString("N").Substring(0, 12));
+                            GitResult added = RunGit(new string[] { "worktree", "add", "--detach", workPath, session.ParentSnapshot.Commit }, repositoryRoot, 120000);
+                            if (!added.Ok) reason = GitResultReason(added, "Could not prepare a merge worktree.");
+                            else
+                            {
+                                session.WorkPath = workPath;
+                                session.Temporary = true;
+                                GitResult merged = RunGit(new string[] { "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", session.WorktreeSnapshot.Commit }, workPath, 120000);
+                                conflicts = GitConflictedPaths(workPath);
+                                if (!merged.Ok && conflicts.Count == 0)
+                                {
+                                    reason = GitResultReason(merged, "git could not merge those worktrees.");
+                                    CleanupPendingMergeSession(session);
+                                }
+                                else
+                                {
+                                    ok = true;
+                                    status = conflicts.Count > 0 ? "conflicts" : "staged";
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    GitResult sourceStatus = sourcePath.Length > 0
+                        ? RunGit(new string[] { "status", "--porcelain" }, sourcePath, 30000)
+                        : new GitResult { Ok = true };
+                    GitResult parentStatus = parentPath.Length > 0
+                        ? RunGit(new string[] { "status", "--porcelain" }, parentPath, 30000)
+                        : new GitResult { Ok = true };
+                    if (sourcePath.Length > 0 && sourceStatus.StandardOutput.Trim().Length > 0)
+                    {
+                        status = "dirty";
+                        reason = "The worktree has uncommitted changes. Commit or discard them first.";
+                    }
+                    else
+                    {
+                        GitImportedOverlap overlap = ImportedPendingOverlap(repositoryRoot, parentPath, worktreeBranch);
+                        if (overlap.Unverifiable || overlap.Paths.Count > 0)
+                        {
+                            status = "importedOverlap";
+                            changes = overlap.Paths;
+                            reason = overlap.Unverifiable
+                                ? "MultiTerm could not verify the imported pending snapshot. Use Pending to bring changes back without risking duplicate edits."
+                                : "Some committed worktree changes were imported from files that are still pending in the parent. Use Pending to bring everything back without duplicating those edits.";
+                        }
+                        else if (parentPath.Length > 0 && parentStatus.StandardOutput.Trim().Length > 0)
+                        {
+                            status = "parentDirty";
+                            reason = parentBranch + " is checked out at " + parentPath + " and has uncommitted changes.";
+                        }
+                        else
+                        {
+                            workPath = parentPath;
+                            if (workPath.Length == 0)
+                            {
+                                workPath = Path.Combine(Path.GetTempPath(), "multiterm-merge-" + Guid.NewGuid().ToString("N").Substring(0, 12));
+                                GitResult added = RunGit(new string[] { "worktree", "add", workPath, parentBranch }, repositoryRoot, 120000);
+                                if (!added.Ok) reason = GitResultReason(added, "Could not prepare a merge worktree.");
+                                else session.Temporary = true;
+                            }
+                            if (reason.Length == 0)
+                            {
+                                session.WorkPath = workPath;
+                                string[] mergeArguments = strategy == "squash"
+                                    ? new string[] { "-c", "merge.conflictStyle=diff3", "merge", "--squash", worktreeBranch }
+                                    : new string[] { "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", worktreeBranch };
+                                GitResult merged = RunGit(mergeArguments, workPath, 120000);
+                                conflicts = GitConflictedPaths(workPath);
+                                if (!merged.Ok && conflicts.Count == 0)
+                                {
+                                    reason = GitResultReason(merged, "git could not merge those branches.");
+                                    RunGit(new string[] { "merge", "--abort" }, workPath, 30000);
+                                    if (session.Temporary) RunGit(new string[] { "worktree", "remove", "--force", workPath }, repositoryRoot, 120000);
+                                }
+                                else
+                                {
+                                    ok = true;
+                                    status = conflicts.Count > 0 ? "conflicts" : "staged";
+                                }
+                            }
+                        }
+                    }
+                }
+                if (ok)
+                {
+                    sessionId = Guid.NewGuid().ToString("N").Substring(0, 16);
+                    lock (this.gitMergeLock) this.gitMergeSessions[sessionId] = session;
+                }
+            }
+            client.Send("{\"type\":\"gitMergeStarted\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (ok ? "true" : "false") + ",\"status\":" + Json.Quote(status)
+                + ",\"sessionId\":" + Json.Quote(sessionId) + ",\"workPath\":" + Json.Quote(workPath)
+                + ",\"conflicts\":" + JsonStringArray(conflicts) + ",\"changes\":" + JsonStringArray(changes)
+                + ",\"reason\":" + Json.Quote(reason) + "}");
+        }
+
+        private void SendGitMergeFinish(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string sessionId = Json.Get(message, "sessionId");
+            bool abort = String.Equals(Json.Get(message, "abort"), "true", StringComparison.OrdinalIgnoreCase);
+            GitMergeSession session;
+            lock (this.gitMergeLock) this.gitMergeSessions.TryGetValue(sessionId, out session);
+            if (session == null)
+            {
+                client.Send("{\"type\":\"gitMergeFinished\",\"requestId\":" + Json.Quote(requestId)
+                    + ",\"ok\":false,\"reason\":\"That merge is no longer in progress.\"}");
+                return;
+            }
+
+            bool ok = false;
+            string reason = String.Empty;
+            string status = String.Empty;
+            string recoveryStash = String.Empty;
+            if (abort)
+            {
+                lock (this.gitMergeLock) this.gitMergeSessions.Remove(sessionId);
+                if (session.Strategy == "pending") CleanupPendingMergeSession(session);
+                else
+                {
+                    RunGit(new string[] { "merge", "--abort" }, session.WorkPath, 30000);
+                    RunGit(new string[] { "reset", "--hard" }, session.WorkPath, 30000);
+                    if (session.Temporary) RunGit(new string[] { "worktree", "remove", "--force", session.WorkPath }, session.RepositoryRoot, 120000);
+                }
+                ok = true;
+            }
+            else if (session.Strategy != "pending")
+            {
+                string commitMessage = (Json.Get(message, "commitMessage") ?? String.Empty).Trim();
+                if (commitMessage.Length == 0) commitMessage = "Merge " + session.WorktreeBranch + " into " + session.ParentBranch;
+                GitResult committed = RunGit(new string[] { "commit", "-m", commitMessage }, session.WorkPath, 60000);
+                ok = committed.Ok;
+                reason = ok ? String.Empty : GitResultReason(committed, "git could not commit the merge.");
+                if (ok)
+                {
+                    lock (this.gitMergeLock) this.gitMergeSessions.Remove(sessionId);
+                    if (session.Temporary) RunGit(new string[] { "worktree", "remove", "--force", session.WorkPath }, session.RepositoryRoot, 120000);
+                }
+            }
+            else
+            {
+                List<string> conflicts = GitConflictedPaths(session.WorkPath);
+                if (conflicts.Count > 0)
+                {
+                    reason = "Resolve every conflicted file before bringing the changes back.";
+                }
+                else
+                {
+                    GitResult resultTree = RunGit(new string[] { "write-tree" }, session.WorkPath, 30000);
+                    GitSnapshot currentParent = SnapshotGitWorktree(session.ParentPath, "MultiTerm parent verification");
+                    if (!resultTree.Ok) reason = GitResultReason(resultTree, "Git could not write the merged result.");
+                    else if (!currentParent.Ok || currentParent.Head != session.ParentSnapshot.Head
+                        || currentParent.Tree != session.ParentSnapshot.Tree || currentParent.IndexTree != session.ParentSnapshot.IndexTree
+                        || currentParent.Status != session.ParentSnapshot.Status)
+                    {
+                        reason = "The parent checkout changed while Bring changes back was open. Review it and try again.";
+                    }
+                    else
+                    {
+                        string patchPath = Path.Combine(Path.GetTempPath(), "multiterm-bring-back-" + sessionId + ".patch");
+                        try
+                        {
+                            GitResult patch = RunGit(new string[] {
+                                "diff", "--binary", "--full-index", "--output=" + patchPath,
+                                session.ParentSnapshot.Head, resultTree.StandardOutput.Trim()
+                            }, session.RepositoryRoot, 120000);
+                            if (!patch.Ok)
+                            {
+                                reason = GitResultReason(patch, "Git could not prepare the pending result.");
+                            }
+                            else
+                            {
+                                GitResult stashBefore = RunGit(new string[] { "rev-parse", "--quiet", "--verify", "refs/stash" }, session.ParentPath, 30000);
+                                GitResult stashed = RunGit(new string[] {
+                                    "stash", "push", "--include-untracked", "--message", "MultiTerm bring-back " + sessionId
+                                }, session.ParentPath, 120000);
+                                GitResult stashAfter = RunGit(new string[] { "rev-parse", "--quiet", "--verify", "refs/stash" }, session.ParentPath, 30000);
+                                if (!stashed.Ok)
+                                {
+                                    reason = GitResultReason(stashed, "Git could not protect the parent changes.");
+                                }
+                                else
+                                {
+                                    string beforeOid = stashBefore.Ok ? stashBefore.StandardOutput.Trim() : String.Empty;
+                                    string afterOid = stashAfter.Ok ? stashAfter.StandardOutput.Trim() : String.Empty;
+                                    recoveryStash = afterOid.Length > 0 && afterOid != beforeOid ? afterOid : String.Empty;
+                                    GitResult applied = new GitResult { Ok = true };
+                                    if (new FileInfo(patchPath).Length > 0)
+                                    {
+                                        applied = RunGit(new string[] { "apply", "--binary", "--whitespace=nowarn", patchPath }, session.ParentPath, 120000);
+                                    }
+                                    if (!applied.Ok)
+                                    {
+                                        GitResult restored = RestoreParentSafetyStash(session, recoveryStash);
+                                        reason = restored.Ok
+                                            ? GitResultReason(applied, "Git could not apply the merged result; the parent checkout was restored.")
+                                            : GitResultReason(restored, "The parent checkout could not be restored.");
+                                    }
+                                    else
+                                    {
+                                        GitSnapshot materialized = SnapshotGitWorktree(session.ParentPath, "MultiTerm result verification");
+                                        if (!materialized.Ok || materialized.Head != session.ParentSnapshot.Head
+                                            || materialized.Tree != resultTree.StandardOutput.Trim())
+                                        {
+                                            GitResult restored = RestoreParentSafetyStash(session, recoveryStash);
+                                            reason = restored.Ok
+                                                ? "The merged result could not be verified; the parent checkout was restored."
+                                                : GitResultReason(restored, "The parent checkout could not be restored.");
+                                        }
+                                        else
+                                        {
+                                            GitResult dropped = DropExactStash(session.ParentPath, recoveryStash);
+                                            if (!dropped.Ok)
+                                            {
+                                                reason = GitResultReason(dropped, "The safety stash was retained.");
+                                            }
+                                            else
+                                            {
+                                                recoveryStash = String.Empty;
+                                                ok = true;
+                                                status = "pending";
+                                                lock (this.gitMergeLock) this.gitMergeSessions.Remove(sessionId);
+                                                CleanupPendingMergeSession(session);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            try { File.Delete(patchPath); } catch { }
+                        }
+                    }
+                }
+            }
+            client.Send("{\"type\":\"gitMergeFinished\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (ok ? "true" : "false") + ",\"reason\":" + Json.Quote(reason)
+                + ",\"status\":" + Json.Quote(status) + ",\"recoveryStash\":" + Json.Quote(recoveryStash) + "}");
+        }
+
+        private void SendGitConflictRead(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string sessionId = Json.Get(message, "sessionId");
+            string filePath = Json.Get(message, "path");
+            GitMergeSession session;
+            lock (this.gitMergeLock) this.gitMergeSessions.TryGetValue(sessionId, out session);
+            if (session == null)
+            {
+                client.Send("{\"type\":\"gitConflictSides\",\"requestId\":" + Json.Quote(requestId)
+                    + ",\"path\":" + Json.Quote(filePath)
+                    + ",\"ok\":false,\"reason\":\"That merge is no longer in progress.\"}");
+                return;
+            }
+            GitResult baseSide = RunGit(new string[] { "show", ":1:" + filePath }, session.WorkPath, 30000);
+            GitResult oursSide = RunGit(new string[] { "show", ":2:" + filePath }, session.WorkPath, 30000);
+            GitResult theirsSide = RunGit(new string[] { "show", ":3:" + filePath }, session.WorkPath, 30000);
+            string baseText = baseSide.Ok ? baseSide.StandardOutput : String.Empty;
+            string oursText = oursSide.Ok ? oursSide.StandardOutput : String.Empty;
+            string theirsText = theirsSide.Ok ? theirsSide.StandardOutput : String.Empty;
+            bool binary = (baseSide.Ok && baseText.IndexOf('\0') >= 0)
+                || (oursSide.Ok && oursText.IndexOf('\0') >= 0)
+                || (theirsSide.Ok && theirsText.IndexOf('\0') >= 0);
+            string merged = String.Empty;
+            try { merged = File.ReadAllText(Path.Combine(session.WorkPath, filePath)); } catch { }
+            client.Send("{\"type\":\"gitConflictSides\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"path\":" + Json.Quote(filePath) + ",\"ok\":true,\"reason\":\"\",\"base\":" + Json.Quote(baseText)
+                + ",\"ours\":" + Json.Quote(oursText) + ",\"theirs\":" + Json.Quote(theirsText)
+                + ",\"baseExists\":" + (baseSide.Ok ? "true" : "false")
+                + ",\"oursExists\":" + (oursSide.Ok ? "true" : "false")
+                + ",\"theirsExists\":" + (theirsSide.Ok ? "true" : "false")
+                + ",\"binary\":" + (binary ? "true" : "false")
+                + ",\"merged\":" + Json.Quote(merged) + "}");
+        }
+
+        private void SendGitConflictWrite(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string sessionId = Json.Get(message, "sessionId");
+            string filePath = Json.Get(message, "path");
+            string choice = Json.Get(message, "choice");
+            GitMergeSession session;
+            lock (this.gitMergeLock) this.gitMergeSessions.TryGetValue(sessionId, out session);
+            bool ok = false;
+            string reason = String.Empty;
+            List<string> remaining = new List<string>();
+            if (session == null)
+            {
+                reason = "That merge is no longer in progress.";
+            }
+            else
+            {
+                string root = Path.GetFullPath(session.WorkPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    + Path.DirectorySeparatorChar;
+                string target = Path.GetFullPath(Path.Combine(session.WorkPath, filePath));
+                if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                {
+                    reason = "That path is outside the merge worktree.";
+                }
+                else
+                {
+                    try
+                    {
+                        bool deletionStaged = false;
+                        if (choice.Length > 0 && choice != "ours" && choice != "theirs")
+                        {
+                            reason = "Choose either the current or incoming side.";
+                        }
+                        else if (choice.Length > 0)
+                        {
+                            string stage = choice == "ours" ? "2" : "3";
+                            GitResult exists = RunGit(new string[] { "cat-file", "-e", ":" + stage + ":" + filePath }, session.WorkPath, 30000);
+                            GitResult selected = exists.Ok
+                                ? RunGit(new string[] { "checkout", "--" + choice, "--", filePath }, session.WorkPath, 30000)
+                                : RunGit(new string[] { "rm", "-f", "--ignore-unmatch", "--", filePath }, session.WorkPath, 30000);
+                            if (!selected.Ok) reason = GitResultReason(selected, "git could not select that side.");
+                            else deletionStaged = !exists.Ok;
+                        }
+                        else
+                        {
+                            File.WriteAllText(target, Json.Get(message, "contents"), new UTF8Encoding(false));
+                        }
+                        GitResult added = reason.Length == 0 && !deletionStaged
+                            ? RunGit(new string[] { "add", "-A", "--", filePath }, session.WorkPath, 30000)
+                            : (reason.Length == 0 ? new GitResult { Ok = true } : null);
+                        if (added != null && !added.Ok) reason = GitResultReason(added, "git could not stage that file.");
+                        else if (added != null)
+                        {
+                            ok = true;
+                            remaining = GitConflictedPaths(session.WorkPath);
+                        }
+                    }
+                    catch (Exception error)
+                    {
+                        reason = error.Message;
+                    }
+                }
+            }
+            client.Send("{\"type\":\"gitConflictWritten\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"path\":" + Json.Quote(filePath) + ",\"ok\":" + (ok ? "true" : "false")
+                + ",\"reason\":" + Json.Quote(reason) + ",\"remaining\":" + JsonStringArray(remaining) + "}");
         }
 
         private void FocusBridgeTerminal(BridgeClient client, Dictionary<string, string> message)
@@ -3861,6 +4585,18 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.PickFolder(client, message);
             }
+            else if (type == "folderList")
+            {
+                this.ListFolders(client, message);
+            }
+            else if (type == "folderSearch")
+            {
+                this.SearchFolders(client, message);
+            }
+            else if (type == "folderCreate")
+            {
+                this.CreateFolder(client, message);
+            }
             else if (type == "validateDirectory")
             {
                 this.ValidateDirectory(client, message);
@@ -3926,9 +4662,29 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.SendGitWorktreeRecord(client, message);
             }
+            else if (type == "gitWorktreeCreate")
+            {
+                this.SendGitWorktreeCreate(client, message);
+            }
             else if (type == "gitDiff")
             {
                 this.SendGitDiff(client, message);
+            }
+            else if (type == "gitMergeStart")
+            {
+                this.SendGitMergeStart(client, message);
+            }
+            else if (type == "gitMergeFinish")
+            {
+                this.SendGitMergeFinish(client, message);
+            }
+            else if (type == "gitConflictRead")
+            {
+                this.SendGitConflictRead(client, message);
+            }
+            else if (type == "gitConflictWrite")
+            {
+                this.SendGitConflictWrite(client, message);
             }
             else if (type == "generateTerminalTitle")
             {
@@ -5088,6 +5844,343 @@ namespace MultiTerm.PowerShellBridge
                 }
                 return output;
             }
+        }
+
+        private const int FolderSearchPageSize = 100;
+
+        private static string ExpandFolderPath(string value)
+        {
+            string expanded = (value ?? String.Empty).Trim();
+            if (String.IsNullOrEmpty(expanded)) return String.Empty;
+            expanded = Environment.ExpandEnvironmentVariables(expanded);
+            if (expanded == "~" || expanded.StartsWith("~\\") || expanded.StartsWith("~/"))
+            {
+                expanded = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    expanded.Substring(1).TrimStart('\\', '/'));
+            }
+            return Path.GetFullPath(expanded);
+        }
+
+        private static string ExistingFolder(string value)
+        {
+            string[] candidates = new string[]
+            {
+                value,
+                Directory.GetCurrentDirectory(),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            };
+            foreach (string candidate in candidates)
+            {
+                try
+                {
+                    string expanded = ExpandFolderPath(candidate);
+                    if (!String.IsNullOrEmpty(expanded) && Directory.Exists(expanded)) return expanded;
+                }
+                catch { }
+            }
+            return Path.GetPathRoot(Directory.GetCurrentDirectory());
+        }
+
+        private static List<string> ReadFolderEntries(string directory)
+        {
+            List<string> entries = new List<string>();
+            foreach (string candidate in Directory.GetDirectories(directory)) entries.Add(candidate);
+            entries.Sort(delegate(string left, string right)
+            {
+                return StringComparer.OrdinalIgnoreCase.Compare(Path.GetFileName(left), Path.GetFileName(right));
+            });
+            return entries;
+        }
+
+        private static string FolderEntriesJson(IEnumerable<string> folders)
+        {
+            StringBuilder json = new StringBuilder("[");
+            bool first = true;
+            foreach (string folder in folders)
+            {
+                if (!first) json.Append(',');
+                first = false;
+                string name = Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+                if (String.IsNullOrEmpty(name)) name = folder;
+                json.Append("{\"name\":").Append(Json.Quote(name))
+                    .Append(",\"path\":").Append(Json.Quote(folder)).Append('}');
+            }
+            return json.Append(']').ToString();
+        }
+
+        private static string FolderRootsJson()
+        {
+            StringBuilder json = new StringBuilder("[");
+            string[] roots = Directory.GetLogicalDrives();
+            for (int index = 0; index < roots.Length; index++)
+            {
+                if (index > 0) json.Append(',');
+                json.Append(Json.Quote(roots[index]));
+            }
+            return json.Append(']').ToString();
+        }
+
+        private static string FindEverythingExecutable()
+        {
+            List<string> candidates = new List<string>();
+            candidates.Add(Environment.GetEnvironmentVariable("MULTITERM_ES_PATH"));
+            candidates.Add(@"C:\tools\es.exe");
+            string pathValue = Environment.GetEnvironmentVariable("PATH") ?? String.Empty;
+            foreach (string directory in pathValue.Split(Path.PathSeparator))
+            {
+                if (!String.IsNullOrWhiteSpace(directory)) candidates.Add(Path.Combine(directory.Trim('"'), "es.exe"));
+            }
+            foreach (string candidate in candidates)
+            {
+                if (!String.IsNullOrEmpty(candidate) && File.Exists(candidate)) return candidate;
+            }
+            return String.Empty;
+        }
+
+        private static bool TryRunEverything(string executable, string arguments, out string output)
+        {
+            output = String.Empty;
+            try
+            {
+                ProcessStartInfo start = new ProcessStartInfo(executable, arguments);
+                start.UseShellExecute = false;
+                start.CreateNoWindow = true;
+                start.RedirectStandardOutput = true;
+                start.RedirectStandardError = true;
+                using (Process process = Process.Start(start))
+                {
+                    output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit();
+                    return process.ExitCode == 0;
+                }
+            }
+            catch { return false; }
+        }
+
+        private void ListFolders(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string requestedPath = Json.Get(message, "path");
+            bool strict = String.Equals(Json.Get(message, "strict"), "true", StringComparison.OrdinalIgnoreCase);
+            ThreadPool.QueueUserWorkItem(delegate(object ignored)
+            {
+                string directory = ExistingFolder(requestedPath);
+                if (strict && !String.IsNullOrWhiteSpace(requestedPath))
+                {
+                    try
+                    {
+                        directory = ExpandFolderPath(requestedPath);
+                        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException();
+                    }
+                    catch
+                    {
+                        client.Send("{\"type\":\"folderListing\",\"requestId\":" + Json.Quote(requestId)
+                            + ",\"ok\":false,\"path\":" + Json.Quote(requestedPath)
+                            + ",\"parent\":\"\",\"roots\":" + FolderRootsJson() + ",\"entries\":[]"
+                            + ",\"everythingAvailable\":" + (!String.IsNullOrEmpty(FindEverythingExecutable()) ? "true" : "false")
+                            + ",\"platform\":\"win32\",\"error\":\"That folder does not exist or cannot be opened.\"}");
+                        return;
+                    }
+                }
+                try
+                {
+                    List<string> entries = ReadFolderEntries(directory);
+                    client.Send("{\"type\":\"folderListing\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"ok\":true,\"path\":" + Json.Quote(directory)
+                        + ",\"parent\":" + Json.Quote(Path.GetDirectoryName(directory) ?? directory)
+                        + ",\"roots\":" + FolderRootsJson()
+                        + ",\"entries\":" + FolderEntriesJson(entries)
+                        + ",\"everythingAvailable\":" + (!String.IsNullOrEmpty(FindEverythingExecutable()) ? "true" : "false")
+                        + ",\"platform\":\"win32\"}");
+                }
+                catch (Exception error)
+                {
+                    client.Send("{\"type\":\"folderListing\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"ok\":false,\"path\":" + Json.Quote(directory)
+                        + ",\"parent\":" + Json.Quote(Path.GetDirectoryName(directory) ?? directory)
+                        + ",\"roots\":" + FolderRootsJson() + ",\"entries\":[]"
+                        + ",\"everythingAvailable\":" + (!String.IsNullOrEmpty(FindEverythingExecutable()) ? "true" : "false")
+                        + ",\"platform\":\"win32\",\"error\":" + Json.Quote(error.Message) + "}");
+                }
+            });
+        }
+
+        private static List<string> CompleteFolderPath(string rawValue, int offset, out bool hasMore)
+        {
+            List<string> results = new List<string>();
+            hasMore = false;
+            string expanded;
+            try { expanded = ExpandFolderPath(rawValue); }
+            catch { return results; }
+            string parent = expanded;
+            string needle = String.Empty;
+            if (!Directory.Exists(expanded))
+            {
+                parent = Path.GetDirectoryName(expanded);
+                needle = Path.GetFileName(expanded);
+            }
+            if (String.IsNullOrEmpty(parent) || !Directory.Exists(parent)) return results;
+            int skipped = 0;
+            foreach (string candidate in ReadFolderEntries(parent))
+            {
+                string name = Path.GetFileName(candidate);
+                if (!String.IsNullOrEmpty(needle) && name.IndexOf(needle, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (skipped < offset) { skipped++; continue; }
+                results.Add(candidate);
+                if (results.Count > FolderSearchPageSize)
+                {
+                    hasMore = true;
+                    results.RemoveAt(results.Count - 1);
+                    break;
+                }
+            }
+            return results;
+        }
+
+        private static List<string> FallbackFolderSearch(string root, string query, int offset, out bool hasMore)
+        {
+            List<string> results = new List<string>();
+            Stack<string> pending = new Stack<string>();
+            pending.Push(root);
+            int skipped = 0;
+            hasMore = false;
+            while (pending.Count > 0)
+            {
+                string directory = pending.Pop();
+                List<string> children;
+                try { children = ReadFolderEntries(directory); }
+                catch { continue; }
+                for (int index = children.Count - 1; index >= 0; index--)
+                {
+                    string candidate = children[index];
+                    try
+                    {
+                        if ((File.GetAttributes(candidate) & FileAttributes.ReparsePoint) == 0) pending.Push(candidate);
+                    }
+                    catch { }
+                    if (Path.GetFileName(candidate).IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0
+                        && candidate.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    if (skipped < offset) { skipped++; continue; }
+                    results.Add(candidate);
+                    if (results.Count > FolderSearchPageSize)
+                    {
+                        hasMore = true;
+                        results.RemoveAt(results.Count - 1);
+                        return results;
+                    }
+                }
+            }
+            return results;
+        }
+
+        private static bool EverythingFolderSearch(string executable, string root, string query, int offset, bool everywhere, out List<string> results, out bool hasMore)
+        {
+            results = new List<string>();
+            hasMore = false;
+            string arguments = "-n " + (FolderSearchPageSize + 1).ToString(CultureInfo.InvariantCulture)
+                + " -o " + offset.ToString(CultureInfo.InvariantCulture)
+                + " /ad -sort path -timeout 1500";
+            if (!everywhere) arguments += " -path " + Json.QuoteCommandLine(root);
+            arguments += " -r " + Json.QuoteCommandLine(Regex.Escape(query));
+            string output;
+            if (!TryRunEverything(executable, arguments, out output)) return false;
+            foreach (string line in output.Split(new char[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string candidate = line.Trim();
+                if (!String.IsNullOrEmpty(candidate) && Directory.Exists(candidate)) results.Add(candidate);
+                if (results.Count > FolderSearchPageSize)
+                {
+                    hasMore = true;
+                    results.RemoveAt(results.Count - 1);
+                    break;
+                }
+            }
+            return true;
+        }
+
+        private void SearchFolders(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string query = Json.Get(message, "query").Trim();
+            string requestedPath = Json.Get(message, "path");
+            int offset;
+            if (!Int32.TryParse(Json.Get(message, "offset"), out offset) || offset < 0) offset = 0;
+            bool autocomplete = String.Equals(Json.Get(message, "autocomplete"), "true", StringComparison.OrdinalIgnoreCase);
+            bool everywhere = String.Equals(Json.Get(message, "everywhere"), "true", StringComparison.OrdinalIgnoreCase);
+            bool useEverything = !String.Equals(Json.Get(message, "useEverything"), "false", StringComparison.OrdinalIgnoreCase);
+            ThreadPool.QueueUserWorkItem(delegate(object ignored)
+            {
+                string root = ExistingFolder(requestedPath);
+                string executable = useEverything ? FindEverythingExecutable() : String.Empty;
+                List<string> results = new List<string>();
+                bool hasMore = false;
+                string engine = "fallback";
+                bool everythingAvailable = !String.IsNullOrEmpty(executable);
+                string warning = String.Empty;
+                try
+                {
+                    if (!String.IsNullOrEmpty(query) && autocomplete)
+                    {
+                        results = CompleteFolderPath(query, offset, out hasMore);
+                        engine = "direct";
+                    }
+                    else if (!String.IsNullOrEmpty(query) && everythingAvailable
+                        && EverythingFolderSearch(executable, root, query, offset, everywhere, out results, out hasMore))
+                    {
+                        engine = "everything";
+                    }
+                    else if (!String.IsNullOrEmpty(query))
+                    {
+                        if (everywhere) warning = "Everything is unavailable, so MultiTerm searched the current folder instead.";
+                        everythingAvailable = false;
+                        results = FallbackFolderSearch(root, query, offset, out hasMore);
+                    }
+                    client.Send("{\"type\":\"folderSearchResults\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"ok\":true,\"query\":" + Json.Quote(query)
+                        + ",\"path\":" + Json.Quote(root)
+                        + ",\"offset\":" + offset.ToString(CultureInfo.InvariantCulture)
+                        + ",\"results\":" + FolderEntriesJson(results)
+                        + ",\"hasMore\":" + (hasMore ? "true" : "false")
+                        + ",\"engine\":" + Json.Quote(engine)
+                        + ",\"everythingAvailable\":" + (everythingAvailable ? "true" : "false")
+                        + ",\"warning\":" + Json.Quote(warning) + "}");
+                }
+                catch (Exception error)
+                {
+                    client.Send("{\"type\":\"folderSearchResults\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"ok\":false,\"query\":" + Json.Quote(query)
+                        + ",\"path\":" + Json.Quote(root) + ",\"offset\":" + offset.ToString(CultureInfo.InvariantCulture)
+                        + ",\"results\":[],\"hasMore\":false,\"engine\":\"fallback\""
+                        + ",\"everythingAvailable\":" + (everythingAvailable ? "true" : "false")
+                        + ",\"error\":" + Json.Quote(error.Message) + "}");
+                }
+            });
+        }
+
+        private void CreateFolder(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string parent = ExistingFolder(Json.Get(message, "path"));
+            string name = Json.Get(message, "name").Trim();
+            string error = String.Empty;
+            string target = String.Empty;
+            try
+            {
+                if (String.IsNullOrEmpty(name) || name == "." || name == ".."
+                    || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith(".") || name.EndsWith(" "))
+                {
+                    throw new InvalidOperationException("Enter a valid folder name.");
+                }
+                target = Path.Combine(parent, name);
+                if (Directory.Exists(target)) throw new InvalidOperationException("A folder with that name already exists.");
+                Directory.CreateDirectory(target);
+            }
+            catch (Exception createError) { error = createError.Message; }
+            client.Send("{\"type\":\"folderCreated\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"ok\":" + (String.IsNullOrEmpty(error) ? "true" : "false")
+                + ",\"path\":" + (String.IsNullOrEmpty(target) ? "null" : Json.Quote(target))
+                + ",\"error\":" + Json.Quote(error) + "}");
         }
 
         private void PickFolder(BridgeClient client, Dictionary<string, string> message)
@@ -7168,6 +8261,7 @@ namespace MultiTerm.PowerShellBridge
             return "{\"type\":\"welcome\",\"aiProviderBootstrap\":" + ReadAiProviderBootstrapJson()
                 + ",\"bridgeId\":" + Json.Quote(this.BridgeId)
                 + ",\"canFocusBridgeTerminal\":" + (this.consoleDashboard == null ? "false" : "true")
+                + ",\"currentUser\":" + Json.Quote(Environment.UserName)
                 + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + ",\"sessions\":" + this.SessionsJson()
                 + ",\"openFolders\":" + this.PendingOpenFoldersJson(out pendingFolderCount)
                 + ",\"openTerminals\":" + this.PendingOpenTerminalsJson(out pendingTerminalCount) + "}";

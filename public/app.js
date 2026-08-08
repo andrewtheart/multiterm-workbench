@@ -59,6 +59,7 @@ const defaultSettings = {
   focusWidth: 65,
   fontFamily: "Cascadia Mono",
   fontSize: 14,
+  folderEverythingReminderDismissed: false,
   titleFontScale: TITLE_FONT_SCALE_BOUNDS.fallback,
   gap: 10,
   headerHidden: false,
@@ -66,6 +67,7 @@ const defaultSettings = {
   headerActionsInMenu: ["move-left", "move-right", "find", "clear", "copy", "color", "restart", "duplicate"],
   highlightInputPrompts: true,
   keepSessionsOnClose: true,
+  keyboardShortcuts: {},
   layout: "auto",
   minimizedScope: "page",
   minWidth: 420,
@@ -423,9 +425,12 @@ const elements = {
   automationRuleEmpty: document.querySelector("#automationRuleEmpty"),
   automationRuleList: document.querySelector("#automationRuleList"),
   automationRunNow: document.querySelector("#automationRunNow"),
+  automationRunAs: document.querySelector("#automationRunAs"),
+  automationRunAsHint: document.querySelector("#automationRunAsHint"),
   automationSave: document.querySelector("#automationSave"),
   automationSearch: document.querySelector("#automationSearch"),
   automationTime: document.querySelector("#automationTime"),
+  automationType: document.querySelector("#automationType"),
   automationToggle: document.querySelector("#automationsToggle"),
   automationWelcome: document.querySelector("#automationWelcome"),
   automationWelcomeNew: document.querySelector("#automationWelcomeNew"),
@@ -448,6 +453,8 @@ const elements = {
   worktreePlacement: document.querySelector("#worktreePlacement"),
   worktreeParentRow: document.querySelector("#worktreeParentRow"),
   worktreeParentBranch: document.querySelector("#worktreeParentBranch"),
+  worktreeImportRow: document.querySelector("#worktreeImportRow"),
+  worktreeImportPending: document.querySelector("#worktreeImportPending"),
   worktreeNameInput: document.querySelector("#worktreeNameInput"),
   worktreePathRow: document.querySelector("#worktreePathRow"),
   worktreePathPreview: document.querySelector("#worktreePathPreview"),
@@ -465,6 +472,36 @@ const elements = {
   worktreeReviewDone: document.querySelector("#worktreeReviewDone"),
   worktreeReviewStatus: document.querySelector("#worktreeReviewStatus"),
   worktreeReviewDiff: document.querySelector("#worktreeReviewDiff"),
+  worktreeMergeOverlay: document.querySelector("#worktreeMergeOverlay"),
+  worktreeMergeSubtitle: document.querySelector("#worktreeMergeSubtitle"),
+  worktreeMergeClose: document.querySelector("#worktreeMergeClose"),
+  worktreeMergeSource: document.querySelector("#worktreeMergeSource"),
+  worktreeMergeTarget: document.querySelector("#worktreeMergeTarget"),
+  worktreeMergeCommitRow: document.querySelector("#worktreeMergeCommitRow"),
+  worktreeMergeCommitMessage: document.querySelector("#worktreeMergeCommitMessage"),
+  worktreeMergeDetails: document.querySelector("#worktreeMergeDetails"),
+  worktreeMergeStatus: document.querySelector("#worktreeMergeStatus"),
+  worktreeMergeCancel: document.querySelector("#worktreeMergeCancel"),
+  worktreeMergeConfirm: document.querySelector("#worktreeMergeConfirm"),
+  worktreeConflictOverlay: document.querySelector("#worktreeConflictOverlay"),
+  worktreeConflictSubtitle: document.querySelector("#worktreeConflictSubtitle"),
+  worktreeConflictClose: document.querySelector("#worktreeConflictClose"),
+  worktreeConflictFiles: document.querySelector("#worktreeConflictFiles"),
+  worktreeConflictBase: document.querySelector("#worktreeConflictBase"),
+  worktreeConflictOurs: document.querySelector("#worktreeConflictOurs"),
+  worktreeConflictTheirs: document.querySelector("#worktreeConflictTheirs"),
+  worktreeConflictSideChoice: document.querySelector("#worktreeConflictSideChoice"),
+  worktreeConflictChoiceReason: document.querySelector("#worktreeConflictChoiceReason"),
+  worktreeConflictChooseOurs: document.querySelector("#worktreeConflictChooseOurs"),
+  worktreeConflictChooseTheirs: document.querySelector("#worktreeConflictChooseTheirs"),
+  worktreeConflictTextTools: document.querySelector("#worktreeConflictTextTools"),
+  worktreeConflictHighlight: document.querySelector("#worktreeConflictHighlight"),
+  worktreeConflictResult: document.querySelector("#worktreeConflictResult"),
+  worktreeConflictHunkCount: document.querySelector("#worktreeConflictHunkCount"),
+  worktreeConflictHunks: document.querySelector("#worktreeConflictHunks"),
+  worktreeConflictStatus: document.querySelector("#worktreeConflictStatus"),
+  worktreeConflictBack: document.querySelector("#worktreeConflictBack"),
+  worktreeConflictSave: document.querySelector("#worktreeConflictSave"),
   bridgeStatus: document.querySelector("#bridgeStatus"),
   findAllBar: document.querySelector("#findAllBar"),
   findAllInput: document.querySelector("#findAllInput"),
@@ -541,6 +578,29 @@ const elements = {
   cwdChangeSource: document.querySelector("#cwdChangeSource"),
   cwdChangeStatus: document.querySelector("#cwdChangeStatus"),
   cwdChangeTarget: document.querySelector("#cwdChangeTarget"),
+  folderPickerOverlay: document.querySelector("#folderPickerOverlay"),
+  folderPickerTitle: document.querySelector("#folderPickerTitle"),
+  folderPickerClose: document.querySelector("#folderPickerClose"),
+  folderPickerBack: document.querySelector("#folderPickerBack"),
+  folderPickerForward: document.querySelector("#folderPickerForward"),
+  folderPickerUp: document.querySelector("#folderPickerUp"),
+  folderPickerLocation: document.querySelector("#folderPickerLocation"),
+  folderPickerSuggestions: document.querySelector("#folderPickerSuggestions"),
+  folderPickerSearch: document.querySelector("#folderPickerSearch"),
+  folderPickerScope: document.querySelector("#folderPickerScope"),
+  folderPickerEverywhere: document.querySelector("#folderPickerEverywhere"),
+  folderPickerEverythingNotice: document.querySelector("#folderPickerEverythingNotice"),
+  folderPickerEverythingDismiss: document.querySelector("#folderPickerEverythingDismiss"),
+  folderPickerRoots: document.querySelector("#folderPickerRoots"),
+  folderPickerBreadcrumbs: document.querySelector("#folderPickerBreadcrumbs"),
+  folderPickerList: document.querySelector("#folderPickerList"),
+  folderPickerNew: document.querySelector("#folderPickerNew"),
+  folderPickerNewForm: document.querySelector("#folderPickerNewForm"),
+  folderPickerNewName: document.querySelector("#folderPickerNewName"),
+  folderPickerNewCancel: document.querySelector("#folderPickerNewCancel"),
+  folderPickerStatus: document.querySelector("#folderPickerStatus"),
+  folderPickerCancel: document.querySelector("#folderPickerCancel"),
+  folderPickerSelect: document.querySelector("#folderPickerSelect"),
   contextMenu: document.querySelector("#contextMenu"),
   contextSubmenu: document.querySelector("#contextSubmenu"),
   controlPanel: document.querySelector(".control-panel"),
@@ -593,6 +653,7 @@ const elements = {
   logToggleDot: document.querySelector("#logToggleDot"),
   minWidth: document.querySelector("#minWidth"),
   minWidthValue: document.querySelector("#minWidthValue"),
+  minimizeApp: document.querySelector("#minimizeApp"),
   minimizedDock: document.querySelector("#minimizedDock"),
   messageComposerError: document.querySelector("#messageComposerError"),
   messageConnectionsEmpty: document.querySelector("#messageConnectionsEmpty"),
@@ -719,9 +780,13 @@ const elements = {
   stage: document.querySelector(".stage"),
   shortcutsClose: document.querySelector("#shortcutsClose"),
   shortcutsCatalog: document.querySelector("#shortcutsCatalog"),
+  shortcutsExport: document.querySelector("#shortcutsExport"),
   shortcutsOverlay: document.querySelector("#shortcutsOverlay"),
+  shortcutsPrint: document.querySelector("#shortcutsPrint"),
+  shortcutsStatus: document.querySelector("#shortcutsStatus"),
   startupCommand: document.querySelector("#startupCommand"),
   statusConn: document.querySelector("#statusConn"),
+  statusShortcutHint: document.querySelector("#statusShortcutHint"),
   bridgeIdentityCard: document.querySelector("#bridgeIdentityCard"),
   bridgeIdentityId: document.querySelector("#bridgeIdentityId"),
   bridgeIdentityNote: document.querySelector("#bridgeIdentityNote"),
@@ -787,6 +852,12 @@ const elements = {
   terminalNotesInput: document.querySelector("#terminalNotesInput"),
   terminalNotesSaved: document.querySelector("#terminalNotesSaved"),
   terminalNotesSection: document.querySelector("#terminalNotesSection"),
+  terminalNotesFlyout: document.querySelector("#terminalNotesFlyout"),
+  terminalNotesFlyoutAdd: document.querySelector("#terminalNotesFlyoutAdd"),
+  terminalNotesFlyoutDetails: document.querySelector("#terminalNotesFlyoutDetails"),
+  terminalNotesFlyoutEmpty: document.querySelector("#terminalNotesFlyoutEmpty"),
+  terminalNotesFlyoutList: document.querySelector("#terminalNotesFlyoutList"),
+  terminalNotesFlyoutSubtitle: document.querySelector("#terminalNotesFlyoutSubtitle"),
   terminalTheme: document.querySelector("#terminalTheme"),
   themeToggle: document.querySelector("#themeToggle"),
   toastHost: document.querySelector("#toastHost"),
@@ -823,6 +894,8 @@ let draggedHeaderAction = null;
 let pendingHeaderActionMove = null;
 let terminalNotificationFlyoutId = null;
 let terminalNotificationFlyoutAnchor = null;
+let terminalNotesFlyoutId = null;
+let terminalNotesFlyoutAnchor = null;
 
 const COPILOT_CWD_HISTORY_STORAGE_KEY = "multiterm.copilotCwdHistory";
 const COPILOT_CWD_HISTORY_LIMIT = 10;
@@ -869,8 +942,9 @@ const state = {
   analytics: loadTerminalAnalytics(),
   analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
   automations: loadAutomationStore(initialSettings.automationHistoryLimit),
-  automationRuntime: { lastMessageRefresh: 0, lastTickAt: Date.now(), ticking: false, timer: 0 },
+  automationRuntime: { lastMessageRefresh: 0, lastTickAt: Date.now(), runs: new Map(), steps: new Map(), ticking: false, timer: 0 },
   automationStudio: { editingId: null, returnFocus: null, view: "schedules" },
+  hostUser: "",
   bridgeClosingDown: false,
   closeDisposition: "",
   closeRequestSource: "window",
@@ -980,6 +1054,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindAiSetup();
   bindHeaderActionCustomization();
   bindTerminalNotificationFlyout();
+  bindTerminalNotesFlyout();
   applyVersion();
   applySettings();
   enhanceComboboxes();
@@ -1003,12 +1078,16 @@ window.addEventListener("DOMContentLoaded", () => {
   bindMemStatus();
   bindWorkspaceBackgroundZoom();
   bindGlobalShortcuts();
+  refreshGlobalShortcutHints();
   bindFullscreenEvents();
   bindFindAll();
   bindBridgeIdentityCard();
   bindWorktreeDialog();
   bindWorktreeManager();
   bindWorktreeReview();
+  bindWorktreeMerge();
+  bindWorktreeConflict();
+  bindFolderPicker();
   bindAssistantRestoreDialog();
   bindTuiSearchResults();
   elements.workspaceEmptyRestoreAll?.addEventListener("click", () => {
@@ -1126,6 +1205,10 @@ function bindControls() {
     terminal.term.focus();
   });
   elements.attachTmux.addEventListener("click", openTmuxAttach);
+  elements.minimizeApp.addEventListener("click", () => {
+    if (window.multiterm?.minimizeWindow) window.multiterm.minimizeWindow();
+    else toast("Use the window's native minimize control in this browser-hosted build", "info", 2400);
+  });
   elements.copilotSessionsToggle.addEventListener("click", () => openCopilotResume(null, { newTerminal: true }));
   elements.tmuxAttachClose.addEventListener("click", closeTmuxAttach);
   elements.tmuxAttachRefresh.addEventListener("click", refreshTmuxSessions);
@@ -1224,6 +1307,8 @@ function bindControls() {
   elements.aiCopilotSetup.addEventListener("click", startCopilotGuidedSetup);
   elements.aiProvidersRefresh.addEventListener("click", () => refreshAiProviders());
   elements.shortcutsClose.addEventListener("click", closeShortcuts);
+  elements.shortcutsPrint.addEventListener("click", () => window.print());
+  elements.shortcutsExport.addEventListener("click", exportShortcutCatalog);
   elements.shortcutsOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.shortcutsOverlay) closeShortcuts();
   });
@@ -2007,7 +2092,10 @@ function handleBridgeMessage(message) {
 
   if (message.type === "gitInspection" || message.type === "gitWorktreeList"
     || message.type === "gitWorktreeRemoved" || message.type === "gitWorktreeRecorded"
-    || message.type === "gitDiffResult" || message.type === "assistantSessions") {
+    || message.type === "gitWorktreeCreated"
+    || message.type === "gitDiffResult" || message.type === "gitMergeStarted"
+    || message.type === "gitMergeFinished" || message.type === "gitConflictSides"
+    || message.type === "gitConflictWritten" || message.type === "assistantSessions") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -2017,6 +2105,7 @@ function handleBridgeMessage(message) {
     acceptAiProviderBootstrap(message.aiProviderBootstrap);
     state.bridgeId = typeof message.bridgeId === "string" ? message.bridgeId : "";
     state.canFocusBridgeTerminal = message.canFocusBridgeTerminal === true;
+    state.hostUser = typeof message.currentUser === "string" ? message.currentUser.trim() : state.hostUser;
     renderBridgeIdentity();
     const known = new Set();
     const openFolders = Array.isArray(message.openFolders)
@@ -2200,6 +2289,7 @@ function handleBridgeMessage(message) {
       }
     }
     scheduleAutomaticQueueCheck(terminal, 150);
+    scheduleAutomationWorkflowCheck(terminal, 150);
     scheduleTerminalHandoffDelivery(terminal, 150);
     return;
   }
@@ -2307,6 +2397,7 @@ function handleBridgeMessage(message) {
     const terminal = state.terminals.get(message.id);
     if (!terminal) return;
     terminal.status = "exited";
+    failAutomationWorkflowTasksForTerminal(terminal, "Terminal exited before the automation step completed");
     terminal.logging = false;
     setTerminalStatus(terminal, "exited", "dead");
     setAwaitingInput(terminal, false);
@@ -2562,6 +2653,10 @@ function addTerminal(options = {}) {
     autoQueueOutputEvidence: "",
     autoQueueRequiredRevision: 0,
     autoQueueTimer: 0,
+    automationWorkflowActive: "",
+    automationWorkflowBuffer: "",
+    automationWorkflowTasks: [],
+    automationWorkflowTimer: 0,
     aiAssistantTuiProvider: "",
     elevated,
     fitAddon,
@@ -2665,6 +2760,7 @@ function addTerminal(options = {}) {
   saveTerminalPages();
   if (isOnActivePage(terminal)) setActiveTerminal(id);
   refreshIcons(pane);
+  refreshGlobalShortcutHints();
   bindTerminalKeyHandling(terminal);
   bindTerminalFontZoom(terminal);
   bindTerminalSelectionHandling(terminal);
@@ -3477,6 +3573,7 @@ function positionTerminalNotificationFlyout(anchor) {
 
 function openTerminalNotificationFlyout(terminal, anchor) {
   closeHeaderActionScopeFlyout();
+  closeTerminalNotesFlyout();
   hideContextMenu();
   if (terminalNotificationFlyoutAnchor && terminalNotificationFlyoutAnchor !== anchor) {
     terminalNotificationFlyoutAnchor.setAttribute("aria-expanded", "false");
@@ -3577,7 +3674,7 @@ function bindTerminalNotificationFlyout() {
   });
 }
 
-function runHeaderAction(terminal, action) {
+function runHeaderAction(terminal, action, anchor = null) {
   if (action === "close") {
     removeTerminal(terminal.id);
   } else if (action === "focus") {
@@ -3603,7 +3700,8 @@ function runHeaderAction(terminal, action) {
   } else if (action === "dequeue") {
     dequeueNextTerminalCommand(terminal);
   } else if (action === "artifacts") {
-    openTerminalArtifacts(terminal.id);
+    if (anchor) toggleTerminalNotesFlyout(terminal, anchor);
+    else openTerminalArtifacts(terminal.id);
   } else if (action === "maximize") {
     toggleZoomPane(terminal.id);
   } else if (action === "minimize") {
@@ -3665,7 +3763,7 @@ function bindPaneControls(terminal) {
       setActiveTerminal(terminal.id);
       toggleTerminalNotificationFlyout(terminal, button);
     } else if (HEADER_ACTION_ID_SET.has(action)) {
-      runHeaderAction(terminal, action);
+      runHeaderAction(terminal, action, button);
     }
   });
 
@@ -5064,6 +5162,7 @@ function closeAllTerminals() {
 function disposeTerminal(terminal) {
   const { id } = terminal;
   if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
+  if (terminalNotesFlyoutId === id) closeTerminalNotesFlyout();
   if (state.snap?.id === id) {
     state.snap = null;
   }
@@ -5656,6 +5755,7 @@ function flushAllTerminalOutput() {
 // Immediate, unbatched write. Coalesced live output funnels through here once per
 // frame via flushTerminalOutput; status/banner lines (writelnTerminal) call it too.
 function writeTerminal(terminal, data) {
+  consumeAutomationWorkflowOutput(terminal, data);
   terminal.term.write(data);
   terminal.outputRevision += 1;
   if (terminal.cwdQuery) {
@@ -5670,6 +5770,7 @@ function writeTerminal(terminal, data) {
   handleOutputNotifications(terminal);
   scheduleInputPromptCheck(terminal);
   scheduleAutomaticQueueCheck(terminal);
+  scheduleAutomationWorkflowCheck(terminal);
   scheduleCopilotSetupLogin(terminal);
   schedulePendingCwdChange(terminal);
   scheduleTerminalHandoffScan(terminal);
@@ -6553,8 +6654,6 @@ function updateTerminalActions() {
   updateStatusBar();
 }
 
-// Ctrl+T is fixed in the key handler; this is not a user-rebindable chord yet.
-const NEW_TERMINAL_SHORTCUT = "Ctrl+T";
 let workspaceEmptySignature = "";
 
 function minimizedTerminalsOnActivePage() {
@@ -6573,7 +6672,7 @@ function updateWorkspaceEmptyState() {
   elements.workspaceEmpty.hidden = false;
   elements.workspaceEmptyRestore.hidden = minimized.length === 0;
   elements.workspaceEmptyHint.hidden = minimized.length > 0;
-  elements.workspaceEmptyShortcut.textContent = NEW_TERMINAL_SHORTCUT;
+  elements.workspaceEmptyShortcut.textContent = primaryGlobalShortcutLabel("terminal.new");
 
   // updateTerminalActions runs on routine status changes; rebuilding the rows
   // every time would detach the button a click is already travelling towards.
@@ -8838,8 +8937,8 @@ function resetActiveTerminalFontZoom() {
 
 function getCommands() {
   const commands = [
-    { label: "Toggle fullscreen", hint: "F11", run: toggleFullscreenFocus },
-    { label: "New terminal", hint: "Ctrl+T", run: () => addTerminal({ reveal: true, runStartup: true }) },
+    { label: "Toggle fullscreen", hint: primaryGlobalShortcutLabel("app.fullscreen"), run: toggleFullscreenFocus },
+    { label: "New terminal", hint: primaryGlobalShortcutLabel("terminal.new"), run: () => addTerminal({ reveal: true, runStartup: true }) },
     { label: "New PowerShell 7 terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "pwsh" }) },
     { label: "New Windows PowerShell terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "powershell" }) },
     { label: "New Command Prompt terminal", run: () => addTerminal({ reveal: true, runStartup: true, shell: "cmd" }) },
@@ -8847,35 +8946,35 @@ function getCommands() {
     { label: "Attach WSL tmux session…", run: openTmuxAttach },
     { label: "New Administrator terminal", run: () => newAdminTerminal() },
     { label: "Restart as Administrator", run: restartAsAdmin },
-    { label: "Close active terminal", hint: "Ctrl+Shift+W", run: () => state.activeId && removeTerminal(state.activeId) },
+    { label: "Close active terminal", hint: primaryGlobalShortcutLabel("terminal.close"), run: () => state.activeId && removeTerminal(state.activeId) },
     { label: "Minimize active terminal", run: () => state.activeId && minimizeTerminal(state.activeId) },
     { label: "Restore all minimized terminals", run: restoreAllTerminals },
     { label: "Close all terminals", run: closeAllTerminals },
-    { label: "Restart active terminal", hint: "Ctrl+Shift+R", run: restartActiveSession },
-    { label: "Find in active terminal", hint: "Ctrl+F", run: openFindActive },
-    { label: "Find in all terminals", hint: "Ctrl+Shift+F", run: openFindAll },
+    { label: "Restart active terminal", hint: primaryGlobalShortcutLabel("terminal.restart"), run: restartActiveSession },
+    { label: "Find in active terminal", hint: primaryGlobalShortcutLabel("terminal.find"), run: openFindActive },
+    { label: "Find in all terminals", hint: primaryGlobalShortcutLabel("terminal.find-all"), run: openFindAll },
     {
       label: state.settings.searchAcrossPages
         ? "Search scope: this page only"
         : "Search scope: all pages",
       run: toggleSearchAcrossPages
     },
-    { label: "Clear active terminal", hint: "Ctrl+Shift+L", run: clearActiveTerminal },
-    { label: "Copy active output", hint: "Ctrl+Shift+C", run: copyActiveTerminal },
+    { label: "Clear active terminal", hint: primaryGlobalShortcutLabel("terminal.clear"), run: clearActiveTerminal },
+    { label: "Copy active output", hint: primaryGlobalShortcutLabel("terminal.copy"), run: copyActiveTerminal },
     { label: "Cycle active terminal color", run: () => state.activeId && cyclePaneColor(state.terminals.get(state.activeId)) },
-    { label: "Zoom in active terminal", hint: "Ctrl+Alt++", run: () => zoomActiveTerminalFont(1) },
-    { label: "Zoom out active terminal", hint: "Ctrl+Alt+-", run: () => zoomActiveTerminalFont(-1) },
-    { label: "Reset active terminal zoom", hint: "Ctrl+Alt+0", run: resetActiveTerminalFontZoom },
+    { label: "Zoom in active terminal", hint: primaryGlobalShortcutLabel("terminal.zoom-in"), run: () => zoomActiveTerminalFont(1) },
+    { label: "Zoom out active terminal", hint: primaryGlobalShortcutLabel("terminal.zoom-out"), run: () => zoomActiveTerminalFont(-1) },
+    { label: "Reset active terminal zoom", hint: primaryGlobalShortcutLabel("terminal.zoom-reset"), run: resetActiveTerminalFontZoom },
     { label: "Fit all terminals", run: fitAllTerminals },
     { label: "Reset layout", run: resetLayout },
-    { label: "Broadcast command…", hint: "Ctrl+Shift+B", run: () => toggleBroadcast(true) },
-    { label: "Dequeue next command", hint: "Ctrl+Shift+Q", run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
+    { label: "Broadcast command…", hint: primaryGlobalShortcutLabel("terminal.broadcast"), run: () => toggleBroadcast(true) },
+    { label: "Dequeue next command", hint: primaryGlobalShortcutLabel("terminal.dequeue"), run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
     { label: "Terminal notes & command queue…", run: () => openTerminalArtifacts(state.activeId) },
     { label: "Send to terminal…", run: () => openTerminalMessages(state.activeId) },
     { label: "Automations…", run: () => openAutomationStudio() },
-    { label: "Automation activity…", run: () => openAutomationStudio("activity") },
-    { label: "Paste into active terminal", hint: "Ctrl+Shift+V", run: pasteIntoActive },
-    { label: "Maximize / restore active pane", hint: "Ctrl+Shift+X", run: () => toggleZoomPane(state.activeId) },
+    { label: "Automation run history…", run: () => openAutomationStudio("activity") },
+    { label: "Paste into active terminal", hint: primaryGlobalShortcutLabel("terminal.paste"), run: pasteIntoActive },
+    { label: "Maximize / restore active pane", hint: primaryGlobalShortcutLabel("terminal.pane-zoom"), run: () => toggleZoomPane(state.activeId) },
     { label: "Browse & run script in active terminal\u2026", run: () => browseAndRunScript(state.activeId) },
     { label: "Open active terminal folder", run: () => state.activeId && revealTerminalCwd(state.terminals.get(state.activeId)) },
     { label: "New terminal in active folder", run: () => { const active = state.activeId && state.terminals.get(state.activeId); if (active) addTerminal({ reveal: true, runStartup: true, cwd: active.cwd, title: active.titleInput.value }); } },
@@ -8884,18 +8983,18 @@ function getCommands() {
     { label: "Cycle broadcast scope", run: () => { toggleBroadcastScope(); toast(`Broadcast: ${broadcastScopeLabel()}`, "info", 1600); } },
     { label: "Next terminal", run: () => cycleTerminal(1) },
     { label: "Previous terminal", run: () => cycleTerminal(-1) },
-    { label: "Switch terminal\u2026", hint: "Alt+Q", run: openQuickSwitch },
-    { label: "New page", hint: "Ctrl+P", run: () => addPage() },
-    { label: "Next page", hint: "Ctrl+PageDown", run: () => cyclePage(1) },
-    { label: "Previous page", hint: "Ctrl+PageUp", run: () => cyclePage(-1) },
+    { label: "Switch terminal\u2026", hint: primaryGlobalShortcutLabel("app.quick-switch"), run: openQuickSwitch },
+    { label: "New page", hint: globalShortcutBindings("page.new").map(formatGlobalShortcut).join(" / "), run: () => addPage() },
+    { label: "Next page", hint: primaryGlobalShortcutLabel("page.next"), run: () => cyclePage(1) },
+    { label: "Previous page", hint: primaryGlobalShortcutLabel("page.previous"), run: () => cyclePage(-1) },
     { label: "Close current page", run: () => requestPageClose(state.activePageId) },
-    { label: "Increase default terminal font size", hint: "Ctrl++", run: () => fontZoom(1) },
-    { label: "Decrease default terminal font size", hint: "Ctrl+-", run: () => fontZoom(-1) },
+    { label: "Increase default terminal font size", hint: primaryGlobalShortcutLabel("app.zoom-in"), run: () => fontZoom(1) },
+    { label: "Decrease default terminal font size", hint: primaryGlobalShortcutLabel("app.zoom-out"), run: () => fontZoom(-1) },
     { label: "Toggle app theme", run: toggleAppTheme },
     { label: "Toggle header", run: () => toggleChrome("headerHidden") },
     { label: "Toggle layout panel", run: () => toggleChrome("sidecarHidden") },
-    { label: "Keyboard shortcuts", hint: "Ctrl+/", run: openShortcuts },
-    { label: "Help", run: openHelp },
+    { label: "Keyboard shortcuts", hint: primaryGlobalShortcutLabel("app.shortcuts"), run: openShortcuts },
+    { label: "Help", hint: primaryGlobalShortcutLabel("app.help"), run: openHelp },
     { label: "Check for updates\u2026", run: () => checkForUpdates({ manual: true }) },
     { label: "About MultiTerm", run: openAbout },
     {
@@ -9299,11 +9398,20 @@ function renderCopilotSessions() {
   if (filtered.length === 0) {
     const empty = document.createElement("div");
     empty.className = "copilot-resume-empty";
-    empty.textContent = copilotResume.aiKeys
-      ? "Copilot found no sessions matching that request."
-      : copilotResume.sessions.length === 0
-      ? `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`
-      : "No sessions match this search.";
+    if (!copilotResume.aiKeys && copilotResume.sessions.length > 0 && query && copilotResume.provider === "copilot") {
+      const message = document.createElement("span");
+      message.textContent = "No sessions match this search. ";
+      const searchWithAi = document.createElement("button");
+      searchWithAi.type = "button";
+      searchWithAi.className = "copilot-resume-empty-ai";
+      searchWithAi.textContent = "Search sessions with AI";
+      searchWithAi.addEventListener("click", searchCopilotSessionsWithAi);
+      empty.append(message, searchWithAi);
+    } else {
+      empty.textContent = copilotResume.aiKeys
+        ? "Copilot found no sessions matching that request."
+        : `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`;
+    }
     elements.copilotResumeList.append(empty);
   }
 
@@ -9683,7 +9791,133 @@ function bindQuickSwitch() {
 
 /* ---------------- Global keyboard shortcuts --------------- */
 
+const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
+  { id: "app.help", section: "App", label: "Help", detail: "Opens the in-app help guide.", defaults: [{ key: "f1" }], run: () => openHelp() },
+  { id: "app.command-palette", section: "App", label: "Command palette", detail: "Opens or closes the searchable action palette.", defaults: [{ ctrl: true, shift: true, key: "p" }], run: () => palette.open ? closePalette() : openPalette() },
+  { id: "app.shortcuts", section: "App", label: "Keyboard shortcuts", detail: "Opens or closes this shortcut catalog.", defaults: [{ ctrl: true, key: "/" }], run: () => elements.shortcutsOverlay.hidden ? openShortcuts() : closeShortcuts() },
+  { id: "app.quick-switch", section: "App", label: "Switch terminal", detail: "Opens the quick terminal switcher.", defaults: [{ alt: true, key: "q" }], run: () => quickSwitch.open ? closeQuickSwitch() : openQuickSwitch() },
+  { id: "app.fullscreen", section: "App", label: "Fullscreen focus mode", detail: "Enters or exits fullscreen focus mode.", defaults: [{ key: "f11" }], run: () => toggleFullscreenFocus() },
+  { id: "app.zoom-in", section: "App", label: "Increase default terminal size", detail: "Increases the default terminal font size.", defaults: [{ ctrl: true, key: "=" }], run: () => fontZoom(1) },
+  { id: "app.zoom-out", section: "App", label: "Decrease default terminal size", detail: "Decreases the default terminal font size.", defaults: [{ ctrl: true, key: "-" }], run: () => fontZoom(-1) },
+  { id: "app.zoom-reset", section: "App", label: "Reset default terminal size", detail: "Restores the default terminal font size.", defaults: [{ ctrl: true, key: "0" }], run: () => resetFontZoom() },
+  { id: "page.new", section: "Page", label: "New page", detail: "Creates and opens a new page.", defaults: [{ ctrl: true, key: "t" }, { ctrl: true, key: "p" }], run: () => addPage() },
+  { id: "page.next", section: "Page", label: "Next page", detail: "Moves to the next page without stopping its terminals.", defaults: [{ ctrl: true, key: "pagedown" }], run: () => cyclePage(1) },
+  { id: "page.previous", section: "Page", label: "Previous page", detail: "Moves to the previous page without stopping its terminals.", defaults: [{ ctrl: true, key: "pageup" }], run: () => cyclePage(-1) },
+  { id: "terminal.new", section: "Terminal", label: "New terminal", detail: "Starts a terminal on the active page.", defaults: [{ ctrl: true, key: "n" }, { ctrl: true, shift: true, key: "t" }], run: () => addTerminal({ reveal: true, runStartup: true }) },
+  { id: "terminal.close", section: "Terminal", label: "Close active terminal", detail: "Closes the active terminal session.", defaults: [{ ctrl: true, shift: true, key: "w" }], run: () => { if (state.activeId) removeTerminal(state.activeId); } },
+  { id: "terminal.find", section: "Terminal", label: "Find", detail: "Searches the active terminal.", defaults: [{ ctrl: true, key: "f" }], run: () => openFindActive() },
+  { id: "terminal.find-all", section: "Terminal", label: "Find in all terminals", detail: "Searches every terminal buffer.", defaults: [{ ctrl: true, shift: true, key: "f" }], run: () => openFindAll() },
+  { id: "terminal.filter", section: "Terminal", label: "Search and filter panes", detail: "Focuses the terminal filter in the top bar.", defaults: [{ ctrl: true, shift: true, key: "e" }], run: () => { if (!blockFullscreenSurfaceAction("terminal search")) { elements.terminalSearchInput.focus(); elements.terminalSearchInput.select(); } } },
+  { id: "terminal.restart", section: "Terminal", label: "Restart active terminal", detail: "Restarts the active shell.", defaults: [{ ctrl: true, shift: true, key: "r" }], run: () => restartActiveSession() },
+  { id: "terminal.broadcast", section: "Terminal", label: "Broadcast command", detail: "Opens the command broadcaster.", defaults: [{ ctrl: true, shift: true, key: "b" }], run: () => toggleBroadcast() },
+  { id: "terminal.paste", section: "Terminal", label: "Paste", detail: "Pastes clipboard text into the active terminal.", defaults: [{ ctrl: true, shift: true, key: "v" }], run: () => pasteIntoActive() },
+  { id: "terminal.clear", section: "Terminal", label: "Clear active terminal", detail: "Clears the active terminal display.", defaults: [{ ctrl: true, shift: true, key: "l" }], run: () => clearActiveTerminal() },
+  { id: "terminal.pane-zoom", section: "Terminal", label: "Maximize or restore pane", detail: "Toggles the active pane size.", defaults: [{ ctrl: true, shift: true, key: "x" }], run: () => toggleZoomPane(state.activeId) },
+  { id: "terminal.copy", section: "Terminal", label: "Copy output", detail: "Copies selected terminal output.", defaults: [{ ctrl: true, shift: true, key: "c" }], run: () => { const active = state.activeId ? state.terminals.get(state.activeId) : null; if (active) copyTerminalOutput(active.id, active.term.getSelection() || active.contextSelection || active.selectionSnapshot || undefined); } },
+  { id: "terminal.dequeue", section: "Terminal", label: "Dequeue next command", detail: "Inserts and runs the next staged command.", defaults: [{ ctrl: true, shift: true, key: "q" }], run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
+  { id: "terminal.next", section: "Terminal", label: "Next terminal", detail: "Moves focus to the next terminal.", defaults: [{ ctrl: true, alt: true, key: "arrowright" }], run: () => cycleTerminal(1) },
+  { id: "terminal.previous", section: "Terminal", label: "Previous terminal", detail: "Moves focus to the previous terminal.", defaults: [{ ctrl: true, alt: true, key: "arrowleft" }], run: () => cycleTerminal(-1) },
+  { id: "terminal.zoom-in", section: "Terminal", label: "Increase active terminal size", detail: "Increases only the active terminal's font size.", defaults: [{ ctrl: true, alt: true, key: "=" }], run: () => zoomActiveTerminalFont(1) },
+  { id: "terminal.zoom-out", section: "Terminal", label: "Decrease active terminal size", detail: "Decreases only the active terminal's font size.", defaults: [{ ctrl: true, alt: true, key: "-" }], run: () => zoomActiveTerminalFont(-1) },
+  { id: "terminal.zoom-reset", section: "Terminal", label: "Reset active terminal size", detail: "Restores only the active terminal's font size.", defaults: [{ ctrl: true, alt: true, key: "0" }], run: () => resetActiveTerminalFontZoom() }
+]);
+
+const GLOBAL_SHORTCUT_ACTION_BY_ID = new Map(GLOBAL_SHORTCUT_ACTIONS.map((action) => [action.id, action]));
+const GLOBAL_SHORTCUT_MODIFIER_KEYS = new Set(["alt", "altgraph", "control", "meta", "shift"]);
+
+function normalizeGlobalShortcutBinding(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const rawKey = String(value.key || "");
+  const key = rawKey === " " ? "space" : rawKey.trim().toLowerCase();
+  if (!key || key.length > 32 || GLOBAL_SHORTCUT_MODIFIER_KEYS.has(key)) return null;
+  const binding = { alt: Boolean(value.alt), ctrl: Boolean(value.ctrl), key, meta: Boolean(value.meta), shift: Boolean(value.shift) };
+  return binding.alt || binding.ctrl || binding.meta || binding.shift || /^f(?:[1-9]|1[0-2])$/.test(key) ? binding : null;
+}
+
+function globalShortcutSignature(binding) {
+  const normalized = normalizeGlobalShortcutBinding(binding);
+  if (!normalized) return "";
+  return [normalized.ctrl ? "ctrl" : "", normalized.alt ? "alt" : "", normalized.shift ? "shift" : "", normalized.meta ? "meta" : "", normalized.key]
+    .filter(Boolean)
+    .join("+");
+}
+
+function globalShortcutFromEvent(event) {
+  if (!event || event.isComposing) return null;
+  return normalizeGlobalShortcutBinding({ alt: event.altKey, ctrl: event.ctrlKey, key: event.key, meta: event.metaKey, shift: event.shiftKey });
+}
+
+function globalShortcutBindings(actionId) {
+  const action = GLOBAL_SHORTCUT_ACTION_BY_ID.get(actionId);
+  if (!action) return [];
+  const overrides = state.settings.keyboardShortcuts;
+  const source = overrides && typeof overrides === "object" && !Array.isArray(overrides)
+    && Object.prototype.hasOwnProperty.call(overrides, actionId)
+    ? overrides[actionId]
+    : action.defaults;
+  const values = Array.isArray(source) ? source : action.defaults;
+  const seen = new Set();
+  return values.map(normalizeGlobalShortcutBinding).filter((binding) => {
+    const signature = globalShortcutSignature(binding);
+    if (!signature || seen.has(signature)) return false;
+    seen.add(signature);
+    return true;
+  });
+}
+
+function globalShortcutMatches(event, actionId) {
+  const signature = globalShortcutSignature(globalShortcutFromEvent(event));
+  return Boolean(signature) && globalShortcutBindings(actionId).some((binding) => globalShortcutSignature(binding) === signature);
+}
+
+function globalShortcutKeyLabel(key) {
+  const labels = { arrowleft: "Left", arrowright: "Right", pagedown: "Page Down", pageup: "Page Up", space: "Space" };
+  return labels[key] || (key.length === 1 ? key.toUpperCase() : key.replace(/^./, (character) => character.toUpperCase()));
+}
+
+function formatGlobalShortcut(binding) {
+  const normalized = normalizeGlobalShortcutBinding(binding);
+  if (!normalized) return "";
+  return [normalized.ctrl ? "Ctrl" : "", normalized.alt ? "Alt" : "", normalized.shift ? "Shift" : "", normalized.meta ? "Meta" : "", globalShortcutKeyLabel(normalized.key)]
+    .filter(Boolean)
+    .join("+");
+}
+
+function primaryGlobalShortcutLabel(actionId) {
+  return formatGlobalShortcut(globalShortcutBindings(actionId)[0]) || "Not assigned";
+}
+
+function runGlobalShortcut(event, actionIds) {
+  const actionId = actionIds.find((candidate) => globalShortcutMatches(event, candidate));
+  if (!actionId) return false;
+  event.preventDefault();
+  GLOBAL_SHORTCUT_ACTION_BY_ID.get(actionId).run();
+  return true;
+}
+
 function handleShortcutsOverlayKey(event) {
+  if (shortcutEditor.capture) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.key === "Escape") {
+      cancelGlobalShortcutCapture();
+      return;
+    }
+    if (event.repeat) return;
+    const binding = globalShortcutFromEvent(event);
+    if (!binding) {
+      setShortcutStatus("Include Ctrl, Alt, Shift, or Meta, or press a function key.", "error");
+      return;
+    }
+    const capture = shortcutEditor.capture;
+    shortcutEditor.capture = null;
+    const displaced = assignGlobalShortcutBinding(capture.actionId, capture.index, binding);
+    renderShortcutCatalog();
+    setShortcutStatus(displaced.length
+      ? `${formatGlobalShortcut(binding)} was reassigned from ${displaced.join(", ")}.`
+      : `${formatGlobalShortcut(binding)} assigned.`, "ready");
+    return;
+  }
   if (event.key === "Escape") {
     event.preventDefault();
     closeShortcuts();
@@ -9696,7 +9930,8 @@ function dismissUpdateDialogFromKey(event) {
 }
 
 function handleHelpShortcut(event) {
-  if (event.key !== "F1" || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+  if (!elements.shortcutsOverlay.hidden && shortcutEditor.capture) return;
+  if (!globalShortcutMatches(event, "app.help")) return;
   event.preventDefault();
   event.stopImmediatePropagation();
   openHelp();
@@ -9733,11 +9968,12 @@ function bindGlobalShortcuts() {
   window.addEventListener("keydown", (event) => {
     const key = event.key.toLowerCase();
 
-    if (event.key === "F11" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
-      event.preventDefault();
-      toggleFullscreenFocus();
+    if (!elements.shortcutsOverlay.hidden && shortcutEditor.capture) {
+      handleShortcutsOverlayKey(event);
       return;
     }
+
+    if (runGlobalShortcut(event, ["app.fullscreen"])) return;
 
     if (fullscreenFocus.active && event.key === "Escape") {
       event.preventDefault();
@@ -9778,29 +10014,7 @@ function bindGlobalShortcuts() {
       return;
     }
 
-    if (event.ctrlKey && event.shiftKey && key === "p") {
-      event.preventDefault();
-      palette.open ? closePalette() : openPalette();
-      return;
-    }
-
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && key === "p") {
-      event.preventDefault();
-      addPage();
-      return;
-    }
-
-    if (event.ctrlKey && event.key === "/") {
-      event.preventDefault();
-      elements.shortcutsOverlay.hidden ? openShortcuts() : closeShortcuts();
-      return;
-    }
-
-    if (event.altKey && !event.ctrlKey && !event.metaKey && key === "q") {
-      event.preventDefault();
-      quickSwitch.open ? closeQuickSwitch() : openQuickSwitch();
-      return;
-    }
+    if (runGlobalShortcut(event, ["app.command-palette", "page.new", "app.shortcuts", "app.quick-switch"])) return;
 
     if (!elements.shortcutsOverlay.hidden) {
       handleShortcutsOverlayKey(event);
@@ -9845,86 +10059,19 @@ function bindGlobalShortcuts() {
       }
     }
 
-    if (event.ctrlKey && !event.altKey && !event.metaKey && key === "t") {
-      // Ctrl+T is the primary new-terminal chord; Ctrl+Shift+T also works.
-      event.preventDefault();
-      addTerminal({ reveal: true, runStartup: true });
-    } else if (event.ctrlKey && event.shiftKey && key === "w") {
-      event.preventDefault();
-      if (state.activeId) removeTerminal(state.activeId);
-    } else if (event.ctrlKey && key === "f" && !event.altKey && !event.metaKey) {
-      event.preventDefault();
-      if (event.shiftKey) openFindAll();
-      else openFindActive();
-    } else if (event.ctrlKey && event.shiftKey && key === "e") {
-      event.preventDefault();
-      if (blockFullscreenSurfaceAction("terminal search")) return;
-      elements.terminalSearchInput.focus();
-      elements.terminalSearchInput.select();
-    } else if (event.ctrlKey && event.shiftKey && key === "r") {
-      event.preventDefault();
-      restartActiveSession();
-    } else if (event.ctrlKey && event.shiftKey && key === "b") {
-      event.preventDefault();
-      toggleBroadcast();
-    } else if (event.ctrlKey && event.shiftKey && key === "v") {
-      event.preventDefault();
-      pasteIntoActive();
-    } else if (event.ctrlKey && event.shiftKey && key === "l") {
-      event.preventDefault();
-      clearActiveTerminal();
-    } else if (event.ctrlKey && event.shiftKey && key === "x") {
-      event.preventDefault();
-      toggleZoomPane(state.activeId);
-    } else if (event.ctrlKey && event.shiftKey && key === "c") {
-      const active = state.activeId ? state.terminals.get(state.activeId) : null;
-      if (active) {
-        event.preventDefault();
-        const selection = active.term.getSelection()
-          || active.contextSelection
-          || active.selectionSnapshot;
-        copyTerminalOutput(active.id, selection || undefined);
-      }
-    } else if (event.ctrlKey && event.shiftKey && key === "q") {
-      event.preventDefault();
-      event.stopPropagation();
-      dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null);
-    } else if (event.ctrlKey && event.altKey && event.key === "ArrowRight") {
-      event.preventDefault();
-      cycleTerminal(1);
-    } else if (event.ctrlKey && event.altKey && event.key === "ArrowLeft") {
-      event.preventDefault();
-      cycleTerminal(-1);
-    } else if (event.ctrlKey && event.altKey && event.code === "Equal") {
-      event.preventDefault();
-      zoomActiveTerminalFont(1);
-    } else if (event.ctrlKey && event.altKey && event.code === "Minus") {
-      event.preventDefault();
-      zoomActiveTerminalFont(-1);
-    } else if (event.ctrlKey && event.altKey && (event.code === "Digit0" || event.code === "Numpad0")) {
-      event.preventDefault();
-      resetActiveTerminalFontZoom();
-    } else if (event.ctrlKey && !event.altKey && event.key === "PageDown") {
-      event.preventDefault();
-      cyclePage(1);
-    } else if (event.ctrlKey && !event.altKey && event.key === "PageUp") {
-      event.preventDefault();
-      cyclePage(-1);
-    } else if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
+    if (runGlobalShortcut(event, [
+      "terminal.new", "terminal.close", "terminal.find", "terminal.find-all", "terminal.filter",
+      "terminal.restart", "terminal.broadcast", "terminal.paste", "terminal.clear", "terminal.pane-zoom",
+      "terminal.copy", "terminal.dequeue", "terminal.next", "terminal.previous", "terminal.zoom-in",
+      "terminal.zoom-out", "terminal.zoom-reset", "page.next", "page.previous", "app.zoom-in",
+      "app.zoom-out", "app.zoom-reset"
+    ])) return;
+    if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
       const page = state.pages[Number(event.key) - 1];
       if (page) {
         event.preventDefault();
         setActivePage(page.id);
       }
-    } else if (event.ctrlKey && !event.altKey && (event.key === "=" || event.key === "+")) {
-      event.preventDefault();
-      fontZoom(1);
-    } else if (event.ctrlKey && !event.altKey && event.key === "-") {
-      event.preventDefault();
-      fontZoom(-1);
-    } else if (event.ctrlKey && !event.altKey && event.key === "0") {
-      event.preventDefault();
-      resetFontZoom();
     }
   }, true);
 }
@@ -10995,6 +11142,518 @@ const cwdChange = {
   validationTimer: 0
 };
 
+const folderPicker = {
+  closeTimer: 0,
+  currentPath: "",
+  entries: [],
+  everythingAvailable: false,
+  generation: 0,
+  history: [],
+  historyIndex: -1,
+  platform: "",
+  resolve: null,
+  returnFocus: null,
+  roots: [],
+  searchGeneration: 0,
+  searchHasMore: false,
+  searchResults: [],
+  searchTimer: 0,
+  selectedPath: "",
+  suggestionGeneration: 0,
+  suggestionTimer: 0
+};
+
+function setFolderPickerStatus(text, tone = "") {
+  elements.folderPickerStatus.textContent = text;
+  if (tone) elements.folderPickerStatus.dataset.tone = tone;
+  else delete elements.folderPickerStatus.dataset.tone;
+}
+
+function folderPathParent(value) {
+  const raw = String(value || "");
+  if (!raw || raw === "/" || /^[a-z]:[\\/]?$/i.test(raw)) return raw;
+  const trimmed = raw.replace(/[\\/]+$/, "");
+  if (/^\\\\[^\\]+\\[^\\]+$/i.test(trimmed)) return `${trimmed}\\`;
+  const split = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
+  if (split < 0) return raw;
+  if (split === 0) return raw.startsWith("/") ? "/" : raw;
+  if (split === 2 && /^[a-z]:/i.test(trimmed)) return `${trimmed.slice(0, 2)}\\`;
+  return trimmed.slice(0, split);
+}
+
+function folderPathLabel(value) {
+  const raw = String(value || "");
+  const trimmed = raw.replace(/[\\/]+$/, "");
+  const split = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
+  return trimmed.slice(split + 1) || raw;
+}
+
+function folderPathInputValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "~" || raw.startsWith("~/") || raw.startsWith("~\\")
+      || raw.startsWith("/") || raw.startsWith("\\\\") || /^[a-z]:[\\/]/i.test(raw) || /^%[^%]+%/.test(raw)) {
+    return raw;
+  }
+  const separator = folderPicker.currentPath.includes("\\") ? "\\" : "/";
+  return `${folderPicker.currentPath.replace(/[\\/]+$/, "")}${separator}${raw}`;
+}
+
+function appendFolderHighlight(container, text, query) {
+  const source = String(text || "");
+  const wanted = String(query || "").trim().toLocaleLowerCase();
+  if (!wanted) {
+    container.append(document.createTextNode(source));
+    return;
+  }
+  let cursor = 0;
+  const lower = source.toLocaleLowerCase();
+  while (cursor < source.length) {
+    const index = lower.indexOf(wanted, cursor);
+    if (index < 0) {
+      container.append(document.createTextNode(source.slice(cursor)));
+      break;
+    }
+    if (index > cursor) container.append(document.createTextNode(source.slice(cursor, index)));
+    const mark = document.createElement("mark");
+    mark.textContent = source.slice(index, index + wanted.length);
+    container.append(mark);
+    cursor = index + wanted.length;
+  }
+}
+
+function updateFolderPickerCapabilities(available, platform = folderPicker.platform) {
+  folderPicker.everythingAvailable = Boolean(available);
+  folderPicker.platform = platform || folderPicker.platform;
+  elements.folderPickerEverywhere.disabled = !folderPicker.everythingAvailable;
+  const everywhereSelected = elements.folderPickerEverywhere.getAttribute("aria-pressed") === "true";
+  if (!folderPicker.everythingAvailable && everywhereSelected) setFolderPickerScope("current", { search: false });
+  elements.folderPickerEverythingNotice.hidden = folderPicker.platform !== "win32"
+    || folderPicker.everythingAvailable
+    || state.settings.folderEverythingReminderDismissed;
+}
+
+function setFolderPickerScope(scope, { search = true } = {}) {
+  const selected = scope === "everywhere" && folderPicker.everythingAvailable ? "everywhere" : "current";
+  for (const button of elements.folderPickerScope.querySelectorAll("button[data-folder-scope]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.folderScope === selected));
+  }
+  elements.folderPickerSearch.placeholder = selected === "everywhere"
+    ? "Search every indexed folder"
+    : "Search inside this folder";
+  if (search && elements.folderPickerSearch.value.trim()) runFolderPickerSearch();
+}
+
+function renderFolderPickerRoots() {
+  elements.folderPickerRoots.textContent = "";
+  for (const root of folderPicker.roots) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "folder-picker-root";
+    button.title = root;
+    button.textContent = root;
+    button.addEventListener("click", () => navigateFolderPicker(root));
+    elements.folderPickerRoots.append(button);
+  }
+}
+
+function renderFolderPickerBreadcrumbs() {
+  elements.folderPickerBreadcrumbs.textContent = "";
+  const parts = [];
+  let current = folderPicker.currentPath;
+  for (let depth = 0; current && depth < 128; depth += 1) {
+    parts.unshift({ label: folderPathLabel(current), path: current });
+    const parent = folderPathParent(current);
+    if (!parent || parent === current) break;
+    current = parent;
+  }
+  parts.forEach((part, index) => {
+    if (index > 0) {
+      const separator = document.createElement("i");
+      separator.dataset.lucide = "chevron-right";
+      separator.setAttribute("aria-hidden", "true");
+      elements.folderPickerBreadcrumbs.append(separator);
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = part.path;
+    button.textContent = part.label;
+    button.addEventListener("click", () => navigateFolderPicker(part.path));
+    elements.folderPickerBreadcrumbs.append(button);
+  });
+  refreshIcons(elements.folderPickerBreadcrumbs);
+}
+
+function selectFolderPickerPath(folderPath, row) {
+  folderPicker.selectedPath = folderPath;
+  for (const candidate of elements.folderPickerList.querySelectorAll(".folder-picker-row")) {
+    candidate.classList.toggle("is-selected", candidate === row);
+    candidate.setAttribute("aria-selected", String(candidate === row));
+  }
+  elements.folderPickerSelect.textContent = folderPath === folderPicker.currentPath ? "Select this folder" : "Select folder";
+  elements.folderPickerSelect.title = folderPath;
+}
+
+function renderFolderPickerRows(rows, { search = false, append = false } = {}) {
+  if (!append) elements.folderPickerList.textContent = "";
+  const query = search ? elements.folderPickerSearch.value.trim() : "";
+  for (const entry of rows) {
+    const row = document.createElement("div");
+    row.className = "folder-picker-row";
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", "false");
+    row.dataset.path = entry.path;
+    const choose = document.createElement("button");
+    choose.type = "button";
+    choose.className = "folder-picker-row-main";
+    choose.title = entry.path;
+    const icon = document.createElement("i");
+    icon.dataset.lucide = "folder";
+    const text = document.createElement("span");
+    text.className = "folder-picker-row-text";
+    const name = document.createElement("strong");
+    appendFolderHighlight(name, entry.name || folderPathLabel(entry.path), query);
+    text.append(name);
+    if (search) {
+      const fullPath = document.createElement("small");
+      appendFolderHighlight(fullPath, entry.path, query);
+      text.append(fullPath);
+    }
+    choose.append(icon, text);
+    choose.addEventListener("click", () => selectFolderPickerPath(entry.path, row));
+    choose.addEventListener("dblclick", () => navigateFolderPicker(entry.path));
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "icon-button folder-picker-row-open";
+    open.title = `Open ${entry.name || entry.path}`;
+    open.setAttribute("aria-label", open.title);
+    open.innerHTML = '<i data-lucide="chevron-right"></i>';
+    open.addEventListener("click", () => navigateFolderPicker(entry.path));
+    row.append(choose, open);
+    elements.folderPickerList.append(row);
+  }
+  if (!elements.folderPickerList.querySelector(".folder-picker-row")) {
+    const empty = document.createElement("p");
+    empty.className = "folder-picker-empty";
+    empty.textContent = search ? "No matching folders found." : "This folder has no subfolders.";
+    elements.folderPickerList.append(empty);
+  }
+  if (search && folderPicker.searchHasMore) {
+    const loadMore = document.createElement("button");
+    loadMore.type = "button";
+    loadMore.className = "secondary-action folder-picker-load-more";
+    loadMore.textContent = "Load more";
+    loadMore.addEventListener("click", () => runFolderPickerSearch({ append: true }));
+    elements.folderPickerList.append(loadMore);
+  }
+  refreshIcons(elements.folderPickerList);
+}
+
+function updateFolderPickerHistoryButtons() {
+  elements.folderPickerBack.disabled = folderPicker.historyIndex <= 0;
+  elements.folderPickerForward.disabled = folderPicker.historyIndex < 0
+    || folderPicker.historyIndex >= folderPicker.history.length - 1;
+  elements.folderPickerUp.disabled = !folderPicker.currentPath
+    || folderPathParent(folderPicker.currentPath) === folderPicker.currentPath;
+}
+
+async function navigateFolderPicker(folderPath, { record = true, initial = false } = {}) {
+  const generation = ++folderPicker.generation;
+  elements.folderPickerSuggestions.hidden = true;
+  setFolderPickerStatus("Loading folders...", "waiting");
+  const response = await requestBridge({
+    type: "folderList",
+    path: folderPath,
+    strict: !initial
+  }, { timeout: 300000 });
+  if (generation !== folderPicker.generation || elements.folderPickerOverlay.hidden) return;
+  if (!response?.ok || !response.path) {
+    setFolderPickerStatus(response?.error || bridgeSilenceReason("listed"), "error");
+    return;
+  }
+  folderPicker.currentPath = response.path;
+  folderPicker.entries = Array.isArray(response.entries) ? response.entries : [];
+  folderPicker.roots = Array.isArray(response.roots) ? response.roots : [];
+  folderPicker.selectedPath = response.path;
+  if (record) {
+    folderPicker.history = folderPicker.history.slice(0, folderPicker.historyIndex + 1);
+    if (folderPicker.history.at(-1) !== response.path) folderPicker.history.push(response.path);
+    folderPicker.historyIndex = folderPicker.history.length - 1;
+  }
+  elements.folderPickerLocation.value = response.path;
+  elements.folderPickerSearch.value = "";
+  elements.folderPickerSelect.textContent = "Select this folder";
+  elements.folderPickerSelect.title = response.path;
+  elements.folderPickerNewForm.hidden = true;
+  elements.folderPickerNew.hidden = false;
+  updateFolderPickerCapabilities(response.everythingAvailable, response.platform);
+  renderFolderPickerRoots();
+  renderFolderPickerBreadcrumbs();
+  renderFolderPickerRows(folderPicker.entries);
+  updateFolderPickerHistoryButtons();
+  setFolderPickerStatus(`${folderPicker.entries.length} subfolder${folderPicker.entries.length === 1 ? "" : "s"}.`, "ready");
+}
+
+function navigateFolderPickerHistory(delta) {
+  const next = folderPicker.historyIndex + delta;
+  if (next < 0 || next >= folderPicker.history.length) return;
+  folderPicker.historyIndex = next;
+  navigateFolderPicker(folderPicker.history[next], { record: false });
+}
+
+async function runFolderPickerSearch({ append = false } = {}) {
+  window.clearTimeout(folderPicker.searchTimer);
+  const query = elements.folderPickerSearch.value.trim();
+  if (!query) {
+    folderPicker.searchGeneration += 1;
+    folderPicker.searchResults = [];
+    folderPicker.searchHasMore = false;
+    folderPicker.selectedPath = folderPicker.currentPath;
+    renderFolderPickerRows(folderPicker.entries);
+    setFolderPickerStatus(`${folderPicker.entries.length} subfolder${folderPicker.entries.length === 1 ? "" : "s"}.`, "ready");
+    return;
+  }
+  const generation = ++folderPicker.searchGeneration;
+  const everywhere = elements.folderPickerEverywhere.getAttribute("aria-pressed") === "true";
+  const offset = append ? folderPicker.searchResults.length : 0;
+  setFolderPickerStatus(append ? "Loading more folders..." : "Searching folders...", "waiting");
+  const response = await requestBridge({
+    type: "folderSearch",
+    path: folderPicker.currentPath,
+    query,
+    offset,
+    everywhere,
+    useEverything: folderPicker.everythingAvailable
+  }, { timeout: 300000 });
+  if (generation !== folderPicker.searchGeneration || elements.folderPickerOverlay.hidden
+      || query !== elements.folderPickerSearch.value.trim()) return;
+  if (!response?.ok) {
+    setFolderPickerStatus(response?.error || bridgeSilenceReason("searched"), "error");
+    return;
+  }
+  updateFolderPickerCapabilities(response.everythingAvailable, folderPicker.platform);
+  const results = Array.isArray(response.results) ? response.results : [];
+  folderPicker.searchResults = append ? [...folderPicker.searchResults, ...results] : results;
+  folderPicker.searchHasMore = Boolean(response.hasMore);
+  folderPicker.selectedPath = folderPicker.currentPath;
+  renderFolderPickerRows(folderPicker.searchResults, { search: true });
+  const engine = response.engine === "everything" ? " with Everything" : " in the current folder";
+  setFolderPickerStatus(response.warning || `${folderPicker.searchResults.length} matching folder${folderPicker.searchResults.length === 1 ? "" : "s"}${engine}.`, response.warning ? "waiting" : "ready");
+}
+
+async function updateFolderPickerSuggestions() {
+  const raw = elements.folderPickerLocation.value.trim();
+  if (!raw) {
+    elements.folderPickerSuggestions.hidden = true;
+    return;
+  }
+  const generation = ++folderPicker.suggestionGeneration;
+  const query = folderPathInputValue(raw);
+  const response = await requestBridge({
+    type: "folderSearch",
+    path: folderPicker.currentPath,
+    query,
+    offset: 0,
+    autocomplete: true,
+    useEverything: false
+  }, { timeout: 300000 });
+  if (generation !== folderPicker.suggestionGeneration || elements.folderPickerOverlay.hidden
+      || raw !== elements.folderPickerLocation.value.trim()) return;
+  elements.folderPickerSuggestions.textContent = "";
+  const results = Array.isArray(response?.results) ? response.results : [];
+  for (const entry of results.slice(0, 12)) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "option");
+    appendFolderHighlight(button, entry.path, folderPathLabel(query));
+    button.addEventListener("click", () => navigateFolderPicker(entry.path));
+    elements.folderPickerSuggestions.append(button);
+  }
+  elements.folderPickerSuggestions.hidden = results.length === 0;
+}
+
+function settleFolderPicker(value) {
+  const resolve = folderPicker.resolve;
+  const returnFocus = folderPicker.returnFocus;
+  folderPicker.resolve = null;
+  folderPicker.returnFocus = null;
+  folderPicker.generation += 1;
+  folderPicker.searchGeneration += 1;
+  folderPicker.suggestionGeneration += 1;
+  window.clearTimeout(folderPicker.searchTimer);
+  window.clearTimeout(folderPicker.suggestionTimer);
+  elements.folderPickerOverlay.classList.remove("is-open");
+  folderPicker.closeTimer = window.setTimeout(() => {
+    elements.folderPickerOverlay.hidden = true;
+  }, 150);
+  if (returnFocus?.isConnected) returnFocus.focus();
+  if (resolve) resolve(value || null);
+}
+
+function chooseInlineFolder(initialPath, title = "Select folder") {
+  if (folderPicker.resolve) settleFolderPicker(null);
+  window.clearTimeout(folderPicker.closeTimer);
+  folderPicker.returnFocus = document.activeElement;
+  folderPicker.history = [];
+  folderPicker.historyIndex = -1;
+  folderPicker.searchResults = [];
+  folderPicker.searchHasMore = false;
+  folderPicker.selectedPath = "";
+  elements.folderPickerTitle.textContent = title;
+  elements.folderPickerSearch.value = "";
+  elements.folderPickerLocation.value = initialPath || "";
+  elements.folderPickerSuggestions.hidden = true;
+  elements.folderPickerNewForm.hidden = true;
+  elements.folderPickerNew.hidden = false;
+  setFolderPickerScope("current", { search: false });
+  elements.folderPickerOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.folderPickerOverlay.classList.add("is-open");
+    elements.folderPickerLocation.focus();
+    elements.folderPickerLocation.select();
+  });
+  refreshIcons(elements.folderPickerOverlay);
+  navigateFolderPicker(initialPath, { initial: true });
+  return new Promise((resolve) => { folderPicker.resolve = resolve; });
+}
+
+async function createFolderFromPicker() {
+  const name = elements.folderPickerNewName.value.trim();
+  if (!name) {
+    setFolderPickerStatus("Enter a folder name.", "error");
+    return;
+  }
+  setFolderPickerStatus("Creating folder...", "waiting");
+  const response = await requestBridge({
+    type: "folderCreate",
+    path: folderPicker.currentPath,
+    name
+  }, { timeout: 300000 });
+  if (!response?.ok || !response.path) {
+    setFolderPickerStatus(response?.error || bridgeSilenceReason("created"), "error");
+    return;
+  }
+  await navigateFolderPicker(response.path);
+}
+
+function bindFolderPicker() {
+  elements.folderPickerClose.addEventListener("click", () => settleFolderPicker(null));
+  elements.folderPickerCancel.addEventListener("click", () => settleFolderPicker(null));
+  elements.folderPickerSelect.addEventListener("click", () => settleFolderPicker(folderPicker.selectedPath || folderPicker.currentPath));
+  elements.folderPickerBack.addEventListener("click", () => navigateFolderPickerHistory(-1));
+  elements.folderPickerForward.addEventListener("click", () => navigateFolderPickerHistory(1));
+  elements.folderPickerUp.addEventListener("click", () => navigateFolderPicker(folderPathParent(folderPicker.currentPath)));
+  elements.folderPickerLocation.addEventListener("input", () => {
+    window.clearTimeout(folderPicker.suggestionTimer);
+    folderPicker.suggestionTimer = window.setTimeout(updateFolderPickerSuggestions, 160);
+  });
+  elements.folderPickerLocation.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      navigateFolderPicker(folderPathInputValue(elements.folderPickerLocation.value));
+    } else if (event.key === "ArrowDown" && !elements.folderPickerSuggestions.hidden) {
+      event.preventDefault();
+      elements.folderPickerSuggestions.querySelector("button")?.focus();
+    }
+  });
+  elements.folderPickerSuggestions.addEventListener("keydown", (event) => {
+    const suggestions = [...elements.folderPickerSuggestions.querySelectorAll("button")];
+    const index = suggestions.indexOf(document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      suggestions[(index + delta + suggestions.length) % suggestions.length]?.focus();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      elements.folderPickerSuggestions.hidden = true;
+      elements.folderPickerLocation.focus();
+    }
+  });
+  elements.folderPickerSearch.addEventListener("input", () => {
+    window.clearTimeout(folderPicker.searchTimer);
+    folderPicker.searchTimer = window.setTimeout(() => runFolderPickerSearch(), 220);
+  });
+  elements.folderPickerSearch.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      runFolderPickerSearch();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      elements.folderPickerList.querySelector(".folder-picker-row-main")?.focus();
+    }
+  });
+  elements.folderPickerList.addEventListener("keydown", (event) => {
+    const rows = [...elements.folderPickerList.querySelectorAll(".folder-picker-row")];
+    const row = event.target.closest(".folder-picker-row");
+    const index = rows.indexOf(row);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      rows[(index + delta + rows.length) % rows.length]?.querySelector(".folder-picker-row-main")?.focus();
+    } else if (event.key === "ArrowRight" && row?.dataset.path) {
+      event.preventDefault();
+      navigateFolderPicker(row.dataset.path);
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      navigateFolderPicker(folderPathParent(folderPicker.currentPath));
+    }
+  });
+  elements.folderPickerScope.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-folder-scope]");
+    if (button && !button.disabled) setFolderPickerScope(button.dataset.folderScope);
+  });
+  elements.folderPickerEverythingDismiss.addEventListener("click", () => {
+    state.settings.folderEverythingReminderDismissed = true;
+    saveSettings();
+    elements.folderPickerEverythingNotice.hidden = true;
+  });
+  elements.folderPickerNew.addEventListener("click", () => {
+    elements.folderPickerNew.hidden = true;
+    elements.folderPickerNewForm.hidden = false;
+    elements.folderPickerNewName.value = "";
+    elements.folderPickerNewName.focus();
+  });
+  elements.folderPickerNewCancel.addEventListener("click", () => {
+    elements.folderPickerNewForm.hidden = true;
+    elements.folderPickerNew.hidden = false;
+    elements.folderPickerNew.focus();
+  });
+  elements.folderPickerNewForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    createFolderFromPicker();
+  });
+  elements.folderPickerOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.folderPickerOverlay) settleFolderPicker(null);
+  });
+  elements.folderPickerOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!elements.folderPickerSuggestions.hidden) elements.folderPickerSuggestions.hidden = true;
+      else settleFolderPicker(null);
+    } else if (event.altKey && event.key === "ArrowLeft") {
+      event.preventDefault();
+      navigateFolderPickerHistory(-1);
+    } else if (event.altKey && event.key === "ArrowRight") {
+      event.preventDefault();
+      navigateFolderPickerHistory(1);
+    } else if (event.key === "Tab") {
+      const focusable = [...elements.folderPickerOverlay.querySelectorAll(
+        'a[href], input:not(:disabled), button:not(:disabled), [tabindex]:not([tabindex="-1"])'
+      )].filter((element) => !element.hidden && element.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+  });
+}
+
 function cwdTerminalShell(terminal) {
   const shell = String(terminal?.shell || "").trim().toLowerCase();
   if (shell === "wsl" || shell.includes("tmux")) return "wsl";
@@ -11100,7 +11759,10 @@ function updateWorktreeReadiness() {
     else if (!helpers.isSafeWorktreeName(name)) setWorktreeStatus("That name cannot be used as a folder.", "error");
     else if (worktreeDialog.existingNames.includes(name.toLowerCase())) setWorktreeStatus("A worktree with that name already exists.", "error");
     else {
-      setWorktreeStatus(`Ready to branch from ${inspection.currentBranch}.`, "ready");
+      const pending = inspection.isDirty && elements.worktreeImportPending.checked
+        ? " with its pending changes"
+        : "";
+      setWorktreeStatus(`Ready to branch from ${inspection.currentBranch}${pending}.`, "ready");
       ready = true;
     }
   } else {
@@ -11138,6 +11800,7 @@ function scheduleWorktreeInspection() {
     worktreeDialog.inspection = inspection || { isRepository: false, reason: "The bridge did not answer." };
     elements.worktreeParentBranch.textContent = worktreeDialog.inspection.currentBranch || "-";
     elements.worktreeParentRow.hidden = !worktreeDialog.inspection.isRepository;
+    elements.worktreeImportRow.hidden = !worktreeDialog.inspection.isRepository || !worktreeDialog.inspection.isDirty;
     elements.worktreeRunHere.hidden = worktreeDialog.inspection.isRepository;
     if (worktreeDialog.inspection.isRepository) {
       const listed = await requestBridge({ type: "gitWorktrees", path: folder }, { timeout: 30000 });
@@ -11161,6 +11824,7 @@ function setWorktreeSource(source) {
   elements.worktreeFolderField.hidden = worktreeDialog.source !== "folder";
   elements.worktreeUrlFields.hidden = worktreeDialog.source !== "url";
   elements.worktreeParentRow.hidden = worktreeDialog.source !== "folder" || !worktreeDialog.inspection?.isRepository;
+  elements.worktreeImportRow.hidden = worktreeDialog.source !== "folder" || !worktreeDialog.inspection?.isDirty;
   elements.worktreeRunHere.hidden = true;
   refreshWorktreeSuggestion();
   updateWorktreeReadiness();
@@ -11182,6 +11846,7 @@ function openWorktreeDialog({ terminalId = null, openInNewTerminal = false, retu
   elements.worktreeSharedRootInput.value = state.settings.worktreeSharedRoot || "";
   elements.worktreeNameInput.value = "";
   elements.worktreePlacement.value = "shared";
+  elements.worktreeImportPending.checked = true;
   elements.worktreeOverlay.hidden = false;
   setWorktreeSource("folder");
   window.requestAnimationFrame(() => {
@@ -11263,6 +11928,41 @@ async function createWorktreeAndRun() {
   }
 
   const worktreePath = `${parentDirectory}\\${name}`;
+  if (source === "folder") {
+    elements.worktreeCreate.disabled = true;
+    setWorktreeStatus("Creating the worktree and importing pending changes...", "waiting");
+    const created = await requestBridge({
+      type: "gitWorktreeCreate",
+      repositoryRoot: inspection.repositoryRoot,
+      parentBranch: branch,
+      branch: name,
+      worktreePath,
+      importPending: inspection.isDirty && elements.worktreeImportPending.checked
+    }, { timeout: 180000 });
+    if (!created?.ok) {
+      setWorktreeStatus(created?.reason || "The bridge did not create the worktree.", "error");
+      updateWorktreeReadiness();
+      return;
+    }
+
+    let terminal = worktreeDialog.openInNewTerminal ? null : state.terminals.get(worktreeDialog.terminalId);
+    if (!terminal) {
+      addTerminal({ reveal: true, runStartup: true });
+      terminal = state.terminals.get(state.activeId);
+    }
+    closeWorktreeDialog();
+    if (!terminal) {
+      toast("The worktree was created, but a terminal could not be opened", "error", 3000);
+      return;
+    }
+    const command = `Set-Location -LiteralPath ${powerShellLiteral(worktreePath)}; ${buildAiAssistantCommand()}`;
+    setAwaitingInput(terminal, false);
+    sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
+    window.requestAnimationFrame(() => terminal.term.focus());
+    toast(created.importedPending ? "Worktree created with pending changes" : `Created worktree ${name}`, "success", 2600);
+    return;
+  }
+
   const command = buildWorktreeCommand({
     source,
     repositoryRoot: inspection?.repositoryRoot || "",
@@ -11293,6 +11993,474 @@ async function createWorktreeAndRun() {
 }
 
 const worktreeManager = { repositoryRoot: "", closeTimer: 0, generation: 0, returnFocus: null };
+const worktreeMerge = {
+  busy: false,
+  closeTimer: 0,
+  done: false,
+  returnFocus: null,
+  sessionId: "",
+  worktree: null
+};
+const worktreeConflict = {
+  busy: false,
+  closeTimer: 0,
+  files: [],
+  path: "",
+  sides: null
+};
+
+function worktreeMergeMode() {
+  return elements.worktreeMergeOverlay.querySelector('input[name="worktreeMergeMode"]:checked')?.value || "pending";
+}
+
+function setWorktreeMergeStatus(text, tone = "") {
+  elements.worktreeMergeStatus.textContent = text;
+  if (tone) elements.worktreeMergeStatus.dataset.tone = tone;
+  else delete elements.worktreeMergeStatus.dataset.tone;
+}
+
+function setWorktreeMergeDetails(rows = []) {
+  elements.worktreeMergeDetails.textContent = "";
+  for (const row of rows) {
+    const item = document.createElement("li");
+    item.textContent = row;
+    elements.worktreeMergeDetails.append(item);
+  }
+  elements.worktreeMergeDetails.hidden = rows.length === 0;
+}
+
+function updateWorktreeMergeLock() {
+  const locked = worktreeMerge.busy || Boolean(worktreeMerge.sessionId);
+  for (const button of elements.worktreeManagerList.querySelectorAll('[data-worktree-action="remove"]')) {
+    button.disabled = locked;
+    button.title = locked ? "Finish or abort Bring changes back first" : "";
+  }
+}
+
+function setWorktreeMergeBusy(busy) {
+  worktreeMerge.busy = busy;
+  elements.worktreeMergeConfirm.disabled = busy;
+  elements.worktreeMergeCancel.disabled = busy;
+  elements.worktreeMergeClose.disabled = busy;
+  for (const input of elements.worktreeMergeOverlay.querySelectorAll('input[name="worktreeMergeMode"]')) {
+    input.disabled = busy || Boolean(worktreeMerge.sessionId);
+  }
+  elements.worktreeMergeCommitMessage.disabled = busy || Boolean(worktreeMerge.sessionId);
+  updateWorktreeMergeLock();
+}
+
+function updateWorktreeMergeMode() {
+  const mode = worktreeMergeMode();
+  const pending = mode === "pending";
+  elements.worktreeMergeCommitRow.hidden = pending;
+  elements.worktreeMergeConfirm.textContent = pending ? "Bring back as pending" : "Commit changes";
+  if (!pending && !elements.worktreeMergeCommitMessage.value.trim() && worktreeMerge.worktree) {
+    elements.worktreeMergeCommitMessage.value = `Merge ${worktreeMerge.worktree.branch} into ${worktreeMerge.worktree.parentBranch}`;
+  }
+}
+
+function openWorktreeMerge(worktree) {
+  worktreeMerge.returnFocus = document.activeElement;
+  worktreeMerge.worktree = worktree;
+  worktreeMerge.sessionId = "";
+  worktreeMerge.done = false;
+  window.clearTimeout(worktreeMerge.closeTimer);
+  const pending = elements.worktreeMergeOverlay.querySelector('input[name="worktreeMergeMode"][value="pending"]');
+  pending.checked = true;
+  elements.worktreeMergeSource.textContent = worktree.branch;
+  elements.worktreeMergeTarget.textContent = worktree.parentBranch;
+  elements.worktreeMergeSubtitle.textContent = `${worktree.branch} into ${worktree.parentBranch}`;
+  elements.worktreeMergeCommitMessage.value = `Merge ${worktree.branch} into ${worktree.parentBranch}`;
+  elements.worktreeMergeCancel.textContent = "Cancel";
+  elements.worktreeMergeConfirm.hidden = false;
+  setWorktreeMergeDetails();
+  setWorktreeMergeStatus("The source worktree is not changed by this operation.");
+  updateWorktreeMergeMode();
+  setWorktreeMergeBusy(false);
+  elements.worktreeMergeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.worktreeMergeOverlay.classList.add("is-open");
+    pending.focus();
+  });
+  refreshIcons(elements.worktreeMergeOverlay);
+}
+
+function closeWorktreeMerge() {
+  elements.worktreeMergeOverlay.classList.remove("is-open");
+  worktreeMerge.closeTimer = window.setTimeout(() => {
+    elements.worktreeMergeOverlay.hidden = true;
+  }, 150);
+  const returnFocus = worktreeMerge.returnFocus;
+  worktreeMerge.returnFocus = null;
+  worktreeMerge.worktree = null;
+  worktreeMerge.done = false;
+  if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+}
+
+async function cancelWorktreeMerge() {
+  if (worktreeMerge.busy) return;
+  if (!worktreeMerge.sessionId) {
+    closeWorktreeMerge();
+    return;
+  }
+  setWorktreeMergeBusy(true);
+  setWorktreeMergeStatus("Rolling back the provisional merge...", "waiting");
+  const response = await requestBridge({
+    type: "gitMergeFinish",
+    sessionId: worktreeMerge.sessionId,
+    abort: true
+  }, { timeout: 120000 });
+  if (!response?.ok) {
+    setWorktreeMergeStatus(response?.reason || bridgeSilenceReason("abort the merge"), "error");
+    setWorktreeMergeBusy(false);
+    return;
+  }
+  worktreeMerge.sessionId = "";
+  updateWorktreeMergeLock();
+  closeWorktreeMerge();
+}
+
+async function finishWorktreeMergeFromDialog() {
+  const mode = worktreeMergeMode();
+  setWorktreeMergeStatus(mode === "pending" ? "Materializing pending changes in the parent..." : "Creating the parent commit...", "waiting");
+  const response = await requestBridge({
+    type: "gitMergeFinish",
+    sessionId: worktreeMerge.sessionId,
+    commitMessage: elements.worktreeMergeCommitMessage.value.trim()
+  }, { timeout: 120000 });
+  if (!response?.ok) {
+    setWorktreeMergeStatus(response?.reason || bridgeSilenceReason("finish the merge"), "error");
+    setWorktreeMergeDetails(response?.conflicts || []);
+    setWorktreeMergeBusy(false);
+    return;
+  }
+  worktreeMerge.sessionId = "";
+  worktreeMerge.done = true;
+  elements.worktreeMergeCancel.textContent = "Close";
+  elements.worktreeMergeConfirm.hidden = true;
+  setWorktreeMergeDetails();
+  setWorktreeMergeStatus(
+    mode === "pending"
+      ? `All changes are now pending in ${worktreeMerge.worktree.parentBranch}. No commit was created.`
+      : `${worktreeMerge.worktree.branch} was committed into ${worktreeMerge.worktree.parentBranch}.`,
+    "ready"
+  );
+  setWorktreeMergeBusy(false);
+  refreshWorktreeManager();
+}
+
+async function runWorktreeMerge() {
+  if (worktreeMerge.busy || worktreeMerge.done || !worktreeMerge.worktree) return;
+  if (worktreeMerge.sessionId) {
+    if (worktreeConflict.files.length) {
+      openWorktreeConflict(worktreeConflict.files);
+      return;
+    }
+    setWorktreeMergeBusy(true);
+    await finishWorktreeMergeFromDialog();
+    return;
+  }
+  const mode = worktreeMergeMode();
+  setWorktreeMergeDetails();
+  setWorktreeMergeBusy(true);
+  setWorktreeMergeStatus("Checking both worktrees and preparing the merge...", "waiting");
+  const response = await requestBridge({
+    type: "gitMergeStart",
+    repositoryRoot: worktreeManager.repositoryRoot,
+    parentBranch: worktreeMerge.worktree.parentBranch,
+    worktreeBranch: worktreeMerge.worktree.branch,
+    strategy: mode
+  }, { timeout: 120000 });
+  if (!response?.ok) {
+    setWorktreeMergeStatus(response?.reason || bridgeSilenceReason("start the merge"), "error");
+    setWorktreeMergeDetails(response?.changes || []);
+    setWorktreeMergeBusy(false);
+    return;
+  }
+  worktreeMerge.sessionId = response.sessionId || "";
+  updateWorktreeMergeLock();
+  if (response.status === "conflicts") {
+    elements.worktreeMergeConfirm.hidden = true;
+    elements.worktreeMergeCancel.textContent = "Abort merge";
+    setWorktreeMergeDetails(response.conflicts || []);
+    setWorktreeMergeStatus("Conflicts need to be resolved before this merge can finish.", "error");
+    setWorktreeMergeBusy(false);
+    openWorktreeConflict(response.conflicts || []);
+    return;
+  }
+  if (response.status !== "staged" || !worktreeMerge.sessionId) {
+    setWorktreeMergeStatus(response.reason || "The bridge returned an incomplete merge session.", "error");
+    setWorktreeMergeBusy(false);
+    return;
+  }
+  await finishWorktreeMergeFromDialog();
+}
+
+function worktreeConflictLanguage(filePath) {
+  const extension = String(filePath || "").split(".").pop().toLowerCase();
+  if (["ps1", "psm1", "psd1"].includes(extension)) return "powershell";
+  if (["bat", "cmd"].includes(extension)) return "batch";
+  if (["sh", "bash", "zsh"].includes(extension)) return "shell";
+  return "text";
+}
+
+function worktreeConflictBlocks(contents) {
+  const blocks = [];
+  const pattern = /^<<<<<<<[^\r\n]*\r?\n([\s\S]*?)^\|\|\|\|\|\|\|[^\r\n]*\r?\n([\s\S]*?)^=======[^\r\n]*\r?\n([\s\S]*?)^>>>>>>>[^\r\n]*(?:\r?\n|$)/gm;
+  for (const match of contents.matchAll(pattern)) {
+    blocks.push({
+      base: match[2],
+      current: match[1],
+      end: match.index + match[0].length,
+      incoming: match[3],
+      start: match.index
+    });
+  }
+  return blocks;
+}
+
+function setWorktreeConflictStatus(text, tone = "") {
+  elements.worktreeConflictStatus.textContent = text;
+  if (tone) elements.worktreeConflictStatus.dataset.tone = tone;
+  else delete elements.worktreeConflictStatus.dataset.tone;
+}
+
+function setWorktreeConflictBusy(busy) {
+  worktreeConflict.busy = busy;
+  elements.worktreeConflictClose.disabled = busy;
+  elements.worktreeConflictBack.disabled = busy;
+  elements.worktreeConflictSave.disabled = busy;
+  elements.worktreeConflictChooseOurs.disabled = busy;
+  elements.worktreeConflictChooseTheirs.disabled = busy;
+  for (const button of elements.worktreeConflictFiles.querySelectorAll("button")) button.disabled = busy;
+}
+
+function renderWorktreeConflictFiles() {
+  elements.worktreeConflictFiles.textContent = "";
+  for (const filePath of worktreeConflict.files) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "worktree-conflict-file";
+    button.dataset.active = filePath === worktreeConflict.path ? "true" : "false";
+    button.textContent = filePath;
+    button.addEventListener("click", () => loadWorktreeConflict(filePath));
+    elements.worktreeConflictFiles.append(button);
+  }
+}
+
+function paintWorktreeConflictSide(element, contents, { exists, binary }, language) {
+  delete element.dataset.state;
+  if (!exists) {
+    element.dataset.state = "missing";
+    element.textContent = "File does not exist on this side.";
+  } else if (binary) {
+    element.dataset.state = "binary";
+    element.textContent = "Binary content is not shown.";
+  } else {
+    element.innerHTML = syntaxHighlight.highlight(contents, language);
+  }
+}
+
+function syncWorktreeConflictScroll() {
+  elements.worktreeConflictHighlight.scrollTop = elements.worktreeConflictResult.scrollTop;
+  elements.worktreeConflictHighlight.scrollLeft = elements.worktreeConflictResult.scrollLeft;
+}
+
+function repaintWorktreeConflictResult() {
+  elements.worktreeConflictHighlight.innerHTML = syntaxHighlight.highlight(
+    elements.worktreeConflictResult.value,
+    worktreeConflictLanguage(worktreeConflict.path)
+  );
+  syncWorktreeConflictScroll();
+}
+
+function applyWorktreeConflictHunk(index, choice) {
+  const contents = elements.worktreeConflictResult.value;
+  const block = worktreeConflictBlocks(contents)[index];
+  if (!block) return;
+  let replacement = choice === "current" ? block.current : block.incoming;
+  if (choice === "both") {
+    const separator = block.current && block.incoming && !block.current.endsWith("\n") ? "\n" : "";
+    replacement = `${block.current}${separator}${block.incoming}`;
+  }
+  elements.worktreeConflictResult.value = `${contents.slice(0, block.start)}${replacement}${contents.slice(block.end)}`;
+  const caret = block.start + replacement.length;
+  elements.worktreeConflictResult.setSelectionRange(caret, caret);
+  repaintWorktreeConflictResult();
+  renderWorktreeConflictHunks();
+  elements.worktreeConflictResult.focus();
+}
+
+function renderWorktreeConflictHunks() {
+  const blocks = worktreeConflictBlocks(elements.worktreeConflictResult.value);
+  elements.worktreeConflictHunkCount.textContent = `${blocks.length} unresolved ${blocks.length === 1 ? "hunk" : "hunks"}`;
+  elements.worktreeConflictHunks.textContent = "";
+  blocks.forEach((block, index) => {
+    const row = document.createElement("div");
+    row.className = "worktree-conflict-hunk";
+    const label = document.createElement("span");
+    label.textContent = `Conflict ${index + 1}`;
+    const current = document.createElement("button");
+    current.type = "button";
+    current.className = "secondary-action";
+    current.textContent = "Use current";
+    current.addEventListener("click", () => applyWorktreeConflictHunk(index, "current"));
+    const incoming = document.createElement("button");
+    incoming.type = "button";
+    incoming.className = "secondary-action";
+    incoming.textContent = "Use incoming";
+    incoming.addEventListener("click", () => applyWorktreeConflictHunk(index, "incoming"));
+    const both = document.createElement("button");
+    both.type = "button";
+    both.className = "secondary-action";
+    both.textContent = "Use both";
+    both.addEventListener("click", () => applyWorktreeConflictHunk(index, "both"));
+    row.append(label, current, incoming, both);
+    elements.worktreeConflictHunks.append(row);
+  });
+}
+
+async function loadWorktreeConflict(filePath) {
+  if (worktreeConflict.busy || !filePath) return;
+  worktreeConflict.path = filePath;
+  renderWorktreeConflictFiles();
+  setWorktreeConflictBusy(true);
+  setWorktreeConflictStatus(`Loading ${filePath}...`, "waiting");
+  const response = await requestBridge({
+    type: "gitConflictRead",
+    sessionId: worktreeMerge.sessionId,
+    path: filePath
+  }, { timeout: 60000 });
+  if (!response?.ok) {
+    setWorktreeConflictStatus(response?.reason || bridgeSilenceReason("read the conflict"), "error");
+    setWorktreeConflictBusy(false);
+    return;
+  }
+  worktreeConflict.sides = response;
+  const language = worktreeConflictLanguage(filePath);
+  const baseExists = response.baseExists !== false;
+  const oursExists = response.oursExists !== false;
+  const theirsExists = response.theirsExists !== false;
+  paintWorktreeConflictSide(elements.worktreeConflictBase, response.base || "", { exists: baseExists, binary: response.binary }, language);
+  paintWorktreeConflictSide(elements.worktreeConflictOurs, response.ours || "", { exists: oursExists, binary: response.binary }, language);
+  paintWorktreeConflictSide(elements.worktreeConflictTheirs, response.theirs || "", { exists: theirsExists, binary: response.binary }, language);
+  const needsSideChoice = Boolean(response.binary) || !oursExists || !theirsExists;
+  elements.worktreeConflictSideChoice.hidden = !needsSideChoice;
+  elements.worktreeConflictTextTools.hidden = needsSideChoice;
+  elements.worktreeConflictSave.hidden = needsSideChoice;
+  if (needsSideChoice) {
+    elements.worktreeConflictChoiceReason.textContent = response.binary
+      ? "Binary files cannot be edited safely as text. Git will copy the side you choose."
+      : "One side deleted this file. Choose whether the final result keeps the other side or stays deleted.";
+    elements.worktreeConflictChooseOurs.textContent = oursExists ? "Keep current" : "Keep current deletion";
+    elements.worktreeConflictChooseTheirs.textContent = theirsExists ? "Use incoming" : "Use incoming deletion";
+  } else {
+    elements.worktreeConflictResult.value = response.merged || "";
+    repaintWorktreeConflictResult();
+    renderWorktreeConflictHunks();
+  }
+  elements.worktreeConflictSubtitle.textContent = filePath;
+  setWorktreeConflictStatus("Choose the final contents for this file.");
+  setWorktreeConflictBusy(false);
+}
+
+function showWorktreeMergeAfterConflicts() {
+  elements.worktreeConflictOverlay.classList.remove("is-open");
+  worktreeConflict.closeTimer = window.setTimeout(() => {
+    elements.worktreeConflictOverlay.hidden = true;
+  }, 150);
+  elements.worktreeMergeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.worktreeMergeOverlay.classList.add("is-open");
+    elements.worktreeMergeConfirm.focus();
+  });
+  elements.worktreeMergeConfirm.hidden = false;
+  elements.worktreeMergeConfirm.textContent = worktreeMergeMode() === "pending" ? "Finish pending changes" : "Commit resolved merge";
+  elements.worktreeMergeCancel.textContent = "Abort merge";
+  setWorktreeMergeDetails();
+  setWorktreeMergeStatus("Every conflict is staged. Finish the bring-back operation or abort it.", "ready");
+  setWorktreeMergeBusy(false);
+}
+
+async function completeWorktreeConflictWrite(response) {
+  if (!response?.ok) {
+    setWorktreeConflictStatus(response?.reason || bridgeSilenceReason("stage the resolution"), "error");
+    setWorktreeConflictBusy(false);
+    return;
+  }
+  worktreeConflict.files = response.remaining || [];
+  if (worktreeConflict.files.length) {
+    worktreeConflict.path = "";
+    setWorktreeConflictBusy(false);
+    await loadWorktreeConflict(worktreeConflict.files[0]);
+    return;
+  }
+  setWorktreeConflictBusy(false);
+  showWorktreeMergeAfterConflicts();
+}
+
+async function saveWorktreeConflict() {
+  if (worktreeConflict.busy || !worktreeConflict.path) return;
+  const contents = elements.worktreeConflictResult.value;
+  if (/^(?:<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>)/m.test(contents)) {
+    setWorktreeConflictStatus("Resolve or remove every conflict marker before staging this file.", "error");
+    return;
+  }
+  setWorktreeConflictBusy(true);
+  setWorktreeConflictStatus(`Staging ${worktreeConflict.path}...`, "waiting");
+  const response = await requestBridge({
+    type: "gitConflictWrite",
+    sessionId: worktreeMerge.sessionId,
+    path: worktreeConflict.path,
+    contents
+  }, { timeout: 60000 });
+  await completeWorktreeConflictWrite(response);
+}
+
+async function chooseWorktreeConflictSide(choice) {
+  if (worktreeConflict.busy || !worktreeConflict.path) return;
+  setWorktreeConflictBusy(true);
+  setWorktreeConflictStatus(`Selecting the ${choice === "ours" ? "current" : "incoming"} side...`, "waiting");
+  const response = await requestBridge({
+    type: "gitConflictWrite",
+    sessionId: worktreeMerge.sessionId,
+    path: worktreeConflict.path,
+    choice
+  }, { timeout: 60000 });
+  await completeWorktreeConflictWrite(response);
+}
+
+function returnToWorktreeMerge() {
+  if (worktreeConflict.busy) return;
+  elements.worktreeConflictOverlay.classList.remove("is-open");
+  worktreeConflict.closeTimer = window.setTimeout(() => {
+    elements.worktreeConflictOverlay.hidden = true;
+  }, 150);
+  elements.worktreeMergeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.worktreeMergeOverlay.classList.add("is-open");
+    elements.worktreeMergeConfirm.focus();
+  });
+  elements.worktreeMergeConfirm.hidden = false;
+  elements.worktreeMergeConfirm.textContent = "Resume conflicts";
+  elements.worktreeMergeCancel.textContent = "Abort merge";
+  setWorktreeMergeDetails(worktreeConflict.files);
+  setWorktreeMergeStatus("Conflicts still need resolution. Resume them or abort this provisional merge.", "error");
+}
+
+function openWorktreeConflict(files) {
+  worktreeConflict.files = [...files];
+  worktreeConflict.path = "";
+  worktreeConflict.sides = null;
+  window.clearTimeout(worktreeConflict.closeTimer);
+  elements.worktreeMergeOverlay.classList.remove("is-open");
+  elements.worktreeMergeOverlay.hidden = true;
+  elements.worktreeConflictOverlay.hidden = false;
+  renderWorktreeConflictFiles();
+  window.requestAnimationFrame(() => elements.worktreeConflictOverlay.classList.add("is-open"));
+  refreshIcons(elements.worktreeConflictOverlay);
+  loadWorktreeConflict(worktreeConflict.files[0]);
+}
 
 function renderWorktreeRows(worktrees) {
   const list = elements.worktreeManagerList;
@@ -11337,6 +12505,11 @@ function renderWorktreeRows(worktrees) {
     actions.append(open);
 
     if (worktree.createdByMultiTerm) {
+      const merge = document.createElement("button");
+      merge.type = "button";
+      merge.className = "primary-action";
+      merge.textContent = "Bring changes back";
+      merge.addEventListener("click", () => openWorktreeMerge(worktree));
       const review = document.createElement("button");
       review.type = "button";
       review.className = "secondary-action";
@@ -11346,13 +12519,15 @@ function renderWorktreeRows(worktrees) {
       remove.type = "button";
       remove.className = "secondary-action";
       remove.textContent = "Remove";
+      remove.dataset.worktreeAction = "remove";
       remove.addEventListener("click", () => removeWorktree(worktree));
-      actions.append(review, remove);
+      actions.append(merge, review, remove);
     }
 
     row.append(identity, actions);
     list.append(row);
   }
+  updateWorktreeMergeLock();
 }
 
 async function refreshWorktreeManager() {
@@ -11506,6 +12681,45 @@ function bindWorktreeReview() {
   });
 }
 
+function bindWorktreeMerge() {
+  if (!elements.worktreeMergeOverlay) return;
+  for (const input of elements.worktreeMergeOverlay.querySelectorAll('input[name="worktreeMergeMode"]')) {
+    input.addEventListener("change", updateWorktreeMergeMode);
+  }
+  elements.worktreeMergeConfirm.addEventListener("click", runWorktreeMerge);
+  elements.worktreeMergeCancel.addEventListener("click", cancelWorktreeMerge);
+  elements.worktreeMergeClose.addEventListener("click", cancelWorktreeMerge);
+  elements.worktreeMergeOverlay.addEventListener("mousedown", (event) => {
+    if (event.target === elements.worktreeMergeOverlay) cancelWorktreeMerge();
+  });
+  elements.worktreeMergeOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      cancelWorktreeMerge();
+    }
+  });
+}
+
+function bindWorktreeConflict() {
+  if (!elements.worktreeConflictOverlay) return;
+  elements.worktreeConflictResult.addEventListener("input", () => {
+    repaintWorktreeConflictResult();
+    renderWorktreeConflictHunks();
+  });
+  elements.worktreeConflictResult.addEventListener("scroll", syncWorktreeConflictScroll);
+  elements.worktreeConflictSave.addEventListener("click", saveWorktreeConflict);
+  elements.worktreeConflictChooseOurs.addEventListener("click", () => chooseWorktreeConflictSide("ours"));
+  elements.worktreeConflictChooseTheirs.addEventListener("click", () => chooseWorktreeConflictSide("theirs"));
+  elements.worktreeConflictBack.addEventListener("click", returnToWorktreeMerge);
+  elements.worktreeConflictClose.addEventListener("click", returnToWorktreeMerge);
+  elements.worktreeConflictOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      returnToWorktreeMerge();
+    }
+  });
+}
+
 function bindWorktreeManager() {
   if (!elements.worktreeManagerOverlay) return;
   let timer = 0;
@@ -11514,9 +12728,9 @@ function bindWorktreeManager() {
     timer = window.setTimeout(refreshWorktreeManager, 250);
   });
   elements.worktreeManagerBrowse.addEventListener("click", async () => {
-    const chosen = await requestBridge({ type: "pickFolder", cwd: elements.worktreeManagerRepo.value.trim() }, { timeout: 300000 });
-    if (chosen?.path) {
-      elements.worktreeManagerRepo.value = chosen.path;
+    const chosen = await chooseInlineFolder(elements.worktreeManagerRepo.value.trim(), "Select repository folder");
+    if (chosen) {
+      elements.worktreeManagerRepo.value = chosen;
       refreshWorktreeManager();
     }
   });
@@ -11550,22 +12764,23 @@ function bindWorktreeDialog() {
   });
   elements.worktreeSharedRootInput.addEventListener("input", updateWorktreeReadiness);
   elements.worktreePlacement.addEventListener("change", updateWorktreeReadiness);
+  elements.worktreeImportPending.addEventListener("change", updateWorktreeReadiness);
   elements.worktreeNameInput.addEventListener("input", () => {
     worktreeDialog.nameTouched = true;
     updateWorktreeReadiness();
   });
   elements.worktreeBrowse.addEventListener("click", async () => {
-    const chosen = await requestBridge({ type: "pickFolder", cwd: elements.worktreeFolderInput.value.trim() }, { timeout: 300000 });
-    if (chosen?.path) {
-      elements.worktreeFolderInput.value = chosen.path;
+    const chosen = await chooseInlineFolder(elements.worktreeFolderInput.value.trim(), "Select repository folder");
+    if (chosen) {
+      elements.worktreeFolderInput.value = chosen;
       worktreeDialog.nameTouched = false;
       scheduleWorktreeInspection();
     }
   });
   elements.worktreeSharedRootBrowse.addEventListener("click", async () => {
-    const chosen = await requestBridge({ type: "pickFolder", cwd: elements.worktreeSharedRootInput.value.trim() }, { timeout: 300000 });
-    if (chosen?.path) {
-      elements.worktreeSharedRootInput.value = chosen.path;
+    const chosen = await chooseInlineFolder(elements.worktreeSharedRootInput.value.trim(), "Select shared worktree location");
+    if (chosen) {
+      elements.worktreeSharedRootInput.value = chosen;
       updateWorktreeReadiness();
     }
   });
@@ -11767,14 +12982,7 @@ function bridgeSilenceReason(verb) {
 
 async function browseCwdChange() {
   const current = elements.cwdChangeInput.value.trim();
-  let selected = null;
-  try {
-    selected = window.multiterm?.pickFolder
-      ? await window.multiterm.pickFolder(current)
-      : await requestBridge({ type: "pickFolder", cwd: current }, { timeout: 300000 });
-  } catch {
-    selected = null;
-  }
+  const selected = await chooseInlineFolder(current, "Select working directory");
   if (!selected || elements.cwdChangeOverlay.hidden) return;
   elements.cwdChangeInput.value = selected;
   scheduleCwdValidation();
@@ -13969,6 +15177,170 @@ function artifactTimeLabel(value) {
   });
 }
 
+function renderTerminalNotesFlyout() {
+  const terminal = state.terminals.get(terminalNotesFlyoutId);
+  if (!artifactTerminalIsAvailable(terminal)) {
+    closeTerminalNotesFlyout();
+    return;
+  }
+
+  const record = state.terminalArtifacts.terminals[terminal.id];
+  const notes = String(record?.notes || "").trim();
+  const title = terminal.titleInput.value || "Terminal";
+  elements.terminalNotesFlyoutSubtitle.textContent = `${title} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : "process starting"}`;
+  elements.terminalNotesFlyoutList.textContent = "";
+  elements.terminalNotesFlyoutEmpty.hidden = Boolean(notes);
+
+  if (notes) {
+    const item = document.createElement("article");
+    item.className = "terminal-notes-flyout-item";
+
+    const copy = document.createElement("div");
+    copy.className = "terminal-notes-flyout-copy";
+    const preview = document.createElement("p");
+    preview.className = "terminal-notes-flyout-preview";
+    preview.textContent = notes;
+    const savedAt = artifactTimeLabel(record?.notesUpdatedAt);
+    const time = document.createElement(record?.notesUpdatedAt ? "time" : "span");
+    time.className = "terminal-notes-flyout-time";
+    if (record?.notesUpdatedAt) time.dateTime = record.notesUpdatedAt;
+    time.textContent = savedAt ? `Saved ${savedAt}` : "Saved time unavailable";
+    copy.append(preview, time);
+
+    const actions = document.createElement("div");
+    actions.className = "terminal-notes-flyout-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "icon-button";
+    edit.dataset.notesFlyoutEdit = "";
+    edit.title = "Edit note";
+    edit.setAttribute("aria-label", `Edit note for ${title}`);
+    edit.innerHTML = '<i data-lucide="pencil"></i>';
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-button terminal-notes-flyout-delete";
+    remove.dataset.notesFlyoutDelete = "";
+    remove.title = "Delete note";
+    remove.setAttribute("aria-label", `Delete note for ${title}`);
+    remove.innerHTML = '<i data-lucide="trash-2"></i>';
+    actions.append(edit, remove);
+
+    item.append(copy, actions);
+    elements.terminalNotesFlyoutList.append(item);
+  }
+
+  refreshIcons(elements.terminalNotesFlyout);
+}
+
+function positionTerminalNotesFlyout(anchor) {
+  const flyout = elements.terminalNotesFlyout;
+  const anchorRect = anchor.getBoundingClientRect();
+  flyout.classList.add("is-positioning");
+  flyout.hidden = false;
+  flyout.style.left = "0px";
+  flyout.style.top = "0px";
+  flyout.style.maxHeight = "";
+  const rect = flyout.getBoundingClientRect();
+  const centered = anchorRect.left + (anchorRect.width - rect.width) / 2;
+  const left = Math.max(8, Math.min(centered, window.innerWidth - rect.width - 8));
+  const top = anchorRect.bottom + 7;
+  flyout.style.left = `${left}px`;
+  flyout.style.top = `${top}px`;
+  flyout.style.maxHeight = `${Math.max(80, window.innerHeight - top - 8)}px`;
+  flyout.classList.remove("is-positioning");
+}
+
+function openTerminalNotesFlyout(terminal, anchor) {
+  closeHeaderActionScopeFlyout();
+  closeTerminalNotificationFlyout();
+  hideContextMenu();
+  if (terminalNotesFlyoutAnchor && terminalNotesFlyoutAnchor !== anchor) {
+    if (terminalNotesFlyoutAnchor.getAttribute("aria-haspopup") === "dialog") {
+      terminalNotesFlyoutAnchor.setAttribute("aria-expanded", "false");
+    }
+  }
+  terminalNotesFlyoutId = terminal.id;
+  terminalNotesFlyoutAnchor = anchor;
+  if (anchor.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "true");
+  renderTerminalNotesFlyout();
+  positionTerminalNotesFlyout(anchor);
+  elements.terminalNotesFlyout.querySelector("button")?.focus({ preventScroll: true });
+}
+
+function closeTerminalNotesFlyout({ restoreFocus = false } = {}) {
+  const anchor = terminalNotesFlyoutAnchor;
+  elements.terminalNotesFlyout.hidden = true;
+  terminalNotesFlyoutId = null;
+  terminalNotesFlyoutAnchor = null;
+  if (anchor?.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
+}
+
+function toggleTerminalNotesFlyout(terminal, anchor) {
+  if (terminalNotesFlyoutId === terminal.id && terminalNotesFlyoutAnchor === anchor
+      && !elements.terminalNotesFlyout.hidden) {
+    closeTerminalNotesFlyout({ restoreFocus: true });
+    return;
+  }
+  openTerminalNotesFlyout(terminal, anchor);
+}
+
+function openTerminalNotesDetails({ focusNotes = false } = {}) {
+  const terminalId = terminalNotesFlyoutId;
+  const returnFocus = terminalNotesFlyoutAnchor;
+  if (!terminalId) return;
+  closeTerminalNotesFlyout();
+  openTerminalArtifacts(terminalId);
+  state.terminalArtifactsHub.returnFocus = returnFocus;
+  if (focusNotes) {
+    window.requestAnimationFrame(() => elements.terminalNotesInput.focus({ preventScroll: true }));
+  }
+}
+
+function deleteTerminalFlyoutNote() {
+  const terminal = state.terminals.get(terminalNotesFlyoutId);
+  if (!artifactTerminalIsAvailable(terminal)) {
+    closeTerminalNotesFlyout();
+    return;
+  }
+  const record = state.terminalArtifacts.terminals[terminal.id];
+  if (!record?.notes.trim()) return;
+  record.notes = "";
+  record.notesUpdatedAt = null;
+  saveTerminalArtifacts();
+  renderTerminalNotesFlyout();
+  elements.terminalNotesFlyoutAdd.focus({ preventScroll: true });
+  toast("Note deleted", "info", 1600);
+}
+
+function bindTerminalNotesFlyout() {
+  elements.terminalNotesFlyout.addEventListener("click", (event) => {
+    if (event.target.closest("[data-notes-flyout-edit]")) {
+      openTerminalNotesDetails({ focusNotes: true });
+      return;
+    }
+    if (event.target.closest("[data-notes-flyout-delete]")) deleteTerminalFlyoutNote();
+  });
+  elements.terminalNotesFlyoutAdd.addEventListener("click", () => openTerminalNotesDetails({ focusNotes: true }));
+  elements.terminalNotesFlyoutDetails.addEventListener("click", () => openTerminalNotesDetails());
+  document.addEventListener("pointerdown", (event) => {
+    if (elements.terminalNotesFlyout.hidden) return;
+    if (elements.terminalNotesFlyout.contains(event.target) || terminalNotesFlyoutAnchor?.contains(event.target)) return;
+    closeTerminalNotesFlyout();
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || elements.terminalNotesFlyout.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeTerminalNotesFlyout({ restoreFocus: true });
+  }, true);
+  window.addEventListener("resize", () => {
+    if (!elements.terminalNotesFlyout.hidden && terminalNotesFlyoutAnchor?.isConnected) {
+      positionTerminalNotesFlyout(terminalNotesFlyoutAnchor);
+    }
+  });
+}
+
 function renderCommandQueue(items, source) {
   elements.commandQueueList.textContent = "";
   elements.commandQueueEmpty.hidden = items.length > 0;
@@ -14255,6 +15627,7 @@ function dequeueTerminalCommand(terminal, id) {
 
 function openTerminalArtifacts(terminalId = null) {
   if (!elements.terminalArtifactsOverlay) return;
+  closeTerminalNotesFlyout();
   closePalette();
   hideContextMenu();
   state.terminalArtifactsHub.returnFocus = document.activeElement instanceof HTMLElement
@@ -14406,6 +15779,10 @@ function automationScheduleSummary(rule) {
 }
 
 function automationNextRunLabel(rule) {
+  const snoozedUntil = rule.snoozedUntil ? new Date(rule.snoozedUntil) : null;
+  if (snoozedUntil && Number.isFinite(snoozedUntil.getTime()) && snoozedUntil.getTime() > Date.now()) {
+    return `Snoozed until ${snoozedUntil.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+  }
   if (!rule.enabled) return "Disabled";
   const next = automationApi.nextScheduledAt(rule, new Date());
   if (!next) return "Schedule unavailable";
@@ -14433,52 +15810,115 @@ function updateAutomationBadge() {
   elements.automationToggle.setAttribute("aria-label", `Automations: ${status}`);
 }
 
-function automationTerminalOptions(selectedName = "") {
-  const names = [...state.terminals.values()]
-    .filter((terminal) => terminal.status === "live")
-    .map((terminal) => terminal.titleInput.value || "Terminal");
-  if (selectedName && !names.some((name) => automationApi.terminalName(name) === automationApi.terminalName(selectedName))) {
-    names.unshift(selectedName);
-  }
-  return [...new Set(names)];
+function automationLiveTerminals() {
+  return [...state.terminals.values()].filter((terminal) => terminal.status === "live");
 }
 
-function createAutomationActionRow(action = {}) {
-  const row = document.createElement("div");
+function selectedAutomationType() {
+  return elements.automationType.querySelector("[data-automation-type][aria-checked='true']")?.dataset.automationType === "copilot"
+    ? "copilot"
+    : "command";
+}
+
+function readAutomationActionRows() {
+  return [...elements.automationActionList.querySelectorAll(".automation-action-row")].map((row) => {
+    const targetMode = row.querySelector(".automation-action-target-mode").value;
+    return {
+      command: row.querySelector(".automation-action-command").value,
+      condition: row.querySelector(".automation-action-condition")?.value || "success",
+      conditionOperator: row.querySelector(".automation-action-operator")?.value || "all",
+      cwd: row.querySelector(".automation-action-cwd").value,
+      dependsOn: [...row.querySelectorAll("[data-automation-dependency][aria-pressed='true']")]
+        .map((button) => button.dataset.automationDependency),
+      fallbackToNew: row.querySelector(".automation-action-fallback input")?.checked !== false,
+      id: row.dataset.actionId,
+      inputType: row.querySelector(".automation-action-input-type")?.value || "shell",
+      submit: row.querySelector(".automation-action-delivery")?.value !== "stage",
+      targetMode,
+      targetName: targetMode === "title" ? row.querySelector(".automation-action-target-name").value : "",
+      targetPid: targetMode === "pid" ? Number(row.querySelector(".automation-action-target-pid").value) : null
+    };
+  });
+}
+
+function updateAutomationActionTarget(row) {
+  const mode = row.querySelector(".automation-action-target-mode").value;
+  row.querySelector(".automation-action-target-name-field").hidden = mode !== "title";
+  row.querySelector(".automation-action-target-pid-field").hidden = mode !== "pid";
+  row.querySelector(".automation-action-fallback").hidden = mode === "new";
+}
+
+function renderAutomationActionRows(actions = null) {
+  const values = actions || readAutomationActionRows();
+  elements.automationActionList.textContent = "";
+  const normalizedValues = values.length ? values : [{}];
+  normalizedValues.forEach((action, index) => createAutomationActionRow(action, index, normalizedValues));
+  updateAutomationPreview();
+}
+
+function moveAutomationAction(actionId, delta) {
+  const actions = readAutomationActionRows();
+  const index = actions.findIndex((action) => action.id === actionId);
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= actions.length) return;
+  [actions[index], actions[target]] = [actions[target], actions[index]];
+  renderAutomationActionRows(actions);
+}
+
+function createAutomationActionRow(action = {}, index = elements.automationActionList.children.length, allActions = null) {
+  const actions = allActions || [...readAutomationActionRows(), action];
+  const row = document.createElement("article");
   row.className = "automation-action-row";
   row.dataset.actionId = action.id || createId();
 
-  const targetLabel = document.createElement("label");
-  const targetCaption = document.createElement("span");
-  targetCaption.textContent = "Destination";
-  const target = document.createElement("select");
-  target.className = "automation-action-target";
-  target.required = true;
-  for (const name of automationTerminalOptions(action.targetName || "")) {
-    const option = document.createElement("option");
-    option.value = `terminal:${target.options.length}`;
-    option.dataset.targetMode = "terminal";
-    option.dataset.targetName = name;
-    option.textContent = name;
-    target.append(option);
-  }
-  const newTerminalOption = document.createElement("option");
-  newTerminalOption.value = "new";
-  newTerminalOption.dataset.targetMode = "new";
-  newTerminalOption.textContent = "New terminal";
-  target.append(newTerminalOption);
-  const selectedTarget = action.targetMode === "new"
-    ? newTerminalOption
-    : [...target.options].find((option) => (
-      option.dataset.targetMode === "terminal"
-      && automationApi.terminalName(option.dataset.targetName) === automationApi.terminalName(action.targetName)
-    ));
-  (selectedTarget || target.options[0]).selected = true;
-  targetLabel.append(targetCaption, target);
+  const connector = document.createElement("div");
+  connector.className = "automation-step-connector";
+  connector.setAttribute("aria-hidden", "true");
+  connector.innerHTML = '<span></span><i data-lucide="arrow-down"></i>';
+  connector.hidden = index === 0;
 
+  const head = document.createElement("header");
+  head.className = "automation-step-head";
+  const identity = document.createElement("div");
+  identity.className = "automation-step-identity";
+  identity.innerHTML = `<span>${index + 1}</span><div><strong>${selectedAutomationType() === "copilot" ? "Copilot prompt" : "Command step"}</strong><small>${index === 0 ? "Workflow starts here" : "Runs when its visual gate opens"}</small></div>`;
+  const controls = document.createElement("span");
+  controls.className = "automation-step-controls";
+  const moveUp = document.createElement("button");
+  moveUp.type = "button";
+  moveUp.className = "automation-step-icon";
+  moveUp.title = "Move action up";
+  moveUp.setAttribute("aria-label", "Move action up");
+  moveUp.disabled = index === 0;
+  moveUp.innerHTML = '<i data-lucide="arrow-up"></i>';
+  moveUp.addEventListener("click", () => moveAutomationAction(row.dataset.actionId, -1));
+  const moveDown = document.createElement("button");
+  moveDown.type = "button";
+  moveDown.className = "automation-step-icon";
+  moveDown.title = "Move action down";
+  moveDown.setAttribute("aria-label", "Move action down");
+  moveDown.disabled = index === actions.length - 1;
+  moveDown.innerHTML = '<i data-lucide="arrow-down"></i>';
+  moveDown.addEventListener("click", () => moveAutomationAction(row.dataset.actionId, 1));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "automation-step-icon automation-action-remove";
+  remove.title = "Remove action";
+  remove.setAttribute("aria-label", "Remove action");
+  remove.innerHTML = '<i data-lucide="x"></i>';
+  remove.addEventListener("click", () => {
+    const remaining = readAutomationActionRows().filter((item) => item.id !== row.dataset.actionId);
+    renderAutomationActionRows(remaining);
+  });
+  controls.append(moveUp, moveDown, remove);
+  head.append(identity, controls);
+
+  const body = document.createElement("div");
+  body.className = "automation-step-body";
   const commandLabel = document.createElement("label");
+  commandLabel.className = "automation-step-command-field";
   const commandCaption = document.createElement("span");
-  commandCaption.textContent = "Command or prompt";
+  commandCaption.textContent = selectedAutomationType() === "copilot" ? "Prompt" : "Command or script path";
   const command = document.createElement("input");
   command.className = "automation-action-command";
   command.type = "text";
@@ -14487,31 +15927,144 @@ function createAutomationActionRow(action = {}) {
   command.autocomplete = "off";
   command.spellcheck = false;
   command.value = action.command || "";
-  commandLabel.append(commandCaption, command);
+  command.placeholder = selectedAutomationType() === "copilot" ? "Ask Copilot to..." : "Enter a command or script path";
+  const commandRow = document.createElement("span");
+  commandRow.className = "automation-action-command-row";
+  const scriptBrowse = document.createElement("button");
+  scriptBrowse.type = "button";
+  scriptBrowse.className = "icon-button automation-action-script-browse";
+  scriptBrowse.title = "Browse for script file";
+  scriptBrowse.setAttribute("aria-label", "Browse for script file");
+  scriptBrowse.innerHTML = '<i data-lucide="file-code-2"></i>';
+  scriptBrowse.addEventListener("click", async () => {
+    const selected = await pickScriptPath(row.querySelector(".automation-action-cwd")?.value || elements.cwdInput.value);
+    if (selected) {
+      command.value = selected;
+      updateAutomationPreview();
+    }
+  });
+  commandRow.append(command, scriptBrowse);
+  commandLabel.append(commandCaption, commandRow);
+
+  const inputTypeLabel = document.createElement("label");
+  inputTypeLabel.className = "automation-action-input-type-field";
+  inputTypeLabel.innerHTML = '<span>Command type</span><select class="automation-action-input-type"><option value="shell">Ad-hoc shell command</option><option value="powershell">Ad-hoc PowerShell</option><option value="script">Script file path</option></select>';
+  const inputType = inputTypeLabel.querySelector("select");
+  inputType.value = action.inputType || "shell";
+  inputTypeLabel.hidden = selectedAutomationType() === "copilot";
+  scriptBrowse.hidden = selectedAutomationType() === "copilot" || inputType.value !== "script";
+  inputType.addEventListener("change", () => {
+    scriptBrowse.hidden = inputType.value !== "script";
+    command.placeholder = inputType.value === "script" ? "Select or enter a .ps1, .cmd, or .bat path" : "Enter an ad-hoc command";
+  });
 
   const deliveryLabel = document.createElement("label");
-  const deliveryCaption = document.createElement("span");
-  deliveryCaption.textContent = "Delivery";
-  const delivery = document.createElement("select");
-  delivery.className = "automation-action-delivery";
-  delivery.innerHTML = '<option value="run">Run when ready</option><option value="stage">Stage when ready</option>';
-  delivery.value = action.submit === false ? "stage" : "run";
-  deliveryLabel.append(deliveryCaption, delivery);
+  deliveryLabel.className = "automation-action-delivery-field";
+  deliveryLabel.innerHTML = '<span>Delivery</span><select class="automation-action-delivery"><option value="run">Run when ready</option><option value="stage">Stage without Enter</option></select>';
+  deliveryLabel.querySelector("select").value = action.submit === false ? "stage" : "run";
+  deliveryLabel.hidden = selectedAutomationType() === "copilot";
 
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "icon-button automation-action-remove";
-  remove.title = "Remove action";
-  remove.setAttribute("aria-label", "Remove action");
-  remove.innerHTML = '<i data-lucide="x"></i>';
-  remove.addEventListener("click", () => {
-    row.remove();
-    if (!elements.automationActionList.children.length) createAutomationActionRow();
+  const targetModeLabel = document.createElement("label");
+  targetModeLabel.innerHTML = '<span>Destination</span><select class="automation-action-target-mode"><option value="title">Terminal title</option><option value="pid">Terminal PID</option><option value="new">New terminal</option></select>';
+  const targetMode = targetModeLabel.querySelector("select");
+  targetMode.value = action.targetMode === "new" || action.targetMode === "pid" ? action.targetMode : "title";
+
+  const titleLabel = document.createElement("label");
+  titleLabel.className = "automation-action-target-name-field";
+  const titleListId = `automation-titles-${row.dataset.actionId}`;
+  titleLabel.innerHTML = `<span>Terminal title</span><input class="automation-action-target-name" type="text" list="${titleListId}" autocomplete="off"><datalist id="${titleListId}"></datalist>`;
+  titleLabel.querySelector("input").value = action.targetName || automationLiveTerminals()[0]?.titleInput.value || "";
+  const titleList = titleLabel.querySelector("datalist");
+  for (const terminal of automationLiveTerminals()) {
+    const option = document.createElement("option");
+    option.value = terminal.titleInput.value || "Terminal";
+    option.label = terminal.pid ? `PID ${terminal.pid}` : "Starting";
+    titleList.append(option);
+  }
+
+  const pidLabel = document.createElement("label");
+  pidLabel.className = "automation-action-target-pid-field";
+  const pidListId = `automation-pids-${row.dataset.actionId}`;
+  pidLabel.innerHTML = `<span>Terminal PID</span><input class="automation-action-target-pid" type="number" min="1" step="1" list="${pidListId}"><datalist id="${pidListId}"></datalist>`;
+  pidLabel.querySelector("input").value = action.targetPid || automationLiveTerminals()[0]?.pid || "";
+  const pidList = pidLabel.querySelector("datalist");
+  for (const terminal of automationLiveTerminals().filter((item) => item.pid)) {
+    const option = document.createElement("option");
+    option.value = String(terminal.pid);
+    option.label = terminal.titleInput.value || "Terminal";
+    pidList.append(option);
+  }
+
+  const fallback = document.createElement("label");
+  fallback.className = "automation-action-fallback automation-check";
+  fallback.innerHTML = '<input type="checkbox"><span>Send to new terminal if selected terminal cannot be located</span>';
+  fallback.querySelector("input").checked = action.fallbackToNew !== false;
+
+  const cwdLabel = document.createElement("label");
+  cwdLabel.className = "automation-action-cwd-field";
+  const cwdCaption = document.createElement("span");
+  cwdCaption.textContent = "Working directory (optional)";
+  const cwdRow = document.createElement("span");
+  cwdRow.className = "automation-action-cwd-row";
+  const cwd = document.createElement("input");
+  cwd.className = "automation-action-cwd";
+  cwd.type = "text";
+  cwd.autocomplete = "off";
+  cwd.spellcheck = false;
+  cwd.value = action.cwd || "";
+  cwd.placeholder = "Use terminal's current directory";
+  const browse = document.createElement("button");
+  browse.type = "button";
+  browse.className = "icon-button";
+  browse.title = "Browse for working directory";
+  browse.setAttribute("aria-label", "Browse for working directory");
+  browse.innerHTML = '<i data-lucide="folder-open"></i>';
+  browse.addEventListener("click", async () => {
+    const selected = await chooseInlineFolder(cwd.value || elements.cwdInput.value, "Select automation working directory");
+    if (selected) {
+      cwd.value = selected;
+      updateAutomationPreview();
+    }
+  });
+  cwdRow.append(cwd, browse);
+  cwdLabel.append(cwdCaption, cwdRow);
+
+  body.append(commandLabel, inputTypeLabel, deliveryLabel, targetModeLabel, titleLabel, pidLabel, fallback, cwdLabel);
+
+  const gate = document.createElement("section");
+  gate.className = "automation-step-gate";
+  gate.hidden = index === 0;
+  if (index > 0) {
+    gate.innerHTML = '<i data-lucide="git-branch" aria-hidden="true"></i><div class="automation-step-gate-copy"><strong>Conditional gate</strong><span>Run this step when <select class="automation-action-operator" aria-label="Dependency operator"><option value="all">all</option><option value="any">any</option></select> selected steps <select class="automation-action-condition" aria-label="Dependency outcome"><option value="success">succeed</option><option value="failure">fail</option><option value="always">finish</option></select>.</span><div class="automation-dependency-chips"></div></div>';
+    gate.querySelector(".automation-action-operator").value = action.conditionOperator === "any" ? "any" : "all";
+    gate.querySelector(".automation-action-condition").value = ["failure", "always"].includes(action.condition) ? action.condition : "success";
+    const dependencies = new Set(Array.isArray(action.dependsOn) && action.dependsOn.length
+      ? action.dependsOn
+      : [actions[index - 1]?.id]);
+    const chips = gate.querySelector(".automation-dependency-chips");
+    actions.slice(0, index).forEach((candidate, dependencyIndex) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.dataset.automationDependency = candidate.id;
+      chip.setAttribute("aria-pressed", String(dependencies.has(candidate.id)));
+      chip.textContent = `Step ${dependencyIndex + 1}`;
+      chip.addEventListener("click", () => {
+        chip.setAttribute("aria-pressed", String(chip.getAttribute("aria-pressed") !== "true"));
+        updateAutomationPreview();
+      });
+      chips.append(chip);
+    });
+  }
+
+  targetMode.addEventListener("change", () => {
+    updateAutomationActionTarget(row);
     updateAutomationPreview();
   });
   row.addEventListener("input", updateAutomationPreview);
-  row.append(targetLabel, commandLabel, deliveryLabel, remove);
+  row.addEventListener("change", updateAutomationPreview);
+  row.append(connector, head, body, gate);
   elements.automationActionList.append(row);
+  updateAutomationActionTarget(row);
   refreshIcons(row);
   return row;
 }
@@ -14531,22 +16084,21 @@ function setAutomationScheduleMode(mode) {
   updateAutomationPreview();
 }
 
+function setAutomationType(type, { rerender = true } = {}) {
+  const normalized = type === "copilot" ? "copilot" : "command";
+  for (const button of elements.automationType.querySelectorAll("[data-automation-type]")) {
+    button.setAttribute("aria-checked", String(button.dataset.automationType === normalized));
+  }
+  if (rerender) renderAutomationActionRows();
+}
+
 function readAutomationEditorRule(existing = null) {
   const mode = selectedAutomationScheduleMode();
   const value = Math.max(1, Math.round(Number(elements.automationInterval.value) || 1));
   const intervalMinutes = value * (elements.automationIntervalUnit.value === "hours" ? 60 : 1);
   const days = [...elements.automationDays.querySelectorAll("[data-day][aria-pressed='true']")]
     .map((button) => Number(button.dataset.day));
-  const actions = [...elements.automationActionList.querySelectorAll(".automation-action-row")].map((row) => {
-    const target = row.querySelector(".automation-action-target").selectedOptions[0];
-    return {
-      command: row.querySelector(".automation-action-command").value,
-      id: row.dataset.actionId,
-      submit: row.querySelector(".automation-action-delivery").value === "run",
-      targetMode: target?.dataset.targetMode || "terminal",
-      targetName: target?.dataset.targetName || ""
-    };
-  });
+  const actions = readAutomationActionRows();
   return automationApi.normalizeRule({
     actions,
     createdAt: existing?.createdAt || new Date().toISOString(),
@@ -14554,6 +16106,8 @@ function readAutomationEditorRule(existing = null) {
     id: existing?.id || createId(),
     lastRunAt: existing?.lastRunAt || null,
     name: elements.automationName.value,
+    runAs: elements.automationRunAs.value,
+    snoozedUntil: existing?.snoozedUntil || null,
     trigger: {
       catchUp: elements.automationCatchUp.checked ? "once" : "skip",
       days,
@@ -14562,6 +16116,7 @@ function readAutomationEditorRule(existing = null) {
       time: elements.automationTime.value,
       type: "schedule"
     },
+    type: selectedAutomationType(),
     updatedAt: new Date().toISOString()
   });
 }
@@ -14569,9 +16124,9 @@ function readAutomationEditorRule(existing = null) {
 function updateAutomationPreview() {
   if (!elements.automationPreview) return;
   const rule = readAutomationEditorRule(state.automations.rules.find((item) => item.id === state.automationStudio.editingId));
-  const actionCount = elements.automationActionList.children.length;
+  const actionCount = elements.automationActionList.querySelectorAll(".automation-action-row").length;
   elements.automationPreview.textContent = rule
-    ? `${automationScheduleSummary(rule)} · ${actionCount} action${actionCount === 1 ? "" : "s"}`
+    ? `${automationScheduleSummary(rule)} · ${rule.type === "copilot" ? "Copilot" : "Command based"} · ${actionCount} visual step${actionCount === 1 ? "" : "s"}`
     : "Add at least one destination and command";
 }
 
@@ -14583,6 +16138,10 @@ function openAutomationEditor(id = null) {
   elements.automationEditorTitle.textContent = rule ? rule.name : "New automation";
   elements.automationDelete.hidden = !rule;
   elements.automationName.value = rule?.name || "";
+  elements.automationRunAs.value = rule?.runAs || state.hostUser || "";
+  elements.automationRunAsHint.textContent = state.hostUser
+    ? `Current user: ${state.hostUser}. Another Windows account will prompt for credentials when the workflow runs.`
+    : "Defaults to the current user. Another Windows account will prompt for credentials when the workflow runs.";
   elements.automationCatchUp.checked = rule?.trigger.catchUp === "once";
   elements.automationTime.value = rule?.trigger.time || "09:00";
   const intervalMinutes = rule?.trigger.intervalMinutes || 60;
@@ -14594,7 +16153,8 @@ function openAutomationEditor(id = null) {
     button.setAttribute("aria-pressed", String(selectedDays.has(Number(button.dataset.day))));
   }
   elements.automationActionList.textContent = "";
-  for (const action of rule?.actions || [{}]) createAutomationActionRow(action);
+  setAutomationType(rule?.type || "command", { rerender: false });
+  renderAutomationActionRows(rule?.actions || [{}]);
   setAutomationScheduleMode(rule?.trigger.mode || "interval");
   renderAutomationRuleList();
   elements.automationName.focus();
@@ -14645,6 +16205,56 @@ function toggleAutomationRule(id) {
   renderAutomationRuleList();
 }
 
+function snoozeAutomationRule(id) {
+  const rule = state.automations.rules.find((item) => item.id === id);
+  if (!rule) return false;
+  const raw = window.prompt("Snooze this automation for how many minutes?", "60");
+  if (raw === null) return false;
+  const minutes = Number(raw);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    toast("Enter a positive snooze duration in minutes", "error", 2400);
+    return false;
+  }
+  const resumesAt = new Date(Date.now() + Math.max(1, Math.round(minutes)) * 60000);
+  if (!Number.isFinite(resumesAt.getTime())) {
+    toast("Enter a positive snooze duration in minutes", "error", 2400);
+    return false;
+  }
+  rule.snoozedUntil = resumesAt.toISOString();
+  rule.updatedAt = new Date().toISOString();
+  saveAutomationStore();
+  renderAutomationRuleList();
+  toast(`${rule.name} snoozed`, "success", 1600);
+  return true;
+}
+
+function deleteAutomationRule(id) {
+  const index = state.automations.rules.findIndex((item) => item.id === id);
+  if (index < 0) return false;
+  const [removed] = state.automations.rules.splice(index, 1);
+  if (state.automationStudio.editingId === id) closeAutomationEditor();
+  saveAutomationStore();
+  renderAutomationRuleList();
+  toast(`Deleted ${removed.name}`, "info", 1600);
+  return true;
+}
+
+function showAutomationRuleContextMenu(rule, event) {
+  event.preventDefault();
+  event.stopPropagation();
+  renderContextMenu([
+    {
+      icon: rule.enabled ? "pause" : "play",
+      label: rule.enabled ? "Pause automation" : "Unpause automation",
+      run: () => toggleAutomationRule(rule.id)
+    },
+    { icon: "alarm-clock", label: "Snooze automation...", run: () => snoozeAutomationRule(rule.id) },
+    { separator: true },
+    { danger: true, icon: "trash-2", label: "Delete automation", run: () => deleteAutomationRule(rule.id) }
+  ]);
+  showBuiltContextMenu(event.clientX, event.clientY, { returnFocus: event.currentTarget });
+}
+
 function renderAutomationRuleList() {
   if (!elements.automationRuleList) return;
   const query = elements.automationSearch.value.trim().toLocaleLowerCase();
@@ -14662,6 +16272,9 @@ function renderAutomationRuleList() {
     copy.className = "automation-rule-copy";
     const name = document.createElement("strong");
     name.textContent = rule.name;
+    const type = document.createElement("span");
+    type.className = "automation-rule-type";
+    type.textContent = rule.type === "copilot" ? "Copilot automation" : "Command based automation";
     const summary = document.createElement("span");
     summary.textContent = `${automationScheduleSummary(rule)} · ${automationNextRunLabel(rule)}`;
     const lastOutcome = automationLastOutcome(rule);
@@ -14669,7 +16282,7 @@ function renderAutomationRuleList() {
     outcome.className = "automation-rule-outcome";
     outcome.dataset.status = lastOutcome.status;
     outcome.textContent = lastOutcome.label;
-    copy.append(name, summary, outcome);
+    copy.append(name, type, summary, outcome);
     open.append(copy);
     const toggle = document.createElement("button");
     toggle.type = "button";
@@ -14679,6 +16292,7 @@ function renderAutomationRuleList() {
     toggle.setAttribute("aria-label", `${rule.enabled ? "Disable" : "Enable"} ${rule.name}`);
     toggle.textContent = rule.enabled ? "On" : "Off";
     row.append(open, toggle);
+    row.addEventListener("contextmenu", (event) => showAutomationRuleContextMenu(rule, event));
     elements.automationRuleList.append(row);
   }
 }
@@ -14736,8 +16350,8 @@ function renderAutomationActivity() {
   elements.automationActivityList.textContent = "";
   elements.automationActivityEmpty.hidden = entries.length > 0;
   elements.automationActivityEmpty.textContent = state.automations.history.length
-    ? "No activity matches this filter."
-    : "No automation activity yet.";
+    ? "No run history matches this filter."
+    : "No automation runs yet.";
   for (const entry of entries) {
     const row = document.createElement("div");
     row.className = "automation-activity-row";
@@ -14828,6 +16442,9 @@ function bindAutomationStudio() {
   for (const button of elements.automationEditor.querySelectorAll("[data-schedule-mode]")) {
     button.addEventListener("click", () => setAutomationScheduleMode(button.dataset.scheduleMode));
   }
+  for (const button of elements.automationType.querySelectorAll("[data-automation-type]")) {
+    button.addEventListener("click", () => setAutomationType(button.dataset.automationType));
+  }
   for (const button of elements.automationDays.querySelectorAll("[data-day]")) {
     button.addEventListener("click", () => {
       button.setAttribute("aria-pressed", String(button.getAttribute("aria-pressed") !== "true"));
@@ -14851,7 +16468,22 @@ function bindAutomationStudio() {
   elements.automationSearch.addEventListener("input", renderAutomationRuleList);
   elements.automationNew.addEventListener("click", () => openAutomationEditor());
   elements.automationWelcomeNew.addEventListener("click", () => openAutomationEditor());
-  elements.automationActionAdd.addEventListener("click", () => createAutomationActionRow());
+  elements.automationActionAdd.addEventListener("click", () => {
+    const actions = readAutomationActionRows();
+    actions.push({
+      command: "",
+      condition: "success",
+      conditionOperator: "all",
+      dependsOn: actions.length ? [actions.at(-1).id] : [],
+      fallbackToNew: true,
+      id: createId(),
+      inputType: "shell",
+      submit: true,
+      targetMode: "title",
+      targetName: automationLiveTerminals()[0]?.titleInput.value || ""
+    });
+    renderAutomationActionRows(actions);
+  });
   elements.automationEditor.addEventListener("submit", saveAutomationEditor);
   elements.automationEditor.addEventListener("input", updateAutomationPreview);
   elements.automationCancel.addEventListener("click", closeAutomationEditor);
@@ -14932,20 +16564,286 @@ function automationDueAt(rule) {
   );
 }
 
-function resolveAutomationTerminal(targetName) {
-  const normalized = automationApi.terminalName(targetName);
-  const matches = [...state.terminals.values()].filter((terminal) => (
+function resolveAutomationTerminal(action) {
+  const available = [...state.terminals.values()].filter((terminal) => (
     terminal.status !== "exited" && terminal.status !== "error"
-      && automationApi.terminalName(terminal.titleInput.value) === normalized
+  ));
+  if (action.targetMode === "pid") {
+    const matches = available.filter((terminal) => Number(terminal.pid) === Number(action.targetPid));
+    if (matches.length === 1) return { terminal: matches[0] };
+    return { error: `No live terminal has PID ${action.targetPid}` };
+  }
+  const normalized = automationApi.terminalName(action.targetName);
+  const matches = available.filter((terminal) => (
+    automationApi.terminalName(terminal.titleInput.value) === normalized
   ));
   if (matches.length === 1) return { terminal: matches[0] };
-  return { error: matches.length > 1 ? `More than one live terminal is named ${targetName}` : `No live terminal is named ${targetName}` };
+  return { error: matches.length > 1 ? `More than one live terminal is named ${action.targetName}` : `No live terminal is named ${action.targetName}` };
 }
 
 function resolveAutomationActionTarget(action) {
-  if (action.targetMode !== "new") return resolveAutomationTerminal(action.targetName);
-  const terminal = addTerminal({ runStartup: true });
+  if (action.targetMode !== "new") {
+    const resolution = resolveAutomationTerminal(action);
+    if (resolution.terminal || !action.fallbackToNew) return resolution;
+  }
+  const terminal = addTerminal({ cwd: action.cwd || undefined, runStartup: true });
   return terminal ? { launched: true, terminal } : { error: "Could not open a new terminal" };
+}
+
+function encodePowerShellCommand(script) {
+  const bytes = new Uint8Array(script.length * 2);
+  for (let index = 0; index < script.length; index += 1) {
+    const code = script.charCodeAt(index);
+    bytes[index * 2] = code & 0xff;
+    bytes[index * 2 + 1] = code >> 8;
+  }
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function automationStepCommand(action, terminal) {
+  if (action.inputType === "script") return `& ${powerShellLiteral(action.command)}`;
+  if (action.inputType === "powershell") return action.command;
+  const shell = cwdTerminalShell(terminal);
+  if (shell === "cmd") return `& $env:ComSpec /d /s /c ${powerShellLiteral(action.command)}`;
+  if (shell === "wsl") {
+    const cwd = action.cwd ? ` --cd ${powerShellLiteral(action.cwd)}` : "";
+    return `& wsl.exe${cwd} -- sh -lc ${powerShellLiteral(action.command)}`;
+  }
+  return action.command;
+}
+
+function automationPowerShellBody(action, terminal) {
+  const command = automationStepCommand(action, terminal);
+  const changeDirectory = action.cwd && cwdTerminalShell(terminal) !== "wsl"
+    ? `Push-Location -LiteralPath ${powerShellLiteral(action.cwd)}; $mtChangedDirectory=$true; `
+    : "";
+  return `$mtCode=1; $mtChangedDirectory=$false; try { ${changeDirectory}& { ${command} }; $mtCode=if ($?) { 0 } elseif ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 1 } } catch { Write-Error $_; $mtCode=1 } finally { if ($mtChangedDirectory) { Pop-Location } }`;
+}
+
+function automationWrappedCommand(rule, action, terminal, token) {
+  const innerBody = automationPowerShellBody(action, terminal);
+  const requestedUser = String(rule.runAs || "").trim();
+  const differentUser = requestedUser
+    && automationApi.terminalName(requestedUser) !== automationApi.terminalName(state.hostUser);
+  const execute = differentUser
+    ? `$mtCredential=Get-Credential -UserName ${powerShellLiteral(requestedUser)} -Message ${powerShellLiteral(`Credentials for ${rule.name}`)}; if ($null -eq $mtCredential) { $mtCode=1 } else { $mtProcess=Start-Process powershell.exe -Credential $mtCredential -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',${powerShellLiteral(encodePowerShellCommand(`${innerBody}; exit $mtCode`))}) -Wait -PassThru; $mtCode=$mtProcess.ExitCode }`
+    : innerBody;
+  const marker = `[Console]::Write(([char]27)+']777;multiterm-automation;${token};'+$mtCode+([char]7))`;
+  return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${encodePowerShellCommand(`${execute}; ${marker}`)}`;
+}
+
+function automationGateDecision(run, action) {
+  if (!action.dependsOn.length) return "run";
+  const states = action.dependsOn.map((id) => run.states.get(id) || "pending");
+  const final = states.map((status) => ["succeeded", "failed", "skipped"].includes(status));
+  const matches = states.map((status) => (
+    action.condition === "always"
+      ? ["succeeded", "failed", "skipped"].includes(status)
+      : action.condition === "failure"
+        ? status === "failed"
+        : status === "succeeded"
+  ));
+  if (action.conditionOperator === "any" && matches.some(Boolean)) return "run";
+  if (action.conditionOperator === "all" && final.every(Boolean) && matches.every(Boolean)) return "run";
+  if (final.every(Boolean)) return "skip";
+  return "wait";
+}
+
+function finishAutomationRunIfComplete(run) {
+  const complete = run.rule.actions.every((action) => ["succeeded", "failed", "skipped"].includes(run.states.get(action.id)));
+  if (!complete) return false;
+  state.automationRuntime.runs.delete(run.id);
+  const failed = [...run.states.values()].filter((status) => status === "failed").length;
+  addAutomationHistory(
+    failed ? "failed" : "completed",
+    run.rule.name,
+    failed ? `${failed} workflow step${failed === 1 ? "" : "s"} failed` : "Workflow completed",
+    run.rule.id
+  );
+  return true;
+}
+
+function completeAutomationStep(run, action, succeeded, detail = "") {
+  if (!run || !action || run.states.get(action.id) !== "running") return false;
+  run.states.set(action.id, succeeded ? "succeeded" : "failed");
+  addAutomationHistory(succeeded ? "completed" : "failed", `${run.rule.name} · Step ${run.rule.actions.indexOf(action) + 1}`, detail, run.rule.id);
+  advanceAutomationRun(run);
+  return true;
+}
+
+function automationCopilotLaunchCommand(terminal, cwd = "") {
+  const launch = buildAiAssistantCommand({ provider: "copilot" });
+  if (!cwd) return launch;
+  const separator = cwdTerminalShell(terminal) === "cmd" ? " & " : "; ";
+  return `${buildCwdChangeCommand(terminal, cwd)}${separator}${launch}`;
+}
+
+function queueCopilotAutomationStep(run, action, resolution) {
+  const terminal = resolution.terminal;
+  const cwdCommand = action.cwd ? buildCwdChangeCommand({ ...terminal, aiAssistantTuiProvider: "copilot" }, action.cwd) : "";
+  const launchCommand = automationCopilotLaunchCommand(terminal, action.cwd);
+  if (terminal.status === "starting") {
+    terminal.pendingExternalAssistant = {
+      command: launchCommand,
+      followup: action.command,
+      provider: "copilot"
+    };
+    terminal.cwd = action.cwd || terminal.cwd;
+  } else {
+    const readiness = terminalExecutionReadiness(terminal);
+    if (readiness.mode !== "copilot") {
+      sendBridge({ type: "input", id: terminal.id, data: `${launchCommand}\r` });
+      terminal.autoQueueRequiredAssistant = "copilot";
+      terminal.autoQueueRequiredRevision = terminal.outputRevision + 1;
+    } else if (cwdCommand) {
+      queueAutomaticTerminalCommand(terminal, cwdCommand, { occurrenceKey: `${run.id}:${action.id}:cwd` });
+    }
+    queueAutomaticTerminalCommand(terminal, action.command, { occurrenceKey: `${run.id}:${action.id}:prompt` });
+  }
+  completeAutomationStep(run, action, true, `Copilot prompt queued in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`);
+}
+
+function queueAutomationWorkflowStep(run, action, resolution) {
+  const terminal = resolution.terminal;
+  const token = createId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const command = automationWrappedCommand(run.rule, action, terminal, token);
+  const task = { actionId: action.id, command, runId: run.id, token };
+  terminal.automationWorkflowTasks.push(task);
+  state.automationRuntime.steps.set(token, task);
+  scheduleAutomationWorkflowCheck(terminal, 0);
+  addAutomationHistory("queued", `${run.rule.name} · Step ${run.rule.actions.indexOf(action) + 1}`, `Run in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`, run.rule.id);
+}
+
+function startAutomationStep(run, action) {
+  run.states.set(action.id, "running");
+  const resolution = resolveAutomationActionTarget(action);
+  if (!resolution.terminal) {
+    completeAutomationStep(run, action, false, resolution.error);
+    return false;
+  }
+  if (run.rule.type === "copilot") {
+    queueCopilotAutomationStep(run, action, resolution);
+    return true;
+  }
+  if (!action.submit) {
+    let stagedCommand = action.inputType === "script"
+      ? buildScriptCommand(resolution.terminal, action.command)
+      : action.inputType === "powershell" && cwdTerminalShell(resolution.terminal) !== "powershell"
+        ? `powershell.exe -NoLogo -NoProfile -Command ${powerShellLiteral(action.command)}`
+        : action.command;
+    if (action.cwd) {
+      const separator = cwdTerminalShell(resolution.terminal) === "cmd" ? " & " : "; ";
+      stagedCommand = `${buildCwdChangeCommand(resolution.terminal, action.cwd)}${separator}${stagedCommand}`;
+    }
+    const staged = queueAutomationStage(resolution.terminal, stagedCommand, run.rule, { occurrenceKey: `${run.id}:${action.id}:stage` });
+    completeAutomationStep(run, action, staged, staged ? `Staged in ${resolution.terminal.titleInput.value}` : "Could not stage command");
+    return staged;
+  }
+  queueAutomationWorkflowStep(run, action, resolution);
+  return true;
+}
+
+function advanceAutomationRun(run) {
+  if (!run || !state.automationRuntime.runs.has(run.id)) return 0;
+  let started = 0;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const action of run.rule.actions) {
+      if (run.states.get(action.id) !== "pending") continue;
+      const decision = automationGateDecision(run, action);
+      if (decision === "wait") continue;
+      if (decision === "skip") {
+        run.states.set(action.id, "skipped");
+        addAutomationHistory("skipped", `${run.rule.name} · Step ${run.rule.actions.indexOf(action) + 1}`, "Conditional gate did not match", run.rule.id);
+        changed = true;
+        continue;
+      }
+      if (startAutomationStep(run, action)) started += 1;
+      changed = true;
+    }
+  }
+  finishAutomationRunIfComplete(run);
+  return started;
+}
+
+function runAutomationRule(rule, options = {}) {
+  const normalized = automationApi.normalizeRule(rule);
+  if (!normalized) return 0;
+  const run = {
+    id: createId(),
+    occurrenceAt: options.occurrenceAt || new Date().toISOString(),
+    rule: normalized,
+    states: new Map(normalized.actions.map((action) => [action.id, "pending"]))
+  };
+  state.automationRuntime.runs.set(run.id, run);
+  const started = advanceAutomationRun(run);
+  if (options.manual && started) toast(`Started ${normalized.name}`, "success", 1800);
+  return started;
+}
+
+function scheduleAutomationWorkflowCheck(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
+  if (!terminal || terminal.status !== "live" || terminal.automationWorkflowActive || !terminal.automationWorkflowTasks?.length) return;
+  window.clearTimeout(terminal.automationWorkflowTimer);
+  terminal.automationWorkflowTimer = window.setTimeout(() => {
+    terminal.automationWorkflowTimer = 0;
+    dispatchAutomationWorkflowStep(terminal);
+  }, delay);
+}
+
+function dispatchAutomationWorkflowStep(terminal) {
+  if (!terminal || terminal.status !== "live" || terminal.automationWorkflowActive) return false;
+  const task = terminal.automationWorkflowTasks[0];
+  if (!task || !terminalExecutionReadiness(terminal).ready) return false;
+  if (!pasteIntoSpecificTerminal(terminal, task.command)) return false;
+  terminal.automationWorkflowActive = task.token;
+  terminal.automationWorkflowBuffer = "";
+  scheduleTerminalEnter(terminal, {
+    onComplete: (sent) => {
+      if (sent) return;
+      finishAutomationWorkflowTask(task.token, 1, "Bridge unavailable while starting the step");
+    }
+  });
+  return true;
+}
+
+function consumeAutomationWorkflowOutput(terminal, data) {
+  if (!terminal?.automationWorkflowActive) return;
+  terminal.automationWorkflowBuffer = `${terminal.automationWorkflowBuffer}${data}`.slice(-8192);
+  const marker = /\x1b\]777;multiterm-automation;([a-zA-Z0-9_-]+);(-?\d+)\x07/g;
+  let match;
+  while ((match = marker.exec(terminal.automationWorkflowBuffer))) {
+    finishAutomationWorkflowTask(match[1], Number(match[2]));
+  }
+}
+
+function finishAutomationWorkflowTask(token, exitCode, overrideDetail = "") {
+  const task = state.automationRuntime.steps.get(token);
+  if (!task) return false;
+  state.automationRuntime.steps.delete(token);
+  const run = state.automationRuntime.runs.get(task.runId);
+  const action = run?.rule.actions.find((item) => item.id === task.actionId);
+  const terminal = [...state.terminals.values()].find((item) => (
+    item.automationWorkflowActive === token
+    || item.automationWorkflowTasks.some((queued) => queued.token === token)
+  ));
+  if (terminal) {
+    terminal.automationWorkflowTasks = terminal.automationWorkflowTasks.filter((item) => item.token !== token);
+    if (terminal.automationWorkflowActive === token) {
+      terminal.automationWorkflowActive = "";
+      terminal.automationWorkflowBuffer = "";
+    }
+    scheduleAutomationWorkflowCheck(terminal, 150);
+  }
+  if (!run || !action) return false;
+  return completeAutomationStep(run, action, exitCode === 0, overrideDetail || `Exited with code ${exitCode}`);
+}
+
+function failAutomationWorkflowTasksForTerminal(terminal, reason) {
+  const tokens = terminal?.automationWorkflowTasks?.map((task) => task.token) || [];
+  for (const token of tokens) finishAutomationWorkflowTask(token, 1, reason);
 }
 
 function pendingAutomationStage(terminal) {
@@ -14978,35 +16876,6 @@ function queueAutomationStage(terminal, command, rule, options = {}) {
   return true;
 }
 
-function runAutomationRule(rule, options = {}) {
-  let queued = 0;
-  for (const [actionIndex, action] of rule.actions.entries()) {
-    const resolution = resolveAutomationActionTarget(action);
-    if (!resolution.terminal) {
-      addAutomationHistory("blocked", rule.name, resolution.error, rule.id);
-      continue;
-    }
-    const occurrenceKey = options.occurrenceAt ? `${rule.id}:${options.occurrenceAt}:${actionIndex}` : "";
-    const accepted = action.submit
-      ? queueAutomaticTerminalCommand(resolution.terminal, action.command, { occurrenceKey })
-      : queueAutomationStage(resolution.terminal, action.command, rule, { occurrenceKey });
-    if (accepted) {
-      queued += 1;
-      addAutomationHistory(
-        "queued",
-        rule.name,
-        `${action.submit ? "Run" : "Stage"} in ${resolution.launched ? "new terminal " : ""}${resolution.terminal.titleInput.value}`,
-        rule.id
-      );
-    } else {
-      const destination = action.targetMode === "new" ? "a new terminal" : action.targetName;
-      addAutomationHistory("failed", rule.name, `Could not queue action for ${destination}`, rule.id);
-    }
-  }
-  if (options.manual && queued) toast(`Queued ${queued} automation action${queued === 1 ? "" : "s"}`, "success", 1800);
-  return queued;
-}
-
 async function tickAutomationSchedules(now = new Date()) {
   const nowMs = now.getTime();
   if (state.automationRuntime.ticking) return false;
@@ -15030,6 +16899,12 @@ async function tickAutomationSchedules(now = new Date()) {
     const wokeAfterGap = nowMs - state.automationRuntime.lastTickAt > 5000;
     for (const rule of state.automations.rules) {
       if (!rule.enabled) continue;
+      const snoozedUntil = rule.snoozedUntil ? new Date(rule.snoozedUntil) : null;
+      if (snoozedUntil && Number.isFinite(snoozedUntil.getTime()) && snoozedUntil.getTime() > nowMs) continue;
+      if (rule.snoozedUntil) {
+        rule.snoozedUntil = null;
+        changed = true;
+      }
       const due = automationDueAt(rule);
       if (!due || due.getTime() > nowMs) continue;
       if (!await claimAutomationOccurrence(rule.id, due)) continue;
@@ -16362,63 +18237,170 @@ function bindTerminalMessages() {
 
 /* ---------------- Shortcuts cheat sheet --------------- */
 
-const SHORTCUT_SECTIONS = Object.freeze([
+const CONTEXTUAL_SHORTCUT_SECTIONS = Object.freeze([
   {
-    title: "Terminal right-click menu shortcuts",
+    title: "Contextual controls",
     items: [
-      ["Ctrl+Shift+C", "Copy", "Copies the selected terminal output."],
-      ["Ctrl+Shift+V", "Paste", "Pastes clipboard text into the active terminal."],
-      ["Ctrl+A", "Select all", "Selects all output in the terminal buffer."],
-      ["Ctrl+F", "Find", "Opens search for the active terminal."],
-      ["Ctrl+Shift+F", "Find in all terminals", "Searches every terminal buffer."],
-      ["Ctrl+Shift+L", "Clear", "Clears the active terminal display."],
-      ["Ctrl+Shift+X", "Maximize or restore", "Toggles the active pane between normal and maximized size."],
-      ["Ctrl+Shift+R", "Restart", "Restarts the active terminal session."],
-      ["Ctrl+Shift+W", "Close", "Closes the active terminal session."]
-    ]
-  },
-  {
-    title: "Page right-click menu shortcuts",
-    items: [
-      ["Ctrl+P", "New page", "Creates and opens a new page."],
-      ["Ctrl+T", "New terminal", "Starts a terminal in the current workspace folder."],
-      ["Ctrl+Shift+F", "Find in all terminals", "Searches every terminal on every page."],
-      ["Ctrl+Shift+B", "Broadcast command", "Opens the command broadcaster."],
-      ["Ctrl+Shift+P", "Command palette", "Opens the searchable action palette."]
-    ]
-  },
-  {
-    title: "App shortcuts (available at any time)",
-    items: [
-      ["F1", "Help", "Opens the in-app help guide."],
-      ["Ctrl+Shift+P", "Command palette", "Opens or closes the searchable action palette."],
-      ["Ctrl+P", "New page", "Creates and opens a new page instead of opening Print."],
-      ["Alt+Q", "Switch terminal", "Opens the quick terminal switcher."],
       ["Alt+1…9 / Alt+A…Z", "Jump to terminal", "Chooses a terminal from the quick switcher."],
-      ["Ctrl+PageDown / Ctrl+PageUp", "Next or previous page", "Moves between pages without stopping their terminals."],
       ["Alt+1…9", "Go to page", "Opens the page at the matching position."],
-      ["Ctrl+/", "Keyboard shortcuts", "Opens or closes this shortcut catalog."],
-      ["F11 / Esc", "Fullscreen focus mode", "F11 enters or exits fullscreen with collapsible controls hidden; Esc exits and restores the previous UI."],
-      ["Ctrl+T / Ctrl+Shift+T", "New terminal", "Starts a terminal on the active page."],
-      ["Ctrl+Shift+W", "Close active terminal", "Closes the active terminal session."],
-      ["Ctrl+Shift+R", "Restart active terminal", "Restarts the active shell."],
-      ["Ctrl+F / Ctrl+Shift+F", "Find", "Searches the active terminal or every terminal."],
-      ["Ctrl+Shift+E", "Search and filter panes", "Focuses the terminal filter in the top bar."],
-      ["Ctrl+Shift+L", "Clear active terminal", "Clears the active terminal display."],
-      ["Ctrl+Shift+X", "Maximize or restore pane", "Toggles the active pane size."],
-      ["Ctrl+V / Ctrl+Shift+V", "Paste", "Pastes clipboard text into the active terminal."],
-      ["Ctrl+Shift+C", "Copy output", "Copies selected terminal output."],
+      ["Ctrl+V", "Paste through xterm", "Pastes directly when the Ctrl+V terminal setting is enabled."],
       ["Alt+Drag", "Pass drag to full-screen app", "Lets a mouse-aware terminal app handle the drag."],
-      ["Ctrl+Shift+Q", "Dequeue next command", "Inserts and runs the next staged command."],
-      ["Ctrl+Shift+B", "Broadcast command", "Opens the command broadcaster."],
-      ["Ctrl+Alt+→ / Ctrl+Alt+←", "Next or previous terminal", "Cycles terminal focus."],
       ["Ctrl+mouse wheel", "Zoom terminal under pointer", "Changes only the pointed terminal's font size."],
-      ["Ctrl+Alt+= / Ctrl+Alt+- / Ctrl+Alt+0", "Active terminal zoom", "Changes or resets only the active terminal's font size."],
-      ["Ctrl+= / Ctrl+- / Ctrl+0", "Default terminal zoom", "Changes or resets the default terminal font size."],
       ["Escape", "Close active surface", "Closes the active dialog, menu, or search."]
     ]
   }
 ]);
+
+const shortcutEditor = { capture: null, hoverTimer: 0 };
+
+function setShortcutStatus(text, tone = "") {
+  elements.shortcutsStatus.textContent = text;
+  if (tone) elements.shortcutsStatus.dataset.tone = tone;
+  else delete elements.shortcutsStatus.dataset.tone;
+}
+
+function globalShortcutAria(binding) {
+  const normalized = normalizeGlobalShortcutBinding(binding);
+  if (!normalized) return "";
+  const keys = { arrowleft: "ArrowLeft", arrowright: "ArrowRight", pagedown: "PageDown", pageup: "PageUp", space: "Space" };
+  const key = keys[normalized.key] || (normalized.key.length === 1 ? normalized.key.toUpperCase() : normalized.key.toUpperCase());
+  return [normalized.ctrl ? "Control" : "", normalized.alt ? "Alt" : "", normalized.shift ? "Shift" : "", normalized.meta ? "Meta" : "", key]
+    .filter(Boolean)
+    .join("+");
+}
+
+function refreshGlobalShortcutHints() {
+  const terminalBindings = globalShortcutBindings("terminal.new");
+  const terminalLabel = primaryGlobalShortcutLabel("terminal.new");
+  const terminalAria = terminalBindings.map(globalShortcutAria).filter(Boolean).join(" ");
+  for (const button of [elements.addTerminal, elements.fullscreenAddTerminal]) {
+    if (!button) continue;
+    button.title = `New terminal (${terminalLabel})`;
+    button.setAttribute("aria-keyshortcuts", terminalAria);
+  }
+  if (elements.workspaceEmptyShortcut) elements.workspaceEmptyShortcut.textContent = terminalLabel;
+  const shortcutsLabel = primaryGlobalShortcutLabel("app.shortcuts");
+  elements.helpToggle.title = `Keyboard shortcuts (${shortcutsLabel})`;
+  elements.helpToggle.setAttribute("aria-keyshortcuts", globalShortcutBindings("app.shortcuts").map(globalShortcutAria).join(" "));
+  const paletteLabel = primaryGlobalShortcutLabel("app.command-palette");
+  elements.commandPalette.title = `Command palette (${paletteLabel})`;
+  elements.commandPalette.setAttribute("aria-keyshortcuts", globalShortcutBindings("app.command-palette").map(globalShortcutAria).join(" "));
+  elements.statusShortcutHint.textContent = `${paletteLabel} commands · ${terminalLabel} new terminal · ${primaryGlobalShortcutLabel("page.new")} new page`;
+  const affordances = [
+    ["#broadcastToggle", "terminal.broadcast", "Broadcast command"],
+    ['button[data-action="find"]', "terminal.find", "Find"],
+    ['button[data-action="clear"]', "terminal.clear", "Clear"],
+    ['button[data-action="copy"]', "terminal.copy", "Copy output"],
+    ['button[data-action="restart"]', "terminal.restart", "Restart session"],
+    ['button[data-action="dequeue"]', "terminal.dequeue", "Insert next queued command without pressing Enter"],
+    ['button[data-action="maximize"]', "terminal.pane-zoom", "Maximize or restore"],
+    ['button[data-action="close"]', "terminal.close", "Close"]
+  ];
+  for (const [selector, actionId, label] of affordances) {
+    const bindings = globalShortcutBindings(actionId);
+    const title = bindings.length ? `${label} (${bindings.map(formatGlobalShortcut).join(" / ")})` : label;
+    const aria = bindings.map(globalShortcutAria).filter(Boolean).join(" ");
+    for (const element of document.querySelectorAll(selector)) {
+      element.title = title;
+      if (aria) element.setAttribute("aria-keyshortcuts", aria);
+      else element.removeAttribute("aria-keyshortcuts");
+    }
+  }
+}
+
+function persistGlobalShortcutOverrides(overrides) {
+  state.settings.keyboardShortcuts = overrides;
+  saveSettings();
+  refreshGlobalShortcutHints();
+}
+
+function setGlobalShortcutOverride(overrides, actionId, bindings) {
+  overrides[actionId] = bindings.map(normalizeGlobalShortcutBinding).filter(Boolean);
+}
+
+function assignGlobalShortcutBinding(actionId, index, binding) {
+  const normalized = normalizeGlobalShortcutBinding(binding);
+  const signature = globalShortcutSignature(normalized);
+  if (!GLOBAL_SHORTCUT_ACTION_BY_ID.has(actionId) || !signature) return [];
+  const overrides = state.settings.keyboardShortcuts && typeof state.settings.keyboardShortcuts === "object"
+    && !Array.isArray(state.settings.keyboardShortcuts) ? { ...state.settings.keyboardShortcuts } : {};
+  const displaced = [];
+  for (const action of GLOBAL_SHORTCUT_ACTIONS) {
+    if (action.id === actionId) continue;
+    const current = globalShortcutBindings(action.id);
+    const next = current.filter((candidate) => globalShortcutSignature(candidate) !== signature);
+    if (next.length === current.length) continue;
+    setGlobalShortcutOverride(overrides, action.id, next);
+    displaced.push(action.label);
+  }
+  const current = globalShortcutBindings(actionId);
+  const next = [...current];
+  if (index >= 0 && index < next.length) next.splice(index, 1);
+  const unique = next.filter((candidate) => globalShortcutSignature(candidate) !== signature);
+  unique.splice(index >= 0 ? Math.min(index, unique.length) : unique.length, 0, normalized);
+  setGlobalShortcutOverride(overrides, actionId, unique);
+  persistGlobalShortcutOverrides(overrides);
+  return displaced;
+}
+
+function removeGlobalShortcutBinding(actionId, index) {
+  const current = globalShortcutBindings(actionId);
+  if (index < 0 || index >= current.length) return;
+  current.splice(index, 1);
+  const overrides = state.settings.keyboardShortcuts && typeof state.settings.keyboardShortcuts === "object"
+    && !Array.isArray(state.settings.keyboardShortcuts) ? { ...state.settings.keyboardShortcuts } : {};
+  setGlobalShortcutOverride(overrides, actionId, current);
+  persistGlobalShortcutOverrides(overrides);
+  renderShortcutCatalog();
+  setShortcutStatus("Shortcut removed.", "ready");
+}
+
+function resetGlobalShortcutAction(actionId) {
+  const action = GLOBAL_SHORTCUT_ACTION_BY_ID.get(actionId);
+  if (!action) return;
+  const defaultSignatures = new Set(action.defaults.map(globalShortcutSignature));
+  const overrides = state.settings.keyboardShortcuts && typeof state.settings.keyboardShortcuts === "object"
+    && !Array.isArray(state.settings.keyboardShortcuts) ? { ...state.settings.keyboardShortcuts } : {};
+  for (const other of GLOBAL_SHORTCUT_ACTIONS) {
+    if (other.id === actionId) continue;
+    const current = globalShortcutBindings(other.id);
+    const next = current.filter((binding) => !defaultSignatures.has(globalShortcutSignature(binding)));
+    if (next.length !== current.length) setGlobalShortcutOverride(overrides, other.id, next);
+  }
+  delete overrides[actionId];
+  persistGlobalShortcutOverrides(overrides);
+  renderShortcutCatalog();
+  setShortcutStatus(`${action.label} restored to its defaults.`, "ready");
+}
+
+function cancelGlobalShortcutCapture() {
+  shortcutEditor.capture = null;
+  renderShortcutCatalog();
+  setShortcutStatus("Shortcut capture cancelled.");
+}
+
+function beginGlobalShortcutCapture(actionId, index) {
+  shortcutEditor.capture = { actionId, index };
+  renderShortcutCatalog();
+  const selector = `.shortcut-binding[data-shortcut-action="${actionId}"][data-binding-index="${index}"]`;
+  const button = elements.shortcutsCatalog.querySelector(selector);
+  if (button) {
+    button.classList.add("is-capturing");
+    button.textContent = "Press shortcut";
+    button.focus();
+  }
+  setShortcutStatus("Press the new shortcut now. Escape cancels.", "waiting");
+}
+
+function revealShortcutControlsAfterDelay(row) {
+  window.clearTimeout(shortcutEditor.hoverTimer);
+  shortcutEditor.hoverTimer = window.setTimeout(() => row.classList.add("show-shortcut-controls"), 1000);
+}
+
+function hideShortcutControls(row) {
+  window.clearTimeout(shortcutEditor.hoverTimer);
+  if (!row.contains(document.activeElement)) row.classList.remove("show-shortcut-controls");
+}
 
 const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.command-queue": "Command queue",
@@ -16493,26 +18475,132 @@ function renderShortcutSection(title, items) {
   elements.shortcutsCatalog.append(section);
 }
 
+function renderGlobalShortcutSection(sectionName) {
+  const section = document.createElement("section");
+  section.className = "shortcuts-section";
+  const heading = document.createElement("h3");
+  heading.textContent = `${sectionName} shortcuts`;
+  const list = document.createElement("ul");
+  list.className = "shortcuts-list";
+  for (const action of GLOBAL_SHORTCUT_ACTIONS.filter((candidate) => candidate.section === sectionName)) {
+    const row = document.createElement("li");
+    row.className = "shortcut-edit-row";
+    row.dataset.shortcutAction = action.id;
+    row.addEventListener("pointerenter", () => revealShortcutControlsAfterDelay(row));
+    row.addEventListener("pointerleave", () => hideShortcutControls(row));
+    const description = document.createElement("span");
+    description.className = "shortcut-description";
+    const name = document.createElement("strong");
+    name.textContent = action.label;
+    const explanation = document.createElement("small");
+    explanation.textContent = action.detail;
+    description.append(name, explanation);
+    const editor = document.createElement("span");
+    editor.className = "shortcut-binding-editor";
+    const bindings = globalShortcutBindings(action.id);
+    bindings.forEach((binding, index) => {
+      const wrapper = document.createElement("span");
+      wrapper.className = "shortcut-binding-wrap";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "kbd shortcut-binding";
+      button.dataset.shortcutAction = action.id;
+      button.dataset.bindingIndex = String(index);
+      button.title = `Change ${formatGlobalShortcut(binding)}`;
+      button.textContent = formatGlobalShortcut(binding);
+      button.addEventListener("click", () => beginGlobalShortcutCapture(action.id, index));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "shortcut-binding-remove";
+      remove.title = `Remove ${formatGlobalShortcut(binding)}`;
+      remove.setAttribute("aria-label", `Remove ${formatGlobalShortcut(binding)} from ${action.label}`);
+      remove.innerHTML = '<i data-lucide="x"></i>';
+      remove.addEventListener("click", () => removeGlobalShortcutBinding(action.id, index));
+      wrapper.append(button, remove);
+      editor.append(wrapper);
+    });
+    const controls = document.createElement("span");
+    controls.className = "shortcut-edit-controls";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = `icon-button shortcut-binding${bindings.length ? "" : " is-empty"}`;
+    add.dataset.shortcutAction = action.id;
+    add.dataset.bindingIndex = "-1";
+    add.title = `Add a shortcut for ${action.label}`;
+    add.setAttribute("aria-label", `Add a shortcut for ${action.label}`);
+    add.innerHTML = '<i data-lucide="plus"></i>';
+    add.addEventListener("click", () => beginGlobalShortcutCapture(action.id, -1));
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "icon-button shortcut-reset";
+    reset.title = `Restore defaults for ${action.label}`;
+    reset.setAttribute("aria-label", `Restore defaults for ${action.label}`);
+    reset.innerHTML = '<i data-lucide="rotate-ccw"></i>';
+    reset.addEventListener("click", () => resetGlobalShortcutAction(action.id));
+    controls.append(add, reset);
+    editor.append(controls);
+    row.append(description, editor);
+    list.append(row);
+  }
+  section.append(heading, list);
+  elements.shortcutsCatalog.append(section);
+}
+
 function renderShortcutCatalog() {
   elements.shortcutsCatalog.textContent = "";
-  for (const section of SHORTCUT_SECTIONS) renderShortcutSection(section.title, section.items);
+  for (const sectionName of ["App", "Page", "Terminal"]) renderGlobalShortcutSection(sectionName);
+  for (const section of CONTEXTUAL_SHORTCUT_SECTIONS) renderShortcutSection(section.title, section.items);
   const custom = [...contextMenuShortcuts.entries()].map(([actionId, binding]) => [
     formatContextShortcut(binding),
     terminalShortcutLabel(actionId),
     "Runs this customized action while a terminal context menu is open."
   ]);
   if (custom.length > 0) renderShortcutSection("Custom terminal right-click shortcuts", custom);
+  refreshIcons(elements.shortcutsCatalog);
+}
+
+function shortcutCatalogText() {
+  const lines = ["MultiTerm keyboard shortcuts", ""];
+  for (const sectionName of ["App", "Page", "Terminal"]) {
+    lines.push(`${sectionName} shortcuts`);
+    for (const action of GLOBAL_SHORTCUT_ACTIONS.filter((candidate) => candidate.section === sectionName)) {
+      lines.push(`${action.label}: ${globalShortcutBindings(action.id).map(formatGlobalShortcut).join(", ") || "Not assigned"}`);
+    }
+    lines.push("");
+  }
+  if (contextMenuShortcuts.size) {
+    lines.push("Custom terminal right-click shortcuts");
+    for (const [actionId, binding] of contextMenuShortcuts) {
+      lines.push(`${terminalShortcutLabel(actionId)}: ${formatContextShortcut(binding)}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\r\n");
+}
+
+async function exportShortcutCatalog() {
+  const response = await requestBridge({
+    type: "prepareSave",
+    text: shortcutCatalogText(),
+    suggestedName: "MultiTerm-keyboard-shortcuts.txt",
+    cwd: state.cwd || elements.cwdInput.value || ""
+  }, { timeout: 300000 });
+  if (response?.path) toast(`Saved ${response.path.split(/[\\/]/).pop()}`, "success", 2200);
+  else if (response?.error) toast(response.error, "error", 3200);
 }
 
 function openShortcuts() {
   closePalette();
   renderShortcutCatalog();
+  setShortcutStatus("Click a key combination to replace it. Hover a row for more controls.");
   elements.shortcutsOverlay.hidden = false;
   window.requestAnimationFrame(() => elements.shortcutsOverlay.classList.add("is-open"));
   refreshIcons();
 }
 
 function closeShortcuts() {
+  shortcutEditor.capture = null;
+  window.clearTimeout(shortcutEditor.hoverTimer);
   elements.shortcutsOverlay.classList.remove("is-open");
   window.setTimeout(() => {
     elements.shortcutsOverlay.hidden = true;
@@ -17980,7 +20068,7 @@ function buildSurfaceContextMenu() {
   const invokedTerminalId = state.activeId;
 
   renderContextMenu([
-    { label: "New terminal", hint: "Ctrl+T", icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
+    { label: "New terminal", hint: primaryGlobalShortcutLabel("terminal.new"), icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
     { label: "New terminal here", icon: "folder-plus", title: here || undefined, disabled: !here, run: () => newTerminal({ cwd: here }) },
     { label: "Paste and execute", icon: "clipboard-check", title: "Pastes clipboard text and immediately presses Enter", run: pasteAndExecute },
     { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ cwd: here || undefined, runStartup: true }) },
@@ -18110,7 +20198,11 @@ function buildPaneOverflowMenu(terminal) {
         headerAction: action,
         headerActionTerminalId: terminal.id,
         title: button?.title,
-        run: () => runHeaderAction(terminal, action)
+        run: () => runHeaderAction(
+          terminal,
+          action,
+          action === "artifacts" ? terminal.pane.querySelector('button[data-action="more"]') : null
+        )
       };
     });
   if (narrow) {

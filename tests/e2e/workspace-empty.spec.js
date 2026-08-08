@@ -28,7 +28,7 @@ test.describe("Empty workspace guidance", () => {
     await expect(page.locator("#workspaceEmptyHint")).toBeVisible();
     await expect(page.locator("#workspaceEmptyRestore")).toBeHidden();
     await expect(page.locator("#workspaceEmptyHint")).toContainText("Nothing to show here.");
-    await expect(page.locator("#workspaceEmptyShortcut")).toHaveText("Ctrl+T");
+    await expect(page.locator("#workspaceEmptyShortcut")).toHaveText("Ctrl+N");
     await expect(page.locator("#workspaceEmptyHint")).toContainText("right clicking in this page");
     await expect(page.locator("#workspaceEmptyHint")).toContainText("on the top right of the app");
     await expect(page.locator(".workspace-empty-mark")).toBeVisible();

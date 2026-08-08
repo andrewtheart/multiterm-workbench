@@ -1,4 +1,8 @@
 const { test, expect } = require("../support/renderer-coverage");
+const os = require("node:os");
+const path = require("node:path");
+const fs = require("node:fs");
+const { execFileSync } = require("node:child_process");
 
 // The dialog decides where a real worktree lands and what git command runs, so
 // the checks here are about the resolved path and the guard rails, not styling.
@@ -105,6 +109,43 @@ test.describe("Run in a worktree dialog", () => {
     // A failed add must not leave the assistant running in the old directory.
     expect(command).toMatch(/if \(Test-Path -LiteralPath 'D:\\multiTerm\.worktrees\\main-0806'\) \{[^}]*copilot --yolo/);
     expect(command).toContain("MultiTerm: the worktree was not created.");
+  });
+
+  test("imports dirty parent files by default without changing the parent checkout", async ({ page }) => {
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "mt-create-ui-"));
+    const repo = path.join(sandbox, "repo");
+    fs.mkdirSync(repo);
+    const git = (args, cwd = repo) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    git(["init", "-b", "main"]);
+    git(["config", "user.email", "probe@example.com"]);
+    git(["config", "user.name", "Probe"]);
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "base\n");
+    git(["add", "."]);
+    git(["commit", "-m", "base"]);
+    fs.writeFileSync(path.join(repo, "tracked.txt"), "pending\n");
+    fs.writeFileSync(path.join(repo, "untracked.txt"), "new\n");
+    const parentStatus = git(["status", "--porcelain=v1", "--untracked-files=all"]);
+    const worktree = `${repo}.worktrees\\agent-ui`;
+
+    try {
+      await open(page);
+      await page.evaluate(() => { buildAiAssistantCommand = () => "Write-Output 'assistant-stub'"; });
+      await page.locator("#worktreeFolderInput").fill(repo);
+      await expect(page.locator("#worktreeImportRow")).toBeVisible();
+      await expect(page.locator("#worktreeImportPending")).toBeChecked();
+      await expect(page.locator("#worktreeStatus")).toContainText("with its pending changes");
+      await page.locator("#worktreeNameInput").fill("agent-ui");
+      await page.locator("#worktreeCreate").click();
+      await expect(page.locator("#worktreeOverlay")).toBeHidden({ timeout: 30000 });
+
+      expect(git(["status", "--porcelain=v1", "--untracked-files=all"])).toBe(parentStatus);
+      expect(fs.readFileSync(path.join(worktree, "tracked.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("pending\n");
+      expect(fs.readFileSync(path.join(worktree, "untracked.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("new\n");
+    } finally {
+      try { git(["worktree", "remove", "--force", worktree]); } catch { }
+      fs.rmSync(sandbox, { recursive: true, force: true });
+      fs.rmSync(`${repo}.worktrees`, { recursive: true, force: true });
+    }
   });
 
   test("rejects a worktree name that is not a usable folder", async ({ page }) => {

@@ -59,25 +59,44 @@
     };
   }
 
-  function normalizeAction(value, index = 0) {
+  function normalizeAction(value, index = 0, previousIds = []) {
     const source = value && typeof value === "object" ? value : {};
     const command = typeof source.command === "string" ? source.command.trim() : "";
     if (!command || command.length > MAX_COMMAND_LENGTH) return null;
-    const targetMode = source.targetMode === "new" ? "new" : "terminal";
+    const targetMode = source.targetMode === "new"
+      ? "new"
+      : source.targetMode === "pid"
+        ? "pid"
+        : "title";
+    const targetPid = Number(source.targetPid);
+    const availableDependencies = new Set(previousIds);
+    const dependsOn = (Array.isArray(source.dependsOn) ? source.dependsOn : [])
+      .map(identifier)
+      .filter((id, dependencyIndex, values) => id && availableDependencies.has(id) && values.indexOf(id) === dependencyIndex);
+    if (!dependsOn.length && index > 0 && previousIds.length) dependsOn.push(previousIds[previousIds.length - 1]);
     return {
       command,
+      condition: ["always", "failure"].includes(source.condition) ? source.condition : "success",
+      conditionOperator: source.conditionOperator === "any" ? "any" : "all",
+      cwd: text(source.cwd, 1024),
+      dependsOn,
+      fallbackToNew: targetMode === "new" ? false : source.fallbackToNew !== false,
       id: identifier(source.id) || `action-${index + 1}`,
+      inputType: ["powershell", "script"].includes(source.inputType) ? source.inputType : "shell",
       submit: source.submit !== false,
       targetMode,
-      targetName: targetMode === "new" ? "" : text(source.targetName, 160)
+      targetName: targetMode === "title" ? text(source.targetName, 160) : "",
+      targetPid: targetMode === "pid" && Number.isInteger(targetPid) && targetPid > 0 ? targetPid : null
     };
   }
 
   function normalizeRule(value, index = 0) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const actions = (Array.isArray(value.actions) ? value.actions : [])
-      .map(normalizeAction)
-      .filter(Boolean);
+    const actions = [];
+    for (const sourceAction of (Array.isArray(value.actions) ? value.actions : [])) {
+      const action = normalizeAction(sourceAction, actions.length, actions.map((item) => item.id));
+      if (action) actions.push(action);
+    }
     if (!actions.length) return null;
     const now = new Date().toISOString();
     return {
@@ -87,7 +106,10 @@
       id: identifier(value.id) || `automation-${index + 1}`,
       lastRunAt: text(value.lastRunAt, 64) || null,
       name: text(value.name, 160) || `Automation ${index + 1}`,
+      runAs: text(value.runAs, 320),
+      snoozedUntil: text(value.snoozedUntil, 64) || null,
       trigger: normalizeTrigger(value.trigger),
+      type: value.type === "copilot" ? "copilot" : "command",
       updatedAt: text(value.updatedAt, 64) || now
     };
   }

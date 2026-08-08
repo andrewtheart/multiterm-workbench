@@ -5,7 +5,8 @@ const { execFileSync } = require("node:child_process");
 
 // A throwaway repo with a worktree that has real commits, so the review and
 // merge flows have something genuine to work against.
-const sandbox = path.join(os.tmpdir(), "mt-review-fixture");
+const conflict = process.argv.includes("--conflict");
+const sandbox = path.join(os.tmpdir(), conflict ? "mt-conflict-fixture" : "mt-review-fixture");
 fs.rmSync(sandbox, { recursive: true, force: true });
 fs.mkdirSync(sandbox, { recursive: true });
 
@@ -25,9 +26,18 @@ git(["worktree", "add", worktreePath, "-b", "main-agent"]);
 git(["config", "--local", "multiterm.worktree.main-agent.parent", "main"]);
 git(["config", "--local", "multiterm.worktree.main-agent.created", new Date().toISOString()]);
 
-fs.writeFileSync(path.join(worktreePath, "greeting.txt"), "hello\nagent world\n");
-fs.writeFileSync(path.join(worktreePath, "added.txt"), "brand new\n");
-git(["add", "."], worktreePath);
-git(["commit", "-m", "agent work"], worktreePath);
+if (conflict) {
+	fs.writeFileSync(path.join(repo, "greeting.txt"), "hello\nparent world\n");
+	git(["add", "greeting.txt"], repo);
+	git(["commit", "-m", "parent work"], repo);
+	fs.writeFileSync(path.join(worktreePath, "greeting.txt"), "hello\nagent world\n");
+	git(["add", "greeting.txt"], worktreePath);
+	git(["commit", "-m", "agent work"], worktreePath);
+} else {
+	fs.writeFileSync(path.join(worktreePath, "greeting.txt"), "hello\nagent world\n");
+	fs.writeFileSync(path.join(worktreePath, "added.txt"), "brand new\n");
+	git(["add", "."], worktreePath);
+	git(["commit", "-m", "agent work"], worktreePath);
+}
 
 console.log(JSON.stringify({ sandbox, repo, worktreePath }));

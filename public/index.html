@@ -121,10 +121,13 @@
             <button id="attachTmux" class="icon-button" type="button" title="Attach WSL tmux session" aria-label="Attach WSL tmux session">
               <i data-lucide="link"></i>
             </button>
+            <button id="minimizeApp" class="icon-button" type="button" title="Minimize MultiTerm" aria-label="Minimize MultiTerm">
+              <i data-lucide="minus"></i>
+            </button>
             <button id="toggleHeaderTop" class="icon-button topbar-collapse" type="button" title="Collapse top bar" aria-label="Collapse top bar" aria-pressed="false">
               <i data-lucide="chevron-up"></i>
             </button>
-            <button id="addTerminal" class="primary-action" type="button" title="New terminal (Ctrl+T)" aria-label="New terminal" aria-keyshortcuts="Control+T">
+            <button id="addTerminal" class="primary-action" type="button" title="New terminal (Ctrl+N)" aria-label="New terminal" aria-keyshortcuts="Control+N Control+Shift+T">
               <i data-lucide="plus"></i>
               <span>Terminal</span>
             </button>
@@ -705,7 +708,7 @@
             <div id="workspaceEmptyHint" class="workspace-empty-panel" hidden>
               <p class="workspace-empty-title">Nothing to show here.</p>
               <p class="workspace-empty-body">
-                Add a new terminal with <kbd id="workspaceEmptyShortcut">Ctrl+T</kbd>, by right clicking in this page,
+                Add a new terminal with <kbd id="workspaceEmptyShortcut">Ctrl+N</kbd>, by right clicking in this page,
                 or by pressing <span class="workspace-empty-chip"><i data-lucide="plus"></i>Terminal</span> on the top right of the app.
               </p>
             </div>
@@ -800,7 +803,7 @@
           <input id="statusWorkspaceZoom" type="range" min="50" max="150" step="5" aria-label="Workspace zoom">
           <output id="statusWorkspaceZoomValue">100%</output>
         </label>
-        <span class="status-hint"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> commands · <kbd>Ctrl</kbd>+<kbd>T</kbd> new</span>
+        <span id="statusShortcutHint" class="status-hint">Ctrl+Shift+P commands · Ctrl+N new terminal · Ctrl+T new page</span>
         <div class="status-zoom" role="group" aria-label="Font zoom controls">
           <button id="statusZoomOut" class="status-btn status-icon-btn" type="button" title="Decrease default terminal font size (Ctrl+-)" aria-label="Decrease default terminal font size">
             <i data-lucide="minus"></i>
@@ -821,7 +824,7 @@
       </footer>
     </div>
 
-    <button id="fullscreenAddTerminal" class="fullscreen-add-terminal" type="button" title="New terminal (Ctrl+T)" aria-label="New terminal" aria-keyshortcuts="Control+T">
+    <button id="fullscreenAddTerminal" class="fullscreen-add-terminal" type="button" title="New terminal (Ctrl+N)" aria-label="New terminal" aria-keyshortcuts="Control+N Control+Shift+T">
       <i data-lucide="plus"></i>
     </button>
 
@@ -1078,6 +1081,14 @@
             <code id="worktreeParentBranch">-</code>
           </div>
 
+          <label id="worktreeImportRow" class="worktree-import-row" hidden>
+            <input id="worktreeImportPending" type="checkbox" checked>
+            <span>
+              <strong>Bring pending changes into the worktree</strong>
+              <small>Imports tracked, staged, deleted, and untracked files as pending changes. The parent checkout stays untouched.</small>
+            </span>
+          </label>
+
           <label class="cwd-change-field">
             <span>Worktree name</span>
             <input id="worktreeNameInput" type="text" spellcheck="false" autocomplete="off" placeholder="Suggested from the branch">
@@ -1157,15 +1168,207 @@
       </div>
     </div>
 
+    <div id="worktreeMergeOverlay" class="palette-overlay" hidden>
+      <div class="palette worktree-merge" role="dialog" aria-modal="true" aria-labelledby="worktreeMergeTitle" tabindex="-1">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="git-merge"></i></span>
+            <div>
+              <h2 id="worktreeMergeTitle">Bring changes back</h2>
+              <p id="worktreeMergeSubtitle">Choose how this worktree should return to its parent.</p>
+            </div>
+          </div>
+          <button id="worktreeMergeClose" class="icon-button" type="button" title="Close" aria-label="Close bring changes back dialog">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="cwd-change-body">
+          <div class="worktree-merge-route" aria-label="Merge direction">
+            <span><small>From</small><strong id="worktreeMergeSource"></strong></span>
+            <i data-lucide="arrow-right" aria-hidden="true"></i>
+            <span><small>Into</small><strong id="worktreeMergeTarget"></strong></span>
+          </div>
+          <fieldset class="worktree-merge-mode-group">
+            <legend>Bring-back mode</legend>
+            <div class="worktree-merge-modes">
+              <label class="worktree-merge-mode">
+                <input type="radio" name="worktreeMergeMode" value="pending" checked>
+                <span>
+                  <strong>Pending</strong>
+                  <small>Keeps the parent uncommitted and includes pending worktree changes.</small>
+                  <em>Recommended</em>
+                </span>
+              </label>
+              <label class="worktree-merge-mode">
+                <input type="radio" name="worktreeMergeMode" value="squash">
+                <span>
+                  <strong>Squash</strong>
+                  <small>Combines committed worktree changes into one parent commit.</small>
+                </span>
+              </label>
+              <label class="worktree-merge-mode">
+                <input type="radio" name="worktreeMergeMode" value="merge">
+                <span>
+                  <strong>Preserve history</strong>
+                  <small>Creates a merge commit and retains the worktree commits.</small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+          <label id="worktreeMergeCommitRow" class="cwd-change-field" hidden>
+            <span>Commit message</span>
+            <input id="worktreeMergeCommitMessage" type="text" maxlength="240" autocomplete="off" spellcheck="true">
+          </label>
+          <ul id="worktreeMergeDetails" class="worktree-merge-details" hidden></ul>
+          <p id="worktreeMergeStatus" class="cwd-change-status" role="status">The source worktree is not changed by this operation.</p>
+        </div>
+        <div class="cwd-change-actions">
+          <button id="worktreeMergeCancel" class="secondary-action" type="button">Cancel</button>
+          <button id="worktreeMergeConfirm" class="primary-action" type="button">Bring back as pending</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="worktreeConflictOverlay" class="palette-overlay" hidden>
+      <div class="palette worktree-conflict" role="dialog" aria-modal="true" aria-labelledby="worktreeConflictTitle" tabindex="-1">
+        <div class="cwd-change-head">
+          <div class="cwd-change-heading">
+            <span class="cwd-change-mark" aria-hidden="true"><i data-lucide="git-compare-arrows"></i></span>
+            <div>
+              <h2 id="worktreeConflictTitle">Resolve conflicts</h2>
+              <p id="worktreeConflictSubtitle">Choose a file, shape the final result, then stage it.</p>
+            </div>
+          </div>
+          <button id="worktreeConflictClose" class="icon-button" type="button" title="Back to Bring changes back" aria-label="Back to Bring changes back">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+        <div class="worktree-conflict-body">
+          <aside class="worktree-conflict-sidebar" aria-label="Conflicted files">
+            <span>Files</span>
+            <div id="worktreeConflictFiles" class="worktree-conflict-files" role="list"></div>
+          </aside>
+          <main class="worktree-conflict-main">
+            <section class="worktree-conflict-sides" aria-label="Conflict sides">
+              <article class="worktree-conflict-side">
+                <h3>Base</h3>
+                <pre id="worktreeConflictBase"></pre>
+              </article>
+              <article class="worktree-conflict-side">
+                <h3>Current <small>parent</small></h3>
+                <pre id="worktreeConflictOurs"></pre>
+              </article>
+              <article class="worktree-conflict-side">
+                <h3>Incoming <small>worktree</small></h3>
+                <pre id="worktreeConflictTheirs"></pre>
+              </article>
+            </section>
+            <section id="worktreeConflictSideChoice" class="worktree-conflict-side-choice" hidden>
+              <div>
+                <strong id="worktreeConflictChoiceTitle">This file needs a side choice.</strong>
+                <span id="worktreeConflictChoiceReason"></span>
+              </div>
+              <button id="worktreeConflictChooseOurs" class="secondary-action" type="button">Keep current</button>
+              <button id="worktreeConflictChooseTheirs" class="primary-action" type="button">Use incoming</button>
+            </section>
+            <section id="worktreeConflictTextTools" class="worktree-conflict-result">
+              <div class="worktree-conflict-result-head">
+                <div>
+                  <h3>Final result</h3>
+                  <span>Edit freely or resolve one marker block at a time.</span>
+                </div>
+                <strong id="worktreeConflictHunkCount">0 unresolved hunks</strong>
+              </div>
+              <div class="code-editor worktree-conflict-editor">
+                <pre id="worktreeConflictHighlight" class="code-editor-paint" aria-hidden="true"></pre>
+                <textarea id="worktreeConflictResult" class="code-editor-input" aria-label="Final resolved file contents" spellcheck="false"></textarea>
+              </div>
+              <div id="worktreeConflictHunks" class="worktree-conflict-hunks"></div>
+            </section>
+          </main>
+        </div>
+        <div class="cwd-change-actions worktree-conflict-actions">
+          <p id="worktreeConflictStatus" class="cwd-change-status" role="status">Loading conflict...</p>
+          <button id="worktreeConflictBack" class="secondary-action" type="button">Back</button>
+          <button id="worktreeConflictSave" class="primary-action" type="button">Stage resolution</button>
+        </div>
+      </div>
+    </div>
+
     <div id="shortcutsOverlay" class="palette-overlay" hidden>
       <div class="palette shortcuts" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
         <div class="shortcuts-head">
           <span>Keyboard shortcuts</span>
-          <button id="shortcutsClose" class="icon-button" type="button" title="Close" aria-label="Close">
+          <span class="shortcuts-head-actions">
+            <button id="shortcutsPrint" class="icon-button" type="button" title="Print shortcuts" aria-label="Print shortcuts">
+              <i data-lucide="printer"></i>
+            </button>
+            <button id="shortcutsExport" class="icon-button" type="button" title="Save shortcuts as text" aria-label="Save shortcuts as text">
+              <i data-lucide="save"></i>
+            </button>
+            <button id="shortcutsClose" class="icon-button" type="button" title="Close" aria-label="Close">
+              <i data-lucide="x"></i>
+            </button>
+          </span>
+        </div>
+        <p id="shortcutsStatus" class="shortcuts-status" role="status"></p>
+        <div id="shortcutsCatalog" class="shortcuts-catalog"></div>
+      </div>
+    </div>
+
+    <div id="folderPickerOverlay" class="palette-overlay" hidden>
+      <div class="palette folder-picker" role="dialog" aria-modal="true" aria-labelledby="folderPickerTitle" aria-describedby="folderPickerStatus" tabindex="-1">
+        <div class="folder-picker-head">
+          <div>
+            <h2 id="folderPickerTitle">Select folder</h2>
+            <p>Choose from the hierarchy or search by part of a folder name.</p>
+          </div>
+          <button id="folderPickerClose" class="icon-button" type="button" title="Close" aria-label="Close folder picker">
             <i data-lucide="x"></i>
           </button>
         </div>
-        <div id="shortcutsCatalog" class="shortcuts-catalog"></div>
+        <div class="folder-picker-navigation">
+          <button id="folderPickerBack" class="icon-button" type="button" title="Back" aria-label="Previous folder" disabled><i data-lucide="arrow-left"></i></button>
+          <button id="folderPickerForward" class="icon-button" type="button" title="Forward" aria-label="Next folder" disabled><i data-lucide="arrow-right"></i></button>
+          <button id="folderPickerUp" class="icon-button" type="button" title="Up one level" aria-label="Open parent folder"><i data-lucide="arrow-up"></i></button>
+          <label class="folder-picker-location-field">
+            <i data-lucide="folder" aria-hidden="true"></i>
+            <input id="folderPickerLocation" type="text" spellcheck="false" autocomplete="off" aria-label="Folder location">
+          </label>
+          <div id="folderPickerSuggestions" class="folder-picker-suggestions" role="listbox" hidden></div>
+        </div>
+        <div class="folder-picker-search-row">
+          <label class="folder-picker-search-field">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="folderPickerSearch" type="search" spellcheck="false" autocomplete="off" placeholder="Search inside this folder" aria-label="Search folders">
+          </label>
+          <span id="folderPickerScope" class="folder-picker-scope" role="group" aria-label="Folder search scope">
+            <button type="button" data-folder-scope="current" aria-pressed="true">Current</button>
+            <button id="folderPickerEverywhere" type="button" data-folder-scope="everywhere" aria-pressed="false" disabled>Everywhere</button>
+          </span>
+        </div>
+        <aside id="folderPickerEverythingNotice" class="folder-picker-everything" hidden>
+          <i data-lucide="search-check" aria-hidden="true"></i>
+          <span>Install <a href="https://www.voidtools.com/downloads/" target="_blank" rel="noopener noreferrer">Everything and its ES command-line interface</a> for instant whole-computer folder search. MultiTerm never installs it automatically.</span>
+          <button id="folderPickerEverythingDismiss" type="button">Don't remind me again</button>
+        </aside>
+        <nav id="folderPickerRoots" class="folder-picker-roots" aria-label="Filesystem roots"></nav>
+        <nav id="folderPickerBreadcrumbs" class="folder-picker-breadcrumbs" aria-label="Current folder hierarchy"></nav>
+        <div id="folderPickerList" class="folder-picker-list" role="listbox" aria-label="Folders"></div>
+        <form id="folderPickerNewForm" class="folder-picker-new-form" hidden>
+          <i data-lucide="folder-plus" aria-hidden="true"></i>
+          <input id="folderPickerNewName" type="text" maxlength="255" spellcheck="false" autocomplete="off" placeholder="New folder name" aria-label="New folder name">
+          <button type="submit" class="primary-action">Create</button>
+          <button id="folderPickerNewCancel" type="button" class="icon-button" title="Cancel" aria-label="Cancel new folder"><i data-lucide="x"></i></button>
+        </form>
+        <div class="folder-picker-footer">
+          <p id="folderPickerStatus" role="status">Loading folders...</p>
+          <span class="folder-picker-footer-actions">
+            <button id="folderPickerNew" class="secondary-action" type="button"><i data-lucide="folder-plus"></i><span>New folder</span></button>
+            <button id="folderPickerCancel" class="secondary-action" type="button">Cancel</button>
+            <button id="folderPickerSelect" class="primary-action" type="button">Select this folder</button>
+          </span>
+        </div>
       </div>
     </div>
 
@@ -1623,7 +1826,7 @@
           <i data-lucide="workflow" aria-hidden="true"></i>
           <div>
             <h2 id="automationsTitle">Automations</h2>
-            <p id="automationsSubtitle">Scheduled commands and terminal handoffs.</p>
+            <p id="automationsSubtitle">Scheduled command and Copilot workflows.</p>
           </div>
           <button id="automationsPause" class="automation-pause" type="button" aria-pressed="false">
             <i data-lucide="pause"></i><span>Pause</span>
@@ -1634,7 +1837,7 @@
         <nav class="automation-tabs" role="tablist" aria-label="Automation views">
           <button type="button" role="tab" data-automation-view="schedules" aria-selected="true"><i data-lucide="calendar-clock"></i><span>Schedules</span></button>
           <button type="button" role="tab" data-automation-view="routes" aria-selected="false"><i data-lucide="route"></i><span>Handoff routes</span></button>
-          <button type="button" role="tab" data-automation-view="activity" aria-selected="false"><i data-lucide="activity"></i><span>Activity</span></button>
+          <button type="button" role="tab" data-automation-view="activity" aria-selected="false"><i data-lucide="history"></i><span>Run History</span></button>
         </nav>
 
         <section id="automationSchedulesView" class="automation-view is-active" data-automation-panel="schedules" role="tabpanel">
@@ -1653,6 +1856,14 @@
               <button id="automationDelete" class="icon-button automation-delete" type="button" title="Delete automation" aria-label="Delete automation"><i data-lucide="trash-2"></i></button>
             </div>
             <label class="automation-field automation-name-field"><span>Name</span><input id="automationName" type="text" maxlength="160" autocomplete="off" required></label>
+            <fieldset class="automation-kind-block">
+              <legend>Automation type</legend>
+              <div id="automationType" class="automation-type-options" role="radiogroup" aria-label="Automation type">
+                <button type="button" role="radio" data-automation-type="command" aria-checked="true"><i data-lucide="terminal-square"></i><span><strong>Command based automation</strong><small>Shell commands, PowerShell, or script files</small></span></button>
+                <button type="button" role="radio" data-automation-type="copilot" aria-checked="false"><i data-lucide="sparkles"></i><span><strong>Copilot automation</strong><small>Run a scheduled prompt in Copilot CLI</small></span></button>
+              </div>
+            </fieldset>
+            <label class="automation-field automation-account-field"><span>Run as user</span><input id="automationRunAs" type="text" maxlength="320" autocomplete="username" spellcheck="false"><small id="automationRunAsHint">Defaults to the current user.</small></label>
 
             <fieldset class="automation-block">
               <legend>When</legend>
@@ -1676,8 +1887,8 @@
 
             <fieldset class="automation-block">
               <legend>Then</legend>
-              <div id="automationActionList" class="automation-action-list"></div>
-              <button id="automationActionAdd" class="secondary-action automation-action-add" type="button"><i data-lucide="plus"></i><span>Add action</span></button>
+              <div id="automationActionList" class="automation-action-list" aria-label="Visual automation workflow"></div>
+              <button id="automationActionAdd" class="secondary-action automation-action-add" type="button"><i data-lucide="plus"></i><span>Add another action</span></button>
             </fieldset>
 
             <div class="automation-preview"><i data-lucide="sparkles"></i><span id="automationPreview">Every 60 minutes</span></div>
@@ -1702,13 +1913,13 @@
 
         <section id="automationActivityView" class="automation-view" data-automation-panel="activity" role="tabpanel" hidden>
           <div class="automation-section-head">
-            <div><h3>Activity</h3><p>Recent schedules and handoffs.</p></div>
-            <label class="automation-activity-filter"><span>Show</span><select id="automationActivityFilter" aria-label="Filter automation activity"><option value="all">All events</option><option value="schedules">Schedules</option><option value="handoffs">Handoffs</option><option value="attention">Needs attention</option></select></label>
+            <div><h3>Run History</h3><p>Recent workflow runs and handoffs.</p></div>
+            <label class="automation-activity-filter"><span>Show</span><select id="automationActivityFilter" aria-label="Filter automation run history"><option value="all">All events</option><option value="schedules">Schedules</option><option value="handoffs">Handoffs</option><option value="attention">Needs attention</option></select></label>
             <label class="automation-retention"><span>Keep</span><input id="automationHistoryLimit" type="number" min="0" step="10"><span>events</span></label>
             <button id="automationActivityClear" class="secondary-action" type="button">Clear</button>
           </div>
           <div id="automationActivityList" class="automation-activity-list"></div>
-          <p id="automationActivityEmpty" class="artifact-empty">No automation activity yet.</p>
+          <p id="automationActivityEmpty" class="artifact-empty">No automation runs yet.</p>
         </section>
       </div>
     </div>
@@ -1894,6 +2105,31 @@
       </div>
     </div>
 
+    <div id="terminalNotesFlyout" class="terminal-notes-flyout" role="dialog" aria-modal="false" aria-labelledby="terminalNotesFlyoutTitle" hidden>
+      <div class="terminal-notes-flyout-head">
+        <i data-lucide="notebook-pen"></i>
+        <div>
+          <h2 id="terminalNotesFlyoutTitle">Terminal notes</h2>
+          <p id="terminalNotesFlyoutSubtitle">Notes for this terminal</p>
+        </div>
+      </div>
+      <div id="terminalNotesFlyoutList" class="terminal-notes-flyout-list"></div>
+      <div id="terminalNotesFlyoutEmpty" class="terminal-notes-flyout-empty" hidden>
+        <i data-lucide="notebook"></i>
+        <p>No note saved for this terminal.</p>
+        <button id="terminalNotesFlyoutAdd" type="button" class="secondary-action">
+          <i data-lucide="pencil"></i>
+          <span>Add note</span>
+        </button>
+      </div>
+      <footer class="terminal-notes-flyout-footer">
+        <button id="terminalNotesFlyoutDetails" type="button" class="secondary-action">
+          <i data-lucide="list"></i>
+          <span>View more details</span>
+        </button>
+      </footer>
+    </div>
+
     <div id="contextMenu" class="context-menu" role="menu" tabindex="-1" hidden></div>
     <div id="contextSubmenu" class="context-menu context-submenu" role="menu" hidden></div>
     <template id="paneTemplate">
@@ -1959,7 +2195,7 @@
               <i data-lucide="send"></i>
               <span class="pane-dequeue-badge">0</span>
             </button>
-            <button type="button" data-action="artifacts" class="pane-artifacts" title="Terminal notes and command queue" aria-label="Terminal notes and command queue">
+            <button type="button" data-action="artifacts" class="pane-artifacts" title="Terminal notes and command queue" aria-label="Terminal notes and command queue" aria-haspopup="dialog" aria-expanded="false">
               <i data-lucide="notebook-tabs"></i>
               <span class="pane-artifacts-badge" hidden>0</span>
             </button>

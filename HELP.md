@@ -6,7 +6,7 @@ MultiTerm Workbench is a Windows terminal workspace for running PowerShell 7, Wi
 
 1. Choose a shell from the header.
 2. Optionally enter a name and working directory.
-3. Select **Add terminal** or press <kbd>Ctrl+T</kbd>.
+3. Select **Add terminal** or press <kbd>Ctrl+N</kbd> or <kbd>Ctrl+Shift+T</kbd>.
 4. Click a pane to make it active, then type normally.
 
 Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>F1</kbd> to open this in-app help guide, or <kbd>Ctrl+Shift+P</kbd> to search the command palette. While Help is open, <kbd>Ctrl+F</kbd> searches this guide and highlights every match. Use <kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> for the next / previous match; select `.*` only when the query should be treated as a regular expression.
@@ -72,6 +72,10 @@ Copilot searches native CLI, VS Code, and Visual Studio sessions; native CLI ses
 In the GitHub Copilot session picker, enter a natural-language request such as **Find sessions where I worked on database migration or OAuth refresh**, then select the sparkle button beside Search. Copilot searches the complete local catalog using session metadata and a fair share of recent transcript text, then filters the picker to exact validated session keys. Typing in Search again returns to ordinary literal filtering. **AI session search context (KB)** under AI assistants controls the total metadata and transcript budget for one search. If that budget cannot represent metadata for every session, MultiTerm asks you to increase it instead of silently excluding sessions.
 
 Use **Change working directory...** from a terminal menu, the blank-workspace menu, or the command palette to move the selected terminal independently of session resume. The dialog shows the live Copilot directory when `/cwd` can report it; otherwise it labels the tracked value as last known. Paste a path or select the folder button to browse on disk. MultiTerm validates the folder and waits for an idle shell or ready assistant prompt before enabling **Send**, so it never inserts `cd` into an unrelated foreground program. PowerShell, Command Prompt, and WSL receive their native directory command; Windows folders selected for WSL are converted and checked inside the target distribution. Claude uses `/cd`, which requires Claude Code 2.1.169 or newer and may show Claude's own trust prompt for a new folder. MultiTerm does not approve that prompt automatically.
+
+Folder buttons open the same inline picker for working directories, repositories, and worktree locations. Enter a path directly or use Back, Forward, Up, roots, and breadcrumbs to move through the hierarchy. Typing a partial path shows matching completions. Search finds partial folder-name or path matches recursively below the current folder, highlights the matching text, and returns 100 results at a time with **Load more** when more are available. Select a row to choose it, open it with its arrow or a double-click, or create a direct child with **New folder**. An explicit path that does not exist or cannot be opened is reported instead of silently switching elsewhere.
+
+On Windows, MultiTerm detects an existing [Everything](https://www.voidtools.com/downloads/) desktop/service installation with its `es.exe` command-line interface and then enables **Everywhere** for instant whole-computer folder search. This integration is optional: MultiTerm never downloads or installs Everything. Without it, **Current** search continues to use MultiTerm's cross-platform filesystem search. The optional reminder can be dismissed permanently with **Don't remind me again**.
 
 Drag any terminal-header action onto the hamburger menu to move it into that menu. Open the hamburger menu and drag an action row back onto the header to restore it. The scope flyout defaults to **All terminals**; choose **This terminal** for a per-terminal layout, or select **Always take this action (don't ask me again)** to remember the scope. Change **Header drag scope** under **Terminal** to show the flyout again. Global and per-terminal placements persist across reloads and saved workspaces.
 
@@ -168,20 +172,26 @@ If a terminal exits while commands remain, its queue moves to **Unparented queue
 
 ## Automations
 
-Open **Automations** from the workflow button in the header or the command palette. The Studio separates **Schedules**, **Handoff routes**, and **Activity** so recurring commands and terminal-to-terminal work remain visible and reviewable.
+Open **Automations** from the workflow button in the header or the command palette. The Studio separates **Schedules**, **Handoff routes**, and **Run History** so recurring commands and terminal-to-terminal work remain visible and reviewable.
 
 ### Scheduled terminal work
 
-Create an interval, daily, or selected-weekday schedule, then add one or more ordered terminal actions. A destination can be a named live terminal or **New terminal**. Named destinations should have distinct titles. **New terminal** opens a fresh terminal for that action each time the schedule runs, then applies the selected delivery mode when its shell is ready.
+Choose **Command based automation** for ad-hoc shell commands, ad-hoc PowerShell, or `.ps1`, `.cmd`, and `.bat` script paths. Choose **Copilot automation** for scheduled Copilot CLI prompts. Create an interval, daily, or selected-weekday schedule, then build the workflow from connected visual step cards.
+
+A step can target a terminal by exact title, exact PID, or **New terminal**. Title and PID targets offer **Send to new terminal if selected terminal cannot be located**, enabled by default. Each step can specify a working directory; new terminals start there, and existing command steps run there without permanently moving the terminal. Script steps include a file picker. Copilot steps launch Copilot when needed, optionally change its working directory, and queue the prompt for its empty composer.
+
+The rule's **Run as user** defaults to the current account reported by the bridge. Entering another Windows account does not store a password: Windows displays its credential prompt when the workflow runs, waits for that process, and returns its exit result to the workflow.
+
+Every step after the first has a graphical conditional gate. Select any prior steps, choose **all** or **any**, and run when those steps **succeed**, **fail**, or **finish**. Use the arrow controls to reorder cards and **Add another action** for an arbitrary-length chain. Command workflows emit a hidden terminal completion marker containing the exit code, so dependent branches advance from the real command result rather than a timer.
 
 Each action has an explicit delivery mode:
 
-- **Run when ready** uses the existing automatic command queue and presses Enter only after a regular shell prompt or empty Copilot or Claude prompt is confirmed.
+- **Run when ready** presses Enter only after a regular shell prompt is confirmed and reports the process exit code to the visual workflow.
 - **Stage when ready** pastes the command or prompt without Enter, leaving it visible for review. Accepted staged actions survive a UI reload while their terminal session remains available.
 
 Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. **Run once after sleep or reconnect** catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.
 
-Use the global **Pause** control to stop both scheduled delivery and automatic handoffs. The Activity view records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible **Keep _ events** setting controls persisted history retention; `0` keeps no history.
+Use the global **Pause** control to stop both scheduled delivery and automatic handoffs. Right-click an automation name to pause or unpause that rule, snooze it for a specified duration, or delete it. **Run History** records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible **Keep _ events** setting controls persisted history retention; `0` keeps no history.
 
 ### Visual handoff routes
 
@@ -423,10 +433,12 @@ Changes are stored locally in the app's browser profile. Use **Reset settings** 
 
 ## Keyboard shortcuts
 
+Open the keyboard-shortcut catalog from the top bar or with <kbd>Ctrl+/</kbd>. Click any key combination to replace it. Hover an action for one second to reveal controls for adding another combination, removing one, or restoring that action's defaults. Global shortcuts are stored with the other settings; terminal right-click menu shortcuts remain a separate customization. The catalog can also be printed or saved as a UTF-8 text reference.
+
 | Shortcut | Action |
 | --- | --- |
-| <kbd>Ctrl+T</kbd> | New terminal |
-| <kbd>Ctrl+P</kbd> | New page |
+| <kbd>Ctrl+N</kbd> / <kbd>Ctrl+Shift+T</kbd> | New terminal |
+| <kbd>Ctrl+T</kbd> / <kbd>Ctrl+P</kbd> | New page |
 | <kbd>Ctrl+Shift+W</kbd> | Close active terminal |
 | <kbd>Ctrl+Shift+R</kbd> | Restart active terminal |
 | <kbd>Ctrl+Shift+X</kbd> | Maximize or restore active pane |

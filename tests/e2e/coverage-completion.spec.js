@@ -6154,6 +6154,7 @@ test.describe("Renderer coverage completion", () => {
     const result = await page.evaluate(async () => {
       const savedRequestBridge = requestBridge;
       const savedRefreshWorktreeManager = refreshWorktreeManager;
+      const savedChooseInlineFolder = chooseInlineFolder;
       const savedConfirm = window.confirm;
       const savedDiff2Html = window.Diff2Html;
       const savedSendBridge = sendBridge;
@@ -6234,7 +6235,7 @@ test.describe("Renderer coverage completion", () => {
         resolveStaleReview({ ok: true, diff: "stale", truncated: false });
         await staleReview;
 
-        requestBridge = async (message) => message.type === "pickFolder" ? { path: "D:\\chosen" } : null;
+        chooseInlineFolder = async () => "D:\\chosen";
         elements.worktreeManagerBrowse.click();
         await Promise.resolve();
         await Promise.resolve();
@@ -6253,12 +6254,14 @@ test.describe("Renderer coverage completion", () => {
         worktreeDialog.terminalId = terminal.id;
         worktreeDialog.openInNewTerminal = false;
         elements.worktreeNameInput.value = "coverage-worktree";
+        requestBridge = async () => ({ ok: true, importedPending: false });
         sendBridge = (message) => { values.sent.push(message); return true; };
         await createWorktreeAndRun();
         values.branchName = worktreeBranchName();
       } finally {
         requestBridge = savedRequestBridge;
         refreshWorktreeManager = savedRefreshWorktreeManager;
+        chooseInlineFolder = savedChooseInlineFolder;
         window.confirm = savedConfirm;
         window.Diff2Html = savedDiff2Html;
         sendBridge = savedSendBridge;
@@ -6274,7 +6277,7 @@ test.describe("Renderer coverage completion", () => {
       branchName: "coverage-worktree",
       browsedFolder: "D:\\chosen",
       failedManager: "The bridge did not answer.",
-      managedActions: 3,
+      managedActions: 4,
       managerSummary: "2 worktree(s), 1 created by MultiTerm.",
       refreshes: 2,
       removeStatus: "remove failed",
@@ -6289,7 +6292,8 @@ test.describe("Renderer coverage completion", () => {
     expect(result.reviewRendered).toContain("diff --git");
     expect(result.sent).toHaveLength(1);
     expect(result.sent[0]).toMatchObject({ type: "input", id: expect.any(String) });
-    expect(result.sent[0].data).toContain("worktree add -b");
+    expect(result.sent[0].data).toContain("Set-Location -LiteralPath");
+    expect(result.sent[0].data).toContain("coverage-worktree");
   });
 
   test("covers automation editor, filters, and modal callbacks @full", async () => {
@@ -6434,9 +6438,9 @@ test.describe("Renderer coverage completion", () => {
       defaultView: "schedules",
       deleted: 0,
       editorTitle: "Coverage schedule",
-      emptyActivity: "No automation activity yet.",
+      emptyActivity: "No automation runs yet.",
       escapeClosed: true,
-      filteredActivity: "No activity matches this filter.",
+      filteredActivity: "No run history matches this filter.",
       filteredEmpty: true,
       filteredRows: 1,
       invalidSave: false,
@@ -6455,6 +6459,7 @@ test.describe("Renderer coverage completion", () => {
   test("covers remaining bound dialog and editor callbacks @full", async () => {
     const result = await page.evaluate(async () => {
       const savedRequestBridge = requestBridge;
+      const savedChooseInlineFolder = chooseInlineFolder;
       const savedAutomations = structuredClone(state.automations);
       const savedDocumentExecCommand = document.execCommand;
       const terminal = [...state.terminals.values()][0];
@@ -6543,7 +6548,7 @@ test.describe("Renderer coverage completion", () => {
         elements.prepareTerminalFlyout.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }));
         closePrepareEditor({ restoreFocus: false });
 
-        requestBridge = async (message) => message.type === "pickFolder" ? { path: "D:\\callback-choice" } : null;
+        chooseInlineFolder = async () => "D:\\callback-choice";
         elements.worktreeOverlay.hidden = false;
         elements.worktreeFolderInput.value = "D:\\start";
         elements.worktreeBrowse.click();
@@ -6595,6 +6600,7 @@ test.describe("Renderer coverage completion", () => {
         else delete document.activeElement;
       } finally {
         requestBridge = savedRequestBridge;
+        chooseInlineFolder = savedChooseInlineFolder;
         state.automations = savedAutomations;
         document.execCommand = savedDocumentExecCommand;
         elements.copilotResumeOverlay.hidden = true;

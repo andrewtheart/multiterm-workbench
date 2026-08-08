@@ -30,7 +30,62 @@ describe("automations model", () => {
       command: "npm test",
       id: "action-legacy1",
       targetName: "Tests"
-    })).toMatchObject({ targetMode: "terminal", targetName: "Tests" });
+    })).toMatchObject({ targetMode: "title", targetName: "Tests" });
+  });
+
+  it("normalizes PID targeting, default fallback, CWD, account, and conditional chains", () => {
+    const normalized = automations.normalizeRule(rule({
+      runAs: "CONTOSO\\andre",
+      type: "command",
+      actions: [
+        {
+          command: "npm test",
+          cwd: "D:\\repo",
+          fallbackToNew: false,
+          id: "action-first123",
+          inputType: "powershell",
+          targetMode: "pid",
+          targetPid: 4242
+        },
+        {
+          command: "npm run report",
+          condition: "failure",
+          conditionOperator: "any",
+          dependsOn: ["action-first123", "missing"],
+          id: "action-second12",
+          targetMode: "new"
+        }
+      ]
+    }));
+
+    expect(normalized).toMatchObject({ runAs: "CONTOSO\\andre", type: "command" });
+    expect(normalized.actions[0]).toMatchObject({
+      cwd: "D:\\repo",
+      fallbackToNew: false,
+      inputType: "powershell",
+      targetMode: "pid",
+      targetPid: 4242
+    });
+    expect(normalized.actions[1]).toMatchObject({
+      condition: "failure",
+      conditionOperator: "any",
+      dependsOn: ["action-first123"],
+      fallbackToNew: false,
+      targetMode: "new"
+    });
+  });
+
+  it("preserves Copilot automation type and repairs unsafe conditional references", () => {
+    const normalized = automations.normalizeRule(rule({
+      type: "copilot",
+      actions: [
+        { command: "Review the build", id: "action-prompt123", targetName: "Copilot" },
+        { command: "Summarize failures", id: "action-prompt456", dependsOn: ["later-action999"], targetName: "Copilot" }
+      ]
+    }));
+
+    expect(normalized.type).toBe("copilot");
+    expect(normalized.actions[1].dependsOn).toEqual(["action-prompt123"]);
   });
 
   it("normalizes rules and keeps malformed persisted rules disabled or discarded", () => {

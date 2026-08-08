@@ -1090,6 +1090,12 @@ test.describe("Enhancement milestone", () => {
     await expect(page.locator(".copilot-session-card")).toHaveCount(1);
     await expect(page.locator(".copilot-session-card")).toContainText("Terminal rendering");
 
+    await page.locator("#copilotResumeSearch").fill("nothing matches this literal query");
+    await expect(page.locator(".copilot-session-card")).toHaveCount(0);
+    await expect(page.locator(".copilot-resume-empty")).toContainText("No sessions match this search. Search sessions with AI");
+    await page.getByRole("button", { name: "Search sessions with AI", exact: true }).click();
+    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
+
     const request = await page.evaluate((profile) => {
       closeCopilotResume();
       state.socket.send = window.__aiSearchOriginalSend;

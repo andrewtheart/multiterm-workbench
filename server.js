@@ -1102,6 +1102,7 @@ server.on("upgrade", (request, socket) => {
     // Only the installed bridge owns a console window worth focusing.
     canFocusBridgeTerminal: false,
     cwd: process.cwd(),
+    currentUser: os.userInfo().username,
     sessions: [...sessions.values()].map(toSessionSummary),
     openFolders: pendingOpenFolders.splice(0),
     openTerminals: pendingOpenTerminals.splice(0)
@@ -1564,8 +1565,23 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     case "gitWorktreeRecord":
       sendGitWorktreeRecord(client, message);
       break;
+    case "gitWorktreeCreate":
+      sendGitWorktreeCreate(client, message);
+      break;
     case "gitDiff":
       sendGitDiff(client, message);
+      break;
+    case "gitMergeStart":
+      sendGitMergeStart(client, message);
+      break;
+    case "gitMergeFinish":
+      sendGitMergeFinish(client, message);
+      break;
+    case "gitConflictRead":
+      sendGitConflictRead(client, message);
+      break;
+    case "gitConflictWrite":
+      sendGitConflictWrite(client, message);
       break;
     case "saveAssistantSessions":
       writeAssistantSessions(message.sessions);
@@ -1615,6 +1631,15 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "pickFolder":
       pickFolder(client, message);
+      break;
+    case "folderList":
+      listFolders(client, message);
+      break;
+    case "folderSearch":
+      searchFolders(client, message);
+      break;
+    case "folderCreate":
+      createFolder(client, message);
       break;
     case "validateDirectory":
       validateDirectory(client, message, dependencies.execFile || childProcess.execFile);
@@ -2329,12 +2354,16 @@ function pickScript(client, message) {
 
 // Every git call goes through an argv array, never a shell string, so a
 // repository URL or branch name cannot smuggle in extra commands.
-function runGit(args, cwd, timeoutMs = 30000) {
+function runGit(args, cwd, timeoutMs = 30000, options = {}) {
   /* v8 ignore next */
   return new Promise((resolve) => {
     let child;
     try {
-      child = childProcess.spawn("git", args, { cwd: cwd || undefined, windowsHide: true });
+      child = childProcess.spawn("git", args, {
+        cwd: cwd || undefined,
+        windowsHide: true,
+        ...(options.env ? { env: { ...process.env, ...options.env } } : {})
+      });
     } catch (error) {
       resolve({ ok: false, code: -1, stdout: "", stderr: error.message });
       return;
@@ -2501,6 +2530,18 @@ async function sendGitWorktreeRecord(client, message) {
   client.send({ type: "gitWorktreeRecorded", requestId, ok: true, reason: "" });
 }
 
+async function sendGitWorktreeCreate(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const result = await createGitWorktree({
+    repositoryRoot: message.repositoryRoot,
+    parentBranch: message.parentBranch,
+    branch: message.branch,
+    worktreePath: message.worktreePath,
+    importPending: message.importPending === true
+  });
+  client.send({ type: "gitWorktreeCreated", requestId, ...result });
+}
+
 const maxGitDiffBytes = 2 * 1024 * 1024;
 
 async function sendGitDiff(client, message) {
@@ -2526,6 +2567,43 @@ async function sendGitDiff(client, message) {
   answer(true, truncated ? diff.stdout.slice(0, maxGitDiffBytes) : diff.stdout, "", truncated);
 }
 
+async function sendGitMergeStart(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const result = await startWorktreeMerge({
+    repositoryRoot: String(message.repositoryRoot || "").trim(),
+    parentBranch: String(message.parentBranch || "").trim(),
+    worktreeBranch: String(message.worktreeBranch || "").trim(),
+    strategy: String(message.strategy || "").trim()
+  });
+  client.send({ type: "gitMergeStarted", requestId, ...result });
+}
+
+async function sendGitMergeFinish(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const result = await finishWorktreeMerge(String(message.sessionId || ""), {
+    abort: message.abort === true,
+    commitMessage: typeof message.commitMessage === "string" ? message.commitMessage : ""
+  });
+  client.send({ type: "gitMergeFinished", requestId, ...result });
+}
+
+async function sendGitConflictRead(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const result = await readConflictSides(String(message.sessionId || ""), String(message.path || ""));
+  client.send({ type: "gitConflictSides", requestId, path: String(message.path || ""), ...result });
+}
+
+async function sendGitConflictWrite(client, message) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const result = await writeConflictResolution(
+    String(message.sessionId || ""),
+    String(message.path || ""),
+    typeof message.contents === "string" ? message.contents : "",
+    { choice: typeof message.choice === "string" ? message.choice : "" }
+  );
+  client.send({ type: "gitConflictWritten", requestId, path: String(message.path || ""), ...result });
+}
+
 const gitMergeSessions = new Map();
 
 async function branchCheckoutPath(repositoryRoot, branch) {
@@ -2539,10 +2617,285 @@ async function worktreeIsDirty(directory) {
   return status.ok ? status.stdout.trim() : "";
 }
 
+function nulSeparatedPaths(output) {
+  return new Set(String(output || "").split("\0").filter(Boolean));
+}
+
+async function importedPendingOverlap(repositoryRoot, parentPath, worktreeBranch) {
+  if (!parentPath) return { paths: [], unverifiable: false }; else { void 0; }
+  const imported = await runGit([
+    "config", "--local", "--get", `multiterm.worktree.${worktreeBranch}.importedSnapshot`
+  ], repositoryRoot);
+  const snapshot = imported.ok ? imported.stdout.trim() : "";
+  if (!snapshot) return { paths: [], unverifiable: false }; else { void 0; }
+
+  const [importedDiff, branchDiff, unstaged, staged, untracked] = await Promise.all([
+    runGit(["diff", "--name-only", "-z", `${snapshot}^`, snapshot], repositoryRoot),
+    runGit(["diff", "--name-only", "-z", `${snapshot}^`, worktreeBranch], repositoryRoot),
+    runGit(["diff", "--name-only", "-z"], parentPath),
+    runGit(["diff", "--cached", "--name-only", "-z"], parentPath),
+    runGit(["ls-files", "--others", "--exclude-standard", "-z"], parentPath)
+  ]);
+  if (![importedDiff, branchDiff, unstaged, staged, untracked].every((result) => result.ok)) {
+    return { paths: [], unverifiable: true };
+  } else { void 0; }
+  const importedPaths = nulSeparatedPaths(importedDiff.stdout);
+  const branchPaths = nulSeparatedPaths(branchDiff.stdout);
+  const pendingPaths = new Set([
+    ...nulSeparatedPaths(unstaged.stdout),
+    ...nulSeparatedPaths(staged.stdout),
+    ...nulSeparatedPaths(untracked.stdout)
+  ]);
+  return {
+    paths: [...importedPaths].filter((filePath) => branchPaths.has(filePath) && pendingPaths.has(filePath)).sort(),
+    unverifiable: false
+  };
+}
+
 async function conflictedPaths(directory) {
   const listed = await runGit(["diff", "--name-only", "--diff-filter=U"], directory);
   if (!listed.ok) return []; else { void 0; }
   return listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+}
+
+async function snapshotGitWorktree(directory, label = "MultiTerm worktree snapshot") {
+  // `git status` may refresh and briefly lock the index even though it does not
+  // change user-visible state. Keep these reads sequential within one worktree
+  // so it cannot race `write-tree` for index.lock.
+  const head = await runGit(["rev-parse", "HEAD"], directory);
+  const status = await runGit(["status", "--porcelain=v1", "--untracked-files=all"], directory);
+  const indexTree = await runGit(["write-tree"], directory);
+  if (!head.ok || !status.ok || !indexTree.ok) {
+    return {
+      ok: false,
+      reason: (head.stderr || status.stderr || indexTree.stderr || head.stdout || status.stdout || indexTree.stdout).trim()
+        || "Git could not snapshot that worktree."
+    };
+  } else { void 0; }
+
+  const indexPath = path.join(os.tmpdir(), `multiterm-index-${crypto.randomBytes(8).toString("hex")}`);
+  const env = {
+    GIT_INDEX_FILE: indexPath,
+    GIT_AUTHOR_NAME: "MultiTerm",
+    GIT_AUTHOR_EMAIL: "multiterm@localhost",
+    GIT_COMMITTER_NAME: "MultiTerm",
+    GIT_COMMITTER_EMAIL: "multiterm@localhost"
+  };
+  try {
+    const read = await runGit(["read-tree", head.stdout.trim()], directory, 30000, { env });
+    if (!read.ok) return { ok: false, reason: (read.stderr || read.stdout).trim() || "Git could not prepare a snapshot index." }; else { void 0; }
+    const added = await runGit(["add", "-A", "--", "."], directory, 120000, { env });
+    if (!added.ok) return { ok: false, reason: (added.stderr || added.stdout).trim() || "Git could not add pending files to the snapshot." }; else { void 0; }
+    const tree = await runGit(["write-tree"], directory, 30000, { env });
+    if (!tree.ok) return { ok: false, reason: (tree.stderr || tree.stdout).trim() || "Git could not write the snapshot tree." }; else { void 0; }
+    const committed = await runGit(
+      ["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", label],
+      directory,
+      30000,
+      { env }
+    );
+    if (!committed.ok) return { ok: false, reason: (committed.stderr || committed.stdout).trim() || "Git could not write the snapshot commit." }; else { void 0; }
+    return {
+      ok: true,
+      reason: "",
+      head: head.stdout.trim(),
+      indexTree: indexTree.stdout.trim(),
+      tree: tree.stdout.trim(),
+      commit: committed.stdout.trim(),
+      status: status.stdout
+    };
+  } finally {
+    try { fs.rmSync(indexPath, { force: true }); } catch { /* git may already have removed its temporary index */ }
+  }
+}
+
+async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktreePath, importPending }) {
+  const root = String(repositoryRoot || "").trim();
+  const parent = String(parentBranch || "").trim();
+  const name = String(branch || "").trim();
+  const target = String(worktreePath || "").trim();
+  if (!root || !parent || !name || !target) {
+    return { ok: false, reason: "Repository, parent branch, worktree branch and path are all required." };
+  } else { void 0; }
+
+  const inspection = await inspectGitRepository(root);
+  if (!inspection.isRepository || inspection.repositoryRoot !== path.resolve(root)) {
+    return { ok: false, reason: inspection.reason || "That repository path is not a checkout root." };
+  } else { void 0; }
+  const [validParent, validBranch] = await Promise.all([
+    runGit(["check-ref-format", "--branch", parent], root),
+    runGit(["check-ref-format", "--branch", name], root)
+  ]);
+  if (!validParent.ok || !validBranch.ok) {
+    return { ok: false, reason: "The parent or worktree branch name is not valid." };
+  } else { void 0; }
+
+  let snapshot = null;
+  if (importPending && inspection.isDirty) {
+    snapshot = await snapshotGitWorktree(root, `MultiTerm imported pending changes from ${parent}`);
+    if (!snapshot.ok) return { ok: false, reason: snapshot.reason }; else { void 0; }
+  } else { void 0; }
+
+  const added = await runGit(["worktree", "add", "-b", name, target, parent], root, 120000);
+  if (!added.ok) {
+    return { ok: false, reason: (added.stderr || added.stdout).trim() || "Git could not create that worktree." };
+  } else { void 0; }
+
+  const discardCreatedWorktree = async () => {
+    await runGit(["worktree", "remove", "--force", target], root, 120000);
+    await runGit(["branch", "-D", name], root, 30000);
+  };
+  if (snapshot) {
+    const materialized = await runGit(["read-tree", "--reset", "-u", snapshot.commit], target, 120000);
+    const reset = materialized.ok
+      ? await runGit(["reset", "--mixed", "HEAD"], target, 30000)
+      : { ok: false, stdout: "", stderr: "" };
+    if (!materialized.ok || !reset.ok) {
+      const reason = (materialized.stderr || materialized.stdout || reset.stderr || reset.stdout).trim()
+        || "Git could not import the pending changes into the new worktree.";
+      await discardCreatedWorktree();
+      return { ok: false, reason };
+    } else { void 0; }
+    const verified = await snapshotGitWorktree(target, "MultiTerm imported snapshot verification");
+    if (!verified.ok || verified.tree !== snapshot.tree) {
+      await discardCreatedWorktree();
+      return { ok: false, reason: verified.reason || "The imported worktree did not match the parent snapshot." };
+    } else { void 0; }
+  } else { void 0; }
+
+  await recordWorktreeParent(root, name, parent);
+  if (snapshot) {
+    await runGit(["config", "--local", `multiterm.worktree.${name}.importedSnapshot`, snapshot.commit], root);
+    await runGit(["config", "--local", `multiterm.worktree.${name}.importedAt`, new Date().toISOString()], root);
+  } else { void 0; }
+  return {
+    ok: true,
+    reason: "",
+    importedPending: Boolean(snapshot),
+    snapshotCommit: snapshot?.commit || ""
+  };
+}
+
+async function exactStashSelector(directory, stashOid) {
+  if (!stashOid) return ""; else { void 0; }
+  const listed = await runGit(["stash", "list", "--format=%gd%x09%H"], directory);
+  if (!listed.ok) return ""; else { void 0; }
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    const [selector, oid] = line.split("\t");
+    if (oid === stashOid) return selector;
+  }
+  return "";
+}
+
+async function dropExactStash(directory, stashOid) {
+  if (!stashOid) return { ok: true, reason: "" }; else { void 0; }
+  const selector = await exactStashSelector(directory, stashOid);
+  if (!selector) return { ok: false, reason: `Safety stash ${stashOid} was retained because it could not be identified safely.` }; else { void 0; }
+  const dropped = await runGit(["stash", "drop", selector], directory);
+  return dropped.ok
+    ? { ok: true, reason: "" }
+    : { ok: false, reason: (dropped.stderr || dropped.stdout).trim() || `Safety stash ${stashOid} was retained.` };
+}
+
+async function cleanupPendingMergeSession(session) {
+  await runGit(["merge", "--abort"], session.workPath);
+  await runGit(["worktree", "remove", "--force", session.workPath], session.repositoryRoot, 120000);
+}
+
+async function restoreParentSafetyStash(session, stashOid) {
+  await runGit(["reset", "--hard", session.parentSnapshot.head], session.parentPath);
+  await runGit(["clean", "-fd"], session.parentPath);
+  if (!stashOid) return { ok: true, reason: "" }; else { void 0; }
+  const restored = await runGit(["stash", "apply", "--index", stashOid], session.parentPath, 120000);
+  if (!restored.ok) {
+    return {
+      ok: false,
+      reason: (restored.stderr || restored.stdout).trim()
+        || `Could not restore the parent checkout. Recover it from safety stash ${stashOid}.`
+    };
+  } else { void 0; }
+  const current = await snapshotGitWorktree(session.parentPath, "MultiTerm restore verification");
+  if (!current.ok || current.head !== session.parentSnapshot.head || current.tree !== session.parentSnapshot.tree
+    || current.indexTree !== session.parentSnapshot.indexTree || current.status !== session.parentSnapshot.status) {
+    return { ok: false, reason: `The parent checkout could not be verified. Safety stash ${stashOid} was retained.` };
+  } else { void 0; }
+  return dropExactStash(session.parentPath, stashOid);
+}
+
+async function finishPendingWorktreeMerge(sessionId, session, { abort = false } = {}) {
+  if (abort) {
+    gitMergeSessions.delete(sessionId);
+    await cleanupPendingMergeSession(session);
+    return { ok: true, reason: "" };
+  } else { void 0; }
+
+  const conflicts = await conflictedPaths(session.workPath);
+  if (conflicts.length) {
+    return { ok: false, reason: "Resolve every conflicted file before bringing the changes back.", conflicts };
+  } else { void 0; }
+  const resultTree = await runGit(["write-tree"], session.workPath);
+  if (!resultTree.ok) return { ok: false, reason: (resultTree.stderr || resultTree.stdout).trim() || "Git could not write the merged result." }; else { void 0; }
+
+  // Objects written while fingerprinting do not alter the checkout. This catches
+  // edits made after the dialog opened before the safety stash moves anything.
+  const currentParent = await snapshotGitWorktree(session.parentPath, "MultiTerm parent verification");
+  if (!currentParent.ok || currentParent.head !== session.parentSnapshot.head
+    || currentParent.tree !== session.parentSnapshot.tree || currentParent.indexTree !== session.parentSnapshot.indexTree
+    || currentParent.status !== session.parentSnapshot.status) {
+    return { ok: false, reason: "The parent checkout changed while Bring changes back was open. Review it and try again." };
+  } else { void 0; }
+
+  const patchPath = path.join(os.tmpdir(), `multiterm-bring-back-${sessionId}.patch`);
+  let stashOid = "";
+  try {
+    const patch = await runGit([
+      "diff", "--binary", "--full-index", `--output=${patchPath}`,
+      session.parentSnapshot.head, resultTree.stdout.trim()
+    ], session.repositoryRoot, 120000);
+    if (!patch.ok) return { ok: false, reason: (patch.stderr || patch.stdout).trim() || "Git could not prepare the pending result." }; else { void 0; }
+
+    const stashBefore = await runGit(["rev-parse", "--quiet", "--verify", "refs/stash"], session.parentPath);
+    const stashed = await runGit([
+      "stash", "push", "--include-untracked", "--message", `MultiTerm bring-back ${sessionId}`
+    ], session.parentPath, 120000);
+    if (!stashed.ok) return { ok: false, reason: (stashed.stderr || stashed.stdout).trim() || "Git could not protect the parent changes." }; else { void 0; }
+    const stashAfter = await runGit(["rev-parse", "--quiet", "--verify", "refs/stash"], session.parentPath);
+    const beforeOid = stashBefore.ok ? stashBefore.stdout.trim() : "";
+    const afterOid = stashAfter.ok ? stashAfter.stdout.trim() : "";
+    stashOid = afterOid && afterOid !== beforeOid ? afterOid : "";
+
+    if (fs.statSync(patchPath).size > 0) {
+      const applied = await runGit(["apply", "--binary", "--whitespace=nowarn", patchPath], session.parentPath, 120000);
+      if (!applied.ok) {
+        const restored = await restoreParentSafetyStash(session, stashOid);
+        return {
+          ok: false,
+          reason: restored.ok
+            ? ((applied.stderr || applied.stdout).trim() || "Git could not apply the merged result; the parent checkout was restored.")
+            : restored.reason
+        };
+      } else { void 0; }
+    } else { void 0; }
+
+    const materialized = await snapshotGitWorktree(session.parentPath, "MultiTerm result verification");
+    if (!materialized.ok || materialized.head !== session.parentSnapshot.head || materialized.tree !== resultTree.stdout.trim()) {
+      const restored = await restoreParentSafetyStash(session, stashOid);
+      return {
+        ok: false,
+        reason: restored.ok
+          ? "The merged result could not be verified; the parent checkout was restored."
+          : restored.reason
+      };
+    } else { void 0; }
+
+    const dropped = await dropExactStash(session.parentPath, stashOid);
+    if (!dropped.ok) return { ok: false, reason: dropped.reason, recoveryStash: stashOid }; else { void 0; }
+    gitMergeSessions.delete(sessionId);
+    await cleanupPendingMergeSession(session);
+    return { ok: true, reason: "", status: "pending" };
+  } finally {
+    try { fs.rmSync(patchPath, { force: true }); } catch { /* the patch may not have been created */ }
+  }
 }
 
 // git couples a branch ref to its checkout: whichever tree holds the parent
@@ -2552,12 +2905,12 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
   if (!repositoryRoot || !parentBranch || !worktreeBranch) {
     return { ok: false, status: "refused", reason: "A repository, parent branch and worktree branch are required." };
   } else { void 0; }
-  if (!["squash", "merge"].includes(strategy)) {
+  if (!["pending", "squash", "merge"].includes(strategy)) {
     return { ok: false, status: "refused", reason: `Unsupported merge strategy: ${strategy}.` };
   } else { void 0; }
 
   const worktreePath = await branchCheckoutPath(repositoryRoot, worktreeBranch);
-  if (worktreePath) {
+  if (worktreePath && strategy !== "pending") {
     const dirty = await worktreeIsDirty(worktreePath);
     if (dirty) {
       return {
@@ -2570,6 +2923,66 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
   } else { void 0; }
 
   const parentPath = await branchCheckoutPath(repositoryRoot, parentBranch);
+  if (strategy !== "pending") {
+    const overlap = await importedPendingOverlap(repositoryRoot, parentPath, worktreeBranch);
+    if (overlap.unverifiable || overlap.paths.length) {
+      return {
+        ok: false,
+        status: "importedOverlap",
+        reason: overlap.unverifiable
+          ? "MultiTerm could not verify the imported pending snapshot. Use Pending to bring changes back without risking duplicate edits."
+          : "Some committed worktree changes were imported from files that are still pending in the parent. Use Pending to bring everything back without duplicating those edits.",
+        changes: overlap.paths.slice(0, 50)
+      };
+    } else { void 0; }
+  } else { void 0; }
+  if (strategy === "pending") {
+    if (!worktreePath) {
+      return { ok: false, status: "refused", reason: `${worktreeBranch} is not checked out in a worktree.` };
+    } else if (!parentPath) {
+      return { ok: false, status: "refused", reason: `${parentBranch} must be checked out so the result can remain pending there.` };
+    } else { void 0; }
+    const [parentSnapshot, worktreeSnapshot] = await Promise.all([
+      snapshotGitWorktree(parentPath, `MultiTerm snapshot of ${parentBranch}`),
+      snapshotGitWorktree(worktreePath, `MultiTerm snapshot of ${worktreeBranch}`)
+    ]);
+    if (!parentSnapshot.ok || !worktreeSnapshot.ok) {
+      return {
+        ok: false,
+        status: "refused",
+        reason: parentSnapshot.reason || worktreeSnapshot.reason || "Git could not snapshot those worktrees."
+      };
+    } else { void 0; }
+    const workPath = path.join(os.tmpdir(), `multiterm-merge-${crypto.randomBytes(6).toString("hex")}`);
+    const added = await runGit(["worktree", "add", "--detach", workPath, parentSnapshot.commit], repositoryRoot, 120000);
+    if (!added.ok) {
+      return { ok: false, status: "refused", reason: (added.stderr || added.stdout).trim() || "Could not prepare a merge worktree." };
+    } else { void 0; }
+    const merged = await runGit([
+      "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", worktreeSnapshot.commit
+    ], workPath, 120000);
+    const conflicts = await conflictedPaths(workPath);
+    const sessionId = crypto.randomBytes(8).toString("hex");
+    gitMergeSessions.set(sessionId, {
+      repositoryRoot,
+      workPath,
+      temporary: true,
+      parentBranch,
+      parentPath,
+      parentSnapshot,
+      worktreeBranch,
+      worktreePath,
+      worktreeSnapshot,
+      strategy
+    });
+    if (conflicts.length) return { ok: true, status: "conflicts", sessionId, workPath, conflicts, reason: "" }; else { void 0; }
+    if (!merged.ok) {
+      await finishWorktreeMerge(sessionId, { abort: true });
+      return { ok: false, status: "refused", reason: (merged.stderr || merged.stdout).trim() || "git could not merge those worktrees." };
+    } else { void 0; }
+    return { ok: true, status: "staged", sessionId, workPath, conflicts: [], reason: "" };
+  } else { void 0; }
+
   let workPath = parentPath;
   let temporary = false;
   if (parentPath) {
@@ -2617,10 +3030,11 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
 async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "" } = {}) {
   const session = gitMergeSessions.get(sessionId);
   if (!session) return { ok: false, reason: "That merge is no longer in progress." }; else { void 0; }
-  gitMergeSessions.delete(sessionId);
+  if (session.strategy === "pending") return finishPendingWorktreeMerge(sessionId, session, { abort }); else { void 0; }
 
   let result = { ok: true, reason: "" };
   if (abort) {
+    gitMergeSessions.delete(sessionId);
     await runGit(["merge", "--abort"], session.workPath);
     await runGit(["reset", "--hard"], session.workPath);
   } else {
@@ -2628,8 +3042,9 @@ async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "
       || `Merge ${session.worktreeBranch} into ${session.parentBranch}`;
     const committed = await runGit(["commit", "-m", message], session.workPath, 60000);
     if (!committed.ok) {
-      result = { ok: false, reason: (committed.stderr || committed.stdout).trim() || "git could not commit the merge." };
+      return { ok: false, reason: (committed.stderr || committed.stdout).trim() || "git could not commit the merge." };
     } else { void 0; }
+    gitMergeSessions.delete(sessionId);
   }
 
   if (session.temporary) {
@@ -2643,7 +3058,11 @@ async function readConflictSides(sessionId, filePath) {
   if (!session) return { ok: false, reason: "That merge is no longer in progress." }; else { void 0; }
   const read = async (stage) => {
     const shown = await runGit(["show", `:${stage}:${filePath}`], session.workPath);
-    return shown.ok ? shown.stdout : "";
+    return {
+      binary: shown.ok && shown.stdout.includes("\0"),
+      contents: shown.ok ? shown.stdout : "",
+      exists: shown.ok
+    };
   };
   const [base, ours, theirs] = await Promise.all([read(1), read(2), read(3)]);
   let merged = "";
@@ -2652,10 +3071,21 @@ async function readConflictSides(sessionId, filePath) {
   } catch {
     merged = "";
   }
-  return { ok: true, reason: "", base, ours, theirs, merged };
+  return {
+    ok: true,
+    reason: "",
+    base: base.contents,
+    ours: ours.contents,
+    theirs: theirs.contents,
+    baseExists: base.exists,
+    oursExists: ours.exists,
+    theirsExists: theirs.exists,
+    binary: base.binary || ours.binary || theirs.binary,
+    merged
+  };
 }
 
-async function writeConflictResolution(sessionId, filePath, contents) {
+async function writeConflictResolution(sessionId, filePath, contents, { choice = "" } = {}) {
   const session = gitMergeSessions.get(sessionId);
   if (!session) return { ok: false, reason: "That merge is no longer in progress." }; else { void 0; }
   const target = path.resolve(session.workPath, filePath);
@@ -2663,17 +3093,263 @@ async function writeConflictResolution(sessionId, filePath, contents) {
   if (!target.startsWith(path.resolve(session.workPath) + path.sep)) {
     return { ok: false, reason: "That path is outside the merge worktree." };
   } else { void 0; }
-  try {
-    fs.writeFileSync(target, contents, "utf8");
-  } catch (error) {
-    /* v8 ignore next */
-    return { ok: false, reason: error.message };
+  if (choice && !["ours", "theirs"].includes(choice)) {
+    return { ok: false, reason: "Choose either the current or incoming side." };
+  } else { void 0; }
+  let deletionStaged = false;
+  if (choice) {
+    const stage = choice === "ours" ? 2 : 3;
+    const exists = await runGit(["cat-file", "-e", `:${stage}:${filePath}`], session.workPath);
+    const selected = exists.ok
+      ? await runGit(["checkout", `--${choice}`, "--", filePath], session.workPath)
+      : await runGit(["rm", "-f", "--ignore-unmatch", "--", filePath], session.workPath);
+    if (!selected.ok) return { ok: false, reason: (selected.stderr || selected.stdout).trim() || "git could not select that side." }; else { void 0; }
+    deletionStaged = !exists.ok;
+  } else {
+    try {
+      fs.writeFileSync(target, contents, "utf8");
+    } catch (error) {
+      /* v8 ignore next */
+      return { ok: false, reason: error.message };
+    }
   }
   /* v8 ignore next */
-  const added = await runGit(["add", "--", filePath], session.workPath);
+  const added = deletionStaged
+    ? { ok: true, stderr: "", stdout: "" }
+    : await runGit(["add", "-A", "--", filePath], session.workPath);
   if (!added.ok) return { ok: false, reason: (added.stderr || added.stdout).trim() || "git could not stage that file." }; else { void 0; }
   const remaining = await conflictedPaths(session.workPath);
   return { ok: true, reason: "", remaining };
+}
+
+const folderSearchPageSize = 100;
+
+function expandFolderPath(value) {
+  let expanded = String(value || "").trim();
+  if (!expanded) return "";
+  if (expanded === "~" || expanded.startsWith(`~${path.sep}`) || expanded.startsWith("~/") || expanded.startsWith("~\\")) {
+    expanded = path.join(os.homedir(), expanded.slice(1));
+  }
+  if (process.platform === "win32") {
+    expanded = expanded.replace(/%([^%]+)%/g, (match, name) => process.env[name] || process.env[name.toUpperCase()] || match);
+  }
+  return path.resolve(expanded);
+}
+
+function existingFolder(value, fallback = process.cwd()) {
+  for (const candidate of [value, fallback, os.homedir(), process.cwd()]) {
+    try {
+      const resolved = expandFolderPath(candidate);
+      if (resolved && fs.statSync(resolved).isDirectory()) return resolved; else { void 0; }
+    } catch { /* try the next useful starting point */ }
+  }
+  return path.parse(process.cwd()).root;
+}
+
+function folderRoots() {
+  if (process.platform === "win32") {
+    const roots = [];
+    for (let code = 65; code <= 90; code += 1) {
+      const root = `${String.fromCharCode(code)}:\\`;
+      if (fs.existsSync(root)) roots.push(root); else { void 0; }
+    }
+    return roots;
+  }
+  return [...new Set(["/", os.homedir()].filter(Boolean))];
+}
+
+function readFolderEntries(directory) {
+  try {
+    return fs.readdirSync(directory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({ name: entry.name, path: path.join(directory, entry.name) }))
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }));
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
+function findEverythingExecutable() {
+  if (process.platform !== "win32") return "";
+  const names = [process.env.MULTITERM_ES_PATH, "C:\\tools\\es.exe"];
+  for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
+    if (directory) names.push(path.join(directory.replace(/^"|"$/g, ""), "es.exe")); else { void 0; }
+  }
+  return names.find((candidate) => candidate && fs.existsSync(candidate)) || "";
+}
+
+function sendFolderResponse(client, type, requestId, values) {
+  client.send({ type, requestId: typeof requestId === "string" ? requestId : "", ...values });
+}
+
+function listFolders(client, message) {
+  const requestedPath = message.path || message.cwd;
+  let directory = existingFolder(requestedPath);
+  if (message.strict === true && String(requestedPath || "").trim()) {
+    try {
+      directory = expandFolderPath(requestedPath);
+      if (!fs.statSync(directory).isDirectory()) throw new Error("not a directory");
+    } catch {
+      sendFolderResponse(client, "folderListing", message.requestId, {
+        ok: false,
+        error: "That folder does not exist or cannot be opened.",
+        path: String(requestedPath),
+        parent: directory ? path.dirname(directory) : "",
+        roots: folderRoots(),
+        entries: [],
+        everythingAvailable: Boolean(findEverythingExecutable()),
+        platform: process.platform
+      });
+      return;
+    }
+  }
+  const entries = readFolderEntries(directory);
+  if (!Array.isArray(entries)) {
+    sendFolderResponse(client, "folderListing", message.requestId, {
+      ok: false,
+      error: entries.error || "That folder could not be read.",
+      path: directory,
+      parent: path.dirname(directory),
+      roots: folderRoots(),
+      entries: [],
+      everythingAvailable: Boolean(findEverythingExecutable()),
+      platform: process.platform
+    });
+    return;
+  }
+  sendFolderResponse(client, "folderListing", message.requestId, {
+    ok: true,
+    path: directory,
+    parent: path.dirname(directory),
+    roots: folderRoots(),
+    entries,
+    everythingAvailable: Boolean(findEverythingExecutable()),
+    platform: process.platform
+  });
+}
+
+function completeFolderPath(rawValue, offset = 0) {
+  const expanded = expandFolderPath(rawValue);
+  if (!expanded) return { results: [], hasMore: false };
+  let parent = expanded;
+  let needle = "";
+  try {
+    if (!fs.statSync(expanded).isDirectory()) throw new Error("not a directory");
+  } catch {
+    parent = path.dirname(expanded);
+    needle = path.basename(expanded).toLocaleLowerCase();
+  }
+  const entries = readFolderEntries(parent);
+  if (!Array.isArray(entries)) return { results: [], hasMore: false };
+  const matches = entries.filter((entry) => !needle || entry.name.toLocaleLowerCase().includes(needle));
+  const page = matches.slice(offset, offset + folderSearchPageSize + 1);
+  return { results: page.slice(0, folderSearchPageSize), hasMore: page.length > folderSearchPageSize };
+}
+
+async function fallbackFolderSearch(root, query, offset = 0) {
+  const wanted = query.toLocaleLowerCase();
+  const stack = [root];
+  const results = [];
+  let skipped = 0;
+  while (stack.length) {
+    const directory = stack.pop();
+    let entries;
+    try {
+      entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    } catch { continue; }
+    const directories = entries.filter((entry) => entry.isDirectory())
+      .sort((left, right) => right.name.localeCompare(left.name, undefined, { sensitivity: "base" }));
+    for (const entry of directories) {
+      const candidate = path.join(directory, entry.name);
+      stack.push(candidate);
+      if (!entry.name.toLocaleLowerCase().includes(wanted) && !candidate.toLocaleLowerCase().includes(wanted)) continue;
+      if (skipped < offset) {
+        skipped += 1;
+        continue;
+      }
+      results.push({ name: entry.name, path: candidate });
+      if (results.length > folderSearchPageSize) {
+        return { results: results.slice(0, folderSearchPageSize), hasMore: true };
+      }
+    }
+  }
+  return { results, hasMore: false };
+}
+
+async function everythingFolderSearch(executable, root, query, offset, everywhere) {
+  const args = [
+    "-n", String(folderSearchPageSize + 1),
+    "-o", String(offset),
+    "/ad",
+    "-sort", "path",
+    "-timeout", "1500"
+  ];
+  if (!everywhere) args.push("-path", root);
+  args.push("-r", query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const output = await runEverythingSearch(executable, args);
+  const paths = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return {
+    results: paths.slice(0, folderSearchPageSize).map((folderPath) => ({ name: path.basename(folderPath) || folderPath, path: folderPath })),
+    hasMore: paths.length > folderSearchPageSize
+  };
+}
+
+async function searchFolders(client, message) {
+  const query = String(message.query || "").trim();
+  const offset = Math.max(0, Number.parseInt(message.offset, 10) || 0);
+  const root = existingFolder(message.path || message.cwd);
+  if (!query) {
+    sendFolderResponse(client, "folderSearchResults", message.requestId, {
+      ok: true, query, path: root, offset, results: [], hasMore: false, engine: "fallback",
+      everythingAvailable: Boolean(findEverythingExecutable())
+    });
+    return;
+  }
+  if (message.autocomplete === true) {
+    const completed = completeFolderPath(query, offset);
+    sendFolderResponse(client, "folderSearchResults", message.requestId, {
+      ok: true, query, path: root, offset, ...completed, engine: "direct",
+      everythingAvailable: Boolean(findEverythingExecutable())
+    });
+    return;
+  }
+  const executable = message.useEverything === false ? "" : findEverythingExecutable();
+  if (executable) {
+    try {
+      const found = await everythingFolderSearch(executable, root, query, offset, message.everywhere === true);
+      sendFolderResponse(client, "folderSearchResults", message.requestId, {
+        ok: true, query, path: root, offset, ...found, engine: "everything", everythingAvailable: true
+      });
+      return;
+    } catch (error) {
+      console.warn(`[bridge] Everything folder search unavailable: ${error.message}`);
+    }
+  }
+  const found = await fallbackFolderSearch(root, query, offset);
+  sendFolderResponse(client, "folderSearchResults", message.requestId, {
+    ok: true, query, path: root, offset, ...found, engine: "fallback", everythingAvailable: false,
+    warning: message.everywhere === true ? "Everything is unavailable, so MultiTerm searched the current folder instead." : ""
+  });
+}
+
+function createFolder(client, message) {
+  const parent = existingFolder(message.path || message.cwd);
+  const name = String(message.name || "").trim();
+  if (!name || name === "." || name === ".." || /[\\/\x00-\x1f\x7f]/.test(name)
+      || (process.platform === "win32" && (/[<>:"|?*]/.test(name) || /[. ]$/.test(name)))) {
+    sendFolderResponse(client, "folderCreated", message.requestId, { ok: false, error: "Enter a valid folder name." });
+    return;
+  }
+  const target = path.join(parent, name);
+  try {
+    fs.mkdirSync(target);
+    sendFolderResponse(client, "folderCreated", message.requestId, { ok: true, path: target });
+  } catch (error) {
+    sendFolderResponse(client, "folderCreated", message.requestId, {
+      ok: false,
+      error: error.code === "EEXIST" ? "A folder with that name already exists." : error.message
+    });
+  }
 }
 
 function pickFolder(client, message) {
@@ -5326,6 +6002,7 @@ module.exports = {
     recordWorktreeParent,
     forgetWorktreeParent,
     branchCheckoutPath,
+    createGitWorktree,
     startWorktreeMerge,
     finishWorktreeMerge,
     readConflictSides,
@@ -5458,6 +6135,16 @@ module.exports = {
     generateAiTerminalTitle,
     sendTerminalTitleSuggestion,
     sendPromptLibraryResponse,
+    expandFolderPath,
+    existingFolder,
+    folderRoots,
+    readFolderEntries,
+    completeFolderPath,
+    fallbackFolderSearch,
+    findEverythingExecutable,
+    listFolders,
+    searchFolders,
+    createFolder,
     pickFolder,
     validateDirectory,
     directoryValidationFrame,

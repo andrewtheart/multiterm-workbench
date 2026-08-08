@@ -32,6 +32,7 @@ async function reset(page, count = 1) {
 test.describe("Terminal notes and command queue", () => {
   test.afterEach(async ({ page }) => {
     await page.evaluate(() => {
+      closeTerminalNotesFlyout({ restoreFocus: false });
       closeTerminalArtifacts({ restoreFocus: false });
       closeAllTerminals();
       localStorage.removeItem("multiterm.terminalArtifacts");
@@ -43,6 +44,9 @@ test.describe("Terminal notes and command queue", () => {
     await reset(page);
     await page.locator('.terminal-pane [data-action="artifacts"]').click();
 
+    await expect(page.locator("#terminalNotesFlyout")).toBeVisible();
+    await expect(page.locator("#terminalNotesFlyoutEmpty")).toBeVisible();
+    await page.locator("#terminalNotesFlyoutAdd").click();
     await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
     await expect(page.locator("#terminalArtifactsTarget option").first()).toContainText(/PID \d+/);
     await page.locator("#terminalNotesInput").fill("Investigate the parser edge case.\nKeep the reproduction command.");
@@ -63,6 +67,89 @@ test.describe("Terminal notes and command queue", () => {
     await page.locator("#terminalArtifactsToggle").click();
     await page.locator("#terminalArtifactsTarget").selectOption(stored.terminalId);
     await expect(page.locator("#terminalNotesInput")).toHaveValue(stored.notes);
+  });
+
+  test("previews, edits, and deletes a note from the centered pane flyout", async ({ page }) => {
+    await reset(page);
+    const note = "Investigate the parser edge case before release.\nKeep the reproduction command and compare the next trace.";
+    await page.locator("#terminalArtifactsToggle").click();
+    await page.locator("#terminalNotesInput").fill(note);
+    await expect(page.locator("#terminalNotesSaved")).toHaveText("Saved");
+    await page.locator("#terminalArtifactsClose").click();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeHidden();
+
+    const notesButton = page.locator('.terminal-pane [data-action="artifacts"]');
+    await notesButton.click();
+    const flyout = page.locator("#terminalNotesFlyout");
+    await expect(flyout).toBeVisible();
+    await expect(notesButton).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#terminalNotesFlyoutSubtitle")).toContainText(/Artifact terminal 1 · PID \d+/);
+    await expect(page.locator(".terminal-notes-flyout-preview")).toHaveText(note);
+    await expect(page.locator(".terminal-notes-flyout-time")).toHaveText(/^Saved /);
+    await expect(page.locator(".terminal-notes-flyout-time")).not.toHaveAttribute("datetime", "");
+    await expect(page.locator(".terminal-notes-flyout-preview")).toHaveCSS("-webkit-line-clamp", "4");
+
+    const geometry = await page.evaluate(() => {
+      const anchor = document.querySelector('.terminal-pane [data-action="artifacts"]').getBoundingClientRect();
+      const preview = elements.terminalNotesFlyout.getBoundingClientRect();
+      const unclampedLeft = anchor.left + (anchor.width - preview.width) / 2;
+      const expectedLeft = Math.max(8, Math.min(unclampedLeft, innerWidth - preview.width - 8));
+      return {
+        expectedLeft,
+        flyoutLeft: preview.left,
+        flyoutTop: preview.top,
+        expectedTop: anchor.bottom + 7,
+        overflow: preview.right > innerWidth || preview.bottom > innerHeight
+      };
+    });
+    expect(Math.abs(geometry.flyoutLeft - geometry.expectedLeft)).toBeLessThanOrEqual(1);
+    expect(Math.abs(geometry.flyoutTop - geometry.expectedTop)).toBeLessThanOrEqual(1);
+    expect(geometry.overflow).toBe(false);
+
+    await page.locator('[data-notes-flyout-edit]').click();
+    await expect(flyout).toBeHidden();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+    await expect(page.locator("#terminalNotesInput")).toBeFocused();
+    await expect(page.locator("#terminalNotesInput")).toHaveValue(note);
+    await page.locator("#terminalArtifactsClose").click();
+
+    await notesButton.click();
+    await page.locator('[data-notes-flyout-delete]').click();
+    await expect(page.locator("#terminalNotesFlyoutEmpty")).toBeVisible();
+    await expect(notesButton).not.toHaveClass(/has-artifacts/);
+    await expect.poll(() => page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const record = state.terminalArtifacts.terminals[terminal.id];
+      return { notes: record.notes, notesUpdatedAt: record.notesUpdatedAt };
+    })).toEqual({ notes: "", notesUpdatedAt: null });
+
+    await page.locator("#terminalNotesFlyoutDetails").click();
+    await expect(flyout).toBeHidden();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+    await expect(page.locator("#terminalNotesInput")).toHaveValue("");
+  });
+
+  test("uses the same notes flyout when the pane action is in overflow", async ({ page }) => {
+    await reset(page);
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      terminal.pane.querySelector('[data-action="artifacts"]').dataset.autoOverflow = "true";
+    });
+
+    const more = page.locator('.terminal-pane [data-action="more"]');
+    await more.click();
+    await page.getByRole("menuitem", { name: "Notes & command queue", exact: true }).click();
+
+    await expect(page.locator("#contextMenu")).toBeHidden();
+    await expect(page.locator("#terminalNotesFlyout")).toBeVisible();
+    await expect(page.locator("#terminalNotesFlyoutEmpty")).toBeVisible();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    const gap = await page.evaluate(() => {
+      const anchor = document.querySelector('.terminal-pane [data-action="more"]').getBoundingClientRect();
+      const flyout = elements.terminalNotesFlyout.getBoundingClientRect();
+      return flyout.top - anchor.bottom;
+    });
+    expect(Math.abs(gap - 7)).toBeLessThanOrEqual(1);
   });
 
   test("dequeues a command by inserting it without Enter", async ({ page }) => {
