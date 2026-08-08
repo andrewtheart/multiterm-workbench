@@ -733,7 +733,11 @@ function registerScriptPicker() {
     let defaultPath;
     try {
       const candidate = path.resolve(String(initialDirectory || "").trim());
-      if (fs.statSync(candidate).isDirectory()) defaultPath = candidate;
+      if (fs.statSync(candidate).isDirectory()) {
+        defaultPath = candidate;
+      } else {
+        defaultPath = undefined;
+      }
     } catch { /* start in the native dialog's default location */ }
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "Select a working directory",

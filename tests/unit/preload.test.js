@@ -51,6 +51,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
   await expect(api.setFullscreen(1)).resolves.toBe("result");
   await expect(api.pickScript()).resolves.toBe("result");
   await expect(api.pickFolder("C:\\work")).resolves.toBe("result");
+  await expect(api.pickFolder()).resolves.toBe("result");
   await expect(api.isElevated()).resolves.toBe("result");
   await expect(api.restartAsAdmin()).resolves.toBe("result");
   await expect(api.checkForUpdate()).resolves.toBe("result");
@@ -63,6 +64,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
     ["multiterm:set-fullscreen", true],
     ["multiterm:pick-script"],
     ["multiterm:pick-folder", "C:\\work"],
+    ["multiterm:pick-folder", ""],
     ["multiterm:is-elevated"],
     ["multiterm:relaunch-as-admin"],
     ["multiterm:check-update"],

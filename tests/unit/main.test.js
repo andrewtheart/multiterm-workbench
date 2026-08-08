@@ -1221,12 +1221,17 @@ describe("registerScriptPicker (via onReady)", () => {
   });
 
   it("omits an invalid initial folder and returns null when cancelled", async () => {
-    vi.spyOn(fs, "statSync").mockImplementation(() => { throw new Error("missing"); });
+    vi.spyOn(fs, "statSync")
+      .mockReturnValueOnce({ isDirectory: () => false })
+      .mockImplementationOnce(() => { throw new Error("missing"); });
     electron.dialog.showOpenDialog = vi.fn(async () => ({ canceled: true, filePaths: [] }));
     await bootReady();
 
-    await expect(folderHandler()(trustedIpcEvent(), "C:\\missing")).resolves.toBeNull();
+    await expect(folderHandler()(trustedIpcEvent(), "C:\\file.txt")).resolves.toBeNull();
     expect(electron.dialog.showOpenDialog.mock.calls[0][1]).not.toHaveProperty("defaultPath");
+
+    await expect(folderHandler()(trustedIpcEvent(), "C:\\missing")).resolves.toBeNull();
+    expect(electron.dialog.showOpenDialog.mock.calls[1][1]).not.toHaveProperty("defaultPath");
   });
 });
 
