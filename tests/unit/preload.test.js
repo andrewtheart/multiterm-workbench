@@ -49,6 +49,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
   await expect(api.writeClipboardText(42)).resolves.toBe("result");
   await expect(api.readClipboardText()).resolves.toBe("result");
   await expect(api.setFullscreen(1)).resolves.toBe("result");
+  await expect(api.minimizeWindow()).resolves.toBe("result");
   await expect(api.pickScript()).resolves.toBe("result");
   await expect(api.pickFolder("C:\\work")).resolves.toBe("result");
   await expect(api.pickFolder()).resolves.toBe("result");
@@ -62,6 +63,7 @@ test("exposes every isolated renderer API over the expected IPC channels", async
     ["multiterm:write-clipboard", "42"],
     ["multiterm:read-clipboard"],
     ["multiterm:set-fullscreen", true],
+    ["multiterm:minimize-window"],
     ["multiterm:pick-script"],
     ["multiterm:pick-folder", "C:\\work"],
     ["multiterm:pick-folder", ""],

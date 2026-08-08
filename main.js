@@ -35,11 +35,17 @@ function __setElectron(mock) {
 function registerWindowIpc() {
   if (!ipcMain || typeof ipcMain.handle !== "function") return;
   try { ipcMain.removeHandler("multiterm:set-fullscreen"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:minimize-window"); } catch { /* no existing handler */ }
   ipcMain.handle("multiterm:set-fullscreen", (event, enabled) => {
     assertTrustedIpcSender(event);
     const next = Boolean(enabled);
     mainWindow.setFullScreen(next);
     return typeof mainWindow.isFullScreen === "function" ? mainWindow.isFullScreen() : next;
+  });
+  ipcMain.handle("multiterm:minimize-window", (event) => {
+    assertTrustedIpcSender(event);
+    mainWindow.minimize();
+    return true;
   });
 }
 

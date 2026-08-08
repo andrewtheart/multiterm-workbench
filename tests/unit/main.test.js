@@ -116,6 +116,7 @@ function makeWindow() {
     isVisible: vi.fn(() => true),
     isDestroyed: vi.fn(() => false),
     isFullScreen: vi.fn(() => true),
+    minimize: vi.fn(),
     restore: vi.fn(),
     setFullScreen: vi.fn(),
     show: vi.fn(),
@@ -451,6 +452,11 @@ describe("window IPC", () => {
       .find(([channel]) => channel === "multiterm:set-fullscreen")?.[1];
   }
 
+  function minimizeHandler() {
+    return electron.ipcMain.handle.mock.calls
+      .find(([channel]) => channel === "multiterm:minimize-window")?.[1];
+  }
+
   it("allows only the app renderer to change native fullscreen", () => {
     main.createWindow();
     const win = main.getMainWindow();
@@ -476,6 +482,18 @@ describe("window IPC", () => {
     electron.ipcMain.removeHandler.mockImplementation(() => { throw new Error("missing"); });
     expect(() => main.registerWindowIpc()).not.toThrow();
     expect(fullscreenHandler()(trustedIpcEvent(), true)).toBe(true);
+  });
+
+  it("allows only the app renderer to minimize the native window", () => {
+    main.createWindow();
+    const win = main.getMainWindow();
+    main.registerWindowIpc();
+    expect(minimizeHandler()(trustedIpcEvent())).toBe(true);
+    expect(win.minimize).toHaveBeenCalledOnce();
+    expect(() => minimizeHandler()({
+      sender: win.webContents,
+      senderFrame: { url: "https://example.com/" }
+    })).toThrow("restricted to the MultiTerm application window");
   });
 
   it("is unavailable when ipcMain.handle is missing", () => {
