@@ -30,6 +30,7 @@ Write-Host "PowerShell command coverage: $($coverage.NumberOfCommandsExecuted)/$
 # release tooling whose branches depend on git and GitHub state that cannot be
 # reached from a unit test.
 $additionalSuites = @(
+    (Join-Path $repoRoot "tests\powershell\ReleaseState.Tests.ps1"),
     (Join-Path $repoRoot "tests\powershell\ReleaseNotesBase.Tests.ps1")
 )
 

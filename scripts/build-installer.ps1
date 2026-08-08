@@ -49,7 +49,17 @@
         the current branch is pushed; and a GitHub release tagged v<version> is
         created via the gh CLI targeting that commit, with the installer attached
         as an asset. Before the push, GitHub Copilot CLI generates release notes
-        from the commits and diff since the previous release tag.
+        from the commits and diff since the last published GitHub release, so any
+        work stranded by an earlier failed release attempt is still announced.
+
+    Resuming after a failure:
+        Every expensive or irreversible stage is checkpointed to
+        .release-state.json as it succeeds. If the run fails or is interrupted,
+        re-running the same command resumes where it stopped instead of starting
+        over: completed builds are skipped while their inputs are unchanged and
+        their outputs still validate, the version is not bumped a second time,
+        and previously generated release notes are reused. Use -ShowReleaseState
+        to inspect a checkpoint and -FreshStart to discard one.
 
 .PARAMETER Push
     Bump the version, build, commit, push the branch, and publish the release.
@@ -96,6 +106,14 @@
     Full path to GitHub Copilot CLI. Auto-detected when omitted. Required when
     -Push will publish a new GitHub release.
 
+.PARAMETER FreshStart
+    Discard any checkpoint left by an interrupted run and start the pipeline
+    from the beginning, re-running every stage.
+
+.PARAMETER ShowReleaseState
+    Print the checkpoint left by an interrupted run and exit without building
+    or publishing anything.
+
 .EXAMPLE
     .\scripts\build-installer.ps1
     Build the current version's installer only (no version change, no publish).
@@ -141,12 +159,16 @@ param(
     [string]$Tag,
     [string]$IsccPath,
     [string]$CopilotPath,
+    [switch]$FreshStart,
+    [switch]$ShowReleaseState,
     [Parameter(ValueFromRemainingArguments = $true, DontShow = $true)]
     [string[]]$CompatibilityOptions
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+. (Join-Path $PSScriptRoot 'release-state.ps1')
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
 
@@ -290,6 +312,101 @@ function Get-PreviousPublishedReleaseTag {
     return [string]$eligible[0].tagName
 }
 
+function Resolve-ReleaseTagCommit {
+    <#
+        gh creates release tags on the remote, so they are not necessarily in
+        this clone's local tag namespace. Resolve against the remote and prefer
+        the peeled target, which is the commit an annotated tag points at.
+    #>
+    param([string]$RepositoryRoot, [string]$Tag)
+
+    $tagInfo = Get-NativeOutput {
+        git --no-pager -C $RepositoryRoot ls-remote --tags origin "refs/tags/$Tag" "refs/tags/$Tag^{}"
+    }
+    if ($tagInfo.ExitCode -ne 0) { throw "Could not query remote tag $Tag." }
+    $tagLines = @($tagInfo.Output | Where-Object { $_ -and $_.ToString().Trim() })
+    if ($tagLines.Count -eq 0) { return $null }
+
+    $tagLine = $tagLines | Where-Object { $_.ToString() -match '\^\{\}$' } | Select-Object -First 1
+    if (-not $tagLine) { $tagLine = $tagLines | Select-Object -First 1 }
+    return ($tagLine.ToString() -split '\s+')[0]
+}
+
+function Test-CommitIsAncestor {
+    param([string]$RepositoryRoot, [string]$Ancestor, [string]$Descendant)
+
+    if ([string]::IsNullOrWhiteSpace($Ancestor) -or [string]::IsNullOrWhiteSpace($Descendant)) { return $false }
+    return (Get-NativeExit { git --no-pager -C $RepositoryRoot merge-base --is-ancestor $Ancestor $Descendant }) -eq 0
+}
+
+function Resolve-ReleaseNotesBase {
+    <#
+        Release notes must always describe everything that changed since the
+        last release users could actually download. Two failure modes make that
+        harder than reading the newest tag.
+
+        A previous run of this script can fail after committing, or even after
+        pushing, but before the release is published. Those commits belong in
+        the next release's notes, and they are included automatically because
+        the base is the last *published* release rather than the newest tag or
+        the current version.
+
+        A resumed run must not narrow the range either. If the persisted base
+        from the interrupted attempt is an ancestor of the freshly resolved one,
+        the persisted base is kept, because moving forward would silently drop
+        changes the interrupted attempt was going to announce.
+    #>
+    param(
+        [string]$RepositoryRoot,
+        [string]$GhPath,
+        [string]$RepositorySlug,
+        [string]$CurrentTag,
+        [hashtable]$Persisted
+    )
+
+    $tag = Get-PreviousPublishedReleaseTag -GhPath $GhPath -RepositorySlug $RepositorySlug -CurrentTag $CurrentTag
+    $commit = $null
+    if ($tag) {
+        $commit = Resolve-ReleaseTagCommit -RepositoryRoot $RepositoryRoot -Tag $tag
+        if (-not $commit) {
+            throw "GitHub reports $tag as the last published release, but origin has no such tag. Fetch the remote or delete the stale release before publishing."
+        }
+    }
+
+    if ($Persisted -and $Persisted.ContainsKey('commit') -and $Persisted.commit) {
+        $persistedTag = if ($Persisted.ContainsKey('tag')) { [string]$Persisted.tag } else { '' }
+        $persistedCommit = [string]$Persisted.commit
+        $stillReachable = (Get-NativeExit { git --no-pager -C $RepositoryRoot cat-file -e "$persistedCommit^{commit}" }) -eq 0
+        if (-not $stillReachable) {
+            $replacement = if ($tag) { "$tag ($commit)" } else { 'the entire history' }
+            Write-Warning "The interrupted run compared against $persistedCommit, which is no longer in this repository. Comparing against $replacement instead."
+        }
+        elseif (-not $commit) {
+            Write-Step "Keeping the interrupted run's comparison base $persistedTag ($persistedCommit); GitHub no longer reports a published release."
+            return @{ tag = $persistedTag; commit = $persistedCommit; isFirstRelease = $false }
+        }
+        elseif ($persistedCommit -ne $commit -and (Test-CommitIsAncestor -RepositoryRoot $RepositoryRoot -Ancestor $persistedCommit -Descendant $commit)) {
+            Write-Step "A release was published since the interrupted run; keeping the older base $persistedTag so no changes are dropped from the notes."
+            return @{ tag = $persistedTag; commit = $persistedCommit; isFirstRelease = $false }
+        }
+    }
+
+    if (-not $tag) {
+        $rootInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-list --max-parents=0 HEAD }
+        if ($rootInfo.ExitCode -ne 0 -or -not $rootInfo.Output) {
+            throw "Could not determine a comparison base for release notes."
+        }
+        $root = ($rootInfo.Output | Select-Object -First 1).ToString().Trim()
+        Write-Step "No published release found for $RepositorySlug; release notes will cover the entire history from $root."
+        return @{ tag = ''; commit = $root; isFirstRelease = $true }
+    }
+
+    if (-not (Test-CommitIsAncestor -RepositoryRoot $RepositoryRoot -Ancestor $commit -Descendant 'HEAD')) {
+        Write-Warning "The last published release $tag ($commit) is not an ancestor of HEAD. Release notes will describe what HEAD adds relative to their common ancestor."
+    }
+    return @{ tag = $tag; commit = $commit; isFirstRelease = $false }
+}
+
 function Add-DeterministicReleaseDetails {
     param(
         [string]$Notes,
@@ -319,14 +436,9 @@ $baseNotes
 function Get-RemoteTagTarget {
     param([string]$RepositoryRoot, [string]$Tag)
 
-    $tagInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot ls-remote --tags origin "refs/tags/$Tag" "refs/tags/$Tag^{}" }
-    if ($tagInfo.ExitCode -ne 0 -or -not $tagInfo.Output) {
-        throw "Could not resolve remote tag $Tag."
-    }
-    $tagLines = @($tagInfo.Output)
-    $tagLine = $tagLines | Where-Object { $_.ToString() -match '\^\{\}$' } | Select-Object -First 1
-    if (-not $tagLine) { $tagLine = $tagLines | Select-Object -First 1 }
-    return ($tagLine.ToString() -split '\s+')[0]
+    $target = Resolve-ReleaseTagCommit -RepositoryRoot $RepositoryRoot -Tag $Tag
+    if (-not $target) { throw "Could not resolve remote tag $Tag." }
+    return $target
 }
 
 function Assert-PublishedRelease {
@@ -558,40 +670,31 @@ function Invoke-InteractiveDirtyPublishCommitFlow {
 }
 
 function Get-ReleaseChangeContext {
-    param([string]$RepositoryRoot, [string]$ReleaseTag, [string]$PreviousReleaseTag)
+    param([string]$RepositoryRoot, [string]$ReleaseTag, [hashtable]$Base)
 
-    if ($PreviousReleaseTag) {
-        # gh creates the release tag on the remote, but it is not necessarily in
-        # this clone's local tag namespace. Resolve the remote tag directly so
-        # consecutive releases compare against the actual last published build.
-        $tagInfo = Get-NativeOutput {
-            git --no-pager -C $RepositoryRoot ls-remote --tags origin "refs/tags/$PreviousReleaseTag" "refs/tags/$PreviousReleaseTag^{}"
-        }
-        if ($tagInfo.ExitCode -ne 0 -or -not $tagInfo.Output) {
-            throw "Could not resolve previous release tag $PreviousReleaseTag for Copilot release notes."
-        }
-        $tagLines = @($tagInfo.Output)
-        $tagLine = $tagLines | Where-Object { $_.ToString() -match '\^\{\}$' } | Select-Object -First 1
-        if (-not $tagLine) { $tagLine = $tagLines | Select-Object -First 1 }
-        $base = ($tagLine.ToString() -split '\s+')[0]
-        $baseLabel = $PreviousReleaseTag
-    }
-    else {
-        $rootInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-list --max-parents=0 HEAD }
-        if ($rootInfo.ExitCode -ne 0 -or -not $rootInfo.Output) {
-            throw "Could not determine a comparison base for Copilot release notes."
-        }
-        $base = ($rootInfo.Output | Select-Object -First 1).ToString().Trim()
-        $baseLabel = $base
-    }
+    $baseCommit = [string]$Base.commit
+    $baseLabel = if ([string]$Base.tag) { [string]$Base.tag } else { $baseCommit }
 
-    $range = "$base..HEAD"
-    $commits = Get-NativeOutput { git --no-pager -C $RepositoryRoot log --no-merges --format=format:'%h %s%n%b' $range }
+    # git log's two-dot range means "reachable from HEAD but not from base",
+    # while git diff's two-dot means "compare the two endpoints". They agree
+    # only when base is an ancestor of HEAD; otherwise the diff also reports
+    # base-only work as though this release had reverted it. Three-dot diffs
+    # from the merge base, which matches both the commit list and the compare
+    # link GitHub renders for the Full changelog section.
+    $logRange = "$baseCommit..HEAD"
+    $diffRange = "$baseCommit...HEAD"
+
+    $commits = Get-NativeOutput { git --no-pager -C $RepositoryRoot log --no-merges --format=format:'%h %s%n%b' $logRange }
     if ($commits.ExitCode -ne 0) { throw "git log failed while preparing Copilot release notes." }
-    $stat = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --stat --summary $range }
+    $stat = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --stat --summary $diffRange }
     if ($stat.ExitCode -ne 0) { throw "git diff --stat failed while preparing Copilot release notes." }
-    $patch = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --unified=2 $range -- . ':(exclude)package-lock.json' }
+    $patch = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --unified=2 $diffRange -- . ':(exclude)package-lock.json' }
     if ($patch.ExitCode -ne 0) { throw "git diff failed while preparing Copilot release notes." }
+
+    $commitText = (ConvertTo-NativeText $commits.Output).Trim()
+    if ([string]::IsNullOrWhiteSpace($commitText)) {
+        throw "There are no commits between $baseLabel and HEAD, so there is nothing to describe in the release notes for $ReleaseTag."
+    }
 
     $patchText = ConvertTo-NativeText $patch.Output
     $maxPatchChars = 120000
@@ -601,12 +704,12 @@ function Get-ReleaseChangeContext {
 
     return @"
 Release tag: $ReleaseTag
-Comparison base: $baseLabel ($base)
-Comparison range: $range
+Comparison base: $baseLabel ($baseCommit)
+Comparison range: $logRange
 
 COMMITS
 -------
-$(ConvertTo-NativeText $commits.Output)
+$commitText
 
 DIFF STAT
 ---------
@@ -878,7 +981,7 @@ function New-CopilotReleaseNotes {
         [string]$RepositoryRoot,
         [string]$RepositorySlug,
         [string]$ReleaseTag,
-        [string]$PreviousReleaseTag,
+        [hashtable]$Base,
         [string]$Version,
         [string]$AssetName,
         [long]$AssetSize,
@@ -888,7 +991,7 @@ function New-CopilotReleaseNotes {
 
     $contextPath = Join-Path ([System.IO.Path]::GetTempPath()) ("multiterm-release-context-{0}.txt" -f [guid]::NewGuid().ToString('N'))
     try {
-        $context = Get-ReleaseChangeContext -RepositoryRoot $RepositoryRoot -ReleaseTag $ReleaseTag -PreviousReleaseTag $PreviousReleaseTag
+        $context = Get-ReleaseChangeContext -RepositoryRoot $RepositoryRoot -ReleaseTag $ReleaseTag -Base $Base
         [System.IO.File]::WriteAllText($contextPath, $context, [System.Text.UTF8Encoding]::new($false))
         $prompt = @"
 Write the GitHub release notes body for MultiTerm Workbench $ReleaseTag (version $Version).
@@ -922,7 +1025,7 @@ modify any files.
             throw "Copilot CLI returned release notes with an unexpected Markdown structure. Output began: $preview"
         }
         $notes = Add-DeterministicReleaseDetails -Notes $notes -AssetName $AssetName -AssetSize $AssetSize -AssetSha256 $AssetSha256
-        return Add-ReleaseCompareLink -Notes $notes -RepositorySlug $RepositorySlug -PreviousReleaseTag $PreviousReleaseTag -ReleaseTag $ReleaseTag
+        return Add-ReleaseCompareLink -Notes $notes -RepositorySlug $RepositorySlug -PreviousReleaseTag ([string]$Base.tag) -ReleaseTag $ReleaseTag
     }
     finally {
         Remove-Item -LiteralPath $contextPath -Force -ErrorAction SilentlyContinue
@@ -944,30 +1047,42 @@ function Get-NextVersion {
 }
 
 function Set-VersionInFile {
+    <#
+        Idempotent on purpose. A run interrupted between two of these calls
+        leaves some files bumped and some not, and the resumed run has to be
+        able to finish the job without treating the already-correct files as a
+        failure. A pattern that does not match at all is still an error.
+    #>
     param([string]$Path, [string]$Pattern, [string]$NewVersion)
     $text = [System.IO.File]::ReadAllText($Path)
-    $updated = [regex]::new($Pattern).Replace($text, "`${1}$NewVersion`${3}", 1)
-    if ($updated -eq $text) {
-        throw "Failed to update version in $Path (pattern did not match or value unchanged)."
+    $regex = [regex]::new($Pattern)
+    $match = $regex.Match($text)
+    if (-not $match.Success) {
+        throw "Failed to update version in $Path (pattern did not match)."
     }
-    [System.IO.File]::WriteAllText($Path, $updated)
+    if ($match.Groups[2].Value -eq $NewVersion) { return }
+    [System.IO.File]::WriteAllText($Path, $regex.Replace($text, "`${1}$NewVersion`${3}", 1))
 }
 
 function Set-PackageLockVersion {
     param([string]$Path, [string]$NewVersion)
     $text = [System.IO.File]::ReadAllText($Path)
     $patterns = @(
-        '(?s)(^\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+("\s*,)',
-        '(?s)("packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")[^"]+("\s*,)'
+        '(?s)(^\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")([^"]+)("\s*,)',
+        '(?s)("packages"\s*:\s*\{\s*""\s*:\s*\{\s*"name"\s*:\s*"[^"]+",\s*"version"\s*:\s*")([^"]+)("\s*,)'
     )
+    $changed = $false
     foreach ($pattern in $patterns) {
-        $updated = [regex]::new($pattern).Replace($text, "`${1}$NewVersion`${2}", 1)
-        if ($updated -eq $text) {
-            throw "Failed to update version in $Path (pattern did not match or value unchanged)."
+        $regex = [regex]::new($pattern)
+        $match = $regex.Match($text)
+        if (-not $match.Success) {
+            throw "Failed to update version in $Path (pattern did not match)."
         }
-        $text = $updated
+        if ($match.Groups[2].Value -eq $NewVersion) { continue }
+        $text = $regex.Replace($text, "`${1}$NewVersion`${3}", 1)
+        $changed = $true
     }
-    [System.IO.File]::WriteAllText($Path, $text)
+    if ($changed) { [System.IO.File]::WriteAllText($Path, $text) }
 }
 
 # Repository root is the parent of the scripts\ folder that holds this file.
@@ -999,6 +1114,46 @@ if (($NoGitCommit -or $NoGitPush) -and -not $Push) {
     throw "-NoGitCommit and -NoGitPush are only meaningful with -Push."
 }
 
+# --- Checkpoint from an interrupted run -----------------------------------------
+$ReleaseStatePath = Get-ReleaseStatePath -RepositoryRoot $RepoRoot
+$ReleaseState = $null
+if ($FreshStart) {
+    if (Test-Path -LiteralPath $ReleaseStatePath -PathType Leaf) {
+        Write-Step "-FreshStart: discarding the checkpoint from the previous run."
+    }
+    Remove-ReleaseState -Path $ReleaseStatePath
+}
+else {
+    $ReleaseState = Read-ReleaseState -Path $ReleaseStatePath
+}
+
+if ($ShowReleaseState) {
+    if ($ReleaseState) { Write-Host (Format-ReleaseStateSummary -State $ReleaseState) }
+    else { Write-Host "No release checkpoint is present; the next run will start from the beginning." }
+    return
+}
+
+$ResumedVersionBump = $false
+if ($ReleaseState) {
+    # A checkpoint only applies to the run it was created for. Releasing a
+    # different version, or switching between build-only and publish, has to
+    # start over rather than inherit half of someone else's pipeline.
+    $stateOptions = if ($ReleaseState.ContainsKey('options') -and ($ReleaseState.options -is [hashtable])) { $ReleaseState.options } else { @{} }
+    $statePush = $stateOptions.ContainsKey('push') -and [bool]$stateOptions.push
+    $conflicts = @()
+    if ($statePush -ne [bool]$Push) { $conflicts += "it was created for a $(if ($statePush) { 'publish' } else { 'build-only' }) run" }
+    if ($SetVersion -and $SetVersion -ne [string]$ReleaseState.version) { $conflicts += "it targets version $($ReleaseState.version), not $SetVersion" }
+    if ($Tag -and $Tag -ne [string]$ReleaseState.tag) { $conflicts += "it targets tag $($ReleaseState.tag), not $Tag" }
+
+    if ($conflicts.Count -gt 0) {
+        throw ("A checkpoint from an interrupted run of $($ReleaseState.tag) is present, but " + ($conflicts -join ', and ') + ". Re-run with -FreshStart to discard it, or with matching arguments to resume. Use -ShowReleaseState to inspect it.")
+    }
+
+    Write-Step "Resuming the interrupted run of $($ReleaseState.tag) started at $($ReleaseState.startedAt)."
+    Write-Host (Format-ReleaseStateSummary -State $ReleaseState) -ForegroundColor DarkGray
+    $ResumedVersionBump = Test-ReleaseStageComplete -State $ReleaseState -Name 'versionBump'
+}
+
 # --- Current version (package.json is the source of truth) ----------------------
 $CurrentVersion = (Get-Content -LiteralPath $PackageJsonPath -Raw | ConvertFrom-Json).version
 if ([string]::IsNullOrWhiteSpace($CurrentVersion)) { throw "package.json does not define a 'version'." }
@@ -1028,7 +1183,36 @@ if (-not $VisualStudioManifestMatch.Success) { throw "Could not find the VSIX Id
 $VisualStudioManifestVersion = $VisualStudioManifestMatch.Groups[1].Value
 
 # --- Decide the version to build ------------------------------------------------
-$BumpVersion = $Push -and -not $NoVersionBump
+# $VersionedRelease is "this release carries a new version"; $BumpVersion is
+# "this run still has to write it". They differ on a resumed run: the
+# interrupted attempt already wrote its version into the release files, and
+# bumping a second time would strand that version -- built, possibly committed,
+# and never published -- while the release commit it still owes goes unmade.
+$VersionedRelease = $Push -and -not $NoVersionBump
+$BumpVersion = $VersionedRelease -and -not $ResumedVersionBump
+if ($ResumedVersionBump) {
+    $resumedVersion = [string]$ReleaseState.version
+    $partial = @()
+    if ($CurrentVersion -ne $resumedVersion) { $partial += 'package.json' }
+    if ($PackageLockVersion -ne $resumedVersion -or $PackageLockRootVersion -ne $resumedVersion) { $partial += 'package-lock.json' }
+    if ($IssVersion -ne $resumedVersion) { $partial += 'installer\MultiTerm.iss' }
+    if ($AppJsVersion -ne $resumedVersion) { $partial += 'public\app.js' }
+    if ($VisualStudioManifestVersion -ne $resumedVersion) { $partial += 'integrations\visualstudio\source.extension.vsixmanifest' }
+
+    if ($partial.Count -gt 0) {
+        # The interrupted run died between two of the five writes, so its
+        # checkpoint overstates what it finished. Re-running the bump is safe
+        # because the writers are idempotent.
+        Write-Warning "The interrupted run recorded version $resumedVersion but $($partial -join ', ') still disagree. Completing the version bump."
+        Reset-ReleaseStage -State $ReleaseState -Name 'versionBump' -Path $ReleaseStatePath
+        $ResumedVersionBump = $false
+        $BumpVersion = $VersionedRelease
+        $SetVersion = $resumedVersion
+    }
+    else {
+        Write-Step "Resuming: version $resumedVersion was already applied by the interrupted run; not bumping again."
+    }
+}
 if ($BumpVersion) {
     if ($SetVersion) {
         $Version = $SetVersion
@@ -1065,11 +1249,31 @@ else {
 if (-not $Tag) { $Tag = "v$Version" }
 $OutputExe = Join-Path $RepoRoot ("installer\Output\MultiTerm-Setup-{0}.exe" -f $Version)
 
+if ($ReleaseState) {
+    # Only reachable when the version bump had not been recorded yet, so no
+    # committed or published artifact is tied to the old target.
+    if ([string]$ReleaseState.version -ne $Version -or [string]$ReleaseState.tag -ne $Tag) {
+        Write-Step "Re-targeting the checkpoint from $($ReleaseState.tag) to $Tag."
+        $ReleaseState.version = $Version
+        $ReleaseState.tag = $Tag
+    }
+}
+else {
+    $ReleaseState = New-ReleaseState -Version $Version -Tag $Tag -Options @{
+        push          = [bool]$Push
+        noGitCommit   = [bool]$NoGitCommit
+        noGitPush     = [bool]$NoGitPush
+        noVersionBump = [bool]$NoVersionBump
+        draft         = [bool]$Draft
+        prerelease    = [bool]$Prerelease
+    }
+}
+
 # --- Push and publish preflight state -------------------------------------------
 $GhPath = $null
 $ResolvedCopilotPath = $CopilotPath
 $RepoSlug = $null
-$PreviousReleaseTag = $null
+$ReleaseNotesBase = $null
 $releaseExists = $false
 $branch = $null
 $CanPublish = $Push -and -not $NoGitCommit -and -not $NoGitPush
@@ -1086,7 +1290,7 @@ if ($WhatIfPreference) {
             Write-Step "[WhatIf] Planned commit flow: strict push git preflight, then reviewed whole-file atomic dirty-change commit flow."
             Write-Step "[WhatIf] Dirty-change commit flow: preserve pre-staged changes, require explicit commit/abort and message, then require an approved Copilot whole-file plan with temporary-index staging preflight."
         }
-        if ($BumpVersion) {
+        if ($VersionedRelease) {
             Write-Step "[WhatIf] Planned release commit: chore(release): $Tag"
         }
         else {
@@ -1121,22 +1325,45 @@ $NativeModuleGuardPath = Join-Path $RepoRoot 'scripts\confirm-native-module-unlo
 Write-Step "Checking for running MultiTerm native module users..."
 & $NativeModuleGuardPath -RepositoryRoot $RepoRoot
 
-$PromptLibraryHostBuild = Join-Path $RepoRoot 'scripts\build-prompt-library-host.ps1'
-Write-Step "Building encrypted Prompt Library hosts..."
-& $PromptLibraryHostBuild
+Save-ReleaseState -State $ReleaseState -Path $ReleaseStatePath
+
+$PromptLibraryHostRoot = Join-Path $RepoRoot 'lib\prompt-library-host\publish'
+$null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'promptLibraryHost' `
+    -Description 'the encrypted Prompt Library host build' `
+    -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @(
+        'lib\prompt-library-host', 'lib\sqlite3mc', 'scripts\build-prompt-library-host.ps1', 'scripts\build-sqlite3mc.ps1'
+    )) `
+    -Validate {
+        if (-not (Test-Path -LiteralPath $PromptLibraryHostRoot -PathType Container)) { return $false }
+        return @(Get-ChildItem -LiteralPath $PromptLibraryHostRoot -Recurse -File -Filter 'MultiTerm.PromptLibraryHost.exe' -ErrorAction SilentlyContinue).Count -gt 0
+    } `
+    -Action {
+        Write-Step "Building encrypted Prompt Library hosts..."
+        & (Join-Path $RepoRoot 'scripts\build-prompt-library-host.ps1')
+    }
 
 $CopilotSdkHostProject = Join-Path $RepoRoot 'lib\copilot-sdk-host\MultiTerm.CopilotSdkHost.csproj'
 $CopilotSdkHostOutput = Join-Path $RepoRoot 'lib\copilot-sdk-host\publish'
-Write-Step "Building GitHub Copilot SDK host..."
-Invoke-Native {
-    dotnet build $CopilotSdkHostProject --configuration Release --nologo
-} "GitHub Copilot SDK host build failed"
-if (-not (Test-Path -LiteralPath (Join-Path $CopilotSdkHostOutput 'MultiTerm.CopilotSdkHost.exe') -PathType Leaf)) {
-    throw "GitHub Copilot SDK host build did not produce MultiTerm.CopilotSdkHost.exe."
-}
-if (-not (Test-Path -LiteralPath (Join-Path $CopilotSdkHostOutput 'runtimes\win-x64\native\copilot.exe') -PathType Leaf)) {
-    throw "GitHub Copilot SDK host build did not include its bundled Windows runtime."
-}
+$CopilotSdkHostExe = Join-Path $CopilotSdkHostOutput 'MultiTerm.CopilotSdkHost.exe'
+$CopilotSdkHostRuntime = Join-Path $CopilotSdkHostOutput 'runtimes\win-x64\native\copilot.exe'
+$null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'copilotSdkHost' `
+    -Description 'the GitHub Copilot SDK host build' `
+    -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @('lib\copilot-sdk-host')) `
+    -Validate {
+        (Test-Path -LiteralPath $CopilotSdkHostExe -PathType Leaf) -and (Test-Path -LiteralPath $CopilotSdkHostRuntime -PathType Leaf)
+    } `
+    -Action {
+        Write-Step "Building GitHub Copilot SDK host..."
+        Invoke-Native {
+            dotnet build $CopilotSdkHostProject --configuration Release --nologo
+        } "GitHub Copilot SDK host build failed"
+        if (-not (Test-Path -LiteralPath $CopilotSdkHostExe -PathType Leaf)) {
+            throw "GitHub Copilot SDK host build did not produce MultiTerm.CopilotSdkHost.exe."
+        }
+        if (-not (Test-Path -LiteralPath $CopilotSdkHostRuntime -PathType Leaf)) {
+            throw "GitHub Copilot SDK host build did not include its bundled Windows runtime."
+        }
+    }
 
 # --- Locate ISCC.exe ------------------------------------------------------------
 if (-not $IsccPath) {
@@ -1167,10 +1394,18 @@ if ($Push) {
         if ($repo.ExitCode -ne 0 -or -not $repo.Output) { throw "Could not determine repository (gh repo view failed)." }
         $RepoSlug = ($repo.Output | Select-Object -First 1).ToString().Trim()
 
-        $PreviousReleaseTag = Get-PreviousPublishedReleaseTag -GhPath $GhPath -RepositorySlug $RepoSlug -CurrentTag $Tag
+        $ReleaseNotesBase = Resolve-ReleaseNotesBase -RepositoryRoot $RepoRoot -GhPath $GhPath -RepositorySlug $RepoSlug `
+            -CurrentTag $Tag -Persisted (Get-ReleaseStageData -State $ReleaseState -Name 'releaseNotesBase')
+        Set-ReleaseStageComplete -State $ReleaseState -Name 'releaseNotesBase' -Data $ReleaseNotesBase -Path $ReleaseStatePath
+        $baseLabel = if ([string]$ReleaseNotesBase.tag) { [string]$ReleaseNotesBase.tag } else { 'the start of history' }
+        Write-Step "Release notes will cover every change since $baseLabel ($($ReleaseNotesBase.commit))."
 
         $releaseExists = (Get-NativeExit { & $GhPath release view $Tag --repo $RepoSlug }) -eq 0
-        if ($releaseExists -and -not ($NoVersionBump -and $Force)) {
+        $resumingPublish = Test-ReleaseStageComplete -State $ReleaseState -Name 'publish'
+        if ($releaseExists -and $resumingPublish) {
+            Write-Step "Release $Tag was already created by the interrupted run; resuming at verification."
+        }
+        elseif ($releaseExists -and -not ($NoVersionBump -and $Force)) {
             throw "Release $Tag already exists. Pick a different version (bump/-SetVersion), or use -Push -NoVersionBump -Force to re-upload the asset."
         }
         if (-not $releaseExists) {
@@ -1200,12 +1435,16 @@ if ($Push) {
     if ($NoGitCommit) {
         Write-Step "-NoGitCommit: leaving pending path(s) uncommitted."
     }
+    elseif (Test-ReleaseStageComplete -State $ReleaseState -Name 'pendingCommit') {
+        Write-Host "==> Resuming: pending changes were already committed by the interrupted run; skipping." -ForegroundColor DarkGray
+    }
     elseif ($PSCmdlet.ShouldProcess($RepoRoot, "Commit pending changes before $Tag")) {
         $plannerPath = $ResolvedCopilotPath
         if (-not $plannerPath) {
             $plannerPath = Get-Command 'copilot' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
         }
         Invoke-InteractiveDirtyPublishCommitFlow -RepositoryRoot $RepoRoot -ReleaseTag $Tag -CopilotExecutable $plannerPath
+        Set-ReleaseStageComplete -State $ReleaseState -Name 'pendingCommit' -Path $ReleaseStatePath
     }
     else {
         throw "Pending-change commit phase was declined; release cancelled."
@@ -1221,6 +1460,7 @@ if ($BumpVersion) {
         Set-VersionInFile -Path $IssPath -Pattern '(#define\s+MyAppVersion\s+")([^"]+)(")' -NewVersion $Version
         Set-VersionInFile -Path $AppJsPath -Pattern '(const\s+APP_VERSION\s*=\s*")([^"]+)(")' -NewVersion $Version
         Set-VersionInFile -Path $VisualStudioManifestPath -Pattern '(<Identity\s+[^>]*Version=")([^"]+)(")' -NewVersion $Version
+        Set-ReleaseStageComplete -State $ReleaseState -Name 'versionBump' -Data @{ version = $Version } -Path $ReleaseStatePath
         Write-Step "Version set to $Version in package.json, package-lock.json, installer\MultiTerm.iss, public\app.js, and the Visual Studio VSIX manifest."
     }
     else {
@@ -1235,21 +1475,72 @@ if ($BumpVersion) {
 
 # --- Build ----------------------------------------------------------------------
 if ($PSCmdlet.ShouldProcess($IssPath, "Compile installer with ISCC")) {
-    Write-Step "Generating installer artwork..."
-    & (Join-Path $RepoRoot 'scripts\gen-installer-art.ps1')
-    Write-Step "Building Visual Studio Code extension..."
-    & (Join-Path $RepoRoot 'integrations\vscode\build.ps1') -Version $Version
-    Write-Step "Building Visual Studio extension..."
-    & (Join-Path $RepoRoot 'integrations\visualstudio\build.ps1') -Version $Version
-    Write-Step "Building File Explorer integration..."
-    & (Join-Path $RepoRoot 'installer\explorer-integration\build.ps1') -Version $Version
-    Write-Step "Building installer..."
-    & $IsccPath $IssPath
-    if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE." }
-    if (-not (Test-Path -LiteralPath $OutputExe)) {
-        throw "Build reported success but expected output not found: $OutputExe"
-    }
-    Write-Step "Built: $OutputExe"
+    $null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'artwork' `
+        -Description 'installer artwork generation' `
+        -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @('scripts\gen-installer-art.ps1', 'scripts\gen-icon.ps1')) `
+        -Action {
+            Write-Step "Generating installer artwork..."
+            & (Join-Path $RepoRoot 'scripts\gen-installer-art.ps1')
+        }
+
+    $null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'vscodeExtension' `
+        -Description 'the Visual Studio Code extension build' `
+        -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @('integrations\vscode') -Extra @($Version)) `
+        -Action {
+            Write-Step "Building Visual Studio Code extension..."
+            & (Join-Path $RepoRoot 'integrations\vscode\build.ps1') -Version $Version
+        }
+
+    $null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'visualStudioExtension' `
+        -Description 'the Visual Studio extension build' `
+        -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @('integrations\visualstudio') -Extra @($Version)) `
+        -Action {
+            Write-Step "Building Visual Studio extension..."
+            & (Join-Path $RepoRoot 'integrations\visualstudio\build.ps1') -Version $Version
+        }
+
+    $null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'explorerIntegration' `
+        -Description 'the File Explorer integration build' `
+        -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @('installer\explorer-integration') -Extra @($Version)) `
+        -Action {
+            Write-Step "Building File Explorer integration..."
+            & (Join-Path $RepoRoot 'installer\explorer-integration\build.ps1') -Version $Version
+        }
+
+    # The installer packages the entire application, so its fingerprint is the
+    # commit plus every pending change rather than a fixed path list.
+    $worktreeState = Get-NativeOutput { git --no-pager -C $RepoRoot status --porcelain=v1 --untracked-files=all }
+    if ($worktreeState.ExitCode -ne 0) { throw "git status failed while fingerprinting the installer build." }
+    $headState = Get-NativeOutput { git --no-pager -C $RepoRoot rev-parse HEAD }
+    if ($headState.ExitCode -ne 0) { throw "git rev-parse HEAD failed while fingerprinting the installer build." }
+    $worktreeFingerprint = Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Extra @(
+        $Version,
+        (ConvertTo-NativeText $headState.Output),
+        (ConvertTo-NativeText $worktreeState.Output)
+    )
+    $null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'installer' `
+        -Description "the installer compile for $Version" `
+        -Fingerprint $worktreeFingerprint `
+        -Validate {
+            if (-not (Test-Path -LiteralPath $OutputExe -PathType Leaf)) { return $false }
+            $recorded = Get-ReleaseStageData -State $ReleaseState -Name 'installer'
+            if ($null -eq $recorded -or -not $recorded.ContainsKey('sha256')) { return $false }
+            return (Get-ReleaseFileHash -Path $OutputExe) -eq [string]$recorded.sha256
+        } `
+        -Action {
+            Write-Step "Building installer..."
+            & $IsccPath $IssPath
+            if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE." }
+            if (-not (Test-Path -LiteralPath $OutputExe)) {
+                throw "Build reported success but expected output not found: $OutputExe"
+            }
+            Write-Step "Built: $OutputExe"
+            return @{
+                path   = $OutputExe
+                size   = (Get-Item -LiteralPath $OutputExe).Length
+                sha256 = (Get-ReleaseFileHash -Path $OutputExe)
+            }
+        }
 }
 else {
     if ($WhatIfPreference) {
@@ -1262,24 +1553,33 @@ else {
 
 $InstallerAssetName = [System.IO.Path]::GetFileName($OutputExe)
 $InstallerAssetSize = (Get-Item -LiteralPath $OutputExe).Length
-$InstallerSha256 = (Get-FileHash -LiteralPath $OutputExe -Algorithm SHA256).Hash.ToLowerInvariant()
+$InstallerSha256 = (Get-ReleaseFileHash -Path $OutputExe)
 
 # --- Commit, push, and publish ---------------------------------------------------
 if (-not $Push) {
     Write-Step "Done (build only). Re-run with -Push to bump the version and publish a release."
+    Remove-ReleaseState -Path $ReleaseStatePath
     return
 }
 
 if ($NoGitCommit) {
     Write-Step "-NoGitCommit: build complete; skipped all commits, git push, and GitHub release publication."
+    Remove-ReleaseState -Path $ReleaseStatePath
     return
 }
 
-if ($BumpVersion) {
-    if ($PSCmdlet.ShouldProcess($RepoRoot, "Commit release version $Tag")) {
+if ($VersionedRelease) {
+    if (Test-ReleaseStageComplete -State $ReleaseState -Name 'releaseCommit') {
+        Write-Host "==> Resuming: release commit for $Tag was already created; skipping." -ForegroundColor DarkGray
+    }
+    elseif ($PSCmdlet.ShouldProcess($RepoRoot, "Commit release version $Tag")) {
         Write-Step "Committing release version $Tag..."
         Invoke-Native { git --no-pager -C $RepoRoot add -- package.json package-lock.json installer/MultiTerm.iss public/app.js integrations/visualstudio/source.extension.vsixmanifest } "git add release files failed"
         Invoke-Native { git --no-pager -C $RepoRoot commit -m "chore(release): $Tag" } "git commit failed"
+        $releaseCommitInfo = Get-NativeOutput { git --no-pager -C $RepoRoot rev-parse HEAD }
+        if ($releaseCommitInfo.ExitCode -ne 0) { throw "git rev-parse HEAD failed after the release commit." }
+        Set-ReleaseStageComplete -State $ReleaseState -Name 'releaseCommit' `
+            -Data @{ commit = (ConvertTo-NativeText $releaseCommitInfo.Output).Trim() } -Path $ReleaseStatePath
     }
     else {
         if ($WhatIfPreference) {
@@ -1302,28 +1602,63 @@ if (-not $WhatIfPreference) {
 
 if ($NoGitPush) {
     Write-Step "-NoGitPush: local release commits are complete; skipped git push and GitHub release publication."
+    Remove-ReleaseState -Path $ReleaseStatePath
     return
 }
 
 $ReleaseNotes = $null
 if (-not ($NoVersionBump -and $Force -and $releaseExists)) {
     if ($WhatIfPreference) {
-        Write-Step "[WhatIf] Would generate release notes with GitHub Copilot CLI from changes since $PreviousReleaseTag."
+        Write-Step "[WhatIf] Would generate release notes with GitHub Copilot CLI from every change since the last published release."
     }
     else {
-        Write-Step "Generating release notes with GitHub Copilot CLI..."
-        $ReleaseNotes = New-CopilotReleaseNotes -RepositoryRoot $RepoRoot -RepositorySlug $RepoSlug -ReleaseTag $Tag -PreviousReleaseTag $PreviousReleaseTag -Version $Version -AssetName $InstallerAssetName -AssetSize $InstallerAssetSize -AssetSha256 $InstallerSha256 -Executable $ResolvedCopilotPath
-        Write-Step "Copilot release notes generated from changes since the previous release tag."
+        # Cached against the resolved comparison base and the exact artifact. A
+        # publish that fails on the network must not spend another Copilot run,
+        # and must not quietly publish differently worded notes than the ones
+        # the interrupted attempt produced. Any change to the base or the asset
+        # invalidates the cache and regenerates.
+        $notesData = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'releaseNotes' `
+            -Description "the Copilot release notes for $Tag" `
+            -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Extra @(
+                [string]$ReleaseNotesBase.commit, $Tag, $Version, $InstallerSha256
+            )) `
+            -Validate {
+                $cached = Get-ReleaseStageData -State $ReleaseState -Name 'releaseNotes'
+                $null -ne $cached -and $cached.ContainsKey('notes') -and -not [string]::IsNullOrWhiteSpace([string]$cached.notes)
+            } `
+            -Action {
+                Write-Step "Generating release notes with GitHub Copilot CLI..."
+                $generated = New-CopilotReleaseNotes -RepositoryRoot $RepoRoot -RepositorySlug $RepoSlug -ReleaseTag $Tag `
+                    -Base $ReleaseNotesBase -Version $Version -AssetName $InstallerAssetName -AssetSize $InstallerAssetSize `
+                    -AssetSha256 $InstallerSha256 -Executable $ResolvedCopilotPath
+                Write-Step "Copilot release notes generated from every change since the last published release."
+                return @{ notes = $generated }
+            }
+        $ReleaseNotes = [string]$notesData.notes
     }
 }
 
 $Target = $null
-if ($PSCmdlet.ShouldProcess($RepoSlug, "Push branch '$branch'")) {
+$pushRecord = Get-ReleaseStageData -State $ReleaseState -Name 'push'
+if ((Test-ReleaseStageComplete -State $ReleaseState -Name 'push') -and $null -ne $pushRecord -and $pushRecord.ContainsKey('commit')) {
+    # Re-push rather than trust the checkpoint: the branch may have moved, and
+    # pushing an already-pushed commit is a no-op.
+    Write-Step "Re-confirming the push from the interrupted run..."
+    Invoke-Native { git --no-pager -C $RepoRoot push origin HEAD } "git push failed"
+    $head = Get-NativeOutput { git --no-pager -C $RepoRoot rev-parse HEAD }
+    if ($head.ExitCode -ne 0) { throw "git rev-parse HEAD failed." }
+    $Target = ($head.Output | Select-Object -First 1).ToString().Trim()
+    if ($Target -ne [string]$pushRecord.commit) {
+        throw "The interrupted run pushed $($pushRecord.commit) but HEAD is now $Target. Re-run with -FreshStart to release the current HEAD."
+    }
+}
+elseif ($PSCmdlet.ShouldProcess($RepoSlug, "Push branch '$branch'")) {
     Write-Step "Pushing branch..."
     Invoke-Native { git --no-pager -C $RepoRoot push origin HEAD } "git push failed"
     $head = Get-NativeOutput { git --no-pager -C $RepoRoot rev-parse HEAD }
     if ($head.ExitCode -ne 0) { throw "git rev-parse HEAD failed." }
     $Target = ($head.Output | Select-Object -First 1).ToString().Trim()
+    Set-ReleaseStageComplete -State $ReleaseState -Name 'push' -Data @{ commit = $Target } -Path $ReleaseStatePath
 }
 else {
     if ($WhatIfPreference) {
@@ -1335,13 +1670,17 @@ else {
 }
 
 if ($PSCmdlet.ShouldProcess($Tag, "Create GitHub release and upload installer")) {
-    if ($NoVersionBump -and $Force -and $releaseExists) {
+    if (Test-ReleaseStageComplete -State $ReleaseState -Name 'publish') {
+        Write-Host "==> Resuming: release $Tag was already created; re-verifying it." -ForegroundColor DarkGray
+    }
+    elseif ($NoVersionBump -and $Force -and $releaseExists) {
         $remoteTagTarget = Get-RemoteTagTarget -RepositoryRoot $RepoRoot -Tag $Tag
         if ($remoteTagTarget -ne $Target) {
             throw "Remote tag $Tag targets $remoteTagTarget, not current commit $Target; refusing to replace the asset with a mismatched build."
         }
         Write-Step "Uploading asset to existing release $Tag (--clobber)..."
         Invoke-Native { & $GhPath release upload $Tag $OutputExe --clobber --repo $RepoSlug } "gh release upload failed"
+        Set-ReleaseStageComplete -State $ReleaseState -Name 'publish' -Data @{ tag = $Tag; commit = $Target } -Path $ReleaseStatePath
     }
     else {
         Write-Step "Creating release $Tag..."
@@ -1353,14 +1692,19 @@ if ($PSCmdlet.ShouldProcess($Tag, "Create GitHub release and upload installer"))
             if ($Draft) { $ghArgs += '--draft' }
             if ($Prerelease) { $ghArgs += '--prerelease' }
             Invoke-Native { & $GhPath @ghArgs } "gh release create failed"
+            Set-ReleaseStageComplete -State $ReleaseState -Name 'publish' -Data @{ tag = $Tag; commit = $Target } -Path $ReleaseStatePath
         }
         finally {
             Remove-Item -LiteralPath $notesPath -Force -ErrorAction SilentlyContinue
         }
     }
 
-    Assert-PublishedRelease -GhPath $GhPath -RepositoryRoot $RepoRoot -RepositorySlug $RepoSlug -Tag $Tag -ExpectDraft $Draft.IsPresent -ExpectPrerelease $Prerelease.IsPresent -ExpectedTarget $Target -ExpectedAssetName $InstallerAssetName -ExpectedAssetSize $InstallerAssetSize -ExpectedSha256 $InstallerSha256 -RequireFullChangelog:([bool]$PreviousReleaseTag)
+    Assert-PublishedRelease -GhPath $GhPath -RepositoryRoot $RepoRoot -RepositorySlug $RepoSlug -Tag $Tag -ExpectDraft $Draft.IsPresent -ExpectPrerelease $Prerelease.IsPresent -ExpectedTarget $Target -ExpectedAssetName $InstallerAssetName -ExpectedAssetSize $InstallerAssetSize -ExpectedSha256 $InstallerSha256 -RequireFullChangelog:([bool]$ReleaseNotesBase.tag)
     Write-Step "Release $Tag published."
+
+    # The pipeline finished. Nothing is left to resume, so the checkpoint must
+    # go: keeping it would make the next release look like a resumable run.
+    Remove-ReleaseState -Path $ReleaseStatePath
 }
 else {
     if ($WhatIfPreference) {

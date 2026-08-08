@@ -28,6 +28,10 @@ installer/visualstudio-integration/generated/
 *.lib
 *.obj
 
+# Release pipeline checkpoint (lets an interrupted run resume where it stopped)
+.release-state.json
+.release-state.json.tmp
+
 # Deployment staging (not tracked)
 deploy/
 .github/prompts/deploy-to-azurestaticsite.prompt.md
