@@ -7452,7 +7452,10 @@ function loadSettings() {
     settings.titleFontScale = normalizeTitleFontScale(settings.titleFontScale);
     settings.workspaceZoom = normalizeWorkspaceZoom(settings.workspaceZoom);
     return settings;
-  } catch {
+  } catch (error) {
+    // Falling back to defaults discards every stored preference, so it must not
+    // happen quietly — this runs during module init, before the logger exists.
+    console.warn("Settings could not be loaded; falling back to defaults", error);
     return { ...defaultSettings };
   }
 }
