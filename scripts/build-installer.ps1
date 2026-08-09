@@ -106,6 +106,10 @@
     Full path to GitHub Copilot CLI. Auto-detected when omitted. Required when
     -Push will publish a new GitHub release.
 
+.PARAMETER SkipTests
+    Skip the release test gate. -Push otherwise runs the unit, PowerShell, and
+    end-to-end suites before anything is committed or the version is bumped.
+
 .PARAMETER FreshStart
     Discard any checkpoint left by an interrupted run and start the pipeline
     from the beginning, re-running every stage.
@@ -159,6 +163,7 @@ param(
     [string]$Tag,
     [string]$IsccPath,
     [string]$CopilotPath,
+    [switch]$SkipTests,
     [switch]$FreshStart,
     [switch]$ShowReleaseState,
     [Parameter(ValueFromRemainingArguments = $true, DontShow = $true)]
@@ -1428,6 +1433,36 @@ $HelpOutputPath = Join-Path $RepoRoot 'public\help.html'
 if ($PSCmdlet.ShouldProcess($HelpOutputPath, "Generate in-app help from HELP.md")) {
     Write-Step "Generating in-app help..."
     & (Join-Path $RepoRoot 'scripts\build-help.ps1')
+}
+
+# --- Release test gate ----------------------------------------------------------
+# Runs before any commit or version bump, so a failing suite cannot leave a
+# half-prepared release behind. Uses the standard Playwright config: test:e2e:full
+# additionally runs @full cases that need interactive UAC and file-picker
+# approval, which cannot pass unattended.
+if ($Push -and -not $SkipTests) {
+    if ($PSCmdlet.ShouldProcess('unit, PowerShell, and end-to-end suites', 'Run the release test gate')) {
+        $null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'tests' `
+            -Description 'the release test gate' `
+            -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @(
+                'package.json', 'package-lock.json', 'vitest.config.js', 'playwright.config.js',
+                'server.js', 'main.js', 'preload.js', 'elevated-pty-host.js', 'ws-origin.js',
+                'Start-MultiTerm.ps1', 'HELP.md', 'public', 'lib', 'tests', 'scripts',
+                'integrations', 'installer\MultiTerm.iss', 'installer\vscode-integration'
+            )) `
+            -Action {
+                Write-Step "Test gate 1/3: unit and integration suites..."
+                Invoke-Native { npm run test:unit } "Unit tests failed; release aborted"
+                Write-Step "Test gate 2/3: PowerShell coverage suite..."
+                Invoke-Native { npm run test:powershell:coverage } "PowerShell tests failed; release aborted"
+                Write-Step "Test gate 3/3: end-to-end suite..."
+                Invoke-Native { npm run test:e2e } "End-to-end tests failed; release aborted"
+                Write-Step "Test gate passed."
+            }
+    }
+}
+elseif ($Push) {
+    Write-Step "-SkipTests: skipping the release test gate."
 }
 
 # --- Conservatively commit pending changes before changing release files --------

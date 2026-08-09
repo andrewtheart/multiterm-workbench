@@ -89,6 +89,26 @@ describe("installer release notes", () => {
     expect(nativeInstruction).toContain("Stop only the PIDs returned by the repo-specific guard");
   });
 
+  it("re-asks about a surviving lock holder instead of aborting", () => {
+    // A process that still holds conpty.node after the first round is usually a
+    // sibling instance, so the guard offers to stop it rather than giving up.
+    expect(nativeGuard).toContain("while ($blockingProcesses.Count -gt 0) {");
+    expect(nativeGuard).toContain("$blockingProcesses = @(Wait-MultiTermNativeModuleRelease");
+    expect(nativeGuard).toContain("after $MaxAttempts attempt(s)");
+
+    // Every stop still needs its own explicit yes, and a bounded number of rounds
+    // keeps a stubborn holder from prompting forever.
+    const loop = nativeGuard.slice(nativeGuard.indexOf("while ($blockingProcesses.Count -gt 0) {"));
+    expect(loop).toContain("Read-Host");
+    expect(loop.indexOf("Read-Host")).toBeLessThan(loop.indexOf("Stop-MultiTermNativeProcess -Processes"));
+    expect(loop).toContain("if ($answer -ine 'yes') {");
+
+    // Noninteractive callers must still fail closed before any prompt or kill.
+    const blockedThrow = nativeGuard.indexOf('throw "Native rebuild blocked by MultiTerm process PID(s)');
+    expect(blockedThrow).toBeGreaterThan(-1);
+    expect(blockedThrow).toBeLessThan(nativeGuard.indexOf("Read-Host"));
+  });
+
   it("appends one compare link and skips releases without a comparison base", () => {
     const result = runCompareLinkFormatter();
 
@@ -215,5 +235,37 @@ describe("installer release notes", () => {
     }
 
     expect(deferredBlocks.some((block) => block.includes("git --no-pager -C"))).toBe(true);
+  });
+});
+
+describe("release test gate", () => {
+  const gateIndex = script.indexOf("# --- Release test gate");
+
+  it("runs the three suites before anything is committed or the version is bumped", () => {
+    // A suite that fails after the bump would leave the working tree carrying a
+    // version that was never released.
+    expect(gateIndex).toBeGreaterThan(-1);
+    expect(gateIndex).toBeLessThan(script.indexOf("# --- Conservatively commit pending changes"));
+    expect(gateIndex).toBeLessThan(script.indexOf("# --- Apply the version bump"));
+    expect(gateIndex).toBeLessThan(script.indexOf("# --- Build ---"));
+
+    const gate = script.slice(gateIndex, script.indexOf("# --- Conservatively commit pending changes"));
+    expect(gate).toContain('Invoke-Native { npm run test:unit } "Unit tests failed; release aborted"');
+    expect(gate).toContain('Invoke-Native { npm run test:powershell:coverage } "PowerShell tests failed; release aborted"');
+    expect(gate).toContain('Invoke-Native { npm run test:e2e } "End-to-end tests failed; release aborted"');
+  });
+
+  it("uses the unattended end-to-end config", () => {
+    // test:e2e:full adds @full cases that need interactive UAC and file-picker
+    // approval, so it can never pass inside a release run.
+    const gate = script.slice(gateIndex, script.indexOf("# --- Conservatively commit pending changes"));
+    expect(gate).not.toContain("npm run test:e2e:full");
+    expect(packageJson.scripts["test:e2e"]).toBe("playwright test");
+  });
+
+  it("gates only publishing runs and stays skippable", () => {
+    expect(script).toContain("[switch]$SkipTests,");
+    expect(script).toContain("if ($Push -and -not $SkipTests) {");
+    expect(script).toContain(".PARAMETER SkipTests");
   });
 });
