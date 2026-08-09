@@ -81,22 +81,29 @@ test.describe("Copy and prepare editor", () => {
 
   test("copies a terminal selection with Ctrl+C and interrupts on the third rapid press", async () => {
     const marker = `ctrl-c-selection-${Date.now()}`;
-    await page.evaluate(async (text) => {
+    const select = (text) => page.evaluate((value) => {
       const terminal = [...state.terminals.values()][0];
-      await new Promise((resolve) => terminal.term.write(`\r\n${text}`, resolve));
       const buffer = terminal.term.buffer.active;
       for (let row = buffer.length - 1; row >= 0; row -= 1) {
         const line = buffer.getLine(row)?.translateToString(true) || "";
-        const column = line.indexOf(text);
+        const column = line.indexOf(value);
         if (column < 0) continue;
-        terminal.term.select(column, row, text.length);
+        terminal.term.select(column, row, value.length);
         break;
       }
       terminal.term.focus();
+    }, text);
+
+    await page.evaluate(async (text) => {
+      const terminal = [...state.terminals.values()][0];
+      await new Promise((resolve) => terminal.term.write(`\r\n${text}`, resolve));
+    }, marker);
+    await select(marker);
+    await page.evaluate(() => {
       window.__ctrlCFrames = [];
       window.__ctrlCOriginalSend = state.socket.send;
       state.socket.send = (payload) => window.__ctrlCFrames.push(JSON.parse(payload));
-    }, marker);
+    });
 
     await page.keyboard.down("Control");
     await page.keyboard.press("c");
@@ -105,8 +112,10 @@ test.describe("Copy and prepare editor", () => {
     expect(await page.evaluate(() => window.__ctrlCFrames
       .filter((frame) => frame.type === "input" && frame.data === "\x03"))).toEqual([]);
 
-    await page.evaluate(() => forgetTerminalSelection([...state.terminals.values()][0]));
+    // A live selection keeps the press ambiguous, so the interrupt still needs
+    // three deliberate presses.
     await page.waitForTimeout(750);
+    await select(marker);
     await page.keyboard.down("Control");
     await page.keyboard.press("c");
     await page.keyboard.press("c");
@@ -120,6 +129,38 @@ test.describe("Copy and prepare editor", () => {
       state.socket.send = window.__ctrlCOriginalSend;
       delete window.__ctrlCFrames;
       delete window.__ctrlCOriginalSend;
+    });
+  });
+
+  test("interrupts on the first Ctrl+C when nothing is selected", async () => {
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      forgetTerminalSelection(terminal);
+      terminal.term.focus();
+      window.__interruptFrames = [];
+      window.__interruptOriginalSend = state.socket.send;
+      state.socket.send = (payload) => window.__interruptFrames.push(JSON.parse(payload));
+    });
+    await page.waitForTimeout(750);
+
+    await page.keyboard.down("Control");
+    await page.keyboard.press("c");
+    await page.keyboard.up("Control");
+
+    await expect.poll(() => page.evaluate(() => window.__interruptFrames
+      .filter((frame) => frame.type === "input" && frame.data === "\x03").length)).toBe(1);
+
+    // A second press interrupts again rather than being swallowed by a counter.
+    await page.keyboard.down("Control");
+    await page.keyboard.press("c");
+    await page.keyboard.up("Control");
+    await expect.poll(() => page.evaluate(() => window.__interruptFrames
+      .filter((frame) => frame.type === "input" && frame.data === "\x03").length)).toBe(2);
+
+    await page.evaluate(() => {
+      state.socket.send = window.__interruptOriginalSend;
+      delete window.__interruptFrames;
+      delete window.__interruptOriginalSend;
     });
   });
 

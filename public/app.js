@@ -3076,6 +3076,18 @@ function bindTerminalKeyHandling(terminal) {
       event.stopPropagation();
       if (event.repeat) return;
 
+      const selection = terminal.term.getSelection() || terminal.selectionSnapshot;
+      // Nothing to copy means Ctrl+C keeps its usual meaning and interrupts the
+      // running command; the same applies when Copy has been rebound elsewhere.
+      if (!selection || !globalShortcutMatches(event, "terminal.copy")) {
+        terminal.ctrlCCount = 0;
+        terminal.ctrlCLastAt = 0;
+        sendBridge({ type: "input", id: terminal.id, data: "\x03" });
+        return;
+      }
+
+      // A selection makes the press ambiguous, so the interrupt still needs the
+      // deliberate three-press escape hatch.
       const now = performance.now();
       terminal.ctrlCCount = now - terminal.ctrlCLastAt <= RAPID_CTRL_C_INTERVAL_MS
         ? terminal.ctrlCCount + 1
@@ -3088,11 +3100,7 @@ function bindTerminalKeyHandling(terminal) {
         return;
       }
 
-      // The interrupt escape hatch above is unconditional; only the copy half
-      // follows the customizable Copy binding.
-      if (!globalShortcutMatches(event, "terminal.copy")) return;
-      const selection = terminal.term.getSelection() || terminal.selectionSnapshot;
-      if (selection) copyTerminalOutput(terminal.id, selection);
+      copyTerminalOutput(terminal.id, selection);
       return;
     }
 
@@ -9962,6 +9970,7 @@ const copilotResume = {
   remoteSource: "",
   scope: "local",
   sessions: [],
+  silent: false,
   suspended: false,
   terminalId: null,
   visibleLimit: COPILOT_SESSION_PAGE_SIZE
@@ -10118,39 +10127,88 @@ async function refreshCopilotSessions() {
   clearCopilotAiSearch();
   const name = aiAssistantName(provider);
   const remote = copilotResume.scope === "remote";
+  const staged = !remote && provider === "copilot";
+  copilotResume.silent = false;
   elements.copilotResumeRefresh.disabled = true;
   elements.copilotResumeStatus.textContent = remote
     ? "Asking GitHub for your remote sessions\u2026"
     : provider === "claude"
       ? "Looking for local Claude sessions\u2026"
-      : "Looking for local Copilot CLI, VS Code, and Visual Studio sessions\u2026";
+      : "Looking for local Copilot CLI sessions\u2026";
   elements.copilotResumeList.innerHTML = '<div class="copilot-resume-empty">Reading session metadata\u2026</div>';
-  const response = await requestBridge(
-    { type: remote ? "listRemoteCopilotSessions" : provider === "claude" ? "listClaudeSessions" : "listCopilotSessions" },
+
+  // Resumable CLI sessions cost a directory walk; editor histories cost a whole
+  // Everything scan plus a read of every transcript, which on a cold disk ran
+  // past the old single request's timeout and reported "none found". They load
+  // in a second pass so the sessions `--resume` can actually use appear first.
+  const applyResponse = (response, editorSources) => {
+    const sessions = (Array.isArray(response?.sessions) ? response.sessions : [])
+      .map(remote ? normalizeRemoteCopilotSession : normalizeCopilotSession)
+      .filter(Boolean);
+    if (editorSources && sessions.length === 0 && copilotResume.sessions.length > 0) return false;
+    copilotResume.sessions = sessions;
+    return true;
+  };
+
+  const first = await requestBridge(
+    staged
+      ? { type: "listCopilotSessions", source: "cli" }
+      : { type: remote ? "listRemoteCopilotSessions" : provider === "claude" ? "listClaudeSessions" : "listCopilotSessions" },
     { timeout: remote ? 30000 : 20000 }
   );
   if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
 
-  elements.copilotResumeRefresh.disabled = false;
-  copilotResume.sessions = (Array.isArray(response?.sessions) ? response.sessions : [])
-    .map(remote ? normalizeRemoteCopilotSession : normalizeCopilotSession)
-    .filter(Boolean);
+  copilotResume.silent = !first;
+  applyResponse(first, false);
   if (remote) {
-    copilotResume.remoteSource = response?.source === "api" ? "api" : "fallback";
+    copilotResume.remoteSource = first?.source === "api" ? "api" : "fallback";
     copilotResume.remoteMessage = copilotResume.remoteSource === "api"
       ? ""
-      : response?.message || "GitHub could not be asked for remote sessions, so only sessions MultiTerm started are listed.";
+      : first?.message || "GitHub could not be asked for remote sessions, so only sessions MultiTerm started are listed.";
     if (copilotResume.remoteMessage) log.warn("ai", `Remote Copilot session list degraded: ${copilotResume.remoteMessage}`);
     syncCopilotResumeScope();
   }
   renderCopilotSessions();
-  if (copilotResume.sessions.length === 0) {
-    elements.copilotResumeStatus.textContent = response?.message
+
+  if (!staged) {
+    elements.copilotResumeRefresh.disabled = false;
+    reportCopilotSessionStatus(first, remote, name);
+    refreshIcons(elements.copilotResumeOverlay);
+    return;
+  }
+
+  elements.copilotResumeStatus.textContent = copilotResume.sessions.length > 0
+    ? `${copilotResume.sessions.length} Copilot CLI session${copilotResume.sessions.length === 1 ? "" : "s"}. Adding VS Code and Visual Studio history\u2026`
+    : "Looking for VS Code and Visual Studio history\u2026";
+
+  // A cold scan of every editor transcript is slow but no longer blocks the list,
+  // so it gets the room it needs instead of being cut off.
+  const full = await requestBridge({ type: "listCopilotSessions" }, { timeout: 180000 });
+  if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
+  elements.copilotResumeRefresh.disabled = false;
+  copilotResume.silent = copilotResume.silent && !full;
+  if (applyResponse(full, true)) renderCopilotSessions();
+  reportCopilotSessionStatus(full, remote, name);
+  refreshIcons(elements.copilotResumeOverlay);
+}
+
+// A request the bridge never answered is not the same as an empty catalog, and
+// saying "none found" for it sends the user looking for sessions they still have.
+function copilotSessionSilenceReason(provider = copilotResume.provider) {
+  const name = aiAssistantName(provider);
+  return state.socketReady
+    ? `MultiTerm's bridge did not answer in time, so your ${name} sessions could not be listed. Try Refresh.`
+    : `MultiTerm is not connected to its bridge, so your ${name} sessions cannot be listed.`;
+}
+
+function reportCopilotSessionStatus(response, remote, name) {
+  if (copilotResume.sessions.length > 0) return;
+  elements.copilotResumeStatus.textContent = copilotResume.silent
+    ? copilotSessionSilenceReason()
+    : response?.message
       || (remote
         ? "GitHub returned no remote sessions for this account."
         : `The local bridge did not return any ${name} sessions.`);
-  }
-  refreshIcons(elements.copilotResumeOverlay);
 }
 
 function copilotSessionTitle(session) {
@@ -10216,9 +10274,11 @@ function renderCopilotSessions() {
     } else {
       empty.textContent = copilotResume.aiKeys
         ? "Copilot found no sessions matching that request."
-        : copilotResume.scope === "remote"
-          ? "No remote sessions were found for this account."
-          : `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`;
+        : copilotResume.silent
+          ? copilotSessionSilenceReason()
+          : copilotResume.scope === "remote"
+            ? "No remote sessions were found for this account."
+            : `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`;
     }
     elements.copilotResumeList.append(empty);
   }
@@ -10702,7 +10762,7 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
   { id: "app.zoom-out", section: "App", label: "Decrease default terminal size", detail: "Decreases the default terminal font size.", defaults: [{ ctrl: true, key: "-" }], run: () => fontZoom(-1) },
   { id: "app.zoom-reset", section: "App", label: "Reset default terminal size", detail: "Restores the default terminal font size.", defaults: [{ ctrl: true, key: "0" }], run: () => resetFontZoom() },
   { id: "page.new", section: "Page", label: "New page", detail: "Creates and opens a new page.", defaults: [{ ctrl: true, key: "t" }, { ctrl: true, key: "p" }], run: () => addPage() },
-  { id: "page.next", section: "Page", label: "Next page", detail: "Moves to the next page without stopping its terminals.", defaults: [{ ctrl: true, key: "pagedown" }], run: () => cyclePage(1) },
+  { id: "page.next", section: "Page", label: "Next page", detail: "Moves to the next page, wrapping to the first, without stopping its terminals.", defaults: [{ ctrl: true, key: "tab" }, { ctrl: true, key: "pagedown" }], run: () => cyclePage(1) },
   { id: "page.previous", section: "Page", label: "Previous page", detail: "Moves to the previous page without stopping its terminals.", defaults: [{ ctrl: true, key: "pageup" }], run: () => cyclePage(-1) },
   { id: "terminal.close", section: "Terminal", label: "Close active terminal", detail: "Closes the active terminal session.", defaults: [{ ctrl: true, shift: true, key: "w" }], run: () => { if (state.activeId) removeTerminal(state.activeId); } },
   { id: "terminal.find", section: "Terminal", label: "Find", detail: "Searches the active terminal.", defaults: [{ ctrl: true, key: "f" }], run: () => openFindActive() },
@@ -10804,6 +10864,11 @@ function runGlobalShortcut(event, actionIds) {
   const actionId = actionIds.find((candidate) => globalShortcutMatches(event, candidate));
   if (!actionId) return false;
   event.preventDefault();
+  // preventDefault does not stop xterm's own keydown handler, which would still
+  // translate the chord and write it to the PTY (Ctrl+Tab typed a literal tab).
+  if (event.target instanceof Element && event.target.closest(".terminal-pane")) {
+    event.stopImmediatePropagation();
+  }
   GLOBAL_SHORTCUT_ACTION_BY_ID.get(actionId).run();
   return true;
 }
@@ -14256,14 +14321,25 @@ function readClipboardText() {
   return navigator.clipboard.readText();
 }
 
+// Clipboard contents MultiTerm cannot paste as text (a screenshot, say) still
+// belong to the program in the terminal: Copilot and Claude read the clipboard
+// themselves on Ctrl+V and attach the image, so the keystroke is forwarded.
+function forwardClipboardKeyToTerminal(id) {
+  return sendBridge({ type: "input", id, data: "\x16" });
+}
+
 async function pasteIntoTerminal(id) {
   if (!id || !state.terminals.has(id)) return;
+  let text = "";
   try {
-    const text = normalizeClipboardText(await readClipboardText());
-    if (text) state.terminals.get(id).term.paste(text);
+    text = normalizeClipboardText(await readClipboardText());
   } catch {
-    toast("Clipboard unavailable", "error");
+    // A read failure still means no text to paste, so the program gets its turn.
+    forwardClipboardKeyToTerminal(id);
+    return;
   }
+  if (text) state.terminals.get(id).term.paste(text);
+  else forwardClipboardKeyToTerminal(id);
 }
 
 function keyboardFocusedTerminal() {
@@ -20180,7 +20256,7 @@ function setShortcutStatus(text, tone = "") {
 function globalShortcutAria(binding) {
   const normalized = normalizeGlobalShortcutBinding(binding);
   if (!normalized) return "";
-  const keys = { arrowleft: "ArrowLeft", arrowright: "ArrowRight", pagedown: "PageDown", pageup: "PageUp", space: "Space" };
+  const keys = { arrowleft: "ArrowLeft", arrowright: "ArrowRight", pagedown: "PageDown", pageup: "PageUp", space: "Space", tab: "Tab" };
   const key = keys[normalized.key] || (normalized.key.length === 1 ? normalized.key.toUpperCase() : normalized.key.toUpperCase());
   return [normalized.ctrl ? "Control" : "", normalized.alt ? "Alt" : "", normalized.shift ? "Shift" : "", normalized.meta ? "Meta" : "", key]
     .filter(Boolean)
