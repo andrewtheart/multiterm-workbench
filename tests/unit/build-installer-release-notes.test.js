@@ -106,7 +106,7 @@ describe("installer release notes", () => {
       "$notes = Add-DeterministicReleaseDetails -Notes $notes -AssetName $AssetName -AssetSize $AssetSize -AssetSha256 $AssetSha256"
     );
     expect(script).toContain(
-      "return Add-ReleaseCompareLink -Notes $notes -RepositorySlug $RepositorySlug -PreviousReleaseTag $PreviousReleaseTag -ReleaseTag $ReleaseTag"
+      "return Add-ReleaseCompareLink -Notes $notes -RepositorySlug $RepositorySlug -PreviousReleaseTag ([string]$Base.tag) -ReleaseTag $ReleaseTag"
     );
     expect(script).toContain(
       "New-CopilotReleaseNotes -RepositoryRoot $RepoRoot -RepositorySlug $RepoSlug"
@@ -190,7 +190,10 @@ describe("installer release notes", () => {
     expect(nonDeferredScript).not.toContain("git --no-pager -C $RepositoryRoot add --patch -- @Paths");
     expect(deferredBlocks.some((block) => block.includes("git --no-pager -C $RepositoryRoot add --patch -- @Paths"))).toBe(true);
     expect(script).toContain("Assert-PublishedRelease -GhPath $GhPath");
-    expect(script).toContain('Get-PreviousPublishedReleaseTag -GhPath $GhPath -RepositorySlug $RepoSlug -CurrentTag $Tag');
+    // The last published release is resolved through Resolve-ReleaseNotesBase,
+    // which owns the fallbacks a bare tag lookup cannot express.
+    expect(script).toContain('Get-PreviousPublishedReleaseTag -GhPath $GhPath -RepositorySlug $RepositorySlug -CurrentTag $CurrentTag');
+    expect(script).toContain("$ReleaseNotesBase = Resolve-ReleaseNotesBase -RepositoryRoot $RepoRoot -GhPath $GhPath -RepositorySlug $RepoSlug");
     expect(script).toContain("[WhatIf] Planned output: $OutputExe");
   });
 
