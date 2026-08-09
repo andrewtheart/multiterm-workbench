@@ -27,10 +27,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function addSession(id, workspace) {
+function addSession(id, workspace, { transcript = "{\"type\":\"user.message\"}" } = {}) {
   const directory = path.join(temporaryRoot, id);
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "workspace.yaml"), workspace, "utf8");
+  if (transcript !== null) fs.writeFileSync(path.join(directory, "events.jsonl"), transcript, "utf8");
   return directory;
 }
 
@@ -277,6 +278,76 @@ describe("Copilot CLI session discovery", () => {
 
     await expect(server.listCopilotSessions(temporaryRoot)).resolves.toEqual([]);
     expect(warning).toHaveBeenCalledWith(`[bridge] Could not read Copilot session ${id}: access denied`);
+  });
+
+  it("skips session folders the CLI opened but never recorded events for", async () => {
+    const resumable = "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373";
+    addSession(resumable, "name: Resumable");
+    addSession("0298ec3b-6599-4e8d-a620-c1338f9bb47b", "name: Never used", { transcript: null });
+    addSession("70ea177d-5558-40c4-b068-2477e84b9325", "name: Opened and abandoned", { transcript: "" });
+
+    const sessions = await server.listCopilotSessions(temporaryRoot);
+
+    expect(sessions.map((session) => session.id)).toEqual([resumable]);
+  });
+
+  it("reports a transcript that cannot be read instead of treating it as absent", async () => {
+    const id = "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373";
+    addSession(id, "name: Unreadable transcript");
+    const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const readStat = fs.promises.stat;
+    vi.spyOn(fs.promises, "stat").mockImplementation((target, ...rest) => (
+      String(target).endsWith("events.jsonl") ? Promise.reject(denied) : readStat(target, ...rest)
+    ));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(server.listCopilotSessions(temporaryRoot)).resolves.toEqual([]);
+    expect(warning).toHaveBeenCalledWith(`[bridge] Could not read Copilot session ${id}: permission denied`);
+  });
+
+  it("returns only native CLI sessions when the caller asks for resumable ones", async () => {
+    const id = "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373";
+    addSession(id, "name: CLI session");
+    const editorFile = path.join(temporaryRoot, "Project", ".vs", "Project", "copilot-chat", "f26b551e", "sessions", "70ea177d-5558-40c4-b068-2477e84b9325");
+    fs.mkdirSync(path.dirname(editorFile), { recursive: true });
+    fs.writeFileSync(editorFile, Buffer.concat([Buffer.from([0x01]), packMap({ Name: "Visual Studio session" })]));
+    const roots = {
+      cliRoot: temporaryRoot,
+      vscodeRoot: path.join(temporaryRoot, "missing-vscode"),
+      visualStudioFiles: [editorFile]
+    };
+
+    const everything = { send: vi.fn() };
+    await server.sendAllCopilotSessions(everything, "all-sources", roots);
+    expect(everything.send.mock.calls[0][0].sessions.length).toBeGreaterThan(1);
+
+    const cliOnly = { send: vi.fn() };
+    await server.sendAllCopilotSessions(cliOnly, "cli-only", roots, "cli");
+    expect(cliOnly.send.mock.calls[0][0].sessions).toEqual([expect.objectContaining({ id, source: "cli" })]);
+  });
+
+  it("dispatches a cli-only request without touching editor histories", async () => {
+    const client = { send: vi.fn() };
+    const vscodeRoot = path.join(process.env.APPDATA || "", "Code", "User", "workspaceStorage");
+    const readdir = vi.spyOn(fs.promises, "readdir").mockResolvedValue([]);
+    const execFile = vi.spyOn(childProcess, "execFile");
+
+    server.handleClientMessage(client, JSON.stringify({
+      type: "listCopilotSessions",
+      requestId: "cli-dispatch",
+      source: "cli"
+    }));
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "copilotSessions",
+      requestId: "cli-dispatch",
+      sessions: [],
+      message: "No Copilot CLI, VS Code, or Visual Studio sessions were found in this Windows account."
+    }));
+
+    const scanned = readdir.mock.calls.map(([target]) => String(target));
+    expect(scanned).toContain(path.join(os.homedir(), ".copilot", "session-state"));
+    expect(scanned).not.toContain(vscodeRoot);
+    expect(execFile).not.toHaveBeenCalled();
   });
 
   it("returns correlated protocol responses for success and read failure", async () => {
@@ -576,8 +647,7 @@ describe("Copilot CLI session discovery", () => {
     expect(() => server.parseCopilotSessionSearchKeys("not json", new Set(["cli:one"])))
       .toThrow("invalid session search response");
     const id = "70ea177d-5558-40c4-b068-2477e84b9325";
-    const directory = addSession(id, "name: Search protocol");
-    fs.writeFileSync(path.join(directory, "events.jsonl"), "");
+    addSession(id, "name: Search protocol");
     await server.listAllCopilotSessions({
       cliRoot: temporaryRoot,
       vscodeRoot: path.join(temporaryRoot, "missing-vscode"),

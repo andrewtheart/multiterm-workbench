@@ -6375,6 +6375,15 @@ namespace MultiTerm.PowerShellBridge
                 return null;
             }
 
+            // The CLI writes workspace.yaml the moment it starts, so a folder alone
+            // is not a resumable session; --resume rejects one that recorded no
+            // events with "No session, task, or name matched".
+            FileInfo transcript = new FileInfo(Path.Combine(directory, "events.jsonl"));
+            if (!transcript.Exists || transcript.Length == 0)
+            {
+                return null;
+            }
+
             Dictionary<string, string> fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (string line in File.ReadAllLines(workspacePath, Encoding.UTF8))
             {

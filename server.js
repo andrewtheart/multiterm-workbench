@@ -1533,7 +1533,7 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       listWslTmuxSessions(client, message.requestId);
       break;
     case "listCopilotSessions":
-      sendAllCopilotSessions(client, message.requestId);
+      sendAllCopilotSessions(client, message.requestId, undefined, message.source);
       break;
     case "listRemoteCopilotSessions":
       sendRemoteCopilotSessions(client, message, dependencies.remoteCopilotSessions || {});
@@ -4720,10 +4720,18 @@ async function listCopilotSessions(sessionRoot = path.join(os.homedir(), ".copil
     if (!directory.isDirectory() || !copilotSessionIdPattern.test(directory.name)) continue; else { void 0; }
     const workspacePath = path.join(sessionRoot, directory.name, "workspace.yaml");
     try {
-      const [contents, details] = await Promise.all([
+      const [contents, details, transcript] = await Promise.all([
         fs.promises.readFile(workspacePath, "utf8"),
-        fs.promises.stat(workspacePath)
+        fs.promises.stat(workspacePath),
+        fs.promises.stat(path.join(sessionRoot, directory.name, "events.jsonl")).catch((error) => {
+          if (error && error.code === "ENOENT") return null; else { void 0; }
+          throw error;
+        })
       ]);
+      // The CLI writes workspace.yaml the moment it starts, so a folder alone
+      // is not a resumable session; `--resume` rejects one that recorded no
+      // events with "No session, task, or name matched".
+      if (!transcript || transcript.size === 0) continue; else { void 0; }
       const metadata = parseCopilotWorkspaceMetadata(contents);
       const updated = Date.parse(metadata.updated_at) ? metadata.updated_at : details.mtime.toISOString();
       discovered.push({
@@ -4903,6 +4911,11 @@ async function findVisualStudioCopilotSessionFiles(executable = process.env.MULT
   }
 }
 
+async function listCliCopilotSessions(cliRoot = path.join(os.homedir(), ".copilot", "session-state")) {
+  const sessions = await listCopilotSessions(cliRoot);
+  return sessions.map((session) => ({ ...session, key: `cli:${session.id}`, source: "cli" }));
+}
+
 async function listAllCopilotSessions({
   cliRoot = path.join(os.homedir(), ".copilot", "session-state"),
   vscodeRoot = path.join(process.env.APPDATA || "", "Code", "User", "workspaceStorage"),
@@ -4911,27 +4924,29 @@ async function listAllCopilotSessions({
   copilotSessionCatalog.clear();
   const files = visualStudioFiles || await findVisualStudioCopilotSessionFiles();
   const [cli, vscode, visualstudio] = await Promise.all([
-    listCopilotSessions(cliRoot),
+    listCliCopilotSessions(cliRoot),
     listVsCodeCopilotSessions(vscodeRoot),
     listVisualStudioCopilotSessions(files)
   ]);
-  const cliSessions = cli.map((session) => {
-    const key = `cli:${session.id}`;
-    copilotSessionCatalog.set(key, {
+  for (const session of cli) {
+    copilotSessionCatalog.set(session.key, {
       ...session,
-      key,
-      source: "cli",
       filePath: path.join(cliRoot, session.id, "events.jsonl")
     });
-    return { ...session, key, source: "cli" };
-  });
-  return [...cliSessions, ...vscode, ...visualstudio]
+  }
+  return [...cli, ...vscode, ...visualstudio]
     .sort((left, right) => Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0));
 }
 
-async function sendAllCopilotSessions(client, requestId, roots) {
+async function sendAllCopilotSessions(client, requestId, roots, source) {
   try {
-    const discovered = await listAllCopilotSessions(roots);
+    // Only native CLI sessions can be handed to `copilot --resume`, so a CLI-only
+    // request skips editor discovery entirely: an unreadable VS Code history or a
+    // slow Everything scan must not fail or stall assistant restore. It also
+    // leaves the search catalog alone, which only the full listing owns.
+    const discovered = source === "cli"
+      ? await listCliCopilotSessions(roots?.cliRoot)
+      : await listAllCopilotSessions(roots);
     const message = discovered.length === 0
       ? "No Copilot CLI, VS Code, or Visual Studio sessions were found in this Windows account."
       : "";
@@ -6363,6 +6378,7 @@ module.exports = {
     fileUriToWindowsPath,
     jsonStringFromPrefix,
     listCopilotSessions,
+    listCliCopilotSessions,
     listVsCodeCopilotSessions,
     listVisualStudioCopilotSessions,
     findVisualStudioCopilotSessionFiles,
