@@ -31,7 +31,8 @@ Write-Host "PowerShell command coverage: $($coverage.NumberOfCommandsExecuted)/$
 # reached from a unit test.
 $additionalSuites = @(
     (Join-Path $repoRoot "tests\powershell\ReleaseState.Tests.ps1"),
-    (Join-Path $repoRoot "tests\powershell\ReleaseNotesBase.Tests.ps1")
+    (Join-Path $repoRoot "tests\powershell\ReleaseNotesBase.Tests.ps1"),
+    (Join-Path $repoRoot "tests\powershell\Install-CopilotCli.Tests.ps1")
 )
 
 foreach ($suite in $additionalSuites) {

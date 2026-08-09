@@ -96,6 +96,7 @@ Type: files; Name: "{app}\VisualStudio\*.vsix"
 [Files]
 Source: "{#RepoRoot}\{#MyScriptFile}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\Focus-BridgeTerminal.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepoRoot}\Install-CopilotCli.ps1"; DestDir: "{app}"; Flags: ignoreversion
 ; Setup extracts the current launcher before replacing files so upgrades can
 ; gracefully stop every running instance, including instances from older installs.
 Source: "{#RepoRoot}\{#MyScriptFile}"; Flags: dontcopy
