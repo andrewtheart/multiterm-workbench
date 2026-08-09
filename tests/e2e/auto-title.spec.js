@@ -1,7 +1,8 @@
 const { test, expect } = require("../support/renderer-coverage");
 
-// Each automatic suggestion is a real AI request, so the gaps between them and
-// the fact that one never renames a terminal on its own both matter.
+// Each automatic suggestion is a real AI request, so the gaps between them, the
+// fact that one never renames a terminal on its own, and the fact that one never
+// steals focus all matter.
 test.describe("Automatic terminal title suggestions", () => {
   const ready = async (page) => {
     await page.goto("http://127.0.0.1:3199/");
@@ -45,32 +46,24 @@ test.describe("Automatic terminal title suggestions", () => {
     expect(parsed.normalized).toBe("15, 45");
   });
 
-  test("offers an automatic suggestion as a badge on the one suggest button", async ({ page }) => {
+  test("reveals an automatic suggestion for approval without taking focus", async ({ page }) => {
     await ready(page);
-    const before = await page.evaluate(() => {
-      const [terminal] = [...state.terminals.values()];
-      showTerminalTitleSuggestion(terminal, "deploy pipeline", { auto: true });
-      return terminal.titleInput.value;
-    });
-
     const pane = page.locator(".terminal-pane").first();
-    // One sparkle button per header, not two: the waiting suggestion is a state
-    // of the suggest button rather than a second icon beside it.
-    await expect(pane.locator(".pane-title-generate")).toHaveCount(1);
-    await expect(pane.locator(".pane-title-generate")).toHaveClass(/has-suggestion/);
-    await expect(pane.locator(".pane-title-review")).toBeHidden();
-    await expect(pane.locator(".pane-title")).toHaveValue(before);
-    expect(before).not.toBe("deploy pipeline");
-    const unreadAnimation = await pane.locator(".pane-title-generate .ai-title-glyph").evaluate((icon) => {
-      const style = getComputedStyle(icon);
-      return {
-        fillMode: style.animationFillMode,
-        iterationCount: style.animationIterationCount
-      };
-    });
-    expect(unreadAnimation).toEqual({ fillMode: "forwards", iterationCount: "3" });
+    await pane.locator(".xterm-helper-textarea").focus();
 
-    await pane.locator(".pane-title-generate").click();
+    const result = await page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      const before = terminal.titleInput.value;
+      showTerminalTitleSuggestion(terminal, "deploy pipeline", { auto: true });
+      return { before, focused: document.activeElement.className };
+    });
+    expect(result.before).not.toBe("deploy pipeline");
+    // Suggestions arrive on a timer, so pulling focus would interrupt whatever
+    // the user is typing in the terminal underneath.
+    expect(result.focused).toContain("xterm-helper-textarea");
+
+    // One sparkle button per header, not two.
+    await expect(pane.locator(".pane-title-generate")).toHaveCount(1);
     await expect(pane.locator(".pane-title-generate")).toBeHidden();
     await expect(pane.locator(".pane-title-review")).toBeVisible();
     await expect(pane.locator(".pane-title")).toHaveValue("deploy pipeline");
@@ -86,15 +79,43 @@ test.describe("Automatic terminal title suggestions", () => {
     const original = await page.evaluate(() => {
       const [terminal] = [...state.terminals.values()];
       showTerminalTitleSuggestion(terminal, "throwaway name", { auto: true });
-      return terminal.titleInput.value;
+      return terminal.titleOriginal;
     });
     const pane = page.locator(".terminal-pane").first();
-    await pane.locator(".pane-title-generate").click();
     await expect(pane.locator(".pane-title")).toHaveValue("throwaway name");
     await pane.locator(".pane-title-reject").click();
     await expect(pane.locator(".pane-title")).toHaveValue(original);
     await expect(pane.locator(".pane-title-generate")).toBeVisible();
     await expect(pane.locator(".pane-title-generate")).not.toHaveClass(/has-suggestion/);
+  });
+
+  test("waits as a badge rather than overwriting a rename in progress", async ({ page }) => {
+    await ready(page);
+    const pane = page.locator(".terminal-pane").first();
+    await pane.locator(".pane-title").focus();
+
+    const before = await page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      showTerminalTitleSuggestion(terminal, "renamed under you", { auto: true });
+      return terminal.titleInput.value;
+    });
+    expect(before).not.toBe("renamed under you");
+    await expect(pane.locator(".pane-title-review")).toBeHidden();
+    await expect(pane.locator(".pane-title-generate")).toHaveClass(/has-suggestion/);
+    const unreadAnimation = await pane.locator(".pane-title-generate .ai-title-glyph").evaluate((icon) => {
+      const style = getComputedStyle(icon);
+      return {
+        fillMode: style.animationFillMode,
+        iterationCount: style.animationIterationCount
+      };
+    });
+    expect(unreadAnimation).toEqual({ fillMode: "forwards", iterationCount: "3" });
+
+    await pane.locator(".pane-title-generate").click();
+    await expect(pane.locator(".pane-title-review")).toBeVisible();
+    await expect(pane.locator(".pane-title")).toHaveValue("renamed under you");
+    await pane.locator(".pane-title-reject").click();
+    await expect(pane.locator(".pane-title")).toHaveValue(before);
   });
 
   test("a manually requested suggestion still applies straight away", async ({ page }) => {

@@ -39,12 +39,17 @@ const defaultSettings = {
   autoTitleSuppressions: [],
   automationHistoryLimit: 200,
   bellNotify: false,
+  // Custom header background picks, newest first, so the quick picker can offer
+  // them again instead of only remembering the most recent one.
+  headerBackgroundCustomColors: [],
   worktreeSharedRoot: "",
   broadcastSendEnter: true,
   closeAction: "ask",
   columns: 2,
   compactChrome: false,
   copilotImportContextKb: 64,
+  copilotRemoteKeepAlive: "off",
+  copilotRemoteSessions: false,
   copilotSessionSearchContextKb: 1024,
   copilotTitleContext: "default",
   copilotTitleContextKb: 16,
@@ -111,12 +116,20 @@ const HEADER_GRADIENT_TYPES = new Set(["linear", "radial", "conic"]);
 const HEADER_GRADIENT_SHAPES = new Set(["circle", "ellipse"]);
 const HEADER_GRADIENT_MAX_STOPS = 8;
 const HEADER_GRADIENT_FALLBACK_COLOR = "#1E242C";
+// One-click palette for the header quick picker: two neutrals for a subtle
+// tint, then the pane label accents so both cues can share a hue.
+const HEADER_BACKGROUND_QUICK_COLORS = Object.freeze([
+  "#1E242C", "#2F3B46", ...PANE_COLORS.map((color) => color.toUpperCase())
+]);
+const HEADER_BACKGROUND_CUSTOM_LIMIT = 8;
 let headerBackgroundTerminalId = null;
 let headerBackgroundReturnFocus = null;
 let headerBackgroundDraft = null;
 let headerBackgroundCloseTimer = 0;
 let headerBackgroundOpen = false;
 let headerBackgroundReady = false;
+let headerBackgroundFlyoutId = null;
+let headerBackgroundFlyoutAnchor = null;
 const TERMINAL_NOTIFICATION_SETTINGS = Object.freeze({
   activity: "notifyActivity",
   question: "notifyQuestions",
@@ -132,6 +145,8 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   aiCopilotSetup: "ai assistant github copilot cli install setup login sign in winget",
   aiTitleProvider: "ai assistant provider github copilot claude terminal title suggestions",
   aiProvidersRefresh: "ai assistant provider refresh rescan detect installed authentication models",
+  copilotRemoteSessions: "ai assistant copilot remote control steer phone mobile github.com away from desk session",
+  copilotRemoteKeepAlive: "ai assistant copilot remote keep alive caffeinate sleep awake machine standby idle",
   copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
@@ -212,7 +227,8 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
 const PANE_OVERFLOW_WIDTH = 600;
 const HEADER_ACTION_IDS = [
   "move-left", "move-right", "find", "clear", "copy", "color", "restart",
-  "dequeue", "artifacts", "minimize", "focus", "maximize", "duplicate", "close"
+  "dequeue", "artifacts", "header-background", "minimize", "focus", "maximize",
+  "duplicate", "close"
 ];
 const HEADER_ACTION_ID_SET = new Set(HEADER_ACTION_IDS);
 // Most of these have a menu equivalent and are used rarely, so the header keeps
@@ -223,7 +239,7 @@ const DEFAULT_HEADER_ACTIONS_IN_MENU = defaultSettings.headerActionsInMenu.slice
 // narrow and Focus is how you get into it.
 const HEADER_ACTION_OVERFLOW_ORDER = [
   "duplicate", "move-left", "move-right", "color", "find", "clear",
-  "copy", "restart", "artifacts", "minimize", "maximize"
+  "copy", "restart", "artifacts", "header-background", "minimize", "maximize"
 ];
 // The title needs a floor worth reading before buttons may take the rest.
 const PANE_TITLE_MIN_WIDTH = 150;
@@ -237,6 +253,7 @@ const HEADER_ACTIONS = Object.freeze({
   restart: { label: "Restart", icon: "rotate-cw", hint: "Ctrl+Shift+R" },
   dequeue: { label: "Run next queued command", icon: "list-start" },
   artifacts: { label: "Notes & command queue", icon: "notebook-tabs" },
+  "header-background": { label: "Header background\u2026", icon: "palette" },
   minimize: { label: "Minimize", icon: "minus" },
   focus: { label: "Focus", icon: "panel-left-close" },
   maximize: { label: "Maximize", icon: "maximize-2" },
@@ -263,6 +280,7 @@ const HEADER_ACTION_SHORTCUT_DEFAULTS = Object.freeze({
   restart: { ctrl: true, alt: true, shift: true, key: "r" },
   dequeue: { ctrl: true, alt: true, shift: true, key: "n" },
   artifacts: { ctrl: true, alt: true, shift: true, key: "a" },
+  "header-background": { ctrl: true, alt: true, shift: true, key: "b" },
   minimize: { ctrl: true, alt: true, shift: true, key: "m" },
   focus: { ctrl: true, alt: true, shift: true, key: "o" },
   maximize: { ctrl: true, alt: true, shift: true, key: "x" },
@@ -279,6 +297,8 @@ const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
 const COPILOT_CLEAR_PROMPT = "\x15";
 const COPILOT_RESUME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const COPILOT_KEEP_ALIVE_DURATION_PATTERN = /^\d{1,4}[mhd]?$/;
+const COPILOT_REMOTE_SESSION_URL_PATTERN = /https:\/\/github\.com\/copilot\/[A-Za-z0-9._~\-/?#=&%]+/;
 const AI_MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/+\-\[\]]{0,159}$/;
 const terminalMessaging = window.TerminalMessaging;
 const syntaxHighlight = window.SyntaxHighlight;
@@ -564,6 +584,9 @@ const elements = {
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
+  copilotRemoteKeepAlive: document.querySelector("#copilotRemoteKeepAlive"),
+  copilotRemoteSessions: document.querySelector("#copilotRemoteSessions"),
+  copilotRemoteStatus: document.querySelector("#copilotRemoteStatus"),
   copilotSessionSearchContextKb: document.querySelector("#copilotSessionSearchContextKb"),
   copilotTitleContext: document.querySelector("#copilotTitleContext"),
   copilotTitleContextKb: document.querySelector("#copilotTitleContextKb"),
@@ -593,6 +616,14 @@ const elements = {
   headerBackgroundApply: document.querySelector("#headerBackgroundApply"),
   headerBackgroundCancel: document.querySelector("#headerBackgroundCancel"),
   headerBackgroundClose: document.querySelector("#headerBackgroundClose"),
+  headerBackgroundFlyout: document.querySelector("#headerBackgroundFlyout"),
+  headerBackgroundFlyoutColor: document.querySelector("#headerBackgroundFlyoutColor"),
+  headerBackgroundFlyoutCustomRow: document.querySelector("#headerBackgroundFlyoutCustomRow"),
+  headerBackgroundFlyoutCustomSwatches: document.querySelector("#headerBackgroundFlyoutCustomSwatches"),
+  headerBackgroundFlyoutMore: document.querySelector("#headerBackgroundFlyoutMore"),
+  headerBackgroundFlyoutReset: document.querySelector("#headerBackgroundFlyoutReset"),
+  headerBackgroundFlyoutSubtitle: document.querySelector("#headerBackgroundFlyoutSubtitle"),
+  headerBackgroundFlyoutSwatches: document.querySelector("#headerBackgroundFlyoutSwatches"),
   headerBackgroundOverlay: document.querySelector("#headerBackgroundOverlay"),
   headerBackgroundPreview: document.querySelector("#headerBackgroundPreview"),
   headerBackgroundReset: document.querySelector("#headerBackgroundReset"),
@@ -619,12 +650,20 @@ const elements = {
   assistantRestoreClose: document.querySelector("#assistantRestoreClose"),
   copilotResumeClose: document.querySelector("#copilotResumeClose"),
   copilotResumeAiSearch: document.querySelector("#copilotResumeAiSearch"),
+  copilotResumeConnect: document.querySelector("#copilotResumeConnect"),
+  copilotResumeConnectId: document.querySelector("#copilotResumeConnectId"),
   copilotResumeDescription: document.querySelector("#copilotResumeDescription"),
   copilotResumeList: document.querySelector("#copilotResumeList"),
+  copilotResumeNotice: document.querySelector("#copilotResumeNotice"),
   copilotResumeOverlay: document.querySelector("#copilotResumeOverlay"),
+  copilotResumePicker: document.querySelector("#copilotResumePicker"),
   copilotResumeRefresh: document.querySelector("#copilotResumeRefresh"),
+  copilotResumeRemoteFoot: document.querySelector("#copilotResumeRemoteFoot"),
   copilotResumeSearch: document.querySelector("#copilotResumeSearch"),
   copilotResumeStatus: document.querySelector("#copilotResumeStatus"),
+  copilotResumeTabLocal: document.querySelector("#copilotResumeTabLocal"),
+  copilotResumeTabRemote: document.querySelector("#copilotResumeTabRemote"),
+  copilotResumeTabs: document.querySelector("#copilotResumeTabs"),
   copilotSessionsToggle: document.querySelector("#copilotSessionsToggle"),
   cwdChangeBrowse: document.querySelector("#cwdChangeBrowse"),
   cwdChangeCancel: document.querySelector("#cwdChangeCancel"),
@@ -755,6 +794,13 @@ const elements = {
   paletteOverlay: document.querySelector("#paletteOverlay"),
   pager: document.querySelector("#pager"),
   pagerAdd: document.querySelector("#pagerAdd"),
+  pagerGroup: document.querySelector("#pagerGroup"),
+  pageGroupFlyout: document.querySelector("#pageGroupFlyout"),
+  pageGroupStatus: document.querySelector("#pageGroupStatus"),
+  pageGroupList: document.querySelector("#pageGroupList"),
+  pageGroupApply: document.querySelector("#pageGroupApply"),
+  pageGroupCancel: document.querySelector("#pageGroupCancel"),
+  pageGroupClose: document.querySelector("#pageGroupClose"),
   pagerCollapse: document.querySelector("#pagerCollapse"),
   pagerDockTargets: document.querySelector("#pagerDockTargets"),
   pagerList: document.querySelector("#pagerList"),
@@ -1036,6 +1082,9 @@ const state = {
   socketReady: false,
   bridgeId: "",
   canFocusBridgeTerminal: false,
+  copilotSetupScript: "",
+  sharedBrowserProfile: false,
+  sharedBrowserProfileWarned: false,
   statistics: { terminalId: null, loading: false, requestGeneration: 0, returnFocus: null },
   terminalArtifacts: loadTerminalArtifacts(),
   terminalArtifactsHub: { returnFocus: null, savedTimer: 0 },
@@ -1131,12 +1180,14 @@ window.addEventListener("DOMContentLoaded", () => {
   }
   bindTerminalNotificationFlyout();
   bindTerminalNotesFlyout();
+  bindHeaderBackgroundFlyout();
   applyVersion();
   applySettings();
   enhanceComboboxes();
   refreshWorkspaceSelect();
   bindPalette();
   bindPager();
+  bindPageGrouping();
   bindQuickSwitch();
   renderPager();
   bindContextMenu();
@@ -1248,6 +1299,9 @@ function bindControls() {
     state.settings.copilotSessionSearchContextKb,
     elements.copilotSessionSearchContextKb
   );
+  state.settings.copilotRemoteKeepAlive = normalizeCopilotKeepAlive(state.settings.copilotRemoteKeepAlive);
+  elements.copilotRemoteSessions.checked = Boolean(state.settings.copilotRemoteSessions);
+  elements.copilotRemoteKeepAlive.value = state.settings.copilotRemoteKeepAlive;
   syncAiSessionSettings();
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
@@ -1302,6 +1356,15 @@ function bindControls() {
   elements.copilotResumeClose.addEventListener("click", closeCopilotResume);
   elements.copilotResumeRefresh.addEventListener("click", refreshCopilotSessions);
   elements.copilotResumeAiSearch.addEventListener("click", searchCopilotSessionsWithAi);
+  elements.copilotResumeTabLocal.addEventListener("click", () => setCopilotResumeScope("local"));
+  elements.copilotResumeTabRemote.addEventListener("click", () => setCopilotResumeScope("remote"));
+  elements.copilotResumePicker.addEventListener("click", openCopilotRemotePicker);
+  elements.copilotResumeConnect.addEventListener("click", () => connectToRemoteCopilotSessionId(elements.copilotResumeConnectId.value));
+  elements.copilotResumeConnectId.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    connectToRemoteCopilotSessionId(elements.copilotResumeConnectId.value);
+  });
   elements.copilotResumeSearch.addEventListener("input", () => {
     clearCopilotAiSearch();
     renderCopilotSessions();
@@ -1462,6 +1525,8 @@ function bindControls() {
   bindSetting(elements.aiSessionModel, "aiSessionModel", "change", normalizeAiSessionModel);
   bindSetting(elements.aiSessionEffort, "aiSessionEffort", "change", normalizeAiSessionEffort);
   bindSetting(elements.aiSessionContext, "aiSessionContext", "change", normalizeAiSessionContext);
+  bindSetting(elements.copilotRemoteSessions, "copilotRemoteSessions", "change", (_, element) => element.checked);
+  bindSetting(elements.copilotRemoteKeepAlive, "copilotRemoteKeepAlive", "change", normalizeCopilotKeepAlive);
   bindSetting(elements.aiTitleProvider, "aiTitleProvider", "change", normalizeAiProviderId);
   bindSetting(elements.copilotTitleModel, "copilotTitleModel", "change", normalizeCopilotTitleModel);
   bindSetting(elements.copilotTitleEffort, "copilotTitleEffort", "change", normalizeCopilotTitleEffort);
@@ -1582,6 +1647,8 @@ function bindSetting(element, key, eventName, transform) {
       syncAiTitleControls();
     } else if (key === "aiSessionProvider" || key === "aiSessionModel") {
       syncAiSessionControls();
+    } else if (key === "copilotRemoteSessions" || key === "copilotRemoteKeepAlive") {
+      syncCopilotRemoteControls();
     }
     if (key === "aiTitleProvider" || key === "autoTitleSuggestions" || key === "autoTitleSchedule") {
       rescheduleAllAutoTitles();
@@ -1662,6 +1729,14 @@ function clampCopilotImportContextKb(value, element) {
 
 function clampCopilotSessionSearchContextKb(value, element = elements.copilotSessionSearchContextKb) {
   return clampSettingNumber(value, element, COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS);
+}
+
+// "off" means MultiTerm stays out of the way; every other value is passed to
+// the CLI's own /keep-alive command, which is what defines the vocabulary.
+function normalizeCopilotKeepAlive(value) {
+  const candidate = String(value ?? "").trim().toLowerCase();
+  if (candidate === "on" || candidate === "busy") return candidate;
+  return COPILOT_KEEP_ALIVE_DURATION_PATTERN.test(candidate) ? candidate : "off";
 }
 
 function normalizeAiProviderId(value) {
@@ -2143,7 +2218,7 @@ function handleBridgeMessage(message) {
     return;
   }
 
-  if (message.type === "copilotSessions" || message.type === "claudeSessions" || message.type === "copilotSessionContext" || message.type === "terminalTitleSuggestion") {
+  if (message.type === "copilotSessions" || message.type === "claudeSessions" || message.type === "copilotSessionContext" || message.type === "remoteCopilotSessions" || message.type === "terminalPageGroups" || message.type === "terminalTitleSuggestion") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -2183,7 +2258,9 @@ function handleBridgeMessage(message) {
     acceptAiProviderBootstrap(message.aiProviderBootstrap);
     state.bridgeId = typeof message.bridgeId === "string" ? message.bridgeId : "";
     state.canFocusBridgeTerminal = message.canFocusBridgeTerminal === true;
+    state.copilotSetupScript = typeof message.copilotSetupScript === "string" ? message.copilotSetupScript : "";
     state.hostUser = typeof message.currentUser === "string" ? message.currentUser.trim() : state.hostUser;
+    warnAboutSharedBrowserProfile(message.sharedBrowserProfile === true);
     renderBridgeIdentity();
     const known = new Set();
     const openFolders = Array.isArray(message.openFolders)
@@ -2738,6 +2815,12 @@ function addTerminal(options = {}) {
     automationWorkflowTasks: [],
     automationWorkflowTimer: 0,
     aiAssistantTuiProvider: "",
+    keepAliveTimer: 0,
+    pendingKeepAlive: "",
+    remoteEnabledAt: savedMeta?.remoteEnabledAt || "",
+    remoteSessionId: savedMeta?.remoteSessionId || "",
+    remoteSessionTimer: 0,
+    remoteSessionUrl: savedMeta?.remoteSessionUrl || "",
     elevated,
     fitAddon,
     fontSizeOverride,
@@ -3005,6 +3088,9 @@ function bindTerminalKeyHandling(terminal) {
         return;
       }
 
+      // The interrupt escape hatch above is unconditional; only the copy half
+      // follows the customizable Copy binding.
+      if (!globalShortcutMatches(event, "terminal.copy")) return;
       const selection = terminal.term.getSelection() || terminal.selectionSnapshot;
       if (selection) copyTerminalOutput(terminal.id, selection);
       return;
@@ -3850,6 +3936,7 @@ function positionTerminalNotificationFlyout(anchor) {
 function openTerminalNotificationFlyout(terminal, anchor) {
   closeHeaderActionScopeFlyout();
   closeTerminalNotesFlyout();
+  closeHeaderBackgroundFlyout();
   hideContextMenu();
   if (terminalNotificationFlyoutAnchor && terminalNotificationFlyoutAnchor !== anchor) {
     terminalNotificationFlyoutAnchor.setAttribute("aria-expanded", "false");
@@ -3978,6 +4065,9 @@ function runHeaderAction(terminal, action, anchor = null) {
   } else if (action === "artifacts") {
     if (anchor) toggleTerminalNotesFlyout(terminal, anchor);
     else openTerminalArtifacts(terminal.id);
+  } else if (action === "header-background") {
+    if (anchor) toggleHeaderBackgroundFlyout(terminal, anchor);
+    else openHeaderBackgroundEditor(terminal);
   } else if (action === "maximize") {
     toggleZoomPane(terminal.id);
   } else if (action === "minimize") {
@@ -4015,6 +4105,10 @@ function bindPaneControls(terminal) {
 
   // One button, three jobs: reveal a suggestion that is already waiting, ask for
   // a new one otherwise, and offer the pause scopes on right-click.
+  // The title region is full-width only while it has focus, so letting this button
+  // take focus collapses the region and moves the button out from under the
+  // pointer between mousedown and mouseup, and no click is ever delivered.
+  terminal.titleGenerate.addEventListener("mousedown", (event) => event.preventDefault());
   terminal.titleGenerate.addEventListener("click", () => {
     if (terminalTitleSuggestionPending(terminal)) revealTerminalTitleSuggestion(terminal);
     else generateTerminalTitle(terminal);
@@ -4775,19 +4869,19 @@ function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
   updateTerminalTitleGenerateButton(terminal);
 }
 
-// An automatic suggestion only offers itself; it must never rename a terminal
-// the user is watching without being asked. The suggest button carries the
-// waiting state as a badge rather than a second button appearing beside it.
+// An automatic suggestion offers itself for approval like a manual one, but it
+// must not take focus from whatever the user is doing, and it must not overwrite
+// a rename in progress -- that case waits as a badge on the suggest button.
 function showTerminalTitleSuggestion(terminal, title, { auto = false } = {}) {
   terminal.titleSuggestion = title;
-  if (auto) {
+  if (auto && document.activeElement === terminal.titleInput) {
     updateTerminalTitleGenerateButton(terminal);
     return;
   }
-  revealTerminalTitleSuggestion(terminal);
+  revealTerminalTitleSuggestion(terminal, { focus: !auto });
 }
 
-function revealTerminalTitleSuggestion(terminal) {
+function revealTerminalTitleSuggestion(terminal, { focus = true } = {}) {
   const title = terminal?.titleSuggestion;
   if (!title) return;
   terminal.titleOriginal = terminal.titleInput.value;
@@ -4799,7 +4893,7 @@ function revealTerminalTitleSuggestion(terminal) {
   terminal.pane.classList.add("has-title-suggestion");
   updateTerminalTitleGenerateButton(terminal);
   refreshIcons(terminal.titleReview);
-  terminal.titleReview.querySelector(".pane-title-accept").focus({ preventScroll: true });
+  if (focus) terminal.titleReview.querySelector(".pane-title-accept").focus({ preventScroll: true });
 }
 
 function acceptTerminalTitleSuggestion(terminal) {
@@ -5453,6 +5547,7 @@ function disposeTerminal(terminal) {
   const { id } = terminal;
   if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
   if (terminalNotesFlyoutId === id) closeTerminalNotesFlyout();
+  if (headerBackgroundFlyoutId === id) closeHeaderBackgroundFlyout();
   if (headerBackgroundTerminalId === id) closeHeaderBackgroundEditor({ restoreFocus: false });
   if (pendingHeaderActionShortcut?.terminalId === id) closeHeaderActionShortcutFlyout({ restoreFocus: false });
   if (state.snap?.id === id) {
@@ -5471,6 +5566,10 @@ function disposeTerminal(terminal) {
   terminal.autoQueueTimer = 0;
   window.clearTimeout(terminal.copilotSetupLoginTimer);
   terminal.copilotSetupLoginTimer = 0;
+  window.clearTimeout(terminal.remoteSessionTimer);
+  terminal.remoteSessionTimer = 0;
+  window.clearTimeout(terminal.keepAliveTimer);
+  terminal.keepAliveTimer = 0;
   window.clearTimeout(terminal.pendingCwdTimer);
   terminal.pendingCwdTimer = 0;
   window.clearTimeout(terminal.handoffScanTimer);
@@ -5727,10 +5826,10 @@ function startMinChipRename(chip, terminal) {
 
 function showMinChipMenu(x, y, terminal, chip) {
   renderContextMenu([
-    { label: "Restore", icon: "chevron-up", run: () => restoreTerminal(terminal.id) },
-    { label: "Rename\u2026", icon: "pencil", run: () => startMinChipRename(chip, terminal) },
+    { label: "Restore", icon: "chevron-up", shortcutId: "minimized.restore", run: () => restoreTerminal(terminal.id) },
+    { label: "Rename\u2026", icon: "pencil", shortcutId: "minimized.rename", run: () => startMinChipRename(chip, terminal) },
     { separator: true },
-    { label: "Close", hint: "Ctrl+Shift+W", icon: "x", danger: true, run: () => removeTerminal(terminal.id) }
+    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", danger: true, run: () => removeTerminal(terminal.id) }
   ]);
   showBuiltContextMenu(x, y);
 }
@@ -6064,6 +6163,7 @@ function writeTerminal(terminal, data) {
   scheduleAutomaticQueueCheck(terminal);
   scheduleAutomationWorkflowCheck(terminal);
   scheduleCopilotSetupLogin(terminal);
+  schedulePendingKeepAlive(terminal);
   schedulePendingCwdChange(terminal);
   scheduleTerminalHandoffScan(terminal);
   scheduleTerminalHandoffDelivery(terminal);
@@ -6285,6 +6385,21 @@ function scheduleAutomaticQueueCheck(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
   }, delay);
 }
 
+// The configured keep-alive is staged at launch and delivered once the Copilot
+// TUI is idle, because a slash command typed into the banner is discarded.
+function schedulePendingKeepAlive(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
+  window.clearTimeout(terminal?.keepAliveTimer);
+  if (!terminal?.pendingKeepAlive || terminal.status !== "live") return;
+  terminal.keepAliveTimer = window.setTimeout(() => {
+    terminal.keepAliveTimer = 0;
+    const readiness = terminalExecutionReadiness(terminal);
+    if (!readiness.ready || readiness.mode !== "copilot") return;
+    const value = terminal.pendingKeepAlive;
+    terminal.pendingKeepAlive = "";
+    sendTerminalSlashDirective(terminal, "keep-alive", value);
+  }, delay);
+}
+
 function scheduleCopilotSetupLogin(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
   window.clearTimeout(terminal?.copilotSetupLoginTimer);
   if (!terminal?.copilotSetupLoginPending || terminal.status !== "live") return;
@@ -6450,6 +6565,73 @@ function readBufferWindow(buffer, cursorRow, count) {
 function readBufferLine(buffer, row) {
   const line = buffer.getLine(row);
   return line ? line.translateToString(true).replace(/\s+$/, "") : "";
+}
+
+// `/remote on` prints its github.com link once, and the CLI may soft-wrap it, so
+// the scan retries while output settles and also reads wrap-joined rows.
+const REMOTE_SESSION_LINK_SETTLE_MS = 900;
+const REMOTE_SESSION_LINK_ATTEMPTS = 8;
+
+function remoteSessionCandidateLines(terminal) {
+  const buffer = terminal?.term?.buffer?.active;
+  if (!buffer) return [];
+  const first = buffer.type === "alternate" ? 0 : Math.max(0, buffer.length - terminal.term.rows - 4);
+  const rows = [];
+  const joined = [];
+  for (let row = first; row < buffer.length; row += 1) {
+    const text = readBufferLine(buffer, row);
+    rows.push(text);
+    if (buffer.getLine(row)?.isWrapped && joined.length) {
+      joined[joined.length - 1] += text;
+    } else {
+      joined.push(text);
+    }
+  }
+  return [...rows, ...joined];
+}
+
+function captureRemoteSessionLink(terminal) {
+  const lines = remoteSessionCandidateLines(terminal);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = COPILOT_REMOTE_SESSION_URL_PATTERN.exec(lines[index]);
+    if (match) return setTerminalRemoteSession(terminal, match[0]);
+  }
+  return false;
+}
+
+function scheduleRemoteSessionLinkCheck(terminal, attempts = REMOTE_SESSION_LINK_ATTEMPTS) {
+  if (!terminal) return;
+  window.clearTimeout(terminal.remoteSessionTimer);
+  terminal.remoteSessionTimer = 0;
+  if (terminal.status !== "live" || attempts <= 0) return;
+  terminal.remoteSessionTimer = window.setTimeout(() => {
+    terminal.remoteSessionTimer = 0;
+    if (!captureRemoteSessionLink(terminal)) scheduleRemoteSessionLinkCheck(terminal, attempts - 1);
+  }, REMOTE_SESSION_LINK_SETTLE_MS);
+}
+
+function setTerminalRemoteSession(terminal, url) {
+  const value = String(url || "").trim();
+  if (!terminal || !COPILOT_REMOTE_SESSION_URL_PATTERN.test(value)) return false;
+  if (terminal.remoteSessionUrl === value) return true;
+  terminal.remoteSessionUrl = value;
+  terminal.remoteSessionId = (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.exec(value) || [""])[0].toLowerCase();
+  terminal.remoteEnabledAt = new Date().toISOString();
+  saveSessionSnapshot();
+  log.info("ai", `Remote control link captured for ${terminal.titleInput.value || "terminal"}`, { url: value });
+  toast("Remote control is on for this terminal", "success", 2600);
+  return true;
+}
+
+function clearTerminalRemoteSession(terminal) {
+  if (!terminal) return;
+  window.clearTimeout(terminal.remoteSessionTimer);
+  terminal.remoteSessionTimer = 0;
+  if (!terminal.remoteSessionUrl) return;
+  terminal.remoteSessionUrl = "";
+  terminal.remoteSessionId = "";
+  terminal.remoteEnabledAt = "";
+  saveSessionSnapshot();
 }
 
 function setAwaitingInput(terminal, awaiting, category = "") {
@@ -7181,6 +7363,21 @@ function renderBridgeIdentity() {
     : state.canFocusBridgeTerminal
       ? "Served by the terminal window titled with this id."
       : "This bridge does not run in its own terminal window.";
+}
+
+// Without a Chromium browser the bridge cannot hand the UI a private profile, so
+// everything saved here shares the user's ordinary browsing data and disappears
+// with it. Reconnects re-send the welcome, so this is said once per window.
+function warnAboutSharedBrowserProfile(shared) {
+  state.sharedBrowserProfile = shared;
+  if (!shared || state.sharedBrowserProfileWarned) return;
+  state.sharedBrowserProfileWarned = true;
+  log.warn("bridge", "MultiTerm is running in a shared browser profile; settings are stored in this browser's site data.");
+  toast(
+    "MultiTerm opened in your normal browser, so settings, pages and notes are saved with this browser's site data and are lost if you clear it. Install Microsoft Edge or Google Chrome to give MultiTerm its own profile.",
+    "error",
+    15000
+  );
 }
 
 function setBridgeIdentityStatus(text, tone) {
@@ -9752,7 +9949,7 @@ function attachTmuxSession(candidate) {
 /* ---------------- AI assistant session resume --------------- */
 
 const COPILOT_SESSION_PAGE_SIZE = 80;
-const COPILOT_SESSION_SOURCES = new Set(["claude", "cli", "vscode", "visualstudio"]);
+const COPILOT_SESSION_SOURCES = new Set(["claude", "cli", "remote", "vscode", "visualstudio"]);
 const copilotResume = {
   aiKeys: null,
   aiQuery: "",
@@ -9761,6 +9958,9 @@ const copilotResume = {
   generation: 0,
   newTerminal: false,
   provider: "copilot",
+  remoteMessage: "",
+  remoteSource: "",
+  scope: "local",
   sessions: [],
   suspended: false,
   terminalId: null,
@@ -9781,13 +9981,14 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
   copilotResume.aiSearching = false;
   copilotResume.sessions = [];
   copilotResume.suspended = false;
+  copilotResume.scope = "local";
+  copilotResume.remoteSource = "";
+  copilotResume.remoteMessage = "";
   copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
   copilotResume.generation += 1;
   window.clearTimeout(copilotResume.closeTimer);
   copilotResume.closeTimer = 0;
   const name = aiAssistantName(provider);
-  elements.copilotResumeAiSearch.hidden = provider !== "copilot";
-  elements.copilotResumeAiSearch.disabled = provider !== "copilot";
   elements.copilotResumeAiSearch.classList.remove("is-loading");
   elements.copilotResumeAiSearch.setAttribute("aria-pressed", "false");
   document.querySelector("#copilotResumeTitle").textContent = `Resume ${name} session`;
@@ -9795,6 +9996,8 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
     ? `Choose local ${name} history to continue in a new MultiTerm terminal.`
     : `Choose a local ${name} session to continue in ${terminal?.titleInput.value || "this terminal"}.`;
   elements.copilotResumeSearch.value = "";
+  elements.copilotResumeConnectId.value = "";
+  syncCopilotResumeScope();
   elements.copilotResumeOverlay.hidden = false;
   window.requestAnimationFrame(() => {
     elements.copilotResumeOverlay.classList.add("is-open");
@@ -9834,8 +10037,65 @@ function restoreCopilotResume() {
   });
 }
 
-function normalizeCopilotSession(candidate) {
+// The remote tab exists only for Copilot: Claude has no cloud session list, and
+// resuming into an existing terminal is a local-only operation.
+function copilotResumeSupportsRemote() {
+  return copilotResume.provider === "copilot" && copilotResume.newTerminal;
+}
+
+function syncCopilotResumeScope() {
+  const supported = copilotResumeSupportsRemote();
+  if (!supported) copilotResume.scope = "local";
+  const remote = copilotResume.scope === "remote";
+  elements.copilotResumeTabs.hidden = !supported;
+  elements.copilotResumeTabLocal.setAttribute("aria-selected", String(!remote));
+  elements.copilotResumeTabRemote.setAttribute("aria-selected", String(remote));
+  elements.copilotResumeTabLocal.classList.toggle("is-active", !remote);
+  elements.copilotResumeTabRemote.classList.toggle("is-active", remote);
+  elements.copilotResumeRemoteFoot.hidden = !remote;
+  elements.copilotResumeAiSearch.hidden = copilotResume.provider !== "copilot" || remote;
+  elements.copilotResumeAiSearch.disabled = elements.copilotResumeAiSearch.hidden;
+  elements.copilotResumeSearch.placeholder = remote
+    ? "Search remote session title, state, or ID"
+    : "Search source, title, repository, folder, branch, or ID";
+  const showNotice = remote && Boolean(copilotResume.remoteMessage);
+  elements.copilotResumeNotice.hidden = !showNotice;
+  elements.copilotResumeNotice.textContent = showNotice ? copilotResume.remoteMessage : "";
+}
+
+function setCopilotResumeScope(scope) {
+  const next = scope === "remote" && copilotResumeSupportsRemote() ? "remote" : "local";
+  if (copilotResume.scope === next) return false;
+  copilotResume.scope = next;
+  copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
+  clearCopilotAiSearch();
+  syncCopilotResumeScope();
+  refreshCopilotSessions();
+  return true;
+}
+
+function normalizeRemoteCopilotSession(candidate) {
   if (!candidate || !COPILOT_RESUME_ID_PATTERN.test(String(candidate.id || ""))) return null;
+  const key = String(candidate.key || "");
+  if (!key || key.length > 256 || /[\x00-\x1f\x7f]/.test(key)) return null;
+  const localId = String(candidate.localId || "");
+  return {
+    id: String(candidate.id).toLowerCase(),
+    key,
+    source: "remote",
+    localId: COPILOT_RESUME_ID_PATTERN.test(localId) ? localId.toLowerCase() : "",
+    name: String(candidate.name || "").trim(),
+    state: String(candidate.state || "").trim().slice(0, 40),
+    steerable: candidate.steerable === true,
+    cwd: String(candidate.cwd || "").trim(),
+    repository: String(candidate.repository || "").trim(),
+    branch: "",
+    createdAt: String(candidate.createdAt || ""),
+    updatedAt: String(candidate.updatedAt || "")
+  };
+}
+
+function normalizeCopilotSession(candidate) {  if (!candidate || !COPILOT_RESUME_ID_PATTERN.test(String(candidate.id || ""))) return null;
   const source = COPILOT_SESSION_SOURCES.has(candidate.source) ? candidate.source : "cli";
   const key = String(candidate.key || (source === "cli" ? `cli:${candidate.id}` : ""));
   if (!key || key.length > 256 || /[\x00-\x1f\x7f]/.test(key)) return null;
@@ -9857,21 +10117,38 @@ async function refreshCopilotSessions() {
   const provider = copilotResume.provider;
   clearCopilotAiSearch();
   const name = aiAssistantName(provider);
+  const remote = copilotResume.scope === "remote";
   elements.copilotResumeRefresh.disabled = true;
-  elements.copilotResumeStatus.textContent = provider === "claude"
-    ? "Looking for local Claude sessions\u2026"
-    : "Looking for local Copilot CLI, VS Code, and Visual Studio sessions\u2026";
+  elements.copilotResumeStatus.textContent = remote
+    ? "Asking GitHub for your remote sessions\u2026"
+    : provider === "claude"
+      ? "Looking for local Claude sessions\u2026"
+      : "Looking for local Copilot CLI, VS Code, and Visual Studio sessions\u2026";
   elements.copilotResumeList.innerHTML = '<div class="copilot-resume-empty">Reading session metadata\u2026</div>';
-  const response = await requestBridge({ type: provider === "claude" ? "listClaudeSessions" : "listCopilotSessions" }, { timeout: 20000 });
+  const response = await requestBridge(
+    { type: remote ? "listRemoteCopilotSessions" : provider === "claude" ? "listClaudeSessions" : "listCopilotSessions" },
+    { timeout: remote ? 30000 : 20000 }
+  );
   if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
 
   elements.copilotResumeRefresh.disabled = false;
   copilotResume.sessions = (Array.isArray(response?.sessions) ? response.sessions : [])
-    .map(normalizeCopilotSession)
+    .map(remote ? normalizeRemoteCopilotSession : normalizeCopilotSession)
     .filter(Boolean);
+  if (remote) {
+    copilotResume.remoteSource = response?.source === "api" ? "api" : "fallback";
+    copilotResume.remoteMessage = copilotResume.remoteSource === "api"
+      ? ""
+      : response?.message || "GitHub could not be asked for remote sessions, so only sessions MultiTerm started are listed.";
+    if (copilotResume.remoteMessage) log.warn("ai", `Remote Copilot session list degraded: ${copilotResume.remoteMessage}`);
+    syncCopilotResumeScope();
+  }
   renderCopilotSessions();
   if (copilotResume.sessions.length === 0) {
-    elements.copilotResumeStatus.textContent = response?.message || `The local bridge did not return any ${name} sessions.`;
+    elements.copilotResumeStatus.textContent = response?.message
+      || (remote
+        ? "GitHub returned no remote sessions for this account."
+        : `The local bridge did not return any ${name} sessions.`);
   }
   refreshIcons(elements.copilotResumeOverlay);
 }
@@ -9885,9 +10162,27 @@ function copilotSessionTitle(session) {
 
 function copilotSourceLabel(source) {
   if (source === "claude") return "Claude";
+  if (source === "remote") return "Remote";
   if (source === "vscode") return "VS Code";
   if (source === "visualstudio") return "Visual Studio";
   return "Copilot CLI";
+}
+
+// Only states GitHub uses for a finished session may claim the session ended;
+// anything else (idle, waiting_for_user, or a state added later) is still live.
+const REMOTE_SESSION_ENDED_STATES = new Set(["cancelled", "completed", "failed", "timed_out"]);
+
+function remoteSessionStateLabel(state) {
+  return String(state || "").replace(/_/g, " ");
+}
+
+// GitHub only lets you steer a session while it is live and the organization
+// policy allows it, so a row that cannot be connected says why.
+function remoteSessionBlockReason(session) {
+  if (session.steerable) return "";
+  return REMOTE_SESSION_ENDED_STATES.has(session.state)
+    ? `This session has ended (${remoteSessionStateLabel(session.state)}).`
+    : "Remote control is not enabled for this session. Your organization policy may not allow it.";
 }
 
 function renderCopilotSessions() {
@@ -9898,7 +10193,7 @@ function renderCopilotSessions() {
     : query
     ? copilotResume.sessions.filter((session) => {
       const corpus = normalizeSearchText([
-        copilotSourceLabel(session.source), session.name, session.repository, session.branch, session.cwd, session.id
+        copilotSourceLabel(session.source), session.name, session.repository, session.branch, session.cwd, session.id, session.state || ""
       ].join(" "));
       return queryTokens.every((token) => corpus.includes(token));
     })
@@ -9921,17 +10216,27 @@ function renderCopilotSessions() {
     } else {
       empty.textContent = copilotResume.aiKeys
         ? "Copilot found no sessions matching that request."
-        : `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`;
+        : copilotResume.scope === "remote"
+          ? "No remote sessions were found for this account."
+          : `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`;
     }
     elements.copilotResumeList.append(empty);
   }
 
   for (const session of shown) {
+    const blocked = session.source === "remote" ? remoteSessionBlockReason(session) : "";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "copilot-session-card";
     button.setAttribute("role", "listitem");
-    button.setAttribute("aria-label", `Resume ${copilotSessionTitle(session)}`);
+    button.setAttribute("aria-label", session.source === "remote"
+      ? `Connect to ${copilotSessionTitle(session)}`
+      : `Resume ${copilotSessionTitle(session)}`);
+    if (blocked) {
+      button.disabled = true;
+      button.title = blocked;
+      button.classList.add("is-unavailable");
+    }
 
     const main = document.createElement("span");
     main.className = "copilot-session-main";
@@ -9955,9 +10260,17 @@ function renderCopilotSessions() {
       branch.textContent = session.branch;
       context.append(branch);
     }
+    if (session.source === "remote" && session.state) {
+      const remoteState = document.createElement("span");
+      remoteState.className = "copilot-session-state";
+      const label = remoteSessionStateLabel(session.state);
+      remoteState.textContent = session.steerable ? `${label} \u00b7 steerable` : label;
+      context.append(remoteState);
+    }
     const cwd = document.createElement("span");
     cwd.className = "copilot-session-cwd";
-    cwd.textContent = session.cwd || "Working directory unavailable";
+    cwd.textContent = session.cwd
+      || (session.source === "remote" ? blocked || "Runs on the machine that started it" : "Working directory unavailable");
     main.append(title, context, cwd);
 
     const aside = document.createElement("span");
@@ -9969,7 +10282,10 @@ function renderCopilotSessions() {
     id.textContent = session.id.slice(0, 8);
     aside.append(time, id);
     button.append(main, aside);
-    button.addEventListener("click", () => resumeCopilotSession(session));
+    button.addEventListener("click", () => {
+      if (session.source === "remote") connectToRemoteCopilotSession(session);
+      else resumeCopilotSession(session);
+    });
     elements.copilotResumeList.append(button);
   }
 
@@ -10066,6 +10382,67 @@ function sameHostDirectory(left, right) {
     .replace(/\//g, "\\")
     .toLowerCase();
   return Boolean(normalize(left)) && normalize(left) === normalize(right);
+}
+
+// `copilot --connect` attaches to a session hosted on another machine, so there
+// is no working directory to confirm and nothing local to resume.
+function connectToRemoteCopilotSession(session) {
+  const id = String(session?.id || "");
+  if (!COPILOT_RESUME_ID_PATTERN.test(id)) {
+    toast("That remote session id is not valid", "warn", 2400);
+    return false;
+  }
+  const blocked = remoteSessionBlockReason(session);
+  if (blocked) {
+    toast(blocked, "warn", 3600);
+    return false;
+  }
+  const command = buildAiAssistantCommand({ provider: "copilot", connectId: id });
+  if (!command) {
+    toast("GitHub Copilot is not installed and signed in", "error", 2800);
+    return false;
+  }
+  closeCopilotResume();
+  addTerminal({
+    reveal: true,
+    runStartup: true,
+    shell: "pwsh",
+    title: `Remote \u00b7 ${copilotSessionTitle(session)}`,
+    pendingCommand: command
+  });
+  return true;
+}
+
+function connectToRemoteCopilotSessionId(rawValue) {
+  const value = String(rawValue || "").trim();
+  const id = (COPILOT_RESUME_ID_PATTERN.test(value)
+    ? value
+    : (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.exec(value) || [""])[0]).toLowerCase();
+  if (!COPILOT_RESUME_ID_PATTERN.test(id)) {
+    elements.copilotResumeStatus.textContent = "Enter a remote session id, or a github.com link containing one.";
+    elements.copilotResumeConnectId.focus();
+    return false;
+  }
+  const known = copilotResume.sessions.find((session) => session.id === id);
+  return connectToRemoteCopilotSession(known || { id, steerable: true, name: "", cwd: "", repository: "", source: "remote" });
+}
+
+// The CLI's own picker is the fallback whenever GitHub's list is unavailable or
+// the wanted session is not in it.
+function openCopilotRemotePicker() {
+  if (!aiProviderAvailableFor(aiProviderById("copilot"), "session")) {
+    toast("GitHub Copilot is not installed and signed in", "error", 2800);
+    return false;
+  }
+  closeCopilotResume();
+  addTerminal({
+    reveal: true,
+    runStartup: true,
+    shell: "pwsh",
+    title: "Copilot remote picker",
+    pendingCommand: "copilot --connect"
+  });
+  return true;
 }
 
 async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
@@ -10335,7 +10712,7 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
   { id: "terminal.paste", section: "Terminal", label: "Paste", detail: "Pastes clipboard text into the active terminal.", defaults: [{ ctrl: true, shift: true, key: "v" }], run: () => pasteIntoActive() },
   { id: "terminal.clear", section: "Terminal", label: "Clear active terminal", detail: "Clears the active terminal display.", defaults: [{ ctrl: true, shift: true, key: "l" }], run: () => clearActiveTerminal() },
   { id: "terminal.pane-zoom", section: "Terminal", label: "Maximize or restore pane", detail: "Toggles the active pane size.", defaults: [{ ctrl: true, shift: true, key: "x" }], run: () => toggleZoomPane(state.activeId) },
-  { id: "terminal.copy", section: "Terminal", label: "Copy output", detail: "Copies selected terminal output.", defaults: [{ ctrl: true, shift: true, key: "c" }], run: () => { const active = state.activeId ? state.terminals.get(state.activeId) : null; if (active) copyTerminalOutput(active.id, active.term.getSelection() || active.contextSelection || active.selectionSnapshot || undefined); } },
+  { id: "terminal.copy", section: "Terminal", label: "Copy output", detail: "Copies selected terminal output.", defaults: [{ ctrl: true, key: "c" }, { ctrl: true, shift: true, key: "c" }], run: () => { const active = state.activeId ? state.terminals.get(state.activeId) : null; if (active) copyTerminalOutput(active.id, active.term.getSelection() || active.contextSelection || active.selectionSnapshot || undefined); } },
   { id: "terminal.dequeue", section: "Terminal", label: "Dequeue next command", detail: "Inserts and runs the next staged command.", defaults: [{ ctrl: true, shift: true, key: "q" }], run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
   { id: "terminal.next", section: "Terminal", label: "Next terminal", detail: "Moves focus to the next terminal.", defaults: [{ ctrl: true, alt: true, key: "arrowright" }], run: () => cycleTerminal(1) },
   { id: "terminal.previous", section: "Terminal", label: "Previous terminal", detail: "Moves focus to the previous terminal.", defaults: [{ ctrl: true, alt: true, key: "arrowleft" }], run: () => cycleTerminal(-1) },
@@ -10410,12 +10787,50 @@ function primaryGlobalShortcutLabel(actionId) {
   return formatGlobalShortcut(globalShortcutBindings(actionId)[0]) || "Not assigned";
 }
 
+// Menus advertise a single keycap so rows stay scannable; the remaining
+// bindings surface on hover and to assistive technology.
+function shortcutHint(actionId) {
+  const bindings = globalShortcutBindings(actionId);
+  const labels = bindings.map(formatGlobalShortcut).filter(Boolean);
+  return {
+    globalShortcutAction: actionId,
+    hint: labels[0] || "",
+    hintAlternates: labels.slice(1),
+    hintAria: bindings.map(globalShortcutAria).filter(Boolean).join(" ")
+  };
+}
+
 function runGlobalShortcut(event, actionIds) {
   const actionId = actionIds.find((candidate) => globalShortcutMatches(event, candidate));
   if (!actionId) return false;
   event.preventDefault();
   GLOBAL_SHORTCUT_ACTION_BY_ID.get(actionId).run();
   return true;
+}
+
+// Unmodified clipboard/selection chords are the ones a focused editor must keep:
+// xterm runs its own copy-then-interrupt sequence, and a text field needs the
+// browser's native handling. Every other binding still dispatches globally.
+const PLAIN_EDITING_KEYS = new Set(["a", "c", "v", "x", "y", "z"]);
+const NON_TEXT_INPUT_TYPES = new Set([
+  "button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"
+]);
+
+function isPlainEditingChord(event) {
+  return event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey
+    && PLAIN_EDITING_KEYS.has(String(event.key).toLowerCase());
+}
+
+function isTextEditingTarget(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest(".terminal-pane")) return true;
+  if (target.isContentEditable) return true;
+  if (target.tagName === "TEXTAREA") return true;
+  return target.tagName === "INPUT" && !NON_TEXT_INPUT_TYPES.has(target.type);
+}
+
+function defersToFocusedEditor(event) {
+  return isPlainEditingChord(event) && isTextEditingTarget(event.target);
 }
 
 function handleShortcutsOverlayKey(event) {
@@ -10500,6 +10915,8 @@ function bindGlobalShortcuts() {
       handleShortcutsOverlayKey(event);
       return;
     }
+
+    if (defersToFocusedEditor(event)) return;
 
     if (runGlobalShortcut(event, ["app.fullscreen"])) return;
 
@@ -11581,8 +11998,15 @@ function bindScrollToBottomControl(terminal) {
   const button = terminal.pane.querySelector(".pane-scroll-bottom");
   if (!button) return;
 
+  let scrolledUp = false;
   const sync = () => {
-    button.hidden = terminal.term.buffer.active.type === "alternate";
+    const buffer = terminal.term.buffer.active;
+    button.hidden = buffer.type === "alternate";
+    // At the bottom the control has nowhere to go, so it stays a faint hint.
+    const away = buffer.viewportY < buffer.baseY;
+    if (away === scrolledUp) return;
+    scrolledUp = away;
+    button.classList.toggle("is-scrolled-up", away);
   };
 
   button.addEventListener("click", (event) => {
@@ -11596,6 +12020,10 @@ function bindScrollToBottomControl(terminal) {
     button.addEventListener(name, (event) => event.stopPropagation());
   }
   terminal.term.buffer.onBufferChange(sync);
+  // onScroll covers the user moving the viewport; onRender covers new output
+  // arriving underneath while they stay scrolled up.
+  terminal.term.onScroll(sync);
+  terminal.term.onRender(sync);
   sync();
 }
 
@@ -14495,6 +14923,255 @@ function cyclePage(direction) {
   setActivePage(state.pages[next].id);
 }
 
+/* ---------------- Copilot page grouping --------------- */
+
+const pageGrouping = { active: false, groups: [], terminalIds: [], returnFocus: null };
+
+function pageGroupingAvailable() {
+  return aiProviderAvailableFor(aiProviderById("copilot"), "title");
+}
+
+function updatePageGroupButton() {
+  const button = elements.pagerGroup;
+  if (!button) return;
+  const live = [...state.terminals.values()].filter((terminal) => terminal.status !== "exited");
+  const ready = pageGroupingAvailable();
+  button.disabled = pageGrouping.active || live.length < 2 || !ready;
+  button.title = !ready
+    ? "GitHub Copilot is not signed in, so pages cannot be grouped."
+    : live.length < 2
+      ? "Open at least two terminals to group them into pages."
+      : "Group terminals into pages with Copilot";
+  button.setAttribute("aria-label", button.title);
+}
+
+// Each terminal gets a fair share of the configured title-context budget so a
+// busy workspace cannot silently blow past the limit the user set.
+function buildTerminalGroupCatalog() {
+  const terminals = [...state.terminals.values()].filter((terminal) => terminal.status !== "exited");
+  const budget = clampCopilotTitleContextKb(state.settings.copilotTitleContextKb) * 1024;
+  const perTerminal = terminals.length > 0 ? Math.max(512, Math.floor(budget / terminals.length)) : 0;
+  const encoder = new TextEncoder();
+  const catalog = terminals.map((terminal) => {
+    const text = terminalBufferText(terminal.term).trim();
+    const encoded = encoder.encode(text);
+    const excerpt = encoded.length <= perTerminal
+      ? text
+      : new TextDecoder().decode(encoded.slice(-perTerminal)).replace(/^\uFFFD/, "");
+    return {
+      id: terminal.id,
+      title: terminal.titleInput.value || "",
+      shell: terminal.shell || "",
+      cwd: terminal.cwd || "",
+      page: pageName(terminal.pageId) || "",
+      excerpt
+    };
+  });
+  return { terminals, catalog };
+}
+
+function positionPageGroupFlyout() {
+  const flyout = elements.pageGroupFlyout;
+  const anchor = elements.pagerGroup;
+  if (!flyout || !anchor || flyout.hidden) return;
+  const anchorRect = anchor.getBoundingClientRect();
+  const rect = flyout.getBoundingClientRect();
+  const left = Math.max(12, Math.min(
+    anchorRect.left + anchorRect.width / 2 - rect.width / 2,
+    window.innerWidth - rect.width - 12
+  ));
+  const below = anchorRect.bottom + 7;
+  const top = below + rect.height > window.innerHeight - 12
+    ? Math.max(12, anchorRect.top - rect.height - 7)
+    : below;
+  flyout.style.left = `${left}px`;
+  flyout.style.top = `${top}px`;
+}
+
+function openPageGroupFlyout() {
+  pageGrouping.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  elements.pageGroupList.textContent = "";
+  elements.pageGroupApply.disabled = true;
+  elements.pageGroupFlyout.hidden = false;
+  elements.pagerGroup?.setAttribute("aria-expanded", "true");
+  refreshIcons(elements.pageGroupFlyout);
+  positionPageGroupFlyout();
+}
+
+function closePageGroupFlyout({ restoreFocus = true } = {}) {
+  if (elements.pageGroupFlyout.hidden) return;
+  const returnFocus = pageGrouping.returnFocus;
+  elements.pageGroupFlyout.hidden = true;
+  elements.pagerGroup?.setAttribute("aria-expanded", "false");
+  pageGrouping.groups = [];
+  pageGrouping.terminalIds = [];
+  pageGrouping.returnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+
+function renderPageGroupProposal(groups) {
+  const list = elements.pageGroupList;
+  list.textContent = "";
+  for (const group of groups) {
+    const item = document.createElement("div");
+    item.className = "page-group-item";
+    const name = document.createElement("strong");
+    name.textContent = group.name;
+    const members = document.createElement("ul");
+    for (const terminalId of group.terminals) {
+      const entry = document.createElement("li");
+      const terminal = state.terminals.get(terminalId);
+      entry.textContent = terminal?.titleInput.value || terminalId;
+      members.append(entry);
+    }
+    item.append(name, members);
+    list.append(item);
+  }
+  positionPageGroupFlyout();
+}
+
+function normalizePageGroupResponse(groups, allowed) {
+  if (!Array.isArray(groups)) return [];
+  const used = new Set();
+  const normalized = [];
+  for (const candidate of groups) {
+    const name = String(candidate?.name || "").trim().slice(0, 40);
+    const terminals = (Array.isArray(candidate?.terminals) ? candidate.terminals : [])
+      .filter((id) => typeof id === "string" && allowed.has(id) && !used.has(id));
+    for (const id of terminals) used.add(id);
+    if (!name || terminals.length === 0) continue;
+    normalized.push({ name, terminals });
+  }
+  return used.size === allowed.size ? normalized : [];
+}
+
+async function groupPagesWithAi() {
+  if (pageGrouping.active) return false;
+  const { terminals, catalog } = buildTerminalGroupCatalog();
+  if (terminals.length < 2) {
+    toast("Open at least two terminals to group them into pages", "info", 2400);
+    return false;
+  }
+  if (!pageGroupingAvailable()) {
+    toast("GitHub Copilot is not signed in, so pages cannot be grouped", "error", 3200);
+    return false;
+  }
+
+  pageGrouping.active = true;
+  updatePageGroupButton();
+  openPageGroupFlyout();
+  elements.pageGroupStatus.textContent = `Copilot is grouping ${terminals.length} terminals\u2026`;
+  try {
+    const response = await requestBridge({
+      type: "groupTerminalPages",
+      terminals: JSON.stringify(catalog),
+      contextKb: Number(state.settings.copilotSessionSearchContextKb),
+      model: state.settings.copilotTitleModel,
+      effort: state.settings.copilotTitleEffort,
+      context: state.settings.copilotTitleContext
+    }, { timeout: 200000 });
+
+    if (!response) {
+      elements.pageGroupStatus.textContent = bridgeSilenceReason("group these terminals");
+      return false;
+    }
+    if (response.error) {
+      elements.pageGroupStatus.textContent = response.error;
+      return false;
+    }
+    const allowed = new Set(terminals.map((terminal) => terminal.id));
+    const groups = normalizePageGroupResponse(response.groups, allowed);
+    if (groups.length === 0) {
+      elements.pageGroupStatus.textContent = "Copilot did not place every terminal into exactly one group.";
+      return false;
+    }
+    pageGrouping.groups = groups;
+    pageGrouping.terminalIds = [...allowed];
+    elements.pageGroupStatus.textContent = `${groups.length} page${groups.length === 1 ? "" : "s"} proposed. Review, then Apply.`;
+    elements.pageGroupApply.disabled = false;
+    renderPageGroupProposal(groups);
+    return true;
+  } finally {
+    pageGrouping.active = false;
+    updatePageGroupButton();
+  }
+}
+
+// The proposal names terminals by id, so it is only valid while exactly those
+// terminals are still live.
+function pageGroupProposalIsCurrent(terminalIds) {
+  const live = [...state.terminals.values()]
+    .filter((terminal) => terminal.status !== "exited")
+    .map((terminal) => terminal.id);
+  return live.length === terminalIds.length && terminalIds.every((id) => state.terminals.has(id));
+}
+
+function applyTerminalPageGroups(groups, terminalIds) {
+  if (!pageGroupProposalIsCurrent(terminalIds)) return false;
+
+  batchTerminalWork(() => {
+    const byName = new Map(state.pages.map((page) => [page.name.toLowerCase(), page]));
+    const keep = new Set();
+    for (const group of groups) {
+      let page = byName.get(group.name.toLowerCase());
+      if (!page) {
+        page = { id: uniquePageId(), name: group.name };
+        state.pages.push(page);
+        byName.set(group.name.toLowerCase(), page);
+      }
+      keep.add(page.id);
+      for (const terminalId of group.terminals) {
+        const terminal = state.terminals.get(terminalId);
+        if (terminal) terminal.pageId = page.id;
+      }
+    }
+    state.pages = state.pages.filter((page) => keep.has(page.id) || terminalsOnPage(page.id).length > 0);
+    if (state.pages.length === 0) state.pages = defaultPages();
+    const active = state.activeId ? state.terminals.get(state.activeId) : null;
+    if (!active || !pageById(active.pageId)) state.activePageId = state.pages[0].id;
+    else state.activePageId = active.pageId;
+    savePages();
+    saveTerminalPages();
+    renderPager();
+    saveSessionSnapshot();
+    applySettings();
+  });
+
+  applyPageVisibility();
+  applyZoom();
+  updateTerminalActions();
+  window.requestAnimationFrame(() => fitAllTerminals());
+  return true;
+}
+
+function confirmPageGroupProposal() {
+  const { groups, terminalIds } = pageGrouping;
+  if (groups.length === 0) return false;
+  if (!applyTerminalPageGroups(groups, terminalIds)) {
+    elements.pageGroupStatus.textContent = "The open terminals changed while Copilot was working. Group them again.";
+    elements.pageGroupApply.disabled = true;
+    pageGrouping.groups = [];
+    return false;
+  }
+  closePageGroupFlyout();
+  toast(`Grouped terminals into ${groups.length} page${groups.length === 1 ? "" : "s"}`, "success", 2400);
+  return true;
+}
+
+function bindPageGrouping() {
+  elements.pagerGroup?.addEventListener("click", groupPagesWithAi);
+  elements.pageGroupApply?.addEventListener("click", confirmPageGroupProposal);
+  elements.pageGroupCancel?.addEventListener("click", () => closePageGroupFlyout());
+  elements.pageGroupClose?.addEventListener("click", () => closePageGroupFlyout());
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || elements.pageGroupFlyout.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closePageGroupFlyout();
+  }, true);
+  window.addEventListener("resize", positionPageGroupFlyout);
+}
+
 const PAGER_PLACEMENTS = new Set(["top", "bottom", "left", "right"]);
 const PAGER_DOCK_DRAG_THRESHOLD = 12;
 
@@ -14567,13 +15244,13 @@ function togglePagerPanel() {
 function showPagerPlacementMenu(x, y) {
   const current = normalizedPagerPlacement();
   renderContextMenu([
-    { label: "Open new page", icon: "plus", run: () => addPage() },
+    { label: "Open new page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage() },
     { separator: true },
-    { label: "Move pages to top", icon: "panel-top", disabled: current === "top", run: () => setPagerPlacement("top") },
-    { label: "Move pages to bottom", icon: "panel-bottom", disabled: current === "bottom", run: () => setPagerPlacement("bottom") },
+    { label: "Move pages to top", icon: "panel-top", shortcutId: "pager.move-top", disabled: current === "top", run: () => setPagerPlacement("top") },
+    { label: "Move pages to bottom", icon: "panel-bottom", shortcutId: "pager.move-bottom", disabled: current === "bottom", run: () => setPagerPlacement("bottom") },
     { separator: true },
-    { label: "Move pages to left", icon: "panel-left", disabled: current === "left", run: () => setPagerPlacement("left") },
-    { label: "Move pages to right", icon: "panel-right", disabled: current === "right", run: () => setPagerPlacement("right") }
+    { label: "Move pages to left", icon: "panel-left", shortcutId: "pager.move-left", disabled: current === "left", run: () => setPagerPlacement("left") },
+    { label: "Move pages to right", icon: "panel-right", shortcutId: "pager.move-right", disabled: current === "right", run: () => setPagerPlacement("right") }
   ]);
   showBuiltContextMenu(x, y);
 }
@@ -14791,6 +15468,7 @@ function renderPager() {
     list.append(chip);
   }
   refreshIcons();
+  updatePageGroupButton();
   window.requestAnimationFrame(() => {
     const active = list.querySelector(".pager-chip.is-active");
     if (active?.isConnected) active.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -14963,16 +15641,16 @@ function bindPager() {
     const page = pageById(chip.dataset.pageId);
     if (!page) return;
     const items = [
-      { label: "Rename\u2026", icon: "pencil", run: () => startPageRename(chip) },
+      { label: "Rename\u2026", icon: "pencil", shortcutId: "page.rename", run: () => startPageRename(chip) },
       { separator: true, spacious: true },
-      { label: "New page", icon: "plus", run: () => addPage() }
+      { label: "New page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage() }
     ];
     items.push({ separator: true, spacious: true });
     if (state.pages.length > 1) {
-      items.push({ label: "Close page", icon: "x", danger: true, run: () => requestPageClose(page.id) });
-      items.push({ label: "Close other pages", icon: "x-square", danger: true, run: () => requestCloseOtherPages(page.id) });
+      items.push({ label: "Close page", icon: "x", shortcutId: "page.close", danger: true, run: () => requestPageClose(page.id) });
+      items.push({ label: "Close other pages", icon: "x-square", shortcutId: "page.close-others", danger: true, run: () => requestCloseOtherPages(page.id) });
     }
-    items.push({ label: "Close all", icon: "trash-2", danger: true, run: requestCloseAllPages });
+    items.push({ label: "Close all", icon: "trash-2", shortcutId: "page.close-all", danger: true, run: requestCloseAllPages });
     renderContextMenu(items);
     showBuiltContextMenu(event.clientX, event.clientY);
   });
@@ -15706,8 +16384,208 @@ function bindHeaderBackgroundEditor() {
   });
 }
 
-/* ---------------- Bell notifications --------------- */
+/* ------------ Header background quick picker ------------ */
 
+// A one-click swatch produces the same two-stop shape the full editor writes,
+// so the quick picker and the dialog stay interchangeable.
+function headerBackgroundFromColor(hex) {
+  const base = String(hex || "").toUpperCase();
+  if (!/^#[0-9A-F]{6}$/.test(base)) return null;
+  const average = [1, 3, 5].reduce((total, offset) => total + Number.parseInt(base.slice(offset, offset + 2), 16), 0) / 3;
+  return normalizeHeaderBackground({
+    type: "linear",
+    angle: 135,
+    centerX: 50,
+    centerY: 50,
+    shape: "ellipse",
+    stops: [
+      { color: base, opacity: 100, position: 0 },
+      { color: shiftHeaderGradientColor(base, average > 160 ? -26 : 26), opacity: 100, position: 100 }
+    ]
+  });
+}
+
+function renderHeaderBackgroundFlyout() {
+  const terminal = state.terminals.get(headerBackgroundFlyoutId);
+  if (!terminal) {
+    closeHeaderBackgroundFlyout();
+    return;
+  }
+  elements.headerBackgroundFlyoutSubtitle.textContent = terminal.titleInput.value || "Terminal";
+  const current = headerBackgroundCss(terminal.headerBackground);
+  renderHeaderBackgroundSwatches(elements.headerBackgroundFlyoutSwatches, HEADER_BACKGROUND_QUICK_COLORS, current);
+  const custom = headerBackgroundCustomColors();
+  elements.headerBackgroundFlyoutCustomRow.hidden = custom.length === 0;
+  renderHeaderBackgroundSwatches(elements.headerBackgroundFlyoutCustomSwatches, custom, current);
+  const firstStop = terminal.headerBackground?.stops?.[0]?.color;
+  if (firstStop) elements.headerBackgroundFlyoutColor.value = firstStop.toLowerCase();
+  elements.headerBackgroundFlyoutReset.disabled = !terminal.headerBackground;
+}
+
+function renderHeaderBackgroundSwatches(container, colors, current) {
+  container.replaceChildren();
+  for (const color of colors) {
+    const background = headerBackgroundFromColor(color);
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "header-background-swatch";
+    swatch.dataset.headerBackgroundColor = color;
+    swatch.style.background = headerBackgroundCss(background);
+    swatch.title = color;
+    swatch.setAttribute("aria-label", `Header background ${color}`);
+    swatch.setAttribute("aria-pressed", String(Boolean(current) && current === headerBackgroundCss(background)));
+    container.append(swatch);
+  }
+}
+
+// Newest first, so the oldest pick is the one that falls off the end.
+function headerBackgroundCustomColors() {
+  const stored = Array.isArray(state.settings.headerBackgroundCustomColors)
+    ? state.settings.headerBackgroundCustomColors
+    : [];
+  const seen = new Set(HEADER_BACKGROUND_QUICK_COLORS);
+  const colors = [];
+  for (const entry of stored) {
+    const color = String(entry || "").toUpperCase();
+    if (!/^#[0-9A-F]{6}$/.test(color) || seen.has(color)) continue;
+    seen.add(color);
+    colors.push(color);
+    if (colors.length >= HEADER_BACKGROUND_CUSTOM_LIMIT) break;
+  }
+  state.settings.headerBackgroundCustomColors = colors;
+  return colors;
+}
+
+function rememberHeaderBackgroundCustomColor(hex) {
+  const color = String(hex || "").toUpperCase();
+  // A preset is already one click away, so it never consumes a custom slot.
+  if (!/^#[0-9A-F]{6}$/.test(color) || HEADER_BACKGROUND_QUICK_COLORS.includes(color)) return;
+  const colors = headerBackgroundCustomColors().filter((entry) => entry !== color);
+  colors.unshift(color);
+  state.settings.headerBackgroundCustomColors = colors.slice(0, HEADER_BACKGROUND_CUSTOM_LIMIT);
+  saveSettings();
+}
+
+function setHeaderBackgroundFromFlyout(color, { persist = true } = {}) {
+  const terminal = state.terminals.get(headerBackgroundFlyoutId);
+  const background = headerBackgroundFromColor(color);
+  if (!terminal || !background) return;
+  terminal.headerBackground = background;
+  applyTerminalHeaderBackground(terminal);
+  // Dragging the color well fires continuously, so the snapshot waits for the
+  // committed value rather than rewriting storage on every intermediate hue.
+  if (persist) saveSessionSnapshot();
+  renderHeaderBackgroundFlyout();
+}
+
+function clearHeaderBackgroundFromFlyout() {
+  const terminal = state.terminals.get(headerBackgroundFlyoutId);
+  if (!terminal) return;
+  terminal.headerBackground = null;
+  applyTerminalHeaderBackground(terminal);
+  saveSessionSnapshot();
+  renderHeaderBackgroundFlyout();
+}
+
+function positionHeaderBackgroundFlyout(anchor) {
+  const flyout = elements.headerBackgroundFlyout;
+  const anchorRect = anchor.getBoundingClientRect();
+  flyout.classList.add("is-positioning");
+  flyout.hidden = false;
+  flyout.style.left = "0px";
+  flyout.style.top = "0px";
+  const rect = flyout.getBoundingClientRect();
+  const centered = anchorRect.left + (anchorRect.width - rect.width) / 2;
+  const left = Math.max(8, Math.min(centered, window.innerWidth - rect.width - 8));
+  const below = anchorRect.bottom + 7;
+  const top = below + rect.height <= window.innerHeight - 8
+    ? below
+    : Math.max(8, anchorRect.top - rect.height - 7);
+  flyout.style.left = `${left}px`;
+  flyout.style.top = `${top}px`;
+  flyout.classList.remove("is-positioning");
+}
+
+function openHeaderBackgroundFlyout(terminal, anchor) {
+  if (!terminal || !anchor) return;
+  closeHeaderActionScopeFlyout();
+  closeTerminalNotificationFlyout();
+  closeTerminalNotesFlyout();
+  hideContextMenu();
+  if (headerBackgroundFlyoutAnchor && headerBackgroundFlyoutAnchor !== anchor) {
+    headerBackgroundFlyoutAnchor.setAttribute("aria-expanded", "false");
+  }
+  headerBackgroundFlyoutId = terminal.id;
+  headerBackgroundFlyoutAnchor = anchor;
+  if (anchor.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "true");
+  renderHeaderBackgroundFlyout();
+  refreshIcons(elements.headerBackgroundFlyout);
+  positionHeaderBackgroundFlyout(anchor);
+  elements.headerBackgroundFlyout.querySelector(".header-background-swatch")?.focus({ preventScroll: true });
+}
+
+function closeHeaderBackgroundFlyout({ restoreFocus = false } = {}) {
+  const anchor = headerBackgroundFlyoutAnchor;
+  elements.headerBackgroundFlyout.hidden = true;
+  headerBackgroundFlyoutId = null;
+  headerBackgroundFlyoutAnchor = null;
+  if (anchor?.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
+}
+
+function toggleHeaderBackgroundFlyout(terminal, anchor) {
+  if (headerBackgroundFlyoutId === terminal.id && headerBackgroundFlyoutAnchor === anchor
+      && !elements.headerBackgroundFlyout.hidden) {
+    closeHeaderBackgroundFlyout({ restoreFocus: true });
+    return;
+  }
+  openHeaderBackgroundFlyout(terminal, anchor);
+}
+
+function bindHeaderBackgroundFlyout() {
+  if (!elements.headerBackgroundFlyout) return;
+  elements.headerBackgroundFlyoutSwatches.addEventListener("click", (event) => {
+    const swatch = event.target.closest("[data-header-background-color]");
+    if (swatch) setHeaderBackgroundFromFlyout(swatch.dataset.headerBackgroundColor);
+  });
+  elements.headerBackgroundFlyoutCustomSwatches.addEventListener("click", (event) => {
+    const swatch = event.target.closest("[data-header-background-color]");
+    if (swatch) setHeaderBackgroundFromFlyout(swatch.dataset.headerBackgroundColor);
+  });
+  elements.headerBackgroundFlyoutColor.addEventListener("input", () => {
+    setHeaderBackgroundFromFlyout(elements.headerBackgroundFlyoutColor.value, { persist: false });
+  });
+  elements.headerBackgroundFlyoutColor.addEventListener("change", () => {
+    // Only the committed value earns a slot; dragging the well fires constantly.
+    rememberHeaderBackgroundCustomColor(elements.headerBackgroundFlyoutColor.value);
+    setHeaderBackgroundFromFlyout(elements.headerBackgroundFlyoutColor.value);
+  });
+  elements.headerBackgroundFlyoutReset.addEventListener("click", clearHeaderBackgroundFromFlyout);
+  elements.headerBackgroundFlyoutMore.addEventListener("click", () => {
+    const terminal = state.terminals.get(headerBackgroundFlyoutId);
+    closeHeaderBackgroundFlyout();
+    if (terminal) openHeaderBackgroundEditor(terminal);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (elements.headerBackgroundFlyout.hidden) return;
+    if (elements.headerBackgroundFlyout.contains(event.target)
+      || headerBackgroundFlyoutAnchor?.contains(event.target)) return;
+    closeHeaderBackgroundFlyout();
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || elements.headerBackgroundFlyout.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeHeaderBackgroundFlyout({ restoreFocus: true });
+  }, true);
+  window.addEventListener("resize", () => {
+    if (!elements.headerBackgroundFlyout.hidden && headerBackgroundFlyoutAnchor?.isConnected) {
+      positionHeaderBackgroundFlyout(headerBackgroundFlyoutAnchor);
+    }
+  });
+}
+
+/* ---------------- Bell notifications --------------- */
 function handleBell(terminal) {
   if (!terminalNotificationEnabled(terminal, "bell")) return;
 
@@ -15736,6 +16614,9 @@ function saveSessionSnapshot() {
     notificationOverrides: { ...terminal.notificationOverrides },
     minimized: terminal.minimized,
     pageId: terminal.pageId,
+    remoteEnabledAt: terminal.remoteEnabledAt,
+    remoteSessionId: terminal.remoteSessionId,
+    remoteSessionUrl: terminal.remoteSessionUrl,
     tmux: terminal.tmux
   }));
   localStorage.setItem("multiterm.lastSession", JSON.stringify(snapshot));
@@ -16287,6 +17168,7 @@ function positionTerminalNotesFlyout(anchor) {
 function openTerminalNotesFlyout(terminal, anchor) {
   closeHeaderActionScopeFlyout();
   closeTerminalNotificationFlyout();
+  closeHeaderBackgroundFlyout();
   hideContextMenu();
   if (terminalNotesFlyoutAnchor && terminalNotesFlyoutAnchor !== anchor) {
     if (terminalNotesFlyoutAnchor.getAttribute("aria-haspopup") === "dialog") {
@@ -20928,10 +21810,10 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
 
   const items = [
     { group: "Clipboard", groupId: "clipboard" },
-    { label: "Copy", hint: "Ctrl+Shift+C", icon: "clipboard-copy", shortcutId: "terminal.copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
+    { label: "Copy", ...shortcutHint("terminal.copy"), icon: "clipboard-copy", shortcutId: "terminal.copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
     { label: "Copy and prepare\u2026", icon: "notebook-pen", shortcutId: "terminal.copy-prepare", disabled: !hasSelection, run: () => openPrepareEditor(selection, terminal.id) },
     { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { forgetTerminalSelection(terminal); copyTerminalOutput(terminal.id); } },
-    { label: "Paste", hint: "Ctrl+Shift+V", icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
+    { label: "Paste", ...shortcutHint("terminal.paste"), icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
     { label: "Prepare and paste\u2026", icon: "clipboard-pen", shortcutId: "terminal.prepare-paste", run: () => openPrepareAndPaste(terminal) },
     {
       label: "Paste and execute",
@@ -20942,8 +21824,8 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     },
     { label: "Select all", hint: "Ctrl+A", icon: "text-select", shortcutId: "terminal.select-all", run: () => terminal.term.selectAll() },
     { group: "Find & context", groupId: "find-context" },
-    { label: "Find\u2026", hint: "Ctrl+F", icon: "search", shortcutId: "terminal.find", run: () => openFind(terminal) },
-    { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", shortcutId: "terminal.find-all", run: openFindAll },
+    { label: "Find\u2026", ...shortcutHint("terminal.find"), icon: "search", shortcutId: "terminal.find", run: () => openFind(terminal) },
+    { label: "Find in all terminals\u2026", ...shortcutHint("terminal.find-all"), icon: "search", shortcutId: "terminal.find-all", run: openFindAll },
     {
       label: hasSelection
         ? `Search all terminals for \u201c${searchSelectionPreview(selection)}\u201d`
@@ -20954,8 +21836,8 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       disabled: !hasSelection,
       run: () => searchAllTerminalsForSelection(terminal, selection)
     },
-    { label: "Clear", hint: "Ctrl+Shift+L", icon: "eraser", shortcutId: "terminal.clear", run: () => clearTerminal(terminal.id) },
-    { label: isZoomed ? "Restore size" : "Maximize", hint: "Ctrl+Shift+X", icon: isZoomed ? "minimize-2" : "maximize-2", shortcutId: "terminal.zoom", run: () => toggleZoomPane(terminal.id) },
+    { label: "Clear", ...shortcutHint("terminal.clear"), icon: "eraser", shortcutId: "terminal.clear", run: () => clearTerminal(terminal.id) },
+    { label: isZoomed ? "Restore size" : "Maximize", ...shortcutHint("terminal.pane-zoom"), icon: isZoomed ? "minimize-2" : "maximize-2", shortcutId: "terminal.zoom", run: () => toggleZoomPane(terminal.id) },
     { label: "Terminal statistics\u2026", icon: "activity", shortcutId: "terminal.statistics", run: () => openStatistics(terminal.id) },
     { label: "Notes\u2026", icon: "notebook-pen", shortcutId: "terminal.notes", run: () => openTerminalArtifacts(terminal.id) },
     { label: "Send to terminal\u2026", icon: "messages-square", shortcutId: "terminal.send-message", run: () => openTerminalMessages(terminal.id) },
@@ -20964,6 +21846,11 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { label: "Open folder", icon: "folder-open", shortcutId: "terminal.open-folder", run: () => revealTerminalCwd(terminal) },
     { label: "New terminal here", icon: "folder-plus", shortcutId: "terminal.new-here", run: () => addTerminal({ reveal: true, runStartup: true, cwd: terminal.cwd }) },
     { label: "Change working directory\u2026", icon: "folder-input", shortcutId: "terminal.change-cwd", run: () => openCwdChange(terminal) },
+    { label: "New Administrator terminal", icon: "shield", shortcutId: "terminal.new-admin", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
+    { label: "Run script\u2026", icon: "file-code", shortcutId: "terminal.run-script", run: () => browseAndRunScript(terminal.id) },
+    ...buildLoggingMenuItems(terminal),
+    ...(snippetItems.length ? [{ group: "Snippets", groupId: "snippets" }, ...snippetItems] : []),
+    { group: "AI assistant", groupId: "ai-assistant" },
     {
       label: `Run ${assistantName}`,
       icon: "bot",
@@ -20994,6 +21881,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       disabled: !assistantAvailable,
       run: () => openCopilotResume(terminal)
     },
+    ...buildCopilotRemoteMenuItem(terminal),
     {
       input: true,
       label: `${assistantName} model`,
@@ -21018,9 +21906,6 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       suggestions: state.copilotCwdHistory,
       run: (value) => sendCopilotCwd(terminal, value)
     },
-    { label: "New Administrator terminal", icon: "shield", shortcutId: "terminal.new-admin", run: () => newAdminTerminal({ shell: terminal.shell, cwd: terminal.cwd }) },
-    { label: "Run script\u2026", icon: "file-code", shortcutId: "terminal.run-script", run: () => browseAndRunScript(terminal.id) },
-    ...buildLoggingMenuItems(terminal),
     ...(snippetItems.length ? [{ group: "Snippets", groupId: "snippets" }, ...snippetItems] : []),
     { group: "Session", groupId: "session" },
     {
@@ -21039,11 +21924,11 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         notificationOverrides: { ...terminal.notificationOverrides }
       })
     },
-    { label: "Restart", hint: "Ctrl+Shift+R", icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
+    { label: "Restart", ...shortcutHint("terminal.restart"), icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
     { label: "Cycle color", icon: "tag", shortcutId: "terminal.cycle-color", run: () => cyclePaneColor(terminal) },
     { label: "Header background\u2026", icon: "palette", shortcutId: "terminal.header-background", run: () => openHeaderBackgroundEditor(terminal) },
     ...buildMoveToPageItems(terminal),
-    { label: "Close", hint: "Ctrl+Shift+W", icon: "x", shortcutId: "terminal.close", danger: true, run: () => removeTerminal(terminal.id) }
+    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", shortcutId: "terminal.close", danger: true, run: () => removeTerminal(terminal.id) }
   ];
 
   renderContextMenu(items, {
@@ -21059,9 +21944,18 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
 // command early and run whatever followed it as a shell command.
 function sendTerminalSlashCommand(terminal, command, rawValue) {
   const value = safeTerminalCommand(rawValue);
-  if (!terminal || !value) return false;
+  if (!value) return false;
+  return sendTerminalSlashDirective(terminal, command, value);
+}
+
+// Same filtering as above for slash commands whose argument is optional, so a
+// bare `/remote` can be sent without inventing a placeholder value.
+function sendTerminalSlashDirective(terminal, command, rawValue = "") {
+  if (!terminal) return false;
+  const value = rawValue ? safeTerminalCommand(rawValue) : "";
+  if (rawValue && !value) return false;
   sendBridge({ type: "input", id: terminal.id, data: COPILOT_CLEAR_PROMPT });
-  return sendBridge({ type: "input", id: terminal.id, data: `/${command} ${value}\r` });
+  return sendBridge({ type: "input", id: terminal.id, data: `/${command}${value ? ` ${value}` : ""}\r` });
 }
 
 function rememberCopilotCwd(value) {
@@ -21096,6 +21990,8 @@ function quotedAiArgument(value) {
 function buildAiAssistantCommand({
   provider = state.settings.aiSessionProvider,
   resumeId = "",
+  connectId = "",
+  remote = provider === "copilot" && state.settings.copilotRemoteSessions,
   model = state.settings.aiSessionModel,
   effort = state.settings.aiSessionEffort,
   context = state.settings.aiSessionContext
@@ -21104,9 +22000,16 @@ function buildAiAssistantCommand({
   const parts = provider === "claude"
     ? ["claude", "--dangerously-skip-permissions"]
     : ["copilot", "--yolo"];
-  if (resumeId && COPILOT_RESUME_ID_PATTERN.test(resumeId)) {
+  const connect = provider === "copilot" && COPILOT_RESUME_ID_PATTERN.test(connectId) ? connectId : "";
+  // --connect and --resume compete for the session the CLI opens, so the
+  // remote id always wins and the local one is dropped.
+  if (connect) {
+    parts.push(`--connect=${connect}`);
+  } else if (resumeId && COPILOT_RESUME_ID_PATTERN.test(resumeId)) {
     parts.push("--resume", quotedAiArgument(resumeId));
   }
+  // Passing nothing when the toggle is off leaves ~/.copilot/settings.json authoritative.
+  if (provider === "copilot" && remote && !connect) parts.push("--remote");
   const modelArgument = quotedAiArgument(model);
   if (modelArgument) parts.push("--model", modelArgument);
   if (COPILOT_TITLE_EFFORTS.has(effort) && effort !== "none") {
@@ -21118,6 +22021,92 @@ function buildAiAssistantCommand({
   return parts.filter(Boolean).join(" ");
 }
 
+// Remote control is a Copilot CLI feature and is also gated by an organization
+// policy, so a pane only offers it once its own TUI has been identified.
+function copilotRemoteReadiness(terminal) {
+  if (cwdTerminalProvider(terminal) !== "copilot") {
+    return { ready: false, reason: "This terminal is not running a GitHub Copilot CLI session." };
+  }
+  const readiness = terminalExecutionReadiness(terminal);
+  if (readiness.mode !== "copilot" || !readiness.ready) {
+    return { ready: false, reason: "Wait for the Copilot prompt to be idle before changing remote control." };
+  }
+  return { ready: true, reason: "" };
+}
+
+function sendCopilotRemoteCommand(terminal, mode = "") {
+  const readiness = copilotRemoteReadiness(terminal);
+  if (!readiness.ready) {
+    toast(readiness.reason, "warn", 3000);
+    return false;
+  }
+  setAwaitingInput(terminal, false);
+  const sent = sendTerminalSlashDirective(terminal, "remote", mode);
+  if (sent && mode !== "off") scheduleRemoteSessionLinkCheck(terminal);
+  if (sent && mode === "off") clearTerminalRemoteSession(terminal);
+  window.requestAnimationFrame(() => terminal.term.focus());
+  return sent;
+}
+
+function sendCopilotKeepAlive(terminal, rawValue) {
+  const value = normalizeCopilotKeepAlive(rawValue);
+  const readiness = copilotRemoteReadiness(terminal);
+  if (!readiness.ready) {
+    toast(readiness.reason, "warn", 3000);
+    return false;
+  }
+  setAwaitingInput(terminal, false);
+  const sent = sendTerminalSlashDirective(terminal, "keep-alive", value);
+  window.requestAnimationFrame(() => terminal.term.focus());
+  return sent;
+}
+
+function buildCopilotRemoteMenuItem(terminal) {
+  if (state.settings.aiSessionProvider !== "copilot") return [];
+  const readiness = copilotRemoteReadiness(terminal);
+  const url = terminal.remoteSessionUrl || "";
+  const keepAlive = normalizeCopilotKeepAlive(state.settings.copilotRemoteKeepAlive);
+  return [{
+    label: url ? "Remote control (on)" : "Remote control",
+    icon: "radio-tower",
+    customizationId: "terminal.copilot-remote",
+    title: readiness.ready
+      ? "Watch this session and answer its prompts from GitHub.com or GitHub Mobile"
+      : readiness.reason,
+    submenu: [
+      { label: "Enable remote control", icon: "play", disabled: !readiness.ready, run: () => sendCopilotRemoteCommand(terminal, "on") },
+      { label: "Show status and link", icon: "info", disabled: !readiness.ready, run: () => sendCopilotRemoteCommand(terminal, "") },
+      { label: "Disable remote control", icon: "square", disabled: !readiness.ready, run: () => sendCopilotRemoteCommand(terminal, "off") },
+      { separator: true },
+      {
+        label: "Open session on GitHub",
+        icon: "external-link",
+        disabled: !url,
+        title: url || "MultiTerm has not seen a remote session link for this terminal yet.",
+        run: () => openReleasePage(url)
+      },
+      { label: "Copy session link", icon: "link", disabled: !url, run: () => copyRemoteSessionLink(terminal) },
+      { separator: true },
+      { label: "Keep awake while running", icon: keepAlive === "on" ? "check" : "coffee", disabled: !readiness.ready, run: () => sendCopilotKeepAlive(terminal, "on") },
+      { label: "Keep awake while busy", icon: keepAlive === "busy" ? "check" : "coffee", disabled: !readiness.ready, run: () => sendCopilotKeepAlive(terminal, "busy") },
+      { label: "Let the machine sleep", icon: keepAlive === "off" ? "check" : "moon", disabled: !readiness.ready, run: () => sendCopilotKeepAlive(terminal, "off") }
+    ]
+  }];
+}
+
+async function copyRemoteSessionLink(terminal) {
+  const url = terminal?.remoteSessionUrl;
+  if (!url) return false;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Remote session link copied", "success", 1800);
+    return true;
+  } catch {
+    toast("Could not copy the remote session link", "error", 2400);
+    return false;
+  }
+}
+
 function invokeAiAssistant(terminal) {
   const command = buildAiAssistantCommand();
   if (!command || !aiAssistantAvailable()) {
@@ -21127,8 +22116,19 @@ function invokeAiAssistant(terminal) {
   setAwaitingInput(terminal, false);
   if (!sendBridge({ type: "input", id: terminal.id, data: command })) return false;
   sendBridge({ type: "input", id: terminal.id, data: "\r" });
+  if (command.includes("--remote")) noteRemoteAssistantLaunch(terminal);
   window.requestAnimationFrame(() => terminal.term.focus());
   return true;
+}
+
+// A `--remote` launch prints its link during startup, so the scan starts with
+// the command and the configured keep-alive follows once the TUI is idle.
+function noteRemoteAssistantLaunch(terminal) {
+  if (!terminal) return;
+  scheduleRemoteSessionLinkCheck(terminal);
+  const keepAlive = normalizeCopilotKeepAlive(state.settings.copilotRemoteKeepAlive);
+  if (keepAlive === "off") return;
+  terminal.pendingKeepAlive = keepAlive;
 }
 
 function launchAiAssistant() {
@@ -21177,12 +22177,12 @@ function buildSurfaceContextMenu() {
   const invokedTerminalId = state.activeId;
 
   renderContextMenu([
-    { label: "New terminal", hint: primaryGlobalShortcutLabel("terminal.new"), icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
-    { label: "New terminal here", icon: "folder-plus", title: here || undefined, disabled: !here, run: () => newTerminal({ cwd: here }) },
-    { label: "Paste and execute", icon: "clipboard-check", title: "Pastes clipboard text and immediately presses Enter", run: pasteAndExecute },
-    { label: "New Administrator terminal", icon: "shield", run: () => newAdminTerminal({ cwd: here || undefined, runStartup: true }) },
-    { label: "Run script\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here }) },
-    { label: "Run script as Administrator\u2026", icon: "file-code", run: () => browseAndRunScriptInNewTerminal({ cwd: here, elevated: true }) },
+    { label: "New terminal", ...shortcutHint("terminal.new"), icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
+    { label: "New terminal here", icon: "folder-plus", shortcutId: "surface.new-here", title: here || undefined, disabled: !here, run: () => newTerminal({ cwd: here }) },
+    { label: "Paste and execute", icon: "clipboard-check", shortcutId: "surface.paste-execute", title: "Pastes clipboard text and immediately presses Enter", run: pasteAndExecute },
+    { label: "New Administrator terminal", icon: "shield", shortcutId: "surface.new-admin", run: () => newAdminTerminal({ cwd: here || undefined, runStartup: true }) },
+    { label: "Run script\u2026", icon: "file-code", shortcutId: "surface.run-script", run: () => browseAndRunScriptInNewTerminal({ cwd: here }) },
+    { label: "Run script as Administrator\u2026", icon: "file-code", shortcutId: "surface.run-script-admin", run: () => browseAndRunScriptInNewTerminal({ cwd: here, elevated: true }) },
     {
       label: `Run ${aiAssistantName()}`,
       icon: "bot",
@@ -21224,16 +22224,16 @@ function buildSurfaceContextMenu() {
       run: () => openCwdChange(invokedTerminalId)
     },
     { separator: true },
-    { label: "New PowerShell 7 terminal", icon: "terminal", run: () => newTerminal({ shell: "pwsh", cwd: here || undefined }) },
-    { label: "New Windows PowerShell terminal", icon: "terminal", run: () => newTerminal({ shell: "powershell", cwd: here || undefined }) },
-    { label: "New Command Prompt terminal", icon: "terminal", run: () => newTerminal({ shell: "cmd", cwd: here || undefined }) },
-    { label: "New WSL terminal", icon: "terminal", run: () => newTerminal({ shell: "wsl", cwd: here || undefined }) },
+    { label: "New PowerShell 7 terminal", icon: "terminal", shortcutId: "surface.new-pwsh", run: () => newTerminal({ shell: "pwsh", cwd: here || undefined }) },
+    { label: "New Windows PowerShell terminal", icon: "terminal", shortcutId: "surface.new-powershell", run: () => newTerminal({ shell: "powershell", cwd: here || undefined }) },
+    { label: "New Command Prompt terminal", icon: "terminal", shortcutId: "surface.new-cmd", run: () => newTerminal({ shell: "cmd", cwd: here || undefined }) },
+    { label: "New WSL terminal", icon: "terminal", shortcutId: "surface.new-wsl", run: () => newTerminal({ shell: "wsl", cwd: here || undefined }) },
     { separator: true },
-    { label: "Find in all terminals\u2026", hint: "Ctrl+Shift+F", icon: "search", disabled: !hasTerminals, run: openFindAll },
-    { label: "Broadcast command\u2026", hint: "Ctrl+Shift+B", icon: "megaphone", disabled: !hasTerminals, run: () => toggleBroadcast(true) },
-    { label: "All terminal statistics\u2026", icon: "activity", disabled: !hasTerminals, run: () => openStatistics() },
-    { label: "Terminal notes & command queue\u2026", icon: "notebook-tabs", run: () => openTerminalArtifacts(state.activeId) },
-    { label: "Command palette\u2026", hint: "Ctrl+Shift+P", icon: "command", run: openPalette },
+    { label: "Find in all terminals\u2026", ...shortcutHint("terminal.find-all"), icon: "search", disabled: !hasTerminals, run: openFindAll },
+    { label: "Broadcast command\u2026", ...shortcutHint("terminal.broadcast"), icon: "megaphone", disabled: !hasTerminals, run: () => toggleBroadcast(true) },
+    { label: "All terminal statistics\u2026", icon: "activity", shortcutId: "surface.statistics", disabled: !hasTerminals, run: () => openStatistics() },
+    { label: "Terminal notes & command queue\u2026", icon: "notebook-tabs", shortcutId: "surface.artifacts", run: () => openTerminalArtifacts(state.activeId) },
+    { label: "Command palette\u2026", ...shortcutHint("app.command-palette"), icon: "command", run: openPalette },
     { separator: true },
     { label: "Open folder", icon: "folder-open", title: here || undefined, disabled: !here, run: () => revealPath(here) },
     ...(minimized
@@ -21275,12 +22275,12 @@ function buildSurfaceContextMenu() {
         }))
       ]
     },
-    { label: "Fit all terminals", icon: "maximize", disabled: !hasTerminals, run: fitAllTerminals },
-    { label: "Reset layout", icon: "rotate-ccw", run: resetLayout },
+    { label: "Fit all terminals", icon: "maximize", shortcutId: "surface.fit-all", disabled: !hasTerminals, run: fitAllTerminals },
+    { label: "Reset layout", icon: "rotate-ccw", shortcutId: "surface.reset-layout", run: resetLayout },
     { separator: true },
-    { label: "New page", icon: "plus", run: () => addPage() },
+    { label: "New page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage() },
     { separator: true },
-    { label: "Close all terminals", icon: "trash-2", danger: true, disabled: !hasTerminals, run: closeAllTerminals }
+    { label: "Close all terminals", icon: "trash-2", shortcutId: "surface.close-all", danger: true, disabled: !hasTerminals, run: closeAllTerminals }
   ]);
 }
 
@@ -21314,7 +22314,9 @@ function buildPaneOverflowMenu(terminal) {
         run: () => runHeaderAction(
           terminal,
           action,
-          action === "artifacts" ? terminal.pane.querySelector('button[data-action="more"]') : null
+          action === "artifacts" || action === "header-background"
+            ? terminal.pane.querySelector('button[data-action="more"]')
+            : null
         )
       };
     });
@@ -22072,16 +23074,49 @@ function toggleContextMenuHiddenItems() {
   rerenderOpenContextMenu();
 }
 
+function contextShortcutEditableAction(item) {
+  return Boolean(item.globalShortcutAction) || CONTEXT_SHORTCUT_ID_PATTERN.test(item.shortcutId || "");
+}
+
+// Only the full terminal menu has an editor toolbar; compact menus capture
+// straight into the status strip and keep their automatic accelerators.
+function startContextShortcutEdit(item) {
+  if (ctxRenderOptions.shortcutEditor) ctxShortcutEditing = true;
+  beginContextShortcutCapture(item);
+}
+
+function showContextShortcutMenu(event, item) {
+  event.preventDefault();
+  event.stopPropagation();
+  renderContextSubmenu([{
+    label: "Change keybinding",
+    icon: "keyboard",
+    keepMenuOpen: true,
+    run: () => startContextShortcutEdit(item)
+  }]);
+  showContextSubmenuAt(event.clientX, event.clientY);
+}
+
 function showContextCustomizationMenu(event, item) {
   event.preventDefault();
   event.stopPropagation();
   const hidden = ctxCustomizationModel?.hidden.has(item.customizationId);
-  renderContextSubmenu([{
+  const rows = [];
+  if (contextShortcutEditableAction(item)) {
+    rows.push({
+      label: "Change keybinding",
+      icon: "keyboard",
+      keepMenuOpen: true,
+      run: () => startContextShortcutEdit(item)
+    });
+  }
+  rows.push({
     label: hidden ? "Show item" : "Hide item",
     icon: hidden ? "eye" : "eye-off",
     keepMenuOpen: true,
     run: () => setContextMenuItemHidden(item.customizationId, !hidden)
-  }]);
+  });
+  renderContextSubmenu(rows);
   showContextSubmenuAt(event.clientX, event.clientY);
 }
 
@@ -22094,14 +23129,66 @@ function toggleContextShortcutEditor() {
   rerenderOpenContextMenu();
 }
 
+// Capture is staged: nothing is written until the row's Save control runs, so a
+// mistyped chord can be abandoned without disturbing existing bindings.
 function beginContextShortcutCapture(item) {
-  if (!item.shortcutId) return;
-  ctxShortcutCapture = { actionId: item.shortcutId, label: item.label };
-  const current = contextMenuShortcuts.get(item.shortcutId);
+  const globalAction = item.globalShortcutAction || "";
+  const actionId = globalAction || item.shortcutId;
+  if (!actionId) return;
+  const current = globalAction
+    ? formatGlobalShortcut(globalShortcutBindings(globalAction)[0])
+    : formatContextShortcut(contextMenuShortcuts.get(actionId));
+  ctxShortcutCapture = {
+    actionId,
+    global: Boolean(globalAction),
+    label: item.label,
+    pending: null,
+    pendingClear: false
+  };
   ctxShortcutStatus = current
-    ? `Press a replacement for ${item.label}. Delete clears ${formatContextShortcut(current)}; Esc cancels.`
-    : `Press 1-9 or a modifier + key for ${item.label}. Esc cancels.`;
+    ? `Press a replacement for ${item.label}. Delete clears ${current}; Esc cancels.`
+    : globalAction
+      ? `Press a modifier + key for ${item.label}. Esc cancels.`
+      : `Press 1-9 or a modifier + key for ${item.label}. Esc cancels.`;
   rerenderOpenContextMenu({ focusSearch: false });
+}
+
+function contextShortcutPendingLabel(capture) {
+  if (!capture) return "";
+  if (capture.pendingClear) return "Cleared";
+  if (!capture.pending) return "";
+  return capture.global ? formatGlobalShortcut(capture.pending) : formatContextShortcut(capture.pending);
+}
+
+function commitContextShortcutCapture() {
+  const capture = ctxShortcutCapture;
+  if (!capture || (!capture.pending && !capture.pendingClear)) return;
+  ctxShortcutCapture = null;
+  if (capture.pendingClear) {
+    const cleared = capture.global
+      ? removeGlobalShortcutBinding(capture.actionId, 0) !== undefined
+      : clearContextMenuShortcut(capture.actionId);
+    ctxShortcutStatus = cleared || capture.global
+      ? `Cleared the shortcut for ${capture.label}.`
+      : `${capture.label} has no shortcut to clear.`;
+    if (capture.global) refreshGlobalShortcutHints();
+    rerenderOpenContextMenu();
+    return;
+  }
+  const formatted = contextShortcutPendingLabel(capture);
+  if (capture.global) {
+    const displaced = assignGlobalShortcutBinding(capture.actionId, 0, capture.pending);
+    refreshGlobalShortcutHints();
+    ctxShortcutStatus = displaced.length > 0
+      ? `Assigned ${formatted} to ${capture.label}; removed it from ${displaced.join(", ")}.`
+      : `Assigned ${formatted} to ${capture.label}.`;
+  } else {
+    const displacedActionId = assignContextMenuShortcut(capture.actionId, capture.pending);
+    ctxShortcutStatus = displacedActionId
+      ? `Assigned ${formatted} to ${capture.label}; removed it from ${contextShortcutActionLabel(displacedActionId)}.`
+      : `Assigned ${formatted} to ${capture.label}.`;
+  }
+  rerenderOpenContextMenu();
 }
 
 function cancelContextShortcutCapture() {
@@ -22173,8 +23260,9 @@ function renderContextMenu(items, {
     ctxNewSectionId = null;
     ctxShowHiddenItems = false;
   }
-  if (!shortcutEditor) {
-    ctxShortcutCapture = null;
+  // A capture can be running in a compact menu that has no editor toolbar, so
+  // only the toolbar's own state is reset here.
+  if (!shortcutEditor && !ctxShortcutCapture) {
     ctxShortcutEditing = false;
     ctxShortcutStatus = "";
   }
@@ -22232,31 +23320,47 @@ function renderContextMenu(items, {
       toolbar.append(editShortcuts);
     }
     elements.contextMenu.append(toolbar);
-    if (shortcutEditor && ctxShortcutEditing) {
-      const capture = document.createElement("div");
-      capture.className = `ctx-shortcut-capture${ctxShortcutCapture ? " is-capturing" : ""}`;
-      capture.setAttribute("role", "status");
-      capture.setAttribute("aria-live", "polite");
-      const captureText = document.createElement("span");
-      captureText.textContent = ctxShortcutStatus;
-      capture.append(captureText);
-      if (ctxShortcutCapture) {
-        const cancel = document.createElement("button");
-        cancel.type = "button";
-        cancel.className = "ctx-shortcut-cancel";
-        cancel.title = "Cancel shortcut capture";
-        cancel.setAttribute("aria-label", cancel.title);
-        const cancelIcon = document.createElement("i");
-        cancelIcon.dataset.lucide = "x";
-        cancel.append(cancelIcon);
-        cancel.addEventListener("click", (event) => {
+  }
+
+  if (ctxShortcutCapture || (shortcutEditor && ctxShortcutEditing)) {
+    const capture = document.createElement("div");
+    capture.className = `ctx-shortcut-capture${ctxShortcutCapture ? " is-capturing" : ""}`;
+    capture.setAttribute("role", "status");
+    capture.setAttribute("aria-live", "polite");
+    const captureText = document.createElement("span");
+    captureText.textContent = ctxShortcutStatus;
+    capture.append(captureText);
+    if (ctxShortcutCapture) {
+      if (ctxShortcutCapture.pending || ctxShortcutCapture.pendingClear) {
+        const save = document.createElement("button");
+        save.type = "button";
+        save.className = "ctx-shortcut-save";
+        save.title = `Save ${contextShortcutPendingLabel(ctxShortcutCapture)} for ${ctxShortcutCapture.label}`;
+        save.setAttribute("aria-label", save.title);
+        const saveIcon = document.createElement("i");
+        saveIcon.dataset.lucide = "check";
+        save.append(saveIcon);
+        save.addEventListener("click", (event) => {
           event.stopPropagation();
-          cancelContextShortcutCapture();
+          commitContextShortcutCapture();
         });
-        capture.append(cancel);
+        capture.append(save);
       }
-      elements.contextMenu.append(capture);
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "ctx-shortcut-cancel";
+      cancel.title = "Cancel shortcut capture";
+      cancel.setAttribute("aria-label", cancel.title);
+      const cancelIcon = document.createElement("i");
+      cancelIcon.dataset.lucide = "x";
+      cancel.append(cancelIcon);
+      cancel.addEventListener("click", (event) => {
+        event.stopPropagation();
+        cancelContextShortcutCapture();
+      });
+      capture.append(cancel);
     }
+    elements.contextMenu.append(capture);
   }
 
   if (grouped) {
@@ -22415,6 +23519,8 @@ function renderContextMenu(items, {
         event.stopPropagation();
         showHeaderActionShortcutFlyout(terminal, item.headerAction, el);
       });
+    } else if (!item.info && contextShortcutEditableAction(item)) {
+      el.addEventListener("contextmenu", (event) => showContextShortcutMenu(event, item));
     }
     el.dataset.searchText = [item.label, item.title, item.hint]
       .filter(Boolean)
@@ -22518,10 +23624,12 @@ function renderContextMenu(items, {
 
     // A plain row you can actually run is the only kind that earns an accelerator.
     const actionable = Boolean(item.run || item.submenu) && !item.disabled && !item.info && !item.customizationHidden;
-    const shortcutEligible = shortcutEditor && actionable && CONTEXT_SHORTCUT_ID_PATTERN.test(item.shortcutId || "");
-    const customBinding = shortcutEditor && item.shortcutId
+    const shortcutEligible = shortcutEditor && actionable && contextShortcutEditableAction(item);
+    const customBinding = shortcutEditor && item.shortcutId && !item.globalShortcutAction
       ? contextMenuShortcuts.get(item.shortcutId)
       : null;
+    const capturingRow = ctxShortcutCapture
+      && ctxShortcutCapture.actionId === (item.globalShortcutAction || item.shortcutId);
     const accel = actionable ? assignAccelLetter(item.label, usedLetters) : null;
     const number = actionable && !shortcutEditor && ctxByNumber.size < 9 ? ctxByNumber.size + 1 : null;
 
@@ -22530,6 +23638,7 @@ function renderContextMenu(items, {
     // Rows whose label cannot spell out the whole story (a path, say) carry the
     // detail as a tooltip rather than growing the menu.
     if (item.title) el.title = item.title;
+    if (item.hintAria) el.setAttribute("aria-keyshortcuts", item.hintAria);
 
     // The keyboard hint and the number badge share a right-aligned tail so they
     // never collide with the label; a submenu parent adds a chevron at the end.
@@ -22545,6 +23654,8 @@ function renderContextMenu(items, {
         const hint = document.createElement("span");
         hint.className = "ctx-hint";
         hint.textContent = item.hint;
+        const alternates = Array.isArray(item.hintAlternates) ? item.hintAlternates.filter(Boolean) : [];
+        if (alternates.length > 0) hint.title = `Alternate: ${alternates.join(", ")}`;
         accessories.append(hint);
       }
       if (number != null) {
@@ -22560,9 +23671,14 @@ function renderContextMenu(items, {
       if (ctxShortcutEditing && shortcutEligible) {
         const shortcutButton = document.createElement("button");
         shortcutButton.type = "button";
-        shortcutButton.className = "ctx-shortcut-set";
-        shortcutButton.textContent = customBinding ? formatContextShortcut(customBinding) : "Set";
-        shortcutButton.title = customBinding
+        shortcutButton.className = `ctx-shortcut-set${capturingRow ? " is-capturing" : ""}`;
+        const boundLabel = item.globalShortcutAction
+          ? formatGlobalShortcut(globalShortcutBindings(item.globalShortcutAction)[0])
+          : formatContextShortcut(customBinding);
+        shortcutButton.textContent = capturingRow
+          ? (contextShortcutPendingLabel(ctxShortcutCapture) || "Press\u2026")
+          : (boundLabel || "Set");
+        shortcutButton.title = boundLabel
           ? `Change shortcut for ${item.label}`
           : `Set shortcut for ${item.label}`;
         shortcutButton.setAttribute("aria-label", shortcutButton.title);
@@ -22895,12 +24011,10 @@ function onContextMenuKeydown(event) {
       return;
     }
     if ((key === "Delete" || key === "Backspace") && !hasModifier) {
-      const cleared = clearContextMenuShortcut(ctxShortcutCapture.actionId);
-      ctxShortcutStatus = cleared
-        ? `Cleared the shortcut for ${ctxShortcutCapture.label}.`
-        : `${ctxShortcutCapture.label} has no shortcut to clear.`;
-      ctxShortcutCapture = null;
-      rerenderOpenContextMenu();
+      ctxShortcutCapture.pending = null;
+      ctxShortcutCapture.pendingClear = true;
+      ctxShortcutStatus = `Clearing the shortcut for ${ctxShortcutCapture.label}. Save to apply, Esc to cancel.`;
+      rerenderOpenContextMenu({ focusSearch: false });
       stop();
       return;
     }
@@ -22908,21 +24022,21 @@ function onContextMenuKeydown(event) {
       stop();
       return;
     }
-    const binding = contextShortcutFromEvent(event);
+    const binding = ctxShortcutCapture.global
+      ? globalShortcutFromEvent(event)
+      : contextShortcutFromEvent(event);
     if (!binding) {
-      ctxShortcutStatus = "Use 1-9 by itself, or hold Ctrl, Alt, Shift, or Meta with another key.";
+      ctxShortcutStatus = ctxShortcutCapture.global
+        ? "Hold Ctrl, Alt, Shift, or Meta with another key, or press a function key."
+        : "Use 1-9 by itself, or hold Ctrl, Alt, Shift, or Meta with another key.";
       rerenderOpenContextMenu({ focusSearch: false });
       stop();
       return;
     }
-    const capture = ctxShortcutCapture;
-    const displacedActionId = assignContextMenuShortcut(capture.actionId, binding);
-    const formatted = formatContextShortcut(binding);
-    ctxShortcutCapture = null;
-    ctxShortcutStatus = displacedActionId
-      ? `Assigned ${formatted} to ${capture.label}; removed it from ${contextShortcutActionLabel(displacedActionId)}.`
-      : `Assigned ${formatted} to ${capture.label}.`;
-    rerenderOpenContextMenu();
+    ctxShortcutCapture.pending = binding;
+    ctxShortcutCapture.pendingClear = false;
+    ctxShortcutStatus = `${contextShortcutPendingLabel(ctxShortcutCapture)} for ${ctxShortcutCapture.label}. Save to apply, Esc to cancel.`;
+    rerenderOpenContextMenu({ focusSearch: false });
     stop();
     return;
   }
@@ -23130,6 +24244,7 @@ function showSessionInfoMenu(terminal) {
   items.push({
     label: "Copy session details",
     icon: "clipboard-copy",
+    shortcutId: "session.copy-details",
     run: () =>
       writeClipboardText(details).then(
         () => toast("Session details copied", "success", 1600),
@@ -23774,6 +24889,23 @@ async function refreshAiProviders(options = {}) {
   return state.aiProviders;
 }
 
+// Remote control belongs to the Copilot CLI, and GitHub also gates it behind an
+// organization policy, so the panel states what MultiTerm can and cannot promise.
+function syncCopilotRemoteControls() {
+  const copilot = aiProviderById("copilot");
+  const selected = state.settings.aiSessionProvider === "copilot";
+  const usable = selected && aiProviderAvailableFor(copilot, "session");
+  elements.copilotRemoteSessions.disabled = !usable;
+  elements.copilotRemoteKeepAlive.disabled = !usable;
+  elements.copilotRemoteStatus.textContent = !selected
+    ? "Remote control needs GitHub Copilot as the interactive provider."
+    : !usable
+      ? aiProviderStatusFor(copilot, "session")
+      : state.settings.copilotRemoteSessions
+        ? "New Copilot sessions start with --remote. Your organization must allow remote controlled sessions."
+        : "MultiTerm passes no remote flag, so your own Copilot settings decide.";
+}
+
 function syncAiSessionControls() {
   const previous = JSON.stringify({
     context: state.settings.aiSessionContext,
@@ -23799,9 +24931,11 @@ function syncAiSessionControls() {
   );
 
   const provider = aiProviderById(state.settings.aiSessionProvider);
+  syncCopilotRemoteControls();
   const available = aiProviderAvailableFor(provider, "session") && Array.isArray(provider.models) && provider.models.length > 0;
   const resumeName = aiAssistantName(state.settings.aiSessionProvider);
   elements.copilotSessionsToggle.disabled = !available;
+  updatePageGroupButton();
   elements.copilotSessionsToggle.title = available
     ? `Resume a ${resumeName} session`
     : "Choose an available interactive AI assistant in Settings";
@@ -23977,7 +25111,7 @@ function copilotSetupPrompt() {
   if (provider?.cliInstalled !== true) {
     return {
       action: provider?.authenticated ? "Install Copilot CLI" : "Install and sign in",
-      detail: "Interactive assistant sessions need the GitHub Copilot CLI. MultiTerm can install it with WinGet in a visible terminal."
+      detail: "Interactive assistant sessions need the GitHub Copilot CLI. MultiTerm can install it in a visible terminal using WinGet, npm, or the signed installer from GitHub."
     };
   }
   if (provider?.authenticated !== true) {
@@ -23999,7 +25133,13 @@ function updateCopilotSetupActions() {
   elements.aiSetupCopilotText.textContent = prompt?.detail || "";
 }
 
-const COPILOT_SETUP_COMMAND = "$ErrorActionPreference = 'Stop'; if (-not (Get-Command copilot -ErrorAction SilentlyContinue)) { if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'WinGet is required to install GitHub Copilot CLI.' }; winget.exe install --id GitHub.Copilot --exact --source winget --accept-package-agreements --accept-source-agreements; if ($LASTEXITCODE -ne 0) { throw \"WinGet exited with code $LASTEXITCODE.\" }; $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') }; if (-not (Get-Command copilot -ErrorAction SilentlyContinue)) { throw 'GitHub Copilot CLI is installed, but this terminal cannot find it yet. Open a new terminal and run copilot.' }; copilot";
+// The helper ships with the bridge and picks whichever official channel this
+// machine actually has, so the renderer only needs to invoke it and launch.
+function copilotSetupCommand() {
+  const script = state.copilotSetupScript;
+  if (!script) return "";
+  return `& ${powerShellLiteral(script)}; if ($LASTEXITCODE -eq 0) { copilot }`;
+}
 
 function closeAiSetupForGuidedSetup() {
   elements.aiSetupOverlay.classList.remove("is-open");
@@ -24013,9 +25153,14 @@ function startCopilotGuidedSetup() {
   if (state.aiSetup.guided) return false;
   const prompt = copilotSetupPrompt();
   if (!prompt) return false;
+  const command = copilotSetupCommand();
+  if (!command) {
+    toast("MultiTerm is not connected to its bridge, so Copilot setup cannot start yet.", "error", 3200);
+    return false;
+  }
   const provider = aiProviderById("copilot");
   const terminal = addTerminal({
-    pendingCommand: COPILOT_SETUP_COMMAND,
+    pendingCommand: command,
     pendingCopilotLogin: provider?.authenticated !== true,
     reveal: true,
     runStartup: false,

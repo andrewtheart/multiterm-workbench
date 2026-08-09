@@ -2638,6 +2638,84 @@ body.header-hidden .status-hint kbd,
   margin: 4px auto;
 }
 
+.copilot-resume-tabs {
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 4px;
+  padding: 0 20px;
+}
+
+.copilot-resume-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.copilot-resume-tab.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.copilot-resume-notice {
+  background: color-mix(in srgb, var(--warn, #d29922) 12%, var(--surface-raised));
+  border-top: 1px solid color-mix(in srgb, var(--warn, #d29922) 40%, var(--border));
+  color: var(--text-soft);
+  font-size: 11.5px;
+  margin: 0;
+  padding: 8px 20px;
+}
+
+.copilot-session-state {
+  color: var(--text-soft);
+  text-transform: lowercase;
+}
+
+.copilot-session-card.is-unavailable {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.copilot-resume-remote-foot {
+  align-items: end;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 20px;
+}
+
+.copilot-resume-connect {
+  display: grid;
+  flex: 1 1 260px;
+  gap: 4px;
+  min-width: 0;
+}
+
+.copilot-resume-connect span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.copilot-resume-connect input {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  width: 100%;
+}
+
+/* Author-level display rules above beat the UA [hidden] rule, so restate it. */
+.palette.copilot-resume [hidden],
+.copilot-resume-tabs[hidden],
+.copilot-resume-notice[hidden],
+.copilot-resume-remote-foot[hidden] {
+  display: none;
+}
+
 /* ---------------- Working directory dialog --------------- */
 
 .palette.cwd-change {
@@ -4520,6 +4598,101 @@ body[data-pager-placement="right"] .pager-add {
 .pager-add svg {
   height: 14px;
   width: 14px;
+}
+
+.pager-group[disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.pager-group[aria-expanded="true"] {
+  background: var(--hover);
+  border-style: solid;
+  color: var(--primary);
+}
+
+/* Anchored beside the pager rather than modal, so the tabs stay readable while
+   the proposal is reviewed. */
+.page-group-flyout {
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(60vh, 520px);
+  max-width: calc(100vw - 24px);
+  padding: 14px;
+  position: fixed;
+  width: 360px;
+  z-index: 60;
+}
+
+.page-group-flyout[hidden] {
+  display: none;
+}
+
+.page-group-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+}
+
+.page-group-head h2 {
+  font-size: 13px;
+  margin: 0;
+}
+
+.page-group-head p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0 0;
+}
+
+.page-group-head > .icon-button {
+  margin-left: auto;
+}
+
+.page-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.page-group-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.page-group-item strong {
+  display: block;
+  font-size: 12.5px;
+}
+
+.page-group-item ul {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.page-group-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 520px) {
+  .page-group-flyout {
+    left: 12px;
+    right: 12px;
+    width: auto;
+  }
 }
 
 @media (max-width: 900px) {
@@ -7109,6 +7282,147 @@ button.shortcut-binding.is-capturing {
   width: 100%;
 }
 
+.header-background-flyout {
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--elev-4);
+  color: var(--text);
+  padding: 14px;
+  position: fixed;
+  width: min(268px, calc(100vw - 16px));
+  z-index: 146;
+}
+
+.header-background-flyout[hidden] {
+  display: none;
+}
+
+.header-background-flyout.is-positioning {
+  visibility: hidden;
+}
+
+.header-background-flyout-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+}
+
+.header-background-flyout-head > svg {
+  color: var(--primary);
+  flex: 0 0 auto;
+  height: 18px;
+  margin-top: 2px;
+  width: 18px;
+}
+
+.header-background-flyout-head > div {
+  min-width: 0;
+}
+
+.header-background-flyout-head h2 {
+  font-size: 14px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.header-background-flyout-head p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-background-flyout-swatches {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+  margin-top: 12px;
+}
+
+.header-background-swatch {
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  height: 30px;
+  padding: 0;
+  width: 100%;
+}
+
+.header-background-swatch:hover,
+.header-background-swatch:focus-visible {
+  border-color: var(--primary);
+}
+
+.header-background-swatch[aria-pressed="true"] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-container);
+}
+
+.header-background-flyout-custom {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 12px;
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.header-background-flyout-custom-row {
+  display: block;
+  margin-top: 12px;
+}
+
+/* The author display above beats the UA rule for [hidden]. */
+.header-background-flyout-custom-row[hidden] {
+  display: none;
+}
+
+.header-background-flyout-custom-label {
+  color: var(--muted);
+  display: block;
+  font-size: 11.5px;
+}
+
+.header-background-flyout-custom-row .header-background-flyout-swatches {
+  margin-top: 6px;
+}
+
+.header-background-flyout-custom input[type="color"] {
+  block-size: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  inline-size: 44px;
+  padding: 2px;
+}
+
+.header-background-flyout-footer {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.header-background-flyout-footer button {
+  align-items: center;
+  display: inline-flex;
+  font-size: 11.5px;
+  gap: 7px;
+  justify-content: center;
+  min-height: 32px;
+  width: 100%;
+}
+
+.header-background-flyout-footer button svg {
+  height: 14px;
+  width: 14px;
+}
+
 .palette.terminal-artifacts {
   display: flex;
   flex-direction: column;
@@ -8502,6 +8816,7 @@ button.shortcut-binding.is-capturing {
 
 .ctx-shortcut-edit-toggle,
 .ctx-shortcut-cancel,
+.ctx-shortcut-save,
 .ctx-shortcut-set {
   align-items: center;
   border: 1px solid var(--border);
@@ -8569,6 +8884,26 @@ button.shortcut-binding.is-capturing {
   min-height: 26px;
   padding: 0;
   width: 26px;
+}
+
+.ctx-shortcut-save {
+  background: transparent;
+  border-color: var(--success, var(--primary));
+  border-radius: 4px;
+  color: var(--success, var(--primary));
+  flex: 0 0 26px;
+  min-height: 26px;
+  padding: 0;
+  width: 26px;
+}
+
+.ctx-shortcut-save:hover {
+  background: color-mix(in srgb, var(--success, var(--primary)) 16%, transparent);
+}
+
+.ctx-shortcut-set.is-capturing {
+  border-color: var(--primary);
+  color: var(--text);
 }
 
 .ctx-shortcut-set,
@@ -10775,6 +11110,11 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
   transition: background var(--dur-fast) var(--ease-standard), color var(--dur-fast) var(--ease-standard), opacity var(--dur-fast) var(--ease-standard);
   width: 28px;
   z-index: 14;
+}
+
+/* Declared before :hover so the hover rule, at equal specificity, still wins. */
+.pane-scroll-bottom.is-scrolled-up {
+  opacity: 0.72;
 }
 
 .pane-scroll-bottom:hover,

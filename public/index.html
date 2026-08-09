@@ -408,6 +408,24 @@
                 <option value="default">Provider default</option>
               </select>
             </label>
+            <h3 class="settings-subheading">Remote control</h3>
+            <label class="toggle-row">
+              <input id="copilotRemoteSessions" type="checkbox">
+              <span title="Starts Copilot CLI sessions with --remote so you can watch them and answer prompts from GitHub.com or GitHub Mobile. When this is off MultiTerm passes no flag, so your own Copilot settings still decide.">Remote control for new Copilot sessions</span>
+            </label>
+            <label class="control-row">
+              <span title="Sent as /keep-alive when a remote session starts, so the machine stays awake while you are steering it from elsewhere.">Keep machine awake</span>
+              <select id="copilotRemoteKeepAlive">
+                <option value="off">Do not change</option>
+                <option value="on">While the session runs</option>
+                <option value="busy">While Copilot is working</option>
+                <option value="30m">For 30 minutes</option>
+                <option value="2h">For 2 hours</option>
+                <option value="8h">For 8 hours</option>
+                <option value="1d">For 1 day</option>
+              </select>
+            </label>
+            <p id="copilotRemoteStatus" class="settings-note" role="status">Remote control availability has not been checked.</p>
             <h3 class="settings-subheading">Terminal titles</h3>
             <label class="control-row">
               <span>Provider</span>
@@ -756,10 +774,12 @@
         <button id="pagerAdd" class="pager-add" type="button" title="New page" aria-label="New page">
           <i data-lucide="plus"></i>
         </button>
+        <button id="pagerGroup" class="pager-add pager-group" type="button" title="Group terminals into pages with Copilot" aria-label="Group terminals into pages with Copilot" aria-haspopup="dialog" aria-expanded="false">
+          <i data-lucide="bot"></i>
+        </button>
       </nav>
 
-      <div id="pagerDockTargets" class="pager-dock-targets" aria-hidden="true" hidden>
-        <div class="pager-dock-target pager-dock-target-top" data-pager-dock="top"><i data-lucide="panel-top"></i></div>
+      <div id="pagerDockTargets" class="pager-dock-targets" aria-hidden="true" hidden>        <div class="pager-dock-target pager-dock-target-top" data-pager-dock="top"><i data-lucide="panel-top"></i></div>
         <div class="pager-dock-target pager-dock-target-bottom" data-pager-dock="bottom"><i data-lucide="panel-bottom"></i></div>
         <div class="pager-dock-target pager-dock-target-left" data-pager-dock="left"><i data-lucide="panel-left"></i></div>
         <div class="pager-dock-target pager-dock-target-right" data-pager-dock="right"><i data-lucide="panel-right"></i></div>
@@ -906,6 +926,10 @@
             <i data-lucide="x"></i>
           </button>
         </div>
+        <div id="copilotResumeTabs" class="copilot-resume-tabs" role="tablist" aria-label="Session source" hidden>
+          <button id="copilotResumeTabLocal" class="copilot-resume-tab" type="button" role="tab" aria-selected="true" data-resume-scope="local">This machine</button>
+          <button id="copilotResumeTabRemote" class="copilot-resume-tab" type="button" role="tab" aria-selected="false" data-resume-scope="remote">Remote</button>
+        </div>
         <div class="copilot-resume-toolbar">
           <label class="copilot-resume-search">
             <i data-lucide="search" aria-hidden="true"></i>
@@ -919,11 +943,26 @@
             <span>Refresh</span>
           </button>
         </div>
+        <p id="copilotResumeNotice" class="copilot-resume-notice" hidden></p>
         <div class="copilot-resume-summary">
           <span id="copilotResumeStatus" role="status">Looking for local AI assistant sessions&hellip;</span>
           <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>Continue in the selected assistant</span>
         </div>
         <div id="copilotResumeList" class="copilot-resume-list" role="list"></div>
+        <div id="copilotResumeRemoteFoot" class="copilot-resume-remote-foot" hidden>
+          <label class="copilot-resume-connect">
+            <span>Connect by session ID</span>
+            <input id="copilotResumeConnectId" type="text" placeholder="00000000-0000-4000-8000-000000000000" autocomplete="off" spellcheck="false">
+          </label>
+          <button id="copilotResumeConnect" class="secondary-action" type="button">
+            <i data-lucide="plug"></i>
+            <span>Connect</span>
+          </button>
+          <button id="copilotResumePicker" class="secondary-action" type="button" title="Opens a terminal running copilot --connect so the CLI's own remote picker can choose the session">
+            <i data-lucide="list"></i>
+            <span>Open Copilot remote picker</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -2216,6 +2255,24 @@
       </div>
     </div>
 
+    <div id="pageGroupFlyout" class="page-group-flyout" role="dialog" aria-modal="false" aria-labelledby="pageGroupTitle" hidden>
+      <div class="page-group-head">
+        <i data-lucide="bot"></i>
+        <div>
+          <h2 id="pageGroupTitle">Group pages</h2>
+          <p id="pageGroupStatus" role="status">Copilot is grouping your terminals.</p>
+        </div>
+        <button id="pageGroupClose" class="icon-button" type="button" title="Close" aria-label="Close page grouping">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div id="pageGroupList" class="page-group-list"></div>
+      <footer class="page-group-footer">
+        <button id="pageGroupCancel" type="button" class="confirm-cancel">Cancel</button>
+        <button id="pageGroupApply" type="button" class="confirm-proceed" disabled>Apply</button>
+      </footer>
+    </div>
+
     <div id="terminalNotesFlyout" class="terminal-notes-flyout" role="dialog" aria-modal="false" aria-labelledby="terminalNotesFlyoutTitle" hidden>
       <div class="terminal-notes-flyout-head">
         <i data-lucide="notebook-pen"></i>
@@ -2237,6 +2294,35 @@
         <button id="terminalNotesFlyoutDetails" type="button" class="secondary-action">
           <i data-lucide="list"></i>
           <span>View more details</span>
+        </button>
+      </footer>
+    </div>
+
+    <div id="headerBackgroundFlyout" class="header-background-flyout" role="dialog" aria-modal="false" aria-labelledby="headerBackgroundFlyoutTitle" hidden>
+      <div class="header-background-flyout-head">
+        <i data-lucide="palette"></i>
+        <div>
+          <h2 id="headerBackgroundFlyoutTitle">Header background</h2>
+          <p id="headerBackgroundFlyoutSubtitle">Terminal</p>
+        </div>
+      </div>
+      <div id="headerBackgroundFlyoutSwatches" class="header-background-flyout-swatches" role="group" aria-label="Header background colors"></div>
+      <div id="headerBackgroundFlyoutCustomRow" class="header-background-flyout-custom-row" hidden>
+        <span class="header-background-flyout-custom-label">Your colors</span>
+        <div id="headerBackgroundFlyoutCustomSwatches" class="header-background-flyout-swatches" role="group" aria-label="Saved custom header background colors"></div>
+      </div>
+      <label class="header-background-flyout-custom">
+        <input id="headerBackgroundFlyoutColor" type="color" value="#4FD1B0" aria-label="Custom header background color">
+        <span>Custom color</span>
+      </label>
+      <footer class="header-background-flyout-footer">
+        <button id="headerBackgroundFlyoutReset" type="button" class="secondary-action">
+          <i data-lucide="rotate-ccw"></i>
+          <span>Use default</span>
+        </button>
+        <button id="headerBackgroundFlyoutMore" type="button" class="secondary-action">
+          <i data-lucide="sliders-horizontal"></i>
+          <span>More options&hellip;</span>
         </button>
       </footer>
     </div>
@@ -2275,7 +2361,7 @@
             <button type="button" class="pane-title-generate" title="Suggest a title with AI. Right-click to pause automatic titles." aria-label="Suggest a terminal title with AI">
               <i class="ai-title-glyph" data-lucide="sparkles"></i>
             </button>
-            <span class="pane-title-review" hidden>
+            <span class="pane-title-review" role="group" aria-label="Suggested terminal title" aria-live="polite" hidden>
               <button type="button" class="pane-title-accept" title="Use suggested title" aria-label="Use suggested terminal title"><i data-lucide="check"></i></button>
               <button type="button" class="pane-title-reject" title="Discard suggested title" aria-label="Discard suggested terminal title"><i data-lucide="x"></i></button>
             </span>
@@ -2312,6 +2398,9 @@
             </button>
             <button type="button" data-action="notifications" class="pane-notifications" title="Notifications for this terminal" aria-label="Notifications for this terminal" aria-haspopup="dialog" aria-expanded="false">
               <i data-lucide="bell"></i>
+            </button>
+            <button type="button" data-action="header-background" class="pane-header-background" title="Header background" aria-label="Header background for this terminal" aria-haspopup="dialog" aria-expanded="false">
+              <i data-lucide="palette"></i>
             </button>
             <button type="button" data-action="more" title="More terminal actions" aria-label="More terminal actions" aria-haspopup="menu" aria-expanded="false">
               <i data-lucide="menu"></i>

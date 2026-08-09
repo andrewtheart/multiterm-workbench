@@ -403,8 +403,25 @@ test.describe("Surface context menu", () => {
         "Clipboard",
         "Find & context",
         "Tools & automation",
+        "AI assistant",
         "Session"
       ]));
+
+      // Every assistant action belongs to its own section, not to Tools.
+      const assistantSection = menu.locator('.ctx-group[data-section-id="ai-assistant"]');
+      const assistantIds = await assistantSection.locator(".ctx-item")
+        .evaluateAll((items) => items.map((item) => item.dataset.customizationId));
+      expect(assistantIds).toEqual([
+        "terminal.copilot-yolo",
+        "terminal.copilot-worktree",
+        "terminal.copilot-resume",
+        "terminal.copilot-remote",
+        "terminal.copilot-model",
+        "terminal.copilot-cwd"
+      ]);
+      const toolsIds = await menu.locator('.ctx-group[data-section-id="tools-automation"] .ctx-item')
+        .evaluateAll((items) => items.map((item) => item.dataset.customizationId));
+      expect(toolsIds.filter((id) => id.startsWith("terminal.copilot"))).toEqual([]);
 
       const desktopGrid = await menu.locator(".ctx-group-column").evaluateAll((columns) => {
         const visible = columns.map((column) => column.getBoundingClientRect());
@@ -454,6 +471,9 @@ test.describe("Surface context menu", () => {
   });
 
   test("reorders items across sections and persists renamed and custom sections", async ({ page }) => {
+    // The grouped menu is taller than a 720px viewport, and a scroll between the
+    // drag press and the drop would re-hit-test the pointer onto another row.
+    await page.setViewportSize({ width: 1280, height: 1000 });
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await page.evaluate(() => {
@@ -515,6 +535,9 @@ test.describe("Surface context menu", () => {
       "terminal.paste-execute"
     ]);
 
+    // The grouped menu scrolls on short viewports, so keep the destination on
+    // screen: a scroll during the drag moves the source out from under it.
+    await menu.locator('[data-customization-id="terminal.restart"]').scrollIntoViewIfNeeded();
     await menu.locator('[data-customization-id="terminal.paste"] .ctx-item-drag-handle').dragTo(
       menu.locator('[data-customization-id="terminal.restart"]'),
       { targetPosition: { x: 8, y: 2 } }
@@ -1089,7 +1112,11 @@ test.describe("Surface context menu", () => {
     await page.keyboard.type("stat");
     await expect(search).toHaveValue("stat");
     await expect(search).toBeFocused();
-    await expect(menu.locator(".ctx-item:visible")).toContainText(["Terminal statistics", "Git status"]);
+    await expect.poll(() => menu.locator(".ctx-item:visible").allTextContents())
+      .toEqual(expect.arrayContaining([
+        expect.stringContaining("Terminal statistics"),
+        expect.stringContaining("Git status")
+      ]));
 
     const searchChrome = await search.evaluate((input) => {
       const inputStyle = getComputedStyle(input);
@@ -1141,6 +1168,7 @@ test.describe("Surface context menu", () => {
         backgroundColor: style.backgroundColor,
         menuIcons: elements.contextMenu.querySelectorAll("svg[data-lucide]").length,
         outsideIconUnresolved: outsideIcon.tagName === "I" && outsideIcon.isConnected,
+        median: timings[Math.floor(timings.length / 2)],
         p95: timings[Math.floor(timings.length * 0.95)]
       };
       const previousTheme = document.documentElement.dataset.appTheme;
@@ -1161,7 +1189,11 @@ test.describe("Surface context menu", () => {
     expect(result.backgroundColor).toBe("rgba(31, 35, 42, 0.8)");
     expect(result.lightBackgroundColor).toBe("rgba(246, 248, 252, 0.82)");
     expect(result.compactBackdropFilter).toBe("none");
-    expect(result.p95).toBeLessThan(20);
+    // The regression this guards against moved the whole distribution (57ms p95),
+    // so the median carries the tight budget; with 25 samples the p95 is really a
+    // near-max and one GC pause on a loaded machine must not fail the run.
+    expect(result.median).toBeLessThan(12);
+    expect(result.p95).toBeLessThan(40);
   });
 
   test("assigns, reassigns, persists, activates, and clears custom menu shortcuts", async ({ page }) => {
@@ -1182,6 +1214,7 @@ test.describe("Surface context menu", () => {
       await menu.locator(`[data-shortcut-id="${actionId}"] .ctx-shortcut-set`).click();
       await expect(menu.locator(".ctx-shortcut-capture")).toHaveClass(/is-capturing/);
       await page.keyboard.press(shortcut);
+      await menu.locator(".ctx-shortcut-save").click();
     };
 
     await page.goto("http://127.0.0.1:3199/");
@@ -1240,12 +1273,73 @@ test.describe("Surface context menu", () => {
       await edit();
       await menu.locator('[data-shortcut-id="terminal.notes"] .ctx-shortcut-set').click();
       await page.keyboard.press("Delete");
+      await menu.locator(".ctx-shortcut-save").click();
       await expect(menu.locator('[data-shortcut-id="terminal.notes"] .ctx-shortcut-set')).toHaveText("Set");
       expect(await page.evaluate(() => contextMenuShortcuts.has("terminal.notes"))).toBe(false);
     } finally {
       await page.evaluate(() => {
         contextMenuShortcuts.clear();
         saveContextMenuShortcuts();
+        hideContextMenu();
+      });
+    }
+  });
+
+  test("changes a keybinding inline from a row's own right-click menu", async ({ page }) => {
+    const menu = page.locator("#contextMenu");
+    const submenu = page.locator("#contextSubmenu");
+    const copyRow = menu.locator('[data-shortcut-id="terminal.copy"]');
+    const openTerminalMenu = async () => {
+      await page.evaluate(() => {
+        const terminal = state.terminals.values().next().value;
+        showContextMenu(120, 120, terminal, "");
+      });
+      await expect(menu).toBeVisible();
+    };
+
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      state.settings.keyboardShortcuts = {};
+      saveSettings();
+      refreshGlobalShortcutHints();
+    });
+
+    try {
+      // Copy advertises the new primary binding and keeps the old one as an alternate.
+      await openTerminalMenu();
+      await expect(copyRow.locator(".ctx-hint")).toHaveText("Ctrl+C");
+      await expect(copyRow.locator(".ctx-hint")).toHaveAttribute("title", "Alternate: Ctrl+Shift+C");
+
+      // Copy is disabled without a selection, but its binding stays editable.
+      await copyRow.click({ button: "right", force: true });
+      await submenu.getByRole("menuitem", { name: "Change keybinding", exact: true }).click();
+      await expect(menu.locator(".ctx-shortcut-capture")).toHaveClass(/is-capturing/);
+      await page.keyboard.press("Control+Alt+Shift+K");
+      await expect(menu.locator(".ctx-shortcut-capture")).toContainText("Save to apply");
+      await page.keyboard.press("Escape");
+      expect(await page.evaluate(() => globalShortcutBindings("terminal.copy").map(formatGlobalShortcut)))
+        .toEqual(["Ctrl+C", "Ctrl+Shift+C"]);
+
+      // Saving replaces the primary binding and keeps the alternate.
+      await openTerminalMenu();
+      await copyRow.click({ button: "right", force: true });
+      await submenu.getByRole("menuitem", { name: "Change keybinding", exact: true }).click();
+      await page.keyboard.press("Control+Alt+Shift+K");
+      await menu.locator(".ctx-shortcut-save").click();
+      expect(await page.evaluate(() => globalShortcutBindings("terminal.copy").map(formatGlobalShortcut)))
+        .toEqual(["Ctrl+Alt+Shift+K", "Ctrl+Shift+C"]);
+      expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).keyboardShortcuts["terminal.copy"][0]))
+        .toEqual({ alt: true, ctrl: true, key: "k", meta: false, shift: true });
+
+      await page.evaluate(() => hideContextMenu());
+      await openTerminalMenu();
+      await expect(copyRow.locator(".ctx-hint")).toHaveText("Ctrl+Alt+Shift+K");
+    } finally {
+      await page.evaluate(() => {
+        state.settings.keyboardShortcuts = {};
+        saveSettings();
+        refreshGlobalShortcutHints();
         hideContextMenu();
       });
     }
@@ -1301,7 +1395,7 @@ test.describe("Surface context menu", () => {
     });
 
     expect(selected).toBe("tui-selection-marker");
-    const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
+    const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+C/ });
     await expect(copy).toBeVisible();
     await expect(copy).not.toHaveAttribute("aria-disabled", "true");
     expect(await page.evaluate(() => state.terminals.get(state.activeId).selectionSnapshot)).toBe(selected);
@@ -1406,7 +1500,7 @@ test.describe("Surface context menu", () => {
       expect(await page.evaluate((tid) => state.terminals.get(tid).selectionSnapshot, ctx.id)).toBe("TUIDRAG");
 
       await page.mouse.click(ctx.at(3), ctx.y, { button: "right" });
-      const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
+      const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+C/ });
       await expect(copy).toBeVisible();
       await expect(copy).not.toHaveAttribute("aria-disabled", "true");
       await page.keyboard.press("Escape");

@@ -928,6 +928,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(menu.locator(".ctx-item")).toHaveText([
       "Notifications\u2026",
       "Notes & command queueCtrl+Alt+Shift+A",
+      "Header background\u2026Ctrl+Alt+Shift+B",
       "MinimizeCtrl+Alt+Shift+M",
       "MaximizeCtrl+Alt+Shift+X",
       "Move leftCtrl+Alt+Shift+Left",
@@ -1002,24 +1003,47 @@ test.describe("MultiTerm Workbench UI", () => {
   });
 
   test("customizes terminal header actions by drag scope and remembers the choice", async () => {
-    await setNative("#columnCount", "1", "input");
     await setNative("#headerActionDragScope", "ask", "change");
-    // This test is about drag scope, so start from a header that still holds the
-    // draggable actions and keep the row painted rather than hover-revealed.
-    await page.evaluate(() => {
-      state.settings.headerActionsInMenu = ["find", "duplicate"];
-      state.settings.headerActionsRevealOnHover = false;
-      applySettings();
-      for (const terminal of state.terminals.values()) applyHeaderActionPlacement(terminal);
-    });
 
     const panes = page.locator(".terminal-pane");
     if ((await panes.count()) < 2) await page.locator("#addTerminal").click();
+
+    // Earlier spec files share this origin, so every setting that narrows a pane
+    // header is normalized here: side-by-side or zoomed panes push the draggable
+    // actions into the overflow menu and there is nothing left to drag. The
+    // normalization has to persist because this test reloads, so it is captured
+    // first and restored at the end rather than leaking into later specs.
+    const savedLayoutSettings = await page.evaluate(() => ({
+      compactChrome: state.settings.compactChrome,
+      columnCount: state.settings.columnCount,
+      headerActionsInMenu: state.settings.headerActionsInMenu,
+      headerActionsRevealOnHover: state.settings.headerActionsRevealOnHover,
+      layout: state.settings.layout,
+      workspaceZoom: state.settings.workspaceZoom
+    }));
+    await page.evaluate(() => {
+      state.settings.layout = "vertical";
+      state.settings.columnCount = 1;
+      state.settings.workspaceZoom = 100;
+      state.settings.compactChrome = false;
+      state.settings.headerActionsInMenu = ["find", "duplicate"];
+      state.settings.headerActionsRevealOnHover = false;
+      state.zoomedId = null;
+      saveSettings();
+      applySettings();
+      applyZoom();
+      for (const terminal of state.terminals.values()) {
+        terminal.headerActionOverrides = {};
+        applyHeaderActionPlacement(terminal);
+      }
+    });
+
     const firstPane = panes.first();
     const firstId = await firstPane.getAttribute("data-id");
     const more = firstPane.locator('[data-action="more"]');
     const flyout = page.locator("#headerActionScopeFlyout");
 
+    await expect(firstPane.locator('[data-action="clear"]')).toBeVisible();
     await firstPane.locator('[data-action="clear"]').dragTo(more);
     await expect(flyout).toBeVisible();
     await expect(flyout.locator('input[value="all"]')).toBeChecked();
@@ -1139,6 +1163,12 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#headerActionDragScope")).toHaveValue("ask");
     await expect(page.locator(`.terminal-pane[data-id="${firstId}"] [data-action="copy"]`)).toHaveAttribute("data-header-placement", "header");
     await page.locator("#terminalHost").evaluate((host) => { host.scrollTop = 0; });
+    await page.evaluate((saved) => {
+      Object.assign(state.settings, saved);
+      saveSettings();
+      applySettings();
+      applyZoom();
+    }, savedLayoutSettings);
   });
 
   test("maximize button overlays the other panes and toggles back", async () => {
@@ -1288,7 +1318,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("uses the traditional copy glyph for the title-bar copy action", async () => {
     const copy = page.locator('.terminal-pane').first().locator('[data-action="copy"]');
-    await expect(copy).toHaveAttribute("title", "Copy output (Ctrl+Shift+C)\nShortcut: Ctrl+Alt+Shift+C");
+    await expect(copy).toHaveAttribute("title", "Copy output (Ctrl+C / Ctrl+Shift+C)\nShortcut: Ctrl+Alt+Shift+C");
     await expect(copy.locator("svg")).toHaveAttribute("data-lucide", "copy");
   });
 
@@ -1719,14 +1749,16 @@ test.describe("MultiTerm Workbench UI", () => {
 
     await terminalRow.hover();
     await expect(terminalRow).not.toHaveClass(/show-shortcut-controls/);
-    await expect(terminalRow).toHaveClass(/show-shortcut-controls/, { timeout: 1500 });
+    // The controls appear on a 1000ms hover dwell; the assertion above already
+    // covers that they are not immediate, so this one only needs headroom.
+    await expect(terminalRow).toHaveClass(/show-shortcut-controls/, { timeout: 5000 });
     await terminalRow.locator(".shortcut-edit-controls .shortcut-binding").evaluate((button) => button.click());
     await page.keyboard.press("Control+Alt+T");
     await expect(terminalRow.locator(".shortcut-binding")).toContainText(["Ctrl+Alt+N", "Ctrl+Shift+T", "Ctrl+Alt+T"]);
 
     const pageRow = page.locator('[data-shortcut-action="page.new"]').first();
     await pageRow.hover();
-    await expect(pageRow).toHaveClass(/show-shortcut-controls/, { timeout: 1500 });
+    await expect(pageRow).toHaveClass(/show-shortcut-controls/, { timeout: 5000 });
     await pageRow.locator(".shortcut-edit-controls .shortcut-binding").evaluate((button) => button.click());
     await page.keyboard.press("Control+Alt+N");
     await expect(page.locator("#shortcutsStatus")).toContainText("reassigned from New terminal");

@@ -168,4 +168,23 @@ test.describe("Assistant session restore", () => {
     await page.keyboard.press("Escape");
     await expect(page.locator("#assistantRestoreOverlay")).toBeHidden();
   });
+
+  // The record is bridge-side and machine-level, so anything left here makes a
+  // LATER spec file open the restore dialog, whose overlay swallows its clicks.
+  test.afterAll(async ({ browser }) => {
+    const page = await browser.newPage();
+    try {
+      await page.goto("http://127.0.0.1:3199/");
+      await expect(page.locator("#statusConn")).toHaveText("Connected");
+      const remaining = await page.evaluate(async () => {
+        closeAllTerminals();
+        saveAssistantSessionRecord();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return (await readAssistantSessionRecord()).length;
+      });
+      expect(remaining).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
 });

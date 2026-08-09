@@ -16,10 +16,15 @@ test.describe("Copy and prepare editor", () => {
   let context;
   let page;
 
-  const openEditor = (text) => page.evaluate((value) => {
-    const terminal = [...state.terminals.values()][0];
-    openPrepareEditor(value, terminal.id);
-  }, text);
+  // The overlay unhides and only then gets its open class, so measuring right
+  // after this call can read a row that has not been laid out yet.
+  const openEditor = async (text) => {
+    await page.evaluate((value) => {
+      const terminal = [...state.terminals.values()][0];
+      openPrepareEditor(value, terminal.id);
+    }, text);
+    await expect(page.locator("#prepareOverlay")).toBeVisible();
+  };
 
   test.beforeAll(async ({ browser }) => {
     context = await browser.newContext({
@@ -248,8 +253,10 @@ test.describe("Copy and prepare editor", () => {
     await expect(editor).toHaveAttribute("wrap", "soft");
     await expect(numbers).toHaveCount(4);
     await expect(numbers).toHaveText(["1", "2", "3", "4"]);
-    const wrappedHeights = await numbers.evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
-    expect(wrappedHeights[0]).toBeGreaterThan(wrappedHeights[1] * 2);
+    await expect.poll(() => numbers.evaluateAll((rows) => {
+      const heights = rows.map((row) => row.getBoundingClientRect().height);
+      return heights[1] > 0 && heights[0] > heights[1] * 2;
+    })).toBe(true);
 
     await wrap.click();
     await expect(wrap).toHaveAttribute("aria-pressed", "false");
@@ -519,14 +526,17 @@ test.describe("Copy and prepare editor", () => {
       try {
         updatePrepareLineNumbers();
         return {
-          lineHeight: elements.prepareLineNumbers.firstElementChild.getBoundingClientRect().height,
+          // The rendered rect follows ancestor scaling, so assert the height the
+          // fallback actually sets and check separately that it renders.
+          lineHeight: elements.prepareLineNumbers.firstElementChild.style.height,
+          rendered: elements.prepareLineNumbers.firstElementChild.getBoundingClientRect().height > 0,
           observerWithoutApi: createPrepareResizeObserver(null)
         };
       } finally {
         window.getComputedStyle = realGetComputedStyle;
       }
     });
-    expect(result).toEqual({ lineHeight: 20, observerWithoutApi: null });
+    expect(result).toEqual({ lineHeight: "20px", rendered: true, observerWithoutApi: null });
     await page.locator("#prepareClose").click();
   });
 });

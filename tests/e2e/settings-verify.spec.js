@@ -480,7 +480,7 @@ test.describe("Settings panel verification", () => {
     expect(result.action).toBe("Install and sign in");
     expect(result.settingsAction).toBe("Install and sign in");
     expect(result.settingsActionHidden).toBe(false);
-    expect(result.detail).toContain("install it with WinGet in a visible terminal");
+    expect(result.detail).toContain("WinGet, npm, or the signed installer from GitHub");
     expect(result.options).toMatchObject({
       pendingCopilotLogin: true,
       reveal: true,
@@ -488,9 +488,9 @@ test.describe("Settings panel verification", () => {
       shell: "pwsh",
       title: "GitHub Copilot setup"
     });
-    expect(result.options.pendingCommand).toContain("winget.exe install --id GitHub.Copilot --exact");
-    expect(result.options.pendingCommand).toContain("GetEnvironmentVariable('Path', 'User')");
-    expect(result.options.pendingCommand).toMatch(/; copilot$/);
+    expect(result.options.pendingCommand).toContain("Install-CopilotCli.ps1");
+    expect(result.options.pendingCommand).toMatch(/^& '/);
+    expect(result.options.pendingCommand).toMatch(/\{ copilot \}$/);
     expect(result.overlayHidden).toBe(true);
     expect(result.shellInert).toBe(false);
   });
@@ -528,7 +528,7 @@ test.describe("Settings panel verification", () => {
 
     expect(result.action).toBe("Install Copilot CLI");
     expect(result.options.pendingCopilotLogin).toBe(false);
-    expect(result.options.pendingCommand).toContain("winget.exe install --id GitHub.Copilot --exact");
+    expect(result.options.pendingCommand).toContain("Install-CopilotCli.ps1");
   });
 
   test("submits Copilot login only after the Copilot composer is ready", async () => {

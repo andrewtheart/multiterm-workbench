@@ -85,6 +85,37 @@ test.describe("Scroll to bottom control", () => {
     }, id)).toBe(true);
   });
 
+  test("brightens while scrolled away from the bottom and fades once it arrives", async ({ page }) => {
+    const id = await freshTerminal(page);
+    const control = button(page);
+    const opacity = () => control.evaluate((node) => Number(getComputedStyle(node).opacity));
+
+    await page.evaluate((terminalId) => {
+      const { term } = state.terminals.get(terminalId);
+      for (let line = 0; line < 400; line += 1) term.write(`filler line ${line}\r\n`);
+    }, id);
+    await expect.poll(() => page.evaluate((terminalId) => {
+      const { term } = state.terminals.get(terminalId);
+      return term.buffer.active.length > term.rows;
+    }, id)).toBe(true);
+
+    // Sitting at the newest line there is nowhere to jump to.
+    expect(await opacity()).toBeLessThan(0.35);
+
+    await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollToTop(), id);
+    await expect.poll(opacity).toBeGreaterThan(0.5);
+
+    // Output arriving underneath must not fade it back while still scrolled up.
+    await page.evaluate((terminalId) => state.terminals.get(terminalId).term.write("later line\r\n"), id);
+    expect(await opacity()).toBeGreaterThan(0.5);
+
+    await control.click();
+    // Clicking leaves the pointer on the button, and :hover is deliberately
+    // fully opaque, so step off it before reading the resting state.
+    await page.mouse.move(5, 5);
+    await expect.poll(opacity).toBeLessThan(0.35);
+  });
+
   test("hides itself on an alternate-screen buffer that has no scrollback", async ({ page }) => {
     const id = await freshTerminal(page);
     await expect(button(page)).toBeVisible();

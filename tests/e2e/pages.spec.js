@@ -903,6 +903,90 @@ test.describe("Pages and the quick switcher", () => {
     await expect(badge).toBeHidden();
   });
 
+  // Grouping spends a real AI request, so the bridge reply is stubbed here; the
+  // behaviour under test is the review-then-apply contract, not the model.
+  test("previews a Copilot page grouping and only applies it on confirmation", async () => {
+    await reset(3);
+    const ids = await page.evaluate(() => [...state.terminals.keys()]);
+
+    await page.evaluate((terminalIds) => {
+      window.__groupFrames = [];
+      const originalSend = state.socket.send.bind(state.socket);
+      window.__restoreGroupBridge = () => { state.socket.send = originalSend; };
+      state.socket.send = (raw) => {
+        const frame = JSON.parse(raw);
+        if (frame.type === "groupTerminalPages") {
+          window.__groupFrames.push(frame);
+          window.setTimeout(() => handleBridgeMessage({
+            type: "terminalPageGroups",
+            requestId: frame.requestId,
+            groups: [
+              { name: "Build work", terminals: [terminalIds[0], terminalIds[1]] },
+              { name: "Docs", terminals: [terminalIds[2]] }
+            ]
+          }), 10);
+          return;
+        }
+        originalSend(raw);
+      };
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        authenticated: true,
+        cliInstalled: true,
+        available: true,
+        titleAvailable: true,
+        interactiveAvailable: true,
+        models: [{ id: "gpt-test", name: "GPT Test", efforts: [], maxContextTokens: 64000 }]
+      }];
+      updatePageGroupButton();
+    }, ids);
+
+    const flyout = page.locator("#pageGroupFlyout");
+    const groupButton = page.locator("#pagerGroup");
+    await expect(groupButton).toBeEnabled();
+
+    // The catalog must name every live terminal exactly once.
+    await groupButton.click();
+    await expect(flyout).toBeVisible();
+    await expect(page.locator(".page-group-item")).toHaveCount(2);
+    await expect(page.locator("#pageGroupStatus")).toContainText("2 pages proposed");
+    const catalog = await page.evaluate(() => JSON.parse(window.__groupFrames[0].terminals));
+    expect(catalog.map((entry) => entry.id).sort()).toEqual([...ids].sort());
+    expect(catalog.every((entry) => typeof entry.title === "string" && typeof entry.excerpt === "string")).toBe(true);
+
+    // Cancel must not touch the pages.
+    await page.locator("#pageGroupCancel").click();
+    await expect(flyout).toBeHidden();
+    expect(await perPage()).toEqual(["Page 1=3"]);
+
+    await groupButton.click();
+    await expect(page.locator(".page-group-item")).toHaveCount(2);
+    await page.locator("#pageGroupApply").click();
+    await expect(flyout).toBeHidden();
+    expect(await perPage()).toEqual(["Build work=2", "Docs=1"]);
+    await expect(page.locator(".pager-chip")).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.pages")).pages.map((p) => p.name)))
+      .toEqual(["Build work", "Docs"]);
+
+    // A proposal stops being valid once the set of open terminals changes.
+    await groupButton.click();
+    await expect(page.locator(".page-group-item")).toHaveCount(2);
+    await page.evaluate((id) => removeTerminal(id), ids[2]);
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await page.locator("#pageGroupApply").click();
+    await expect(page.locator("#pageGroupStatus")).toContainText("terminals changed");
+    await expect(flyout).toBeVisible();
+    await page.locator("#pageGroupClose").click();
+    await expect(flyout).toBeHidden();
+
+    await page.evaluate(() => {
+      window.__restoreGroupBridge();
+      delete window.__restoreGroupBridge;
+      delete window.__groupFrames;
+    });
+  });
+
   // The find-all bar floats over the stage. Left to sit on the pane header row
   // it swallows clicks on the badge that is the only way back to a borrowed
   // pane's own page — and the bar is exactly what produced that pane.

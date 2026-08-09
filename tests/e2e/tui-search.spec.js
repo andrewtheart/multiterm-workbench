@@ -22,6 +22,19 @@ test.describe("Searching TUI scrollback", () => {
     writeTerminal(terminal, payload);
   });
 
+  const bufferHas = (page, needle) => page.evaluate((text) => {
+    const buffer = [...state.terminals.values()][0].term.buffer.active;
+    for (let i = 0; i < buffer.length; i += 1) {
+      if ((buffer.getLine(i)?.translateToString(true) || "").includes(text)) return true;
+    }
+    return false;
+  }, needle);
+
+  // writeTerminal batches output through the renderer's flush queue, so wait for
+  // the content to reach the buffer instead of guessing how long that takes.
+  const waitForBuffer = (page, needle) =>
+    expect.poll(() => bufferHas(page, needle), { timeout: 15000 }).toBe(true);
+
   const search = async (page, query) => {
     await page.evaluate((q) => {
       elements.terminalSearchInput.value = q;
@@ -40,7 +53,7 @@ test.describe("Searching TUI scrollback", () => {
   test("xterm really does discard what a TUI scrolls past", async ({ page }) => {
     await ready(page);
     await fillTui(page);
-    await page.waitForTimeout(900);
+    await waitForBuffer(page, "MARKER-120 ");
     const buffers = await page.evaluate(() => {
       const [terminal] = [...state.terminals.values()];
       const read = (buffer) => {
@@ -65,7 +78,7 @@ test.describe("Searching TUI scrollback", () => {
   test("keeps a pane whose scrolled-past TUI output matches", async ({ page }) => {
     await ready(page);
     await fillTui(page);
-    await page.waitForTimeout(900);
+    await waitForBuffer(page, "MARKER-120 ");
 
     const early = await search(page, "MARKER-3 ");
     expect(early.hidden).toBe(false);
@@ -86,7 +99,7 @@ test.describe("Searching TUI scrollback", () => {
       const [terminal] = [...state.terminals.values()];
       writeTerminal(terminal, "ordinary shell output\r\n");
     });
-    await page.waitForTimeout(400);
+    await waitForBuffer(page, "ordinary shell output");
     const retained = await page.evaluate(() => [...state.terminals.values()][0].tuiTranscript || "");
     expect(retained).toBe("");
   });

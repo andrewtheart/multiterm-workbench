@@ -109,7 +109,8 @@ namespace MultiTerm.CopilotSdkHost
 
                 bool titleOperation = String.Equals(request.Operation, "title", StringComparison.OrdinalIgnoreCase);
                 bool searchOperation = String.Equals(request.Operation, "search", StringComparison.OrdinalIgnoreCase);
-                if (!titleOperation && !searchOperation)
+                bool groupOperation = String.Equals(request.Operation, "group-pages", StringComparison.OrdinalIgnoreCase);
+                if (!titleOperation && !searchOperation && !groupOperation)
                 {
                     throw new InvalidOperationException("Unsupported SDK host operation.");
                 }
@@ -165,9 +166,11 @@ namespace MultiTerm.CopilotSdkHost
                         await session.SendAsync(new MessageOptions { Prompt = request.Prompt ?? String.Empty }).ConfigureAwait(false);
                         Task finished = await Task.WhenAny(completion.Task, Task.Delay(TimeSpan.FromMinutes(3))).ConfigureAwait(false);
                         if (finished != completion.Task) throw new TimeoutException(
-                            searchOperation
-                                ? "GitHub Copilot session search timed out."
-                                : "GitHub Copilot title generation timed out.");
+                            groupOperation
+                                ? "GitHub Copilot page grouping timed out."
+                                : searchOperation
+                                    ? "GitHub Copilot session search timed out."
+                                    : "GitHub Copilot title generation timed out.");
                         string text = await completion.Task.ConfigureAwait(false);
                         WriteResponse(await BuildCompletionResponseAsync(session, text).ConfigureAwait(false));
                     }

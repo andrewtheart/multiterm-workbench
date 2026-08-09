@@ -310,6 +310,181 @@ test.describe("Terminal header backgrounds", () => {
   });
 });
 
+test.describe("Terminal header background quick picker", () => {
+  // Side-by-side panes can push late header actions into the overflow menu, so
+  // these stack the panes and exercise the button where it lives by default.
+  async function stackedReset(page, count = 2) {
+    await reset(page, count);
+    await page.evaluate(() => {
+      state.settings.layout = "vertical";
+      applySettings();
+    });
+    await expect(page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').first()).toBeVisible();
+  }
+
+  test.afterEach(async ({ page }) => {
+    await page.evaluate(() => {
+      closeHeaderBackgroundFlyout();
+      closeHeaderBackgroundEditor({ restoreFocus: false });
+      state.settings.layout = defaultSettings.layout;
+      // Remembered colors live in persisted settings, so a leak here would change
+      // the swatch counts every later spec file sees.
+      state.settings.headerBackgroundCustomColors = [];
+      applySettings();
+      saveSettings();
+      closeAllTerminals();
+    });
+  });
+
+  test("opens centered under the header button and paints only that terminal", async ({ page }) => {
+    await stackedReset(page, 2);
+    const button = page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').first();
+    await button.click();
+
+    const flyout = page.locator("#headerBackgroundFlyout");
+    await expect(flyout).toBeVisible();
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator("#headerBackgroundFlyoutSubtitle")).toHaveText("Gradient terminal 1");
+
+    const geometry = await page.evaluate(() => {
+      const anchor = document.querySelector('.terminal-pane .pane-actions button[data-action="header-background"]');
+      const anchorRect = anchor.getBoundingClientRect();
+      const rect = document.querySelector("#headerBackgroundFlyout").getBoundingClientRect();
+      return {
+        centerOffset: Math.abs((rect.left + rect.width / 2) - (anchorRect.left + anchorRect.width / 2)),
+        below: Math.round(rect.top - anchorRect.bottom)
+      };
+    });
+    expect(geometry.centerOffset).toBeLessThan(2);
+    expect(geometry.below).toBe(7);
+
+    const swatches = page.locator("#headerBackgroundFlyoutSwatches .header-background-swatch");
+    await expect(swatches).toHaveCount(8);
+    await swatches.nth(2).click();
+
+    const painted = await page.evaluate(() => {
+      const terminals = [...state.terminals.values()];
+      return {
+        first: terminals[0].headerBackground,
+        firstBar: terminals[0].pane.querySelector(".pane-bar").style.getPropertyValue("--pane-bar-custom-bg"),
+        secondBar: terminals[1].pane.querySelector(".pane-bar").style.getPropertyValue("--pane-bar-custom-bg"),
+        snapshot: JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]")
+          .find((entry) => entry.id === terminals[0].id)?.headerBackground
+      };
+    });
+    expect(painted.first.type).toBe("linear");
+    expect(painted.first.stops).toHaveLength(2);
+    expect(painted.firstBar).toContain("linear-gradient");
+    expect(painted.secondBar).toBe("");
+    expect(painted.snapshot).toEqual(painted.first);
+    // The chosen swatch stays marked so the flyout reflects the live header.
+    await expect(swatches.nth(2)).toHaveAttribute("aria-pressed", "true");
+
+    await page.locator("#headerBackgroundFlyoutReset").click();
+    await expect.poll(() => page.evaluate(
+      () => [...state.terminals.values()][0].pane.querySelector(".pane-bar").style.getPropertyValue("--pane-bar-custom-bg")
+    )).toBe("");
+    expect(await page.evaluate(() => [...state.terminals.values()][0].headerBackground)).toBeNull();
+  });
+
+  test("remembers up to eight custom colors and drops the oldest", async ({ page }) => {
+    await stackedReset(page, 1);
+    await page.evaluate(() => {
+      state.settings.headerBackgroundCustomColors = [];
+      saveSettings();
+    });
+    await page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').first().click();
+    await expect(page.locator("#headerBackgroundFlyout")).toBeVisible();
+
+    const pick = (color) => page.evaluate((value) => {
+      elements.headerBackgroundFlyoutColor.value = value;
+      elements.headerBackgroundFlyoutColor.dispatchEvent(new Event("change", { bubbles: true }));
+    }, color);
+    const stored = () => page.evaluate(
+      () => JSON.parse(localStorage.getItem("multiterm.settings")).headerBackgroundCustomColors
+    );
+    const customRow = page.locator("#headerBackgroundFlyoutCustomRow");
+    const customSwatches = page.locator("#headerBackgroundFlyoutCustomSwatches .header-background-swatch");
+
+    await expect(customRow).toBeHidden();
+
+    await pick("#112233");
+    await expect(customRow).toBeVisible();
+    await expect(customSwatches).toHaveCount(1);
+    expect(await stored()).toEqual(["#112233"]);
+
+    // Nine picks in total, so the first one has to fall off the end.
+    const picks = ["#221133", "#331122", "#113322", "#223311", "#332211", "#111122", "#221111", "#112211"];
+    for (const color of picks) await pick(color);
+    await expect(customSwatches).toHaveCount(8);
+    expect(await stored()).toEqual([...picks].reverse());
+
+    // Re-picking a remembered colour promotes it instead of adding a ninth.
+    await pick("#331122");
+    await expect(customSwatches).toHaveCount(8);
+    expect((await stored())[0]).toBe("#331122");
+
+    // A preset is already one click away, so it must not consume a slot.
+    const preset = await page.evaluate(() => HEADER_BACKGROUND_QUICK_COLORS[0]);
+    await pick(preset.toLowerCase());
+    await expect(customSwatches).toHaveCount(8);
+    expect(await stored()).not.toContain(preset);
+
+    // A remembered colour still paints the header when clicked.
+    await customSwatches.nth(3).click();
+    expect(await page.evaluate(() => [...state.terminals.values()][0].headerBackground?.type)).toBe("linear");
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    expect(await stored()).toHaveLength(8);
+  });
+
+  test("hands the same terminal to the full editor and closes on Escape", async ({ page }) => {
+    await stackedReset(page, 2);
+    const secondButton = page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').nth(1);
+    await secondButton.click();
+    await expect(page.locator("#headerBackgroundFlyout")).toBeVisible();
+
+    await page.locator("#headerBackgroundFlyoutMore").click();
+    await expect(page.locator("#headerBackgroundFlyout")).toBeHidden();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeVisible();
+    expect(await page.evaluate(() => headerBackgroundTerminalId)).toBe(
+      await page.evaluate(() => [...state.terminals.values()][1].id)
+    );
+
+    await page.locator("#headerBackgroundCancel").click();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeHidden();
+
+    await secondButton.click();
+    await expect(page.locator("#headerBackgroundFlyout")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#headerBackgroundFlyout")).toBeHidden();
+    await expect(secondButton).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("closes with its terminal and reopens from the overflow menu", async ({ page }) => {
+    await stackedReset(page, 2);
+    await page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').first().click();
+    await expect(page.locator("#headerBackgroundFlyout")).toBeVisible();
+    await page.evaluate(() => removeTerminal([...state.terminals.values()][0].id));
+    await expect(page.locator("#headerBackgroundFlyout")).toBeHidden();
+    expect(await page.evaluate(() => headerBackgroundFlyoutId)).toBeNull();
+
+    await page.evaluate(() => {
+      state.settings.headerActionsInMenu = [...state.settings.headerActionsInMenu, "header-background"];
+      for (const terminal of state.terminals.values()) applyHeaderActionPlacement(terminal);
+      saveSettings();
+    });
+    await page.locator('.terminal-pane .pane-actions button[data-action="more"]').first().click();
+    await page.locator("#contextMenu .ctx-item").filter({ hasText: "Header background" }).click();
+    await expect(page.locator("#headerBackgroundFlyout")).toBeVisible();
+    await page.evaluate(() => {
+      state.settings.headerActionsInMenu = defaultSettings.headerActionsInMenu.slice();
+      saveSettings();
+    });
+  });
+});
+
 function cssColorToHexInPage(value) {
   const rgb = String(value).match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
   if (!rgb) return value;

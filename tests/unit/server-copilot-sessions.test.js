@@ -128,7 +128,10 @@ describe("Copilot CLI session discovery", () => {
             cwd: "c".repeat(1040),
             provider: "copilot",
             shell: "s".repeat(80),
-            recordedAt: "r".repeat(50)
+            recordedAt: "r".repeat(50),
+            remote: true,
+            remoteSessionId: "80f9b2ee-4618-4e71-b8a0-ae5fb172b62b",
+            remoteUrl: "https://github.com/copilot/agents"
           },
           { id: "claude-1", provider: "claude" },
           { id: "unsupported", provider: "other" },
@@ -149,14 +152,20 @@ describe("Copilot CLI session discovery", () => {
           cwd: "c".repeat(1024),
           provider: "copilot",
           shell: "s".repeat(64),
-          recordedAt: "r".repeat(40)
+          recordedAt: "r".repeat(40),
+          remote: true,
+          remoteSessionId: "80f9b2ee-4618-4e71-b8a0-ae5fb172b62b",
+          remoteUrl: "https://github.com/copilot/agents"
         }, {
           id: "claude-1",
           title: "",
           cwd: "",
           provider: "claude",
           shell: "",
-          recordedAt: ""
+          recordedAt: "",
+          remote: false,
+          remoteSessionId: "",
+          remoteUrl: ""
         }]
       });
 
@@ -587,6 +596,82 @@ describe("Copilot CLI session discovery", () => {
       requestId: "ai-search",
       keys: [`cli:${id}`]
     }));
+  });
+
+  it("groups terminals into pages and rejects partial or invented assignments", async () => {
+    const catalog = JSON.stringify([
+      { id: "t-1", title: "api build", shell: "pwsh", cwd: "D:\\api", page: "Page 1", excerpt: "npm run build" },
+      { id: "t-2", title: "api tests", shell: "pwsh", cwd: "D:\\api", page: "Page 1", excerpt: "npm test" },
+      { id: "t-3", title: "docs", shell: "pwsh", cwd: "D:\\docs", page: "Page 1", excerpt: "pandoc" }
+    ]);
+
+    expect(server.parseTerminalGroupCatalog(catalog)).toHaveLength(3);
+    expect(() => server.parseTerminalGroupCatalog("not json")).toThrow("missing or malformed");
+    expect(() => server.parseTerminalGroupCatalog(JSON.stringify([{ id: "only" }]))).toThrow("At least two terminals");
+    // Control characters in untrusted titles must not survive into the prompt.
+    expect(server.parseTerminalGroupCatalog(JSON.stringify([
+      { id: "t-1", title: "a\u0000b" },
+      { id: "t-1", title: "duplicate id" },
+      { id: "t-2", title: "second" }
+    ]))).toEqual([
+      { id: "t-1", title: "a b", shell: "", cwd: "", page: "", excerpt: "" },
+      { id: "t-2", title: "second", shell: "", cwd: "", page: "", excerpt: "" }
+    ]);
+
+    const allowed = new Set(["t-1", "t-2", "t-3"]);
+    expect(server.parseTerminalPageGroups(JSON.stringify({
+      groups: [
+        { name: "API", terminals: ["t-1", "t-2"] },
+        { name: "Docs", terminals: ["t-3"] }
+      ]
+    }), allowed)).toEqual([
+      { name: "API", terminals: ["t-1", "t-2"] },
+      { name: "Docs", terminals: ["t-3"] }
+    ]);
+    expect(() => server.parseTerminalPageGroups("no json", allowed)).toThrow("invalid grouping response");
+    expect(() => server.parseTerminalPageGroups(JSON.stringify({ other: [] }), allowed)).toThrow("invalid grouping response");
+    expect(() => server.parseTerminalPageGroups(JSON.stringify({
+      groups: [{ name: "Partial", terminals: ["t-1"] }]
+    }), allowed)).toThrow("exactly one group");
+    expect(server.parseTerminalPageGroups(JSON.stringify({
+      groups: [{ name: "Invented", terminals: ["t-1", "t-2", "t-3", "t-9"] }, { name: "Empty", terminals: [] }]
+    }), allowed)).toEqual([{ name: "Invented", terminals: ["t-1", "t-2", "t-3"] }]);
+
+    expect(server.terminalPageGroupPrompt([{ id: "t-1", title: "api" }]))
+      .toContain("Every supplied terminal id must appear exactly once");
+
+    const groupFixture = copilotSdkFixture({
+      output: JSON.stringify({ groups: [{ name: "API", terminals: ["t-1", "t-2"] }, { name: "Docs", terminals: ["t-3"] }] })
+    });
+    const groupClient = { send: vi.fn() };
+    server.handleClientMessage(groupClient, JSON.stringify({
+      type: "groupTerminalPages",
+      requestId: "group-1",
+      terminals: catalog,
+      contextKb: 1024
+    }), { createCopilotClient: groupFixture.createClient });
+    await vi.waitFor(() => expect(groupClient.send).toHaveBeenCalledWith({
+      type: "terminalPageGroups",
+      requestId: "group-1",
+      groups: [{ name: "API", terminals: ["t-1", "t-2"] }, { name: "Docs", terminals: ["t-3"] }]
+    }));
+
+    const failing = { send: vi.fn() };
+    await server.sendTerminalPageGroups(failing, { requestId: "group-2", terminals: "[]" });
+    expect(failing.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "terminalPageGroups",
+      requestId: "group-2",
+      groups: []
+    }));
+
+    await expect(server.groupTerminalPages({
+      terminals: JSON.stringify(Array.from({ length: 24 }, (_, index) => ({
+        id: `big-${index}`,
+        title: `terminal ${index}`,
+        excerpt: "x".repeat(4000)
+      }))),
+      contextKb: 64
+    })).rejects.toThrow("Increase AI session search context");
   });
 
   it("exports selected editor history into a bounded private continuation file", async () => {
