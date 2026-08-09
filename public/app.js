@@ -3610,7 +3610,9 @@ function renderHeaderActionShortcutFlyout() {
     status = `${label} is already used by "${conflict.label}". Pick another combination.`;
     blocked = true;
   } else if (conflict?.kind === "header") {
-    status = `${label} will be taken away from "${conflict.label}".`;
+    status = conflict.terminals
+      ? `${label} will be taken away from "${conflict.label}" on ${conflict.terminals} terminal${conflict.terminals === 1 ? "" : "s"}.`
+      : `${label} will be taken away from "${conflict.label}".`;
   } else if (!pending.binding) {
     status = "No shortcut assigned.";
   } else if (pending.scope === "terminal") {
@@ -8126,7 +8128,39 @@ function headerActionShortcutConflict(signature, action, scope, terminal) {
     && globalShortcutSignature(headerActionShortcut(candidate, scope === "terminal" ? terminal : null)) === signature
   ));
   if (clash) return { kind: "header", action: clash, label: HEADER_ACTIONS[clash].label.replace("\u2026", "") };
+  if (scope !== "terminal") {
+    const override = headerActionShortcutOverrideClash(action, signature);
+    if (override) {
+      return {
+        kind: "header",
+        action: override.action,
+        label: HEADER_ACTIONS[override.action].label.replace("\u2026", ""),
+        terminals: override.count
+      };
+    }
+  }
   return null;
+}
+
+// Remapping every terminal at once still has to reckon with per-terminal
+// overrides, which outlive a global remap unless they are cleared, so the
+// editor can warn about the ones it is about to unassign.
+function headerActionShortcutOverrideClash(action, signature) {
+  let clashAction = null;
+  let count = 0;
+  for (const terminal of state.terminals.values()) {
+    const overrides = terminal.headerActionShortcutOverrides;
+    if (!overrides) continue;
+    for (const candidate of HEADER_ACTION_IDS) {
+      if (candidate === action) continue;
+      if (!Object.prototype.hasOwnProperty.call(overrides, candidate)) continue;
+      if (globalShortcutSignature(headerActionShortcut(candidate, terminal)) !== signature) continue;
+      if (!clashAction) clashAction = candidate;
+      count += 1;
+      break;
+    }
+  }
+  return clashAction ? { action: clashAction, count } : null;
 }
 
 function headerActionShortcutDefaultConflicts() {
@@ -8146,6 +8180,26 @@ function headerActionShortcutDefaultConflicts() {
     if (globalAction) conflicts.push({ action, reason: `shipped binding for ${globalAction.id}` });
   }
   return conflicts;
+}
+
+// A per-terminal override survives a global remap, so after one action takes a
+// combination for every terminal, any terminal that still points that same
+// combination at a different action has to give it up.
+function clearHeaderActionShortcutOverrideClashes(action, signature) {
+  for (const terminal of state.terminals.values()) {
+    const overrides = terminal.headerActionShortcutOverrides;
+    if (!overrides) continue;
+    let changed = false;
+    const next = { ...normalizeHeaderActionShortcuts(overrides) };
+    for (const candidate of HEADER_ACTION_IDS) {
+      if (candidate === action) continue;
+      if (!Object.prototype.hasOwnProperty.call(next, candidate)) continue;
+      if (globalShortcutSignature(headerActionShortcut(candidate, terminal)) !== signature) continue;
+      next[candidate] = null;
+      changed = true;
+    }
+    if (changed) terminal.headerActionShortcutOverrides = next;
+  }
 }
 
 function setHeaderActionShortcut(terminalId, action, binding, scope) {
@@ -8169,6 +8223,11 @@ function setHeaderActionShortcut(terminalId, action, binding, scope) {
     next[action] = normalized;
     state.settings.headerActionShortcuts = next;
     saveSettings();
+    // A global binding does not displace a per-terminal one, so any terminal
+    // that already gave this combination to another action would answer to it
+    // twice. Those overrides have to be cleared too, or dispatch on that
+    // terminal comes down to which action is declared first.
+    if (signature) clearHeaderActionShortcutOverrideClashes(action, signature);
   } else {
     const next = { ...normalizeHeaderActionShortcuts(terminal.headerActionShortcutOverrides) };
     if (signature) {
