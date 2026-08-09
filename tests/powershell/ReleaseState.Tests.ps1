@@ -247,16 +247,45 @@ Describe "release checkpoint state" {
             $script:ran | Should Be 1
         }
 
-        It "rejects a stage action that returns something other than a hashtable" {
+        It "treats tool chatter as output rather than stage data" {
+            # Stages shell out to compilers and packagers, whose stdout lands on
+            # the success stream. Mistaking that for a result once failed every
+            # release at its first stage.
+            $state = New-ReleaseState -Version "1.0.0" -Tag "v1.0.0"
+            $data = Invoke-ReleaseStage -State $state -StatePath $statePath -Name "build" -Description "the build" `
+                -Fingerprint "abc" -Action {
+                    Write-Output "Microsoft (R) Build Engine"
+                    Write-Output "Build succeeded."
+                }
+
+            $data | Should BeNullOrEmpty
+            (Test-ReleaseStageComplete -State $state -Name "build" -Fingerprint "abc") | Should Be $true
+        }
+
+        It "records the hashtable a noisy stage produces" {
+            $state = New-ReleaseState -Version "1.0.0" -Tag "v1.0.0"
+            $data = Invoke-ReleaseStage -State $state -StatePath $statePath -Name "notes" -Description "the notes" `
+                -Fingerprint "abc" -Action {
+                    Write-Output "resolving..."
+                    @{ body = "the notes" }
+                    Write-Output "done"
+                }
+
+            $data.body | Should Be "the notes"
+            (Read-ReleaseState -Path $statePath).stages.notes.data.body | Should Be "the notes"
+        }
+
+        It "rejects a stage that produces more than one result" {
             $state = New-ReleaseState -Version "1.0.0" -Tag "v1.0.0"
             $threw = $false
             try {
                 Invoke-ReleaseStage -State $state -StatePath $statePath -Name "build" -Description "the build" `
-                    -Action { return "not a hashtable" } | Out-Null
+                    -Action { @{ first = 1 }; @{ second = 2 } } | Out-Null
             }
             catch { $threw = $true }
 
             $threw | Should Be $true
+            (Test-ReleaseStageComplete -State $state -Name "build") | Should Be $false
         }
     }
 

@@ -350,6 +350,11 @@ function Invoke-ReleaseStage {
         $Validate must be side-effect free: it runs on the resume path to prove
         the previous run's output survived. When it returns false the stage is
         re-run, which is always the safe direction.
+
+        Stages shell out to compilers and packagers, so most of what $Action
+        emits is tool chatter rather than a result. That chatter is written
+        through to the host as it arrives, keeping a long build observable, and
+        only a hashtable is treated as the stage's recorded data.
     #>
     param(
         [Parameter(Mandatory)][hashtable]$State,
@@ -379,10 +384,15 @@ function Invoke-ReleaseStage {
         Reset-ReleaseStage -State $State -Name $Name -Path $StatePath
     }
 
-    $data = & $Action
-    if ($null -ne $data -and -not ($data -is [hashtable])) {
-        throw "Release stage '$Name' returned $($data.GetType().Name); stage actions must return a hashtable or nothing."
+    $produced = [System.Collections.ArrayList]::new()
+    & $Action | ForEach-Object {
+        if ($_ -is [hashtable]) { [void]$produced.Add($_) }
+        else { $_ | Out-Host }
     }
+    if ($produced.Count -gt 1) {
+        throw "Release stage '$Name' produced $($produced.Count) result hashtables; a stage must produce at most one."
+    }
+    $data = if ($produced.Count -eq 1) { $produced[0] } else { $null }
     Set-ReleaseStageComplete -State $State -Name $Name -Fingerprint $Fingerprint -Data $data -Path $StatePath
     return $data
 }
