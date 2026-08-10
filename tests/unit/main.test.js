@@ -24,7 +24,15 @@ const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
-const main = require("../../main.js");
+const inheritedPort = process.env.PORT;
+process.env.PORT = "3177";
+let main;
+try {
+  main = require("../../main.js");
+} finally {
+  if (inheritedPort === undefined) delete process.env.PORT;
+  else process.env.PORT = inheritedPort;
+}
 
 let electron;
 
