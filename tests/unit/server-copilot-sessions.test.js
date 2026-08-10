@@ -684,8 +684,8 @@ describe("Copilot CLI session discovery", () => {
       { id: "t-1", title: "duplicate id" },
       { id: "t-2", title: "second" }
     ]))).toEqual([
-      { id: "t-1", title: "a b", shell: "", cwd: "", page: "", excerpt: "" },
-      { id: "t-2", title: "second", shell: "", cwd: "", page: "", excerpt: "" }
+      { id: "t-1", title: "a b", shell: "", cwd: "", page: "", members: "", excerpt: "" },
+      { id: "t-2", title: "second", shell: "", cwd: "", page: "", members: "", excerpt: "" }
     ]);
 
     const allowed = new Set(["t-1", "t-2", "t-3"]);
@@ -742,6 +742,63 @@ describe("Copilot CLI session discovery", () => {
       }))),
       contextKb: 64
     })).rejects.toThrow("Increase AI session search context");
+
+    await expect(server.groupTerminalPages({
+      scope: "pages",
+      terminals: JSON.stringify(Array.from({ length: 24 }, (_, index) => ({
+        id: `large-page-${index}`,
+        title: `page ${index}`,
+        members: "terminal title ".repeat(20),
+        excerpt: "x".repeat(4000)
+      }))),
+      contextKb: 64
+    })).rejects.toThrow("Grouping these pages needs");
+  });
+
+  it("groups pages into page groups when the caller asks for that scope", async () => {
+    // The scope has to reach the catalog parser, not just the prompt: the wording
+    // of this refusal is the only signal the renderer gets.
+    expect(() => server.parseTerminalGroupCatalog(JSON.stringify([{ id: "page-1" }]), "pages"))
+      .toThrow("At least two pages are needed to group them.");
+
+    const entries = server.parseTerminalGroupCatalog(JSON.stringify([
+      { id: "page-1", title: "Release", members: "build | tests", excerpt: "[start] a [middle] b [latest] c" },
+      { id: "page-2", title: "Docs", members: "pandoc" }
+    ]), "pages");
+    expect(entries[0].members).toBe("build | tests");
+
+    const pagePrompt = server.terminalPageGroupPrompt(entries, "pages");
+    expect(pagePrompt).toContain("Group these workbench pages into a small number of named page groups.");
+    expect(pagePrompt).toContain("Every supplied page id must appear exactly once");
+    expect(pagePrompt).toContain("exact-page-id");
+    expect(pagePrompt).toContain("<pages>");
+    expect(pagePrompt).not.toContain("<terminals>");
+
+    const terminalPrompt = server.terminalPageGroupPrompt(entries, "terminals");
+    expect(terminalPrompt).toContain("Group these terminal sessions into a small number of named workbench pages.");
+    expect(terminalPrompt).toContain("<terminals>");
+    expect(terminalPrompt).not.toContain("<pages>");
+
+    const fixture = copilotSdkFixture({
+      output: JSON.stringify({ groups: [{ name: "Shipping", terminals: ["page-1", "page-2"] }] })
+    });
+    const client = { send: vi.fn() };
+    server.handleClientMessage(client, JSON.stringify({
+      type: "groupTerminalPages",
+      requestId: "pages-1",
+      scope: "pages",
+      terminals: JSON.stringify([
+        { id: "page-1", title: "Release", members: "build | tests" },
+        { id: "page-2", title: "Docs", members: "pandoc" }
+      ]),
+      contextKb: 1024
+    }), { createCopilotClient: fixture.createClient });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "terminalPageGroups",
+      requestId: "pages-1",
+      groups: [{ name: "Shipping", terminals: ["page-1", "page-2"] }]
+    }));
+    expect(fixture.session.sendAndWait.mock.calls.at(-1)[0].prompt).toContain("<pages>");
   });
 
   it("exports selected editor history into a bounded private continuation file", async () => {
