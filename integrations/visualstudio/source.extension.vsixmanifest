@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
   <Metadata>
-    <Identity Id="andrewtheart.multiterm-workbench.visualstudio" Version="0.1.88" Language="en-US" Publisher="Andrew Stein" />
+    <Identity Id="andrewtheart.multiterm-workbench.visualstudio" Version="0.1.89" Language="en-US" Publisher="Andrew Stein" />
     <DisplayName>MultiTerm Workbench for Visual Studio</DisplayName>
     <Description xml:space="preserve">Open solutions, projects, folders, and selected files in MultiTerm Workbench.</Description>
     <MoreInfo>https://github.com/andrewtheart/multiterm-workbench</MoreInfo>
