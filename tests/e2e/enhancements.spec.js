@@ -618,9 +618,15 @@ test.describe("Enhancement milestone", () => {
       title: "Runs GitHub Copilot with permission prompts bypassed in the focused terminal, or opens one on this page",
       frames: undefined
     });
-    const command = "copilot --yolo --model \"gpt-5.4\" --effort high --context long_context";
-    const commandIndex = result.frames.findIndex((frame) => frame.data === command);
+    // MultiTerm mints the session UUID so a terminal's notes can be hung off the
+    // resume card later, so the id varies while the rest of the command does not.
+    const commandIndex = result.frames.findIndex((frame) => typeof frame.data === "string"
+      && frame.data.startsWith("copilot --yolo --session-id="));
     expect(commandIndex).toBeGreaterThanOrEqual(0);
+    const command = result.frames[commandIndex].data;
+    expect(command).toMatch(
+      /^copilot --yolo --session-id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} --model "gpt-5\.4" --effort high --context long_context$/
+    );
     expect(result.frames.slice(commandIndex, commandIndex + 2)).toEqual([
       { type: "input", id: result.frames[commandIndex].id, data: command },
       { type: "input", id: result.frames[commandIndex].id, data: "\r" }
@@ -704,14 +710,15 @@ test.describe("Enhancement milestone", () => {
       showSurfaceContextMenu(20, 20);
     });
 
-    const command = "copilot --yolo --model \"gpt-5.4\" --effort high --context long_context";
+    const commandPattern = /^copilot --yolo --session-id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} --model "gpt-5\.4" --effort high --context long_context$/;
     await page.getByRole("menuitem", { name: "Run GitHub Copilot", exact: true }).click();
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
-    await expect.poll(() => page.evaluate((expectedCommand) => window.__copilotLaunchFrames
-      .filter((frame) => frame.type === "input" && (frame.data === expectedCommand || frame.data === "\r"))
-      .map((frame) => frame.data), command)).toEqual([command, "\r"]);
+    // The session UUID MultiTerm mints varies, so the launch is matched by shape.
+    await expect.poll(() => page.evaluate((source) => window.__copilotLaunchFrames
+      .filter((frame) => frame.type === "input" && (new RegExp(source).test(frame.data) || frame.data === "\r"))
+      .map((frame) => (frame.data === "\r" ? "\r" : "command")), commandPattern.source)).toEqual(["command", "\r"]);
 
-    const result = await page.evaluate(({ command, expectedPageId }) => {
+    const result = await page.evaluate(({ source, expectedPageId }) => {
       state.socket.send = window.__copilotLaunchOriginalSend;
       delete window.__copilotLaunchOriginalSend;
       const profile = window.__copilotLaunchProfile;
@@ -721,12 +728,13 @@ test.describe("Enhancement milestone", () => {
       state.settings.aiSessionModel = profile.model;
       state.settings.aiSessionEffort = profile.effort;
       state.settings.aiSessionContext = profile.context;
+      const pattern = new RegExp(source);
       const create = window.__copilotLaunchFrames.find((frame) => frame.type === "create");
       const input = window.__copilotLaunchFrames
         .filter((frame) => frame.type === "input"
           && frame.id === create.id
-          && (frame.data === command || frame.data === "\r"))
-        .map((frame) => frame.data);
+          && (pattern.test(frame.data) || frame.data === "\r"))
+        .map((frame) => (frame.data === "\r" ? "\r" : "command"));
       delete window.__copilotLaunchFrames;
       const terminal = state.terminals.get(create.id);
       return {
@@ -735,9 +743,9 @@ test.describe("Enhancement milestone", () => {
         terminalId: terminal.id,
         terminalPageId: terminal.pageId
       };
-    }, { command, expectedPageId: setup.pageId });
+    }, { source: commandPattern.source, expectedPageId: setup.pageId });
     expect(result.terminalPageId).toBe(setup.pageId);
-    expect(result.input).toEqual([command, "\r"]);
+    expect(result.input).toEqual(["command", "\r"]);
 
     await page.evaluate(({ existingId, terminalId, pageId }) => {
       removeTerminal(terminalId);

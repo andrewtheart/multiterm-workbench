@@ -927,7 +927,6 @@ test.describe("MultiTerm Workbench UI", () => {
     // Every header action advertises its own remappable shortcut here.
     await expect(menu.locator(".ctx-item")).toHaveText([
       "Notifications\u2026",
-      "Notes & command queueCtrl+Alt+Shift+A",
       "Header background\u2026Ctrl+Alt+Shift+B",
       "MinimizeCtrl+Alt+Shift+M",
       "MaximizeCtrl+Alt+Shift+X",

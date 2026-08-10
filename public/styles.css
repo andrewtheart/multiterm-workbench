@@ -2599,6 +2599,61 @@ body.header-hidden .status-hint kbd,
   text-align: right;
 }
 
+.copilot-session-notes {
+  align-self: stretch;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
+}
+
+.copilot-session-note {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.copilot-session-note-meta {
+  color: var(--muted);
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-session-note.is-recovered .copilot-session-note-meta {
+  font-style: italic;
+}
+
+.copilot-session-note-text {
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.copilot-session-notes-more {
+  align-self: flex-start;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.copilot-session-notes-more:hover {
+  text-decoration: underline;
+}
+
+.copilot-session-note-hint {
+  color: var(--muted);
+  font-size: 9.5px;
+  font-style: italic;
+}
+
 .copilot-session-aside time {
   color: var(--muted);
   font-size: 10px;
@@ -4469,6 +4524,115 @@ body[data-pager-placement="right"] .pager-name {
   text-align: left;
 }
 
+.pager-group {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface-raised) 45%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 4px;
+}
+
+.pager-group:has(.pager-chip.is-active) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
+}
+
+.pager-group-header {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 11.5px;
+  font-weight: 600;
+  gap: 4px;
+  letter-spacing: 0.25px;
+  min-height: 24px;
+  min-width: 0;
+  padding: 0 6px;
+  text-transform: uppercase;
+}
+
+.pager-group-header:hover {
+  background: var(--surface-high);
+  color: var(--text);
+}
+
+.pager-group-header svg {
+  height: 13px;
+  transition: transform var(--dur) var(--ease-standard);
+  width: 13px;
+}
+
+.pager-group.is-collapsed .pager-group-header svg {
+  transform: rotate(-90deg);
+}
+
+.pager-group-name {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pager-group-count {
+  background: var(--surface-high);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 16px;
+  padding: 1px 5px;
+  text-align: center;
+}
+
+.pager-group-chips {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Collapsed with the active page elsewhere leaves nothing to draw. */
+.pager-group-chips:empty {
+  display: none;
+}
+
+.pager-group-rename {
+  text-transform: none;
+}
+
+body[data-pager-placement="left"] .pager-group,
+body[data-pager-placement="right"] .pager-group {
+  align-items: stretch;
+  flex-direction: column;
+  width: 100%;
+}
+
+body[data-pager-placement="left"] .pager-group-chips,
+body[data-pager-placement="right"] .pager-group-chips {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+body[data-pager-placement="left"] .pager-group-header,
+body[data-pager-placement="right"] .pager-group-header {
+  justify-content: flex-start;
+}
+
+body[data-pager-placement="left"] .pager-group-name,
+body[data-pager-placement="right"] .pager-group-name {
+  flex: 1;
+  max-width: none;
+  text-align: left;
+}
+
 .pager-edit {
   align-items: center;
   border-radius: 3px;
@@ -4600,12 +4764,12 @@ body[data-pager-placement="right"] .pager-add {
   width: 14px;
 }
 
-.pager-group[disabled] {
+.pager-ai[disabled] {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
-.pager-group[aria-expanded="true"] {
+.pager-ai[aria-expanded="true"] {
   background: var(--hover);
   border-style: solid;
   color: var(--primary);
@@ -11243,12 +11407,6 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
 .terminal-host.compact .pane-actions button[data-action="copy"],
 .terminal-host.compact .pane-actions button[data-action="color"],
 .terminal-host.compact .pane-actions button[data-action="restart"] {
-  display: none;
-}
-
-/* Narrow panes keep the primary actions but move the secondary ones (which the
-   overflow menu re-exposes) out of the header so the title keeps its space. */
-.terminal-pane.is-narrow .pane-actions button[data-action="notifications"] {
   display: none;
 }
 

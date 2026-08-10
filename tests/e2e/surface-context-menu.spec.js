@@ -1540,6 +1540,39 @@ test.describe("Surface context menu", () => {
       await page.evaluate(() => window.__restoreBridge());
     });
 
+    // A hand moves a few pixels while clicking. Measured against the old
+    // pixel-only threshold, 4px highlighted a character and 6px both highlighted
+    // and stopped the click reaching the application at all.
+    test("a wobbling click neither selects nor is swallowed", async ({ page }) => {
+      const ctx = await setup(page);
+      const cell = await page.evaluate((tid) => {
+        const terminal = state.terminals.get(tid);
+        const screen = terminal.term.element.querySelector(".xterm-screen");
+        return screen.getBoundingClientRect().width / terminal.term.cols;
+      }, ctx.id);
+
+      for (const wobble of [2, 4, 6]) {
+        await ctx.reset();
+        await page.evaluate((tid) => state.terminals.get(tid).term.clearSelection(), ctx.id);
+        await page.mouse.move(ctx.at(4), ctx.y);
+        await page.mouse.down();
+        await page.mouse.move(ctx.at(4) + wobble, ctx.y);
+        await page.mouse.up();
+
+        expect(await ctx.selection(), `wobble ${wobble}px must not select`).toBe("");
+        expect(await ctx.reports(), `wobble ${wobble}px must still reach the TUI`).toBeGreaterThanOrEqual(2);
+      }
+
+      // A deliberate drag of one whole cell is still a selection.
+      await ctx.reset();
+      await page.mouse.move(ctx.at(4), ctx.y);
+      await page.mouse.down();
+      await page.mouse.move(ctx.at(4) + Math.ceil(cell) + 2, ctx.y, { steps: 4 });
+      await page.mouse.up();
+      expect(await ctx.selection()).not.toBe("");
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
     test("Alt+drag hands the whole gesture to the TUI", async ({ page }) => {
       const ctx = await setup(page);
       await drag(page, ctx, 0, 7, { modifier: "Alt" });
@@ -1563,6 +1596,34 @@ test.describe("Surface context menu", () => {
 
       expect(await ctx.selection()).toBe("TUIDRAG");
       expect(await ctx.reports()).toBe(0);
+      await page.evaluate(() => window.__restoreBridge());
+    });
+
+    test("guards click wobble in an assistant TUI without mouse reporting", async ({ page }) => {
+      const ctx = await setup(page, { reporting: false });
+      await page.evaluate(async (tid) => {
+        const terminal = state.terminals.get(tid);
+        await new Promise((resolve) => terminal.term.write("\r\nCopilot v1.0.78 uses AI.\r\n", resolve));
+        // The cache may be cleared while the TUI remains painted; click routing
+        // has to trust current screen evidence instead.
+        terminal.aiAssistantTuiProvider = "";
+      }, ctx.id);
+
+      for (const wobble of [4, 6]) {
+        await ctx.reset();
+        await page.evaluate((tid) => state.terminals.get(tid).term.clearSelection(), ctx.id);
+        await page.mouse.move(ctx.at(4), ctx.y);
+        await page.mouse.down();
+        await page.mouse.move(ctx.at(4) + wobble, ctx.y);
+        await page.mouse.up();
+
+        expect(await ctx.selection(), `wobble ${wobble}px must not select`).toBe("");
+        expect(await ctx.reports()).toBe(0);
+      }
+
+      // Deliberate drag selection remains available inside the same TUI.
+      await drag(page, ctx, 0, 7);
+      expect(await ctx.selection()).toBe("TUIDRAG");
       await page.evaluate(() => window.__restoreBridge());
     });
 
@@ -1683,10 +1744,18 @@ test.describe("Surface context menu", () => {
         const screen = terminal.term.element.querySelector(".xterm-screen");
         const realRect = screen.getBoundingClientRect.bind(screen);
         // A pane mid-relayout measures zero; cells cannot be derived from it.
+        const beforeCollapse = realRect();
+        const startY = beforeCollapse.top + ((row + 0.5) * (beforeCollapse.height / terminal.term.rows));
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          clientX: beforeCollapse.left + 40,
+          clientY: startY
+        }));
         screen.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0 });
-        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: 50, clientY: 50 }));
         window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
         window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
+        terminal.term.clearSelection();
         const collapsed = terminal.term.getSelection();
         screen.getBoundingClientRect = realRect;
 

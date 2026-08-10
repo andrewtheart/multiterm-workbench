@@ -239,7 +239,8 @@ const DEFAULT_HEADER_ACTIONS_IN_MENU = defaultSettings.headerActionsInMenu.slice
 // narrow and Focus is how you get into it.
 const HEADER_ACTION_OVERFLOW_ORDER = [
   "duplicate", "move-left", "move-right", "color", "find", "clear",
-  "copy", "restart", "artifacts", "header-background", "minimize", "maximize"
+  "copy", "restart", "minimize", "maximize",
+  "header-background", "notifications", "artifacts"
 ];
 // The title needs a floor worth reading before buttons may take the rest.
 const PANE_TITLE_MIN_WIDTH = 150;
@@ -795,7 +796,9 @@ const elements = {
   pager: document.querySelector("#pager"),
   pagerAdd: document.querySelector("#pagerAdd"),
   pagerGroup: document.querySelector("#pagerGroup"),
+  pagerGroupPages: document.querySelector("#pagerGroupPages"),
   pageGroupFlyout: document.querySelector("#pageGroupFlyout"),
+  pageGroupTitle: document.querySelector("#pageGroupTitle"),
   pageGroupStatus: document.querySelector("#pageGroupStatus"),
   pageGroupList: document.querySelector("#pageGroupList"),
   pageGroupApply: document.querySelector("#pageGroupApply"),
@@ -1073,6 +1076,7 @@ const state = {
   manualLayouts: loadManualLayouts(),
   mem: { open: false, timer: null, requested: false, stats: null, unsupported: false, unsupportedReason: null },
   pages: loadPages(),
+  pageGroups: [],
   primaryId: null,
   reconnectAttempts: 0,
   reconnectTimer: null,
@@ -1100,6 +1104,7 @@ const state = {
   zoomedId: null
 };
 state.activePageId = loadActivePageId(state.pages);
+state.pageGroups = loadPageGroups(state.pages);
 
 /* ---------------- Logging & tail console --------------- */
 
@@ -2815,6 +2820,7 @@ function addTerminal(options = {}) {
     automationWorkflowTasks: [],
     automationWorkflowTimer: 0,
     aiAssistantTuiProvider: "",
+    aiSessionId: "",
     keepAliveTimer: 0,
     pendingKeepAlive: "",
     remoteEnabledAt: savedMeta?.remoteEnabledAt || "",
@@ -3443,6 +3449,12 @@ function bindTuiDragSelection(terminal, element) {
     return { col, row: row + terminal.term.buffer.active.viewportY };
   };
 
+  const cellWidth = () => {
+    const screen = element.querySelector(".xterm-screen") || element;
+    const rect = screen.getBoundingClientRect();
+    return rect.width / terminal.term.cols || 0;
+  };
+
   const applySelection = (gesture, event) => {
     const end = cellAt(event);
     let from = gesture.startCell;
@@ -3464,9 +3476,15 @@ function bindTuiDragSelection(terminal, element) {
 
   function onMove(event) {
     if (!drag.moved) {
-      const far = Math.abs(event.clientX - drag.x) >= DRAG_SELECT_THRESHOLD_PX
-        || Math.abs(event.clientY - drag.y) >= DRAG_SELECT_THRESHOLD_PX;
-      if (!far) return;
+      // A hand wobbles during a click, and a pixel-only threshold turns that into
+      // a selection because a few pixels can cross a cell boundary. A cell is the
+      // smallest thing a selection can express, so a gesture that travels less
+      // than one, or lands back in the cell it started in, is a click and still
+      // belongs to the application.
+      const cell = cellAt(event);
+      const leftStartCell = cell.col !== drag.startCell.col || cell.row !== drag.startCell.row;
+      const travelled = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
+      if (!leftStartCell || travelled < Math.max(DRAG_SELECT_THRESHOLD_PX, cellWidth())) return;
       drag.moved = true;
     }
     applySelection(drag, event);
@@ -3483,6 +3501,15 @@ function bindTuiDragSelection(terminal, element) {
       const selection = terminal.term.getSelection();
       terminal.selectionSnapshot = selection;
       terminal.selectionSnapshotPosition = selection ? (terminal.term.getSelectionPosition() || null) : null;
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    // An assistant TUI that has not enabled mouse reporting has nothing to
+    // receive. Focus was established on mousedown; letting this mouseup reach
+    // xterm would only re-enter its pixel-sensitive native selector.
+    if (!gesture.replayClick) {
+      event.preventDefault();
       event.stopImmediatePropagation();
       return;
     }
@@ -3513,9 +3540,20 @@ function bindTuiDragSelection(terminal, element) {
   terminal.pane.addEventListener("mousedown", (event) => {
     if (replaying || event.button !== 0 || event.altKey || event.shiftKey) return;
     if (!event.target.closest(".xterm")) return;
-    if (!mouseReportingActive(terminal)) return;
+    const reportsMouse = mouseReportingActive(terminal);
+    const detectedAssistant = terminal.aiAssistantTuiProvider
+      || promptDetector.aiAssistantTuiProvider(activeBufferLines(terminal));
+    if (detectedAssistant) terminal.aiAssistantTuiProvider = detectedAssistant;
+    const assistantTui = detectedAssistant === "copilot" || detectedAssistant === "claude";
+    if (!reportsMouse && !assistantTui) return;
 
-    drag = { startCell: cellAt(event), x: event.clientX, y: event.clientY, moved: false };
+    drag = {
+      startCell: cellAt(event),
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+      replayClick: reportsMouse
+    };
     forgetTerminalSelection(terminal);
     terminal.term.focus();
     window.addEventListener("mousemove", onMove, true);
@@ -7615,7 +7653,14 @@ function updateHeaderActionOverflow(terminal) {
   const leading = [...wrap.children]
     .filter((element) => element !== region && element.offsetParent !== null)
     .reduce((total, element) => total + element.getBoundingClientRect().width + 8, 0);
-  const budget = barWidth - leading - PANE_TITLE_MIN_WIDTH - 18;
+  const title = terminal.titleDisplay.dataset.fullTitle || terminal.titleInput.value || "";
+  const titleStyle = window.getComputedStyle(terminal.titleDisplay);
+  const titleFont = `${titleStyle.fontWeight} ${titleStyle.fontSize} ${titleStyle.fontFamily}`;
+  // A short title should not reserve the same 150px as a long one. The title's
+  // real width is enough until it reaches the readability floor, after which
+  // lower-priority buttons start moving into More.
+  const titleReserve = Math.min(PANE_TITLE_MIN_WIDTH, Math.ceil(measureTitleText(title, titleFont)) + 12);
+  const budget = barWidth - leading - titleReserve - 18;
 
   // Reveal-on-hover makes buttons measure zero at rest, so size the row from
   // the full set it will show when hovered, not from what is painted now.
@@ -8798,14 +8843,57 @@ function clearActiveTerminal() {
   if (state.activeId) clearTerminal(state.activeId);
 }
 
-function terminalBufferText(term) {
+function terminalBufferLines(term) {
   const buffer = term.buffer.active;
   const lines = [];
   for (let i = 0; i < buffer.length; i += 1) {
     const line = buffer.getLine(i);
     if (line) lines.push(line.translateToString(true));
   }
-  return lines.join("\n").replace(/\s+$/, "");
+  return lines;
+}
+
+function terminalBufferText(term) {
+  return terminalBufferLines(term).join("\n").replace(/\s+$/, "");
+}
+
+const OUTPUT_SAMPLE_LINES = 6;
+
+// Slicing UTF-8 at an arbitrary byte can cut a character in half, which decodes
+// to a replacement character at the seam.
+function clampSampleToBudget(parts, budgetBytes) {
+  const budget = Math.max(0, Math.floor(budgetBytes));
+  if (budget === 0 || parts.length === 0) return "";
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const share = Math.max(1, Math.floor(budget / parts.length));
+  return parts
+    .map((part) => {
+      const encoded = encoder.encode(part);
+      if (encoded.length <= share) return part;
+      return decoder.decode(encoded.slice(0, share)).replace(/\uFFFD$/, "");
+    })
+    .join(" ")
+    .trim();
+}
+
+// A tail-only excerpt loses why a terminal exists: the opening lines usually name
+// the repo or command that set it up, the middle shows the work, and the tail only
+// shows where it stopped. Bridges flatten control characters into spaces, so the
+// regions are labelled inline instead of separated by newlines.
+function sampleTerminalOutput(term, budgetBytes, linesPerRegion = OUTPUT_SAMPLE_LINES) {
+  const lines = terminalBufferLines(term).map((line) => line.trim()).filter((line) => line !== "");
+  if (lines.length === 0) return "";
+
+  const span = Math.max(1, Math.floor(linesPerRegion));
+  if (lines.length <= span * 3) return clampSampleToBudget([lines.join(" | ")], budgetBytes);
+
+  const middleStart = Math.floor((lines.length - span) / 2);
+  return clampSampleToBudget([
+    `[start] ${lines.slice(0, span).join(" | ")}`,
+    `[middle] ${lines.slice(middleStart, middleStart + span).join(" | ")}`,
+    `[latest] ${lines.slice(-span).join(" | ")}`
+  ], budgetBytes);
 }
 
 async function copyTerminalOutput(id, selectionOverride) {
@@ -9973,8 +10061,106 @@ const copilotResume = {
   silent: false,
   suspended: false,
   terminalId: null,
+  expandedNotes: new Set(),
   visibleLimit: COPILOT_SESSION_PAGE_SIZE
 };
+
+const COPILOT_SESSION_NOTE_PREVIEW_CHARS = 260;
+
+// Notes are linked by the id MultiTerm minted for the session. Sessions started
+// before that existed, or started outside MultiTerm, have no id to match, so they
+// fall back to a working-directory match that the card labels as the weaker claim
+// it is. Titles are deliberately not used: they are editable.
+function copilotSessionNoteEntries(session) {
+  const sessionId = String(session?.id || "").toLowerCase();
+  const exact = [];
+  const inferred = [];
+
+  const consider = (entry, live) => {
+    const text = String(entry?.notes || "").trim();
+    if (!text) return;
+    const row = {
+      text,
+      live,
+      title: entry.title || "Terminal",
+      updatedAt: entry.notesUpdatedAt || entry.recoveredAt || null
+    };
+    if (sessionId && String(entry.aiSessionId || "").toLowerCase() === sessionId) exact.push(row);
+    else if (!entry.aiSessionId && sameHostDirectory(entry.cwd, session?.cwd)) inferred.push(row);
+  };
+
+  for (const record of Object.values(state.terminalArtifacts.terminals)) consider(record, true);
+  for (const entry of state.terminalArtifacts.recoveredNotes) consider(entry, false);
+
+  return exact.length > 0 ? { entries: exact, exact: true } : { entries: inferred, exact: false };
+}
+
+function buildCopilotSessionNotes(session) {
+  const { entries, exact } = copilotSessionNoteEntries(session);
+  if (entries.length === 0) return null;
+
+  const wrap = document.createElement("span");
+  wrap.className = "copilot-session-notes";
+  const expanded = copilotResume.expandedNotes.has(session.key);
+
+  let used = 0;
+  let shown = 0;
+  let truncated = false;
+  for (const entry of entries) {
+    const remaining = COPILOT_SESSION_NOTE_PREVIEW_CHARS - used;
+    if (!expanded && shown > 0 && remaining <= 0) break;
+
+    const block = document.createElement("span");
+    block.className = `copilot-session-note${entry.live ? "" : " is-recovered"}`;
+
+    const meta = document.createElement("span");
+    meta.className = "copilot-session-note-meta";
+    meta.textContent = [entry.title, artifactTimeLabel(entry.updatedAt), entry.live ? "" : "recovered"]
+      .filter(Boolean)
+      .join(" \u00b7 ");
+
+    const text = document.createElement("span");
+    text.className = "copilot-session-note-text";
+    if (!expanded && entry.text.length > remaining) {
+      text.textContent = `${entry.text.slice(0, Math.max(60, remaining)).trimEnd()}\u2026`;
+      truncated = true;
+    } else {
+      text.textContent = entry.text;
+    }
+
+    block.append(meta, text);
+    wrap.append(block);
+    used += entry.text.length;
+    shown += 1;
+  }
+
+  const hidden = entries.length - shown;
+  if (!expanded && (hidden > 0 || truncated)) {
+    const more = document.createElement("span");
+    more.className = "copilot-session-notes-more";
+    more.dataset.notesMore = session.key;
+    more.setAttribute("role", "button");
+    more.textContent = hidden > 0 ? `Show ${hidden} more note${hidden === 1 ? "" : "s"}\u2026` : "Show more\u2026";
+    wrap.append(more);
+  } else if (expanded) {
+    const less = document.createElement("span");
+    less.className = "copilot-session-notes-more";
+    less.dataset.notesMore = session.key;
+    less.setAttribute("role", "button");
+    less.textContent = "Show less";
+    wrap.append(less);
+  }
+
+  if (!exact) {
+    const hint = document.createElement("span");
+    hint.className = "copilot-session-note-hint";
+    hint.title = "MultiTerm did not record a session id for these notes, so they were matched by working directory.";
+    hint.textContent = "Matched by folder";
+    wrap.append(hint);
+  }
+
+  return wrap;
+}
 
 function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
   const provider = state.settings.aiSessionProvider;
@@ -10341,8 +10527,21 @@ function renderCopilotSessions() {
     const id = document.createElement("code");
     id.textContent = session.id.slice(0, 8);
     aside.append(time, id);
-    button.append(main, aside);
-    button.addEventListener("click", () => {
+    const notes = buildCopilotSessionNotes(session);
+    button.append(main, ...(notes ? [notes] : []), aside);
+    button.addEventListener("click", (event) => {
+      // The show-more control lives inside the card button, so it has to claim
+      // its own clicks before the card treats them as "resume this session".
+      const toggle = event.target.closest("[data-notes-more]");
+      if (toggle) {
+        event.preventDefault();
+        event.stopPropagation();
+        const key = toggle.dataset.notesMore;
+        if (copilotResume.expandedNotes.has(key)) copilotResume.expandedNotes.delete(key);
+        else copilotResume.expandedNotes.add(key);
+        renderCopilotSessions();
+        return;
+      }
       if (session.source === "remote") connectToRemoteCopilotSession(session);
       else resumeCopilotSession(session);
     });
@@ -10423,8 +10622,8 @@ function powerShellLiteral(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
-function openCopilotSessionTerminal(session, command, cwd = session.cwd, provider = copilotResume.provider, pendingCwdChange = null) {
-  return addTerminal({
+function openCopilotSessionTerminal(session, command, cwd = session.cwd, provider = copilotResume.provider, pendingCwdChange = null, aiSessionId = "") {
+  const created = addTerminal({
     reveal: true,
     runStartup: true,
     shell: "pwsh",
@@ -10433,6 +10632,11 @@ function openCopilotSessionTerminal(session, command, cwd = session.cwd, provide
     title: `${aiAssistantName(provider)} \u00b7 ${copilotSessionTitle(session)}`,
     pendingCommand: command
   });
+  // reveal:true makes the new pane active, which is the only handle the caller
+  // gets back on it.
+  const terminal = state.terminals.get(state.activeId);
+  if (terminal && aiSessionId) claimAiSessionId(terminal, aiSessionId);
+  return created;
 }
 
 function sameHostDirectory(left, right) {
@@ -10547,7 +10751,7 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
     }
     const relocate = sameHostDirectory(launchCwd, confirmedCwd) ? null : { path: confirmedCwd, provider };
     closeCopilotResume();
-    openCopilotSessionTerminal(session, command, launchCwd, provider, relocate);
+    openCopilotSessionTerminal(session, command, launchCwd, provider, relocate, id);
     return true;
   }
   if (copilotResume.newTerminal) {
@@ -10571,6 +10775,7 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
   }
   closeCopilotResume();
   setAwaitingInput(terminal, false);
+  claimAiSessionId(terminal, id);
   sendBridge({ type: "input", id: terminal.id, data: `${buildAiAssistantCommand({ provider, resumeId: id })}\r` });
   window.requestAnimationFrame(() => terminal.term.focus());
   return true;
@@ -12989,7 +13194,8 @@ async function createWorktreeAndRun() {
       toast("The worktree was created, but a terminal could not be opened", "error", 3000);
       return;
     }
-    const command = `Set-Location -LiteralPath ${powerShellLiteral(worktreePath)}; ${buildAiAssistantCommand()}`;
+    const sessionId = state.settings.aiSessionProvider === "copilot" ? claimAiSessionId(terminal) : "";
+    const command = `Set-Location -LiteralPath ${powerShellLiteral(worktreePath)}; ${buildAiAssistantCommand({ sessionId })}`;
     setAwaitingInput(terminal, false);
     sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
     window.requestAnimationFrame(() => terminal.term.focus());
@@ -12997,6 +13203,9 @@ async function createWorktreeAndRun() {
     return;
   }
 
+  // Minted before the terminal exists so the same id reaches both the command
+  // line and the pane that will host it.
+  const worktreeSessionId = state.settings.aiSessionProvider === "copilot" ? createAiSessionId() : "";
   const command = buildWorktreeCommand({
     source,
     repositoryRoot: inspection?.repositoryRoot || "",
@@ -13006,7 +13215,7 @@ async function createWorktreeAndRun() {
     parentDirectory,
     worktreePath,
     name,
-    assistantCommand: buildAiAssistantCommand()
+    assistantCommand: buildAiAssistantCommand({ sessionId: worktreeSessionId })
   });
 
   let terminal = worktreeDialog.openInNewTerminal ? null : state.terminals.get(worktreeDialog.terminalId);
@@ -13020,6 +13229,7 @@ async function createWorktreeAndRun() {
     return;
   }
 
+  if (worktreeSessionId) claimAiSessionId(terminal, worktreeSessionId);
   setAwaitingInput(terminal, false);
   sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
   window.requestAnimationFrame(() => terminal.term.focus());
@@ -14576,7 +14786,7 @@ function bindCloseConfirm() {
 // from metadata.
 
 function defaultPages() {
-  return [{ id: "page-1", name: "Page 1" }];
+  return [{ id: "page-1", name: "Page 1", groupId: null }];
 }
 
 // These run during `const state = {...}` near the top of the file, so they must
@@ -14589,10 +14799,35 @@ function loadPages() {
     const list = Array.isArray(raw) ? raw : raw?.pages;
     const pages = (Array.isArray(list) ? list : [])
       .filter((page) => page && typeof page.id === "string" && page.id)
-      .map((page) => ({ id: page.id, name: String(page.name || "Page") }));
+      .map((page) => ({
+        id: page.id,
+        name: String(page.name || "Page"),
+        groupId: typeof page.groupId === "string" && page.groupId ? page.groupId : null
+      }));
     return pages.length > 0 ? pages : defaultPages();
   } catch {
     return defaultPages();
+  }
+}
+
+// Groups are a second level above pages: a named, collapsible band of page tabs.
+// A group owning no page is meaningless, so membership lives on the page and the
+// group record only carries presentation.
+function loadPageGroups(pages) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("multiterm.pages") || "null");
+    const referenced = new Set((Array.isArray(pages) ? pages : []).map((page) => page.groupId).filter(Boolean));
+    const seen = new Set();
+    const groups = [];
+    for (const group of Array.isArray(raw?.pageGroups) ? raw.pageGroups : []) {
+      const id = group && typeof group.id === "string" ? group.id : "";
+      if (!referenced.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      groups.push({ id, name: String(group.name || "Group"), collapsed: group.collapsed === true });
+    }
+    return groups;
+  } catch {
+    return [];
   }
 }
 
@@ -14617,7 +14852,11 @@ function loadTerminalPages() {
 }
 
 function savePages() {
-  localStorage.setItem("multiterm.pages", JSON.stringify({ pages: state.pages, activePageId: state.activePageId }));
+  localStorage.setItem("multiterm.pages", JSON.stringify({
+    pages: state.pages,
+    activePageId: state.activePageId,
+    pageGroups: state.pageGroups
+  }));
 }
 
 // Merges rather than replaces. On reconnect the bridge re-adopts sessions one at
@@ -14733,7 +14972,9 @@ function uniquePageId() {
 function addPage(options = {}) {
   const id = uniquePageId();
   const name = String(options.name || "").trim() || `Page ${state.pages.length + 1}`;
-  state.pages.push({ id, name });
+  const groupId = options.groupId && pageGroupById(options.groupId) ? options.groupId : null;
+  state.pages.push({ id, name, groupId });
+  if (groupId) orderPagesByGroup();
   savePages();
   renderPager();
   if (options.activate !== false) setActivePage(id);
@@ -14862,6 +15103,7 @@ function resetAllPages(terminalAction) {
     for (const terminal of state.terminals.values()) terminal.pageId = nextPage.id;
   }
   state.pages = [nextPage];
+  pruneEmptyPageGroups();
   state.activePageId = nextPage.id;
   applyPageVisibility();
   renderPager();
@@ -14896,6 +15138,8 @@ function closeOtherPages(keepId, options = {}) {
   }
 
   state.pages = [keep];
+  keep.groupId = null;
+  pruneEmptyPageGroups();
   state.activePageId = keepId;
   applyPageVisibility();
   renderPager();
@@ -14945,6 +15189,7 @@ function removePage(id, options = {}) {
     for (const terminal of affected) terminal.pageId = fallback.id;
   }
   state.pages.splice(index, 1);
+  pruneEmptyPageGroups();
 
   if (state.activePageId === id) {
     state.activePageId = fallback.id;
@@ -14999,9 +15244,133 @@ function cyclePage(direction) {
   setActivePage(state.pages[next].id);
 }
 
+/* ---------------- Page groups --------------- */
+
+// A group is a named, collapsible band of page tabs. Membership lives on the page
+// rather than in the group record, so a group can never disagree with the pages it
+// claims to hold, and one that ends up empty simply stops existing.
+
+function uniquePageGroupId() {
+  let n = state.pageGroups.length + 1;
+  while (state.pageGroups.some((group) => group.id === `group-${n}`)) n += 1;
+  return `group-${n}`;
+}
+
+function pageGroupById(id) {
+  return state.pageGroups.find((group) => group.id === id) || null;
+}
+
+function pagesInGroup(id) {
+  return state.pages.filter((page) => page.groupId === id);
+}
+
+function pageGroupOf(page) {
+  return page?.groupId ? pageGroupById(page.groupId) : null;
+}
+
+// A group draws as one band, so its members have to sit together in page order.
+// Each group gathers at the position of its first member; everything else keeps
+// its place.
+function orderPagesByGroup() {
+  const ordered = [];
+  const placed = new Set();
+  for (const page of state.pages) {
+    if (placed.has(page.id)) continue;
+    const group = pageGroupOf(page);
+    if (!group) {
+      ordered.push(page);
+      placed.add(page.id);
+      continue;
+    }
+    for (const member of pagesInGroup(group.id)) {
+      ordered.push(member);
+      placed.add(member.id);
+    }
+  }
+  state.pages = ordered;
+}
+
+function pruneEmptyPageGroups() {
+  const populated = new Set(state.pages.map((page) => page.groupId).filter(Boolean));
+  state.pageGroups = state.pageGroups.filter((group) => populated.has(group.id));
+  for (const page of state.pages) {
+    if (page.groupId && !pageGroupById(page.groupId)) page.groupId = null;
+  }
+}
+
+// Every membership change funnels through here so ordering, empty groups and
+// storage cannot drift apart.
+function commitPageGroups() {
+  pruneEmptyPageGroups();
+  orderPagesByGroup();
+  savePages();
+  renderPager();
+}
+
+function assignPagesToGroup(pageIds, groupId) {
+  const target = groupId ? pageGroupById(groupId) : null;
+  if (groupId && !target) return false;
+  let changed = false;
+  for (const pageId of pageIds) {
+    const page = pageById(pageId);
+    const next = target ? target.id : null;
+    if (!page || page.groupId === next) continue;
+    page.groupId = next;
+    changed = true;
+  }
+  if (!changed) return false;
+  // Adding a tab to a collapsed group would otherwise make it vanish from the bar.
+  if (target) target.collapsed = false;
+  commitPageGroups();
+  return true;
+}
+
+function createPageGroup(rawName, pageIds = []) {
+  const id = uniquePageGroupId();
+  const name = String(rawName || "").trim() || `Group ${state.pageGroups.length + 1}`;
+  state.pageGroups.push({ id, name, collapsed: false });
+  for (const pageId of pageIds) {
+    const page = pageById(pageId);
+    if (page) page.groupId = id;
+  }
+  commitPageGroups();
+  if (!pageGroupById(id)) return "";
+  log.info("pages", `Created group ${name}`);
+  return id;
+}
+
+function renamePageGroup(id, rawName) {
+  const group = pageGroupById(id);
+  const name = String(rawName || "").trim();
+  if (!group || !name || group.name === name) return false;
+  group.name = name;
+  savePages();
+  renderPager();
+  return true;
+}
+
+function setPageGroupCollapsed(id, collapsed) {
+  const group = pageGroupById(id);
+  if (!group || group.collapsed === collapsed) return false;
+  group.collapsed = collapsed;
+  savePages();
+  renderPager();
+  return true;
+}
+
+function ungroupPageGroup(id) {
+  const group = pageGroupById(id);
+  if (!group) return false;
+  const name = group.name;
+  for (const page of pagesInGroup(id)) page.groupId = null;
+  commitPageGroups();
+  toast(`Ungrouped \u201c${name}\u201d`, "info", 1800);
+  return true;
+}
+
 /* ---------------- Copilot page grouping --------------- */
 
-const pageGrouping = { active: false, groups: [], terminalIds: [], returnFocus: null };
+const pageGrouping = { active: false, groups: [], memberIds: [], mode: "terminals", returnFocus: null };
 
 function pageGroupingAvailable() {
   return aiProviderAvailableFor(aiProviderById("copilot"), "title");
@@ -15009,16 +15378,27 @@ function pageGroupingAvailable() {
 
 function updatePageGroupButton() {
   const button = elements.pagerGroup;
-  if (!button) return;
-  const live = [...state.terminals.values()].filter((terminal) => terminal.status !== "exited");
   const ready = pageGroupingAvailable();
-  button.disabled = pageGrouping.active || live.length < 2 || !ready;
-  button.title = !ready
+  if (button) {
+    const live = [...state.terminals.values()].filter((terminal) => terminal.status !== "exited");
+    button.disabled = pageGrouping.active || live.length < 2 || !ready;
+    button.title = !ready
+      ? "GitHub Copilot is not signed in, so terminals cannot be grouped."
+      : live.length < 2
+        ? "Open at least two terminals to group them into pages."
+        : "Group terminals into pages with Copilot";
+    button.setAttribute("aria-label", button.title);
+  }
+
+  const bands = elements.pagerGroupPages;
+  if (!bands) return;
+  bands.disabled = pageGrouping.active || state.pages.length < 2 || !ready;
+  bands.title = !ready
     ? "GitHub Copilot is not signed in, so pages cannot be grouped."
-    : live.length < 2
-      ? "Open at least two terminals to group them into pages."
-      : "Group terminals into pages with Copilot";
-  button.setAttribute("aria-label", button.title);
+    : state.pages.length < 2
+      ? "Open at least two pages to group them."
+      : "Group pages into page groups with Copilot";
+  bands.setAttribute("aria-label", bands.title);
 }
 
 // Each terminal gets a fair share of the configured title-context budget so a
@@ -15027,28 +15407,45 @@ function buildTerminalGroupCatalog() {
   const terminals = [...state.terminals.values()].filter((terminal) => terminal.status !== "exited");
   const budget = clampCopilotTitleContextKb(state.settings.copilotTitleContextKb) * 1024;
   const perTerminal = terminals.length > 0 ? Math.max(512, Math.floor(budget / terminals.length)) : 0;
-  const encoder = new TextEncoder();
-  const catalog = terminals.map((terminal) => {
-    const text = terminalBufferText(terminal.term).trim();
-    const encoded = encoder.encode(text);
-    const excerpt = encoded.length <= perTerminal
-      ? text
-      : new TextDecoder().decode(encoded.slice(-perTerminal)).replace(/^\uFFFD/, "");
+  const catalog = terminals.map((terminal) => ({
+    id: terminal.id,
+    title: terminal.titleInput.value || "",
+    shell: terminal.shell || "",
+    cwd: terminal.cwd || "",
+    page: pageName(terminal.pageId) || "",
+    excerpt: sampleTerminalOutput(terminal.term, perTerminal)
+  }));
+  return { terminals, catalog };
+}
+
+// Grouping pages is the same question one level up, so the entry shape is shared;
+// `members` carries the terminal titles, which are the strongest signal a page has
+// about what it is for. The output sample is a fallback for telling similar pages
+// apart, so each page's share is split across the terminals sitting on it.
+function buildPageCatalog() {
+  const pages = [...state.pages];
+  const budget = clampCopilotTitleContextKb(state.settings.copilotTitleContextKb) * 1024;
+  const perPage = pages.length > 0 ? Math.max(512, Math.floor(budget / pages.length)) : 0;
+  const catalog = pages.map((page) => {
+    const onPage = terminalsOnPage(page.id).filter((terminal) => terminal.status !== "exited");
+    const perTerminal = onPage.length > 0 ? Math.max(256, Math.floor(perPage / onPage.length)) : 0;
+    const unique = (values) => [...new Set(values.filter(Boolean))];
     return {
-      id: terminal.id,
-      title: terminal.titleInput.value || "",
-      shell: terminal.shell || "",
-      cwd: terminal.cwd || "",
-      page: pageName(terminal.pageId) || "",
-      excerpt
+      id: page.id,
+      title: page.name,
+      shell: unique(onPage.map((terminal) => terminal.shell)).join(", "),
+      cwd: unique(onPage.map((terminal) => terminal.cwd)).slice(0, 4).join(", "),
+      page: pageGroupById(page.groupId)?.name || "",
+      members: unique(onPage.map((terminal) => terminal.titleInput.value)).join(" | "),
+      excerpt: onPage.map((terminal) => sampleTerminalOutput(terminal.term, perTerminal)).filter(Boolean).join(" ")
     };
   });
-  return { terminals, catalog };
+  return { pages, catalog };
 }
 
 function positionPageGroupFlyout() {
   const flyout = elements.pageGroupFlyout;
-  const anchor = elements.pagerGroup;
+  const anchor = pageGrouping.mode === "pages" ? elements.pagerGroupPages : elements.pagerGroup;
   if (!flyout || !anchor || flyout.hidden) return;
   const anchorRect = anchor.getBoundingClientRect();
   const rect = flyout.getBoundingClientRect();
@@ -15068,8 +15465,10 @@ function openPageGroupFlyout() {
   pageGrouping.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   elements.pageGroupList.textContent = "";
   elements.pageGroupApply.disabled = true;
+  elements.pageGroupTitle.textContent = pageGrouping.mode === "pages" ? "Group pages" : "Group terminals into pages";
   elements.pageGroupFlyout.hidden = false;
-  elements.pagerGroup?.setAttribute("aria-expanded", "true");
+  elements.pagerGroup?.setAttribute("aria-expanded", String(pageGrouping.mode === "terminals"));
+  elements.pagerGroupPages?.setAttribute("aria-expanded", String(pageGrouping.mode === "pages"));
   refreshIcons(elements.pageGroupFlyout);
   positionPageGroupFlyout();
 }
@@ -15079,14 +15478,18 @@ function closePageGroupFlyout({ restoreFocus = true } = {}) {
   const returnFocus = pageGrouping.returnFocus;
   elements.pageGroupFlyout.hidden = true;
   elements.pagerGroup?.setAttribute("aria-expanded", "false");
+  elements.pagerGroupPages?.setAttribute("aria-expanded", "false");
   pageGrouping.groups = [];
-  pageGrouping.terminalIds = [];
+  pageGrouping.memberIds = [];
   pageGrouping.returnFocus = null;
   if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 }
 
 function renderPageGroupProposal(groups) {
   const list = elements.pageGroupList;
+  const memberName = (id) => (pageGrouping.mode === "pages"
+    ? pageById(id)?.name
+    : state.terminals.get(id)?.titleInput.value) || id;
   list.textContent = "";
   for (const group of groups) {
     const item = document.createElement("div");
@@ -15094,10 +15497,9 @@ function renderPageGroupProposal(groups) {
     const name = document.createElement("strong");
     name.textContent = group.name;
     const members = document.createElement("ul");
-    for (const terminalId of group.terminals) {
+    for (const id of group.terminals) {
       const entry = document.createElement("li");
-      const terminal = state.terminals.get(terminalId);
-      entry.textContent = terminal?.titleInput.value || terminalId;
+      entry.textContent = memberName(id);
       members.append(entry);
     }
     item.append(name, members);
@@ -15121,25 +15523,18 @@ function normalizePageGroupResponse(groups, allowed) {
   return used.size === allowed.size ? normalized : [];
 }
 
-async function groupPagesWithAi() {
-  if (pageGrouping.active) return false;
-  const { terminals, catalog } = buildTerminalGroupCatalog();
-  if (terminals.length < 2) {
-    toast("Open at least two terminals to group them into pages", "info", 2400);
-    return false;
-  }
-  if (!pageGroupingAvailable()) {
-    toast("GitHub Copilot is not signed in, so pages cannot be grouped", "error", 3200);
-    return false;
-  }
-
+// Both levels ask Copilot the same question - put every supplied id into exactly
+// one named group - so they share one request, one review step and one Apply.
+async function runCopilotGrouping({ mode, ids, catalog, working, subject, unit }) {
   pageGrouping.active = true;
+  pageGrouping.mode = mode;
   updatePageGroupButton();
   openPageGroupFlyout();
-  elements.pageGroupStatus.textContent = `Copilot is grouping ${terminals.length} terminals\u2026`;
+  elements.pageGroupStatus.textContent = working;
   try {
     const response = await requestBridge({
       type: "groupTerminalPages",
+      scope: mode,
       terminals: JSON.stringify(catalog),
       contextKb: Number(state.settings.copilotSessionSearchContextKb),
       model: state.settings.copilotTitleModel,
@@ -15148,22 +15543,23 @@ async function groupPagesWithAi() {
     }, { timeout: 200000 });
 
     if (!response) {
-      elements.pageGroupStatus.textContent = bridgeSilenceReason("group these terminals");
+      elements.pageGroupStatus.textContent = bridgeSilenceReason(`group these ${subject}`);
       return false;
     }
     if (response.error) {
       elements.pageGroupStatus.textContent = response.error;
       return false;
     }
-    const allowed = new Set(terminals.map((terminal) => terminal.id));
+    const allowed = new Set(ids);
     const groups = normalizePageGroupResponse(response.groups, allowed);
     if (groups.length === 0) {
-      elements.pageGroupStatus.textContent = "Copilot did not place every terminal into exactly one group.";
+      elements.pageGroupStatus.textContent = `Copilot did not place every ${unit} into exactly one group.`;
       return false;
     }
     pageGrouping.groups = groups;
-    pageGrouping.terminalIds = [...allowed];
-    elements.pageGroupStatus.textContent = `${groups.length} page${groups.length === 1 ? "" : "s"} proposed. Review, then Apply.`;
+    pageGrouping.memberIds = [...allowed];
+    const label = mode === "pages" ? "group" : "page";
+    elements.pageGroupStatus.textContent = `${groups.length} ${label}${groups.length === 1 ? "" : "s"} proposed. Review, then Apply.`;
     elements.pageGroupApply.disabled = false;
     renderPageGroupProposal(groups);
     return true;
@@ -15173,13 +15569,81 @@ async function groupPagesWithAi() {
   }
 }
 
-// The proposal names terminals by id, so it is only valid while exactly those
+async function groupPagesWithAi() {
+  if (pageGrouping.active) return false;
+  const { terminals, catalog } = buildTerminalGroupCatalog();
+  if (terminals.length < 2) {
+    toast("Open at least two terminals to group them into pages", "info", 2400);
+    return false;
+  }
+  if (!pageGroupingAvailable()) {
+    toast("GitHub Copilot is not signed in, so terminals cannot be grouped", "error", 3200);
+    return false;
+  }
+  return runCopilotGrouping({
+    mode: "terminals",
+    ids: terminals.map((terminal) => terminal.id),
+    catalog,
+    working: `Copilot is grouping ${terminals.length} terminals\u2026`,
+    subject: "terminals",
+    unit: "terminal"
+  });
+}
+
+async function groupPageBandsWithAi() {
+  if (pageGrouping.active) return false;
+  const { pages, catalog } = buildPageCatalog();
+  if (pages.length < 2) {
+    toast("Open at least two pages to group them", "info", 2400);
+    return false;
+  }
+  if (!pageGroupingAvailable()) {
+    toast("GitHub Copilot is not signed in, so pages cannot be grouped", "error", 3200);
+    return false;
+  }
+  return runCopilotGrouping({
+    mode: "pages",
+    ids: pages.map((page) => page.id),
+    catalog,
+    working: `Copilot is grouping ${pages.length} pages\u2026`,
+    subject: "pages",
+    unit: "page"
+  });
+}
+
+// A proposal names its members by id, so it is only valid while exactly those
 // terminals are still live.
 function pageGroupProposalIsCurrent(terminalIds) {
   const live = [...state.terminals.values()]
     .filter((terminal) => terminal.status !== "exited")
     .map((terminal) => terminal.id);
   return live.length === terminalIds.length && terminalIds.every((id) => state.terminals.has(id));
+}
+
+function pageGroupPagesProposalIsCurrent(pageIds) {
+  return state.pages.length === pageIds.length && pageIds.every((id) => Boolean(pageById(id)));
+}
+
+// Reuses any group whose name already matches so re-running does not pile up
+// duplicates, and leaves pages Copilot did not name ungrouped.
+function applyAiPageGroups(groups, pageIds) {
+  if (!pageGroupPagesProposalIsCurrent(pageIds)) return false;
+
+  const byName = new Map(state.pageGroups.map((group) => [group.name.toLowerCase(), group]));
+  for (const proposed of groups) {
+    let group = byName.get(proposed.name.toLowerCase());
+    if (!group) {
+      group = { id: uniquePageGroupId(), name: proposed.name, collapsed: false };
+      state.pageGroups.push(group);
+      byName.set(proposed.name.toLowerCase(), group);
+    }
+    for (const pageId of proposed.terminals) {
+      const page = pageById(pageId);
+      if (page) page.groupId = group.id;
+    }
+  }
+  commitPageGroups();
+  return true;
 }
 
 function applyTerminalPageGroups(groups, terminalIds) {
@@ -15191,7 +15655,7 @@ function applyTerminalPageGroups(groups, terminalIds) {
     for (const group of groups) {
       let page = byName.get(group.name.toLowerCase());
       if (!page) {
-        page = { id: uniquePageId(), name: group.name };
+        page = { id: uniquePageId(), name: group.name, groupId: null };
         state.pages.push(page);
         byName.set(group.name.toLowerCase(), page);
       }
@@ -15203,6 +15667,8 @@ function applyTerminalPageGroups(groups, terminalIds) {
     }
     state.pages = state.pages.filter((page) => keep.has(page.id) || terminalsOnPage(page.id).length > 0);
     if (state.pages.length === 0) state.pages = defaultPages();
+    pruneEmptyPageGroups();
+    orderPagesByGroup();
     const active = state.activeId ? state.terminals.get(state.activeId) : null;
     if (!active || !pageById(active.pageId)) state.activePageId = state.pages[0].id;
     else state.activePageId = active.pageId;
@@ -15221,21 +15687,33 @@ function applyTerminalPageGroups(groups, terminalIds) {
 }
 
 function confirmPageGroupProposal() {
-  const { groups, terminalIds } = pageGrouping;
+  const { groups, memberIds, mode } = pageGrouping;
   if (groups.length === 0) return false;
-  if (!applyTerminalPageGroups(groups, terminalIds)) {
-    elements.pageGroupStatus.textContent = "The open terminals changed while Copilot was working. Group them again.";
+  const applied = mode === "pages"
+    ? applyAiPageGroups(groups, memberIds)
+    : applyTerminalPageGroups(groups, memberIds);
+  if (!applied) {
+    elements.pageGroupStatus.textContent = mode === "pages"
+      ? "The open pages changed while Copilot was working. Group them again."
+      : "The open terminals changed while Copilot was working. Group them again.";
     elements.pageGroupApply.disabled = true;
     pageGrouping.groups = [];
     return false;
   }
   closePageGroupFlyout();
-  toast(`Grouped terminals into ${groups.length} page${groups.length === 1 ? "" : "s"}`, "success", 2400);
+  toast(
+    mode === "pages"
+      ? `Grouped pages into ${groups.length} group${groups.length === 1 ? "" : "s"}`
+      : `Grouped terminals into ${groups.length} page${groups.length === 1 ? "" : "s"}`,
+    "success",
+    2400
+  );
   return true;
 }
 
 function bindPageGrouping() {
   elements.pagerGroup?.addEventListener("click", groupPagesWithAi);
+  elements.pagerGroupPages?.addEventListener("click", groupPageBandsWithAi);
   elements.pageGroupApply?.addEventListener("click", confirmPageGroupProposal);
   elements.pageGroupCancel?.addEventListener("click", () => closePageGroupFlyout());
   elements.pageGroupClose?.addEventListener("click", () => closePageGroupFlyout());
@@ -15444,10 +15922,16 @@ let suppressPageClick = false;
 
 function syncPageOrderFromPager() {
   const pagesById = new Map(state.pages.map((page) => [page.id, page]));
-  const reordered = [...elements.pagerList.querySelectorAll(".pager-chip")]
-    .map((chip) => pagesById.get(chip.dataset.pageId))
-    .filter(Boolean);
-  if (reordered.length === state.pages.length) state.pages = reordered;
+  const pairs = [...elements.pagerList.querySelectorAll(".pager-chip")]
+    .map((chip) => ({ chip, page: pagesById.get(chip.dataset.pageId) }))
+    .filter((pair) => pair.page);
+  // A collapsed group keeps its members out of the DOM, so a partial reading of
+  // the bar must never be written back as the new truth.
+  if (pairs.length !== state.pages.length) return;
+  for (const { chip, page } of pairs) {
+    page.groupId = chip.closest(".pager-group")?.dataset.groupId || null;
+  }
+  state.pages = pairs.map((pair) => pair.page);
 }
 
 function moveDraggedPage(targetChip, before) {
@@ -15459,7 +15943,8 @@ function moveDraggedPage(targetChip, before) {
     : targetChip.nextElementSibling === draggedChip;
   if (alreadyPlaced) return;
 
-  elements.pagerList.insertBefore(draggedChip, before ? targetChip : targetChip.nextElementSibling);
+  // The target may sit inside a group band rather than directly on the bar.
+  targetChip.parentElement.insertBefore(draggedChip, before ? targetChip : targetChip.nextElementSibling);
   syncPageOrderFromPager();
   pageDragChanged = true;
 }
@@ -15471,11 +15956,113 @@ function movePageByOffset(pageId, offset) {
 
   const [moved] = state.pages.splice(index, 1);
   state.pages.splice(next, 0, moved);
-  savePages();
-  renderPager();
+  // Sliding a tab past a group boundary joins or leaves that group, taking the
+  // group of whichever page it just stepped over, so each group stays one band.
+  const neighbour = offset < 0 ? state.pages[next + 1] : state.pages[next - 1];
+  moved.groupId = neighbour?.groupId || null;
+  commitPageGroups();
   elements.pagerList.querySelector(`[data-page-id="${CSS.escape(pageId)}"]`)?.focus();
   toast(`Moved ${moved.name} to position ${next + 1}`, "info", 1400);
   return true;
+}
+
+function buildPageChip(page) {
+  const onPage = terminalsOnPage(page.id);
+  const count = onPage.length;
+  const parked = onPage.filter((terminal) => terminal.minimized).length;
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "pager-chip";
+  chip.dataset.pageId = page.id;
+  chip.draggable = true;
+  chip.setAttribute("role", "tab");
+  const isActive = page.id === state.activePageId;
+  chip.classList.toggle("is-active", isActive);
+  chip.setAttribute("aria-selected", isActive ? "true" : "false");
+  chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (drop a terminal here; drag the tab to reorder or move it between groups; double-click or right-click to rename)`;
+
+  const label = document.createElement("span");
+  label.className = "pager-name";
+  label.textContent = page.name;
+  chip.append(label);
+
+  const badge = document.createElement("span");
+  badge.className = "pager-count";
+  badge.textContent = String(count);
+  chip.append(badge);
+
+  // A page can hold minimized terminals you cannot see from another page, so flag
+  // them on the tab. This is the "reach" affordance for the per-page dock scope.
+  if (parked) {
+    const park = document.createElement("span");
+    park.className = "pager-parked";
+    park.setAttribute("aria-label", `${parked} minimized`);
+    park.title = `${parked} minimized terminal${parked === 1 ? "" : "s"}`;
+    park.innerHTML = '<i data-lucide="minimize-2"></i><span class="pager-parked-count"></span>';
+    park.querySelector(".pager-parked-count").textContent = String(parked);
+    chip.append(park);
+  }
+
+  const edit = document.createElement("span");
+  edit.className = "pager-edit";
+  edit.dataset.pageEdit = page.id;
+  edit.setAttribute("role", "button");
+  edit.setAttribute("aria-label", `Rename ${page.name}`);
+  edit.title = "Rename page";
+  edit.innerHTML = '<i data-lucide="pencil"></i>';
+  chip.append(edit);
+
+  const canClose = state.pages.length > 1;
+  const close = document.createElement("span");
+  close.className = `pager-close${canClose ? "" : " is-disabled"}`;
+  close.dataset.pageClose = page.id;
+  close.setAttribute("role", "button");
+  close.setAttribute("aria-disabled", String(!canClose));
+  close.setAttribute("aria-label", canClose ? "Close page" : "The last page cannot be closed");
+  close.title = canClose ? "Close page" : "The last page cannot be closed";
+  close.textContent = "\u00d7";
+  chip.append(close);
+
+  return chip;
+}
+
+// Returns the element a group's tabs go into, so the caller can keep appending
+// chips without caring whether it is inside a band or on the bar itself.
+function appendPageGroupBand(list, group) {
+  const hidden = pagesInGroup(group.id).filter((page) => page.id !== state.activePageId).length;
+  const band = document.createElement("div");
+  band.className = "pager-group";
+  band.dataset.groupId = group.id;
+  band.classList.toggle("is-collapsed", group.collapsed);
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "pager-group-header";
+  header.dataset.groupToggle = group.id;
+  header.setAttribute("aria-expanded", String(!group.collapsed));
+  const count = pagesInGroup(group.id).length;
+  header.title = `${group.name} — ${count} page${count === 1 ? "" : "s"} (click to ${group.collapsed ? "expand" : "collapse"}; right-click for group options)`;
+  header.setAttribute("aria-label", header.title);
+  header.innerHTML = '<i data-lucide="chevron-down"></i>';
+
+  const label = document.createElement("span");
+  label.className = "pager-group-name";
+  label.textContent = group.name;
+  header.append(label);
+
+  // Collapsed, the count is the only clue to what is hidden in there.
+  if (group.collapsed && hidden > 0) {
+    const badge = document.createElement("span");
+    badge.className = "pager-group-count";
+    badge.textContent = String(hidden);
+    header.append(badge);
+  }
+
+  const chips = document.createElement("div");
+  chips.className = "pager-group-chips";
+  band.append(header, chips);
+  list.append(band);
+  return chips;
 }
 
 function renderPager() {
@@ -15484,64 +16071,18 @@ function renderPager() {
   if (!list) return;
 
   list.textContent = "";
+  let bandGroupId = null;
+  let container = list;
   for (const page of state.pages) {
-    const onPage = terminalsOnPage(page.id);
-    const count = onPage.length;
-    const parked = onPage.filter((terminal) => terminal.minimized).length;
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "pager-chip";
-    chip.dataset.pageId = page.id;
-    chip.draggable = true;
-    chip.setAttribute("role", "tab");
-    const isActive = page.id === state.activePageId;
-    chip.classList.toggle("is-active", isActive);
-    chip.setAttribute("aria-selected", isActive ? "true" : "false");
-    chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (drop a terminal here; drag the tab to reorder; double-click or right-click to rename)`;
-
-    const label = document.createElement("span");
-    label.className = "pager-name";
-    label.textContent = page.name;
-    chip.append(label);
-
-    const badge = document.createElement("span");
-    badge.className = "pager-count";
-    badge.textContent = String(count);
-    chip.append(badge);
-
-    // A page can hold minimized terminals you cannot see from another page, so flag
-    // them on the tab. This is the "reach" affordance for the per-page dock scope.
-    if (parked) {
-      const park = document.createElement("span");
-      park.className = "pager-parked";
-      park.setAttribute("aria-label", `${parked} minimized`);
-      park.title = `${parked} minimized terminal${parked === 1 ? "" : "s"}`;
-      park.innerHTML = '<i data-lucide="minimize-2"></i><span class="pager-parked-count"></span>';
-      park.querySelector(".pager-parked-count").textContent = String(parked);
-      chip.append(park);
+    const group = pageGroupOf(page);
+    if ((group ? group.id : null) !== bandGroupId) {
+      bandGroupId = group ? group.id : null;
+      container = group ? appendPageGroupBand(list, group) : list;
     }
-
-    const edit = document.createElement("span");
-    edit.className = "pager-edit";
-    edit.dataset.pageEdit = page.id;
-    edit.setAttribute("role", "button");
-    edit.setAttribute("aria-label", `Rename ${page.name}`);
-    edit.title = "Rename page";
-    edit.innerHTML = '<i data-lucide="pencil"></i>';
-    chip.append(edit);
-
-    const canClose = state.pages.length > 1;
-    const close = document.createElement("span");
-    close.className = `pager-close${canClose ? "" : " is-disabled"}`;
-    close.dataset.pageClose = page.id;
-    close.setAttribute("role", "button");
-    close.setAttribute("aria-disabled", String(!canClose));
-    close.setAttribute("aria-label", canClose ? "Close page" : "The last page cannot be closed");
-    close.title = canClose ? "Close page" : "The last page cannot be closed";
-    close.textContent = "\u00d7";
-    chip.append(close);
-
-    list.append(chip);
+    // The active page stays visible even inside a collapsed group, so collapsing
+    // can never hide where you actually are.
+    if (group?.collapsed && page.id !== state.activePageId) continue;
+    container.append(buildPageChip(page));
   }
   refreshIcons();
   updatePageGroupButton();
@@ -15586,6 +16127,91 @@ function startPageRename(chip) {
   input.addEventListener("blur", () => finish(true));
 }
 
+// Same in-place editor as page rename, so a new group can be named the moment it
+// is created without a separate dialog.
+function startPageGroupRename(header) {
+  const group = pageGroupById(header.dataset.groupToggle);
+  const label = header.querySelector(".pager-group-name");
+  if (!group || !label || header.querySelector(".pager-rename")) return;
+
+  const input = document.createElement("input");
+  input.className = "pager-rename pager-group-rename";
+  input.type = "text";
+  input.value = group.name;
+  input.spellcheck = false;
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let settled = false;
+  const finish = (commit) => {
+    if (settled) return;
+    settled = true;
+    if (commit) renamePageGroup(group.id, input.value);
+    renderPager();
+  };
+  input.addEventListener("click", (event) => event.stopPropagation());
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+function startPageGroupCreation(pageId) {
+  const id = createPageGroup("", [pageId]);
+  if (!id) return;
+  const header = elements.pagerList.querySelector(`[data-group-toggle="${CSS.escape(id)}"]`);
+  if (header) startPageGroupRename(header);
+}
+
+// Offered on a page tab so a group can be built from the tab you are already
+// pointing at, which is the only place membership is unambiguous.
+function pageGroupMenuItems(page) {
+  const submenu = state.pageGroups.map((group) => ({
+    label: group.name,
+    icon: group.id === page.groupId ? "check" : "square",
+    disabled: group.id === page.groupId,
+    run: () => assignPagesToGroup([page.id], group.id)
+  }));
+  if (submenu.length > 0) submenu.push({ separator: true });
+  submenu.push({ label: "New group\u2026", icon: "plus", run: () => startPageGroupCreation(page.id) });
+
+  const items = [{ label: "Add to group", icon: "folder", submenu }];
+  if (pageGroupOf(page)) {
+    items.push({ label: "Remove from group", icon: "folder-minus", run: () => assignPagesToGroup([page.id], null) });
+  }
+  return items;
+}
+
+function showPageGroupMenu(group, x, y) {
+  const header = elements.pagerList.querySelector(`[data-group-toggle="${CSS.escape(group.id)}"]`);
+  const count = pagesInGroup(group.id).length;
+  renderContextMenu([
+    { label: "Rename group\u2026", icon: "pencil", run: () => header && startPageGroupRename(header) },
+    {
+      label: group.collapsed ? "Expand group" : "Collapse group",
+      icon: group.collapsed ? "chevron-down" : "chevron-right",
+      run: () => setPageGroupCollapsed(group.id, !group.collapsed)
+    },
+    { separator: true },
+    { label: "New page in group", icon: "plus", run: () => addPage({ groupId: group.id }) },
+    { separator: true, spacious: true },
+    {
+      label: `Ungroup ${count} page${count === 1 ? "" : "s"}`,
+      icon: "folder-minus",
+      run: () => ungroupPageGroup(group.id)
+    }
+  ]);
+  showBuiltContextMenu(x, y);
+}
+
 function bindPager() {
   const list = elements.pagerList;
   if (!list) return;
@@ -15624,11 +16250,21 @@ function bindPager() {
       requestPageClose(close.dataset.pageClose);
       return;
     }
+    const groupHeader = event.target.closest("[data-group-toggle]");
+    if (groupHeader && !groupHeader.querySelector(".pager-rename")) {
+      event.stopPropagation();
+      const group = pageGroupById(groupHeader.dataset.groupToggle);
+      if (group) setPageGroupCollapsed(group.id, !group.collapsed);
+      return;
+    }
     const chip = event.target.closest(".pager-chip");
     if (chip && !chip.querySelector(".pager-rename")) setActivePage(chip.dataset.pageId);
   });
 
   list.addEventListener("dblclick", (event) => {
+    // Group headers are deliberately excluded: single click already owns collapse,
+    // so a double click there would toggle twice before renaming.
+    if (event.target.closest("[data-group-toggle]")) return;
     const chip = event.target.closest(".pager-chip");
     if (chip) startPageRename(chip);
   });
@@ -15655,7 +16291,7 @@ function bindPager() {
     draggedPageId = chip.dataset.pageId;
     pageDragChanged = false;
     pageDropAccepted = false;
-    originalPageOrder = state.pages.map((page) => page.id);
+    originalPageOrder = state.pages.map((page) => ({ id: page.id, groupId: page.groupId }));
     suppressPageClick = true;
     chip.classList.add("is-page-dragging");
     if (event.dataTransfer) {
@@ -15675,10 +16311,14 @@ function bindPager() {
         ? event.clientY < rect.top + rect.height / 2
         : event.clientX < rect.left + rect.width / 2;
       moveDraggedPage(targetChip, before);
-    } else if (event.target === list || event.target.closest?.(".pager-list") === list) {
+    } else {
+      // Dropping on a band's free space joins that group; dropping on the bar
+      // itself leaves the page ungrouped.
+      const band = event.target.closest?.(".pager-group-chips");
+      const zone = band || list;
       const draggedChip = list.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
-      if (draggedChip && draggedChip !== list.lastElementChild) {
-        list.append(draggedChip);
+      if (zone && draggedChip && draggedChip !== zone.lastElementChild) {
+        zone.append(draggedChip);
         syncPageOrderFromPager();
         pageDragChanged = true;
       }
@@ -15694,10 +16334,16 @@ function bindPager() {
   list.addEventListener("dragend", (event) => {
     event.target.closest?.(".pager-chip")?.classList.remove("is-page-dragging");
     if (pageDragChanged && pageDropAccepted) {
-      savePages();
+      commitPageGroups();
     } else if (pageDragChanged && originalPageOrder) {
       const pagesById = new Map(state.pages.map((page) => [page.id, page]));
-      state.pages = originalPageOrder.map((id) => pagesById.get(id)).filter(Boolean);
+      state.pages = originalPageOrder
+        .map((entry) => {
+          const page = pagesById.get(entry.id);
+          if (page) page.groupId = entry.groupId;
+          return page;
+        })
+        .filter(Boolean);
       renderPager();
     }
     draggedPageId = null;
@@ -15711,13 +16357,19 @@ function bindPager() {
     const chip = event.target.closest(".pager-chip");
     event.preventDefault();
     if (!chip) {
-      if (!event.target.closest("button")) showPagerPlacementMenu(event.clientX, event.clientY);
+      // Checked before the generic button guard below: a group header is a button.
+      const groupHeader = event.target.closest("[data-group-toggle]");
+      const group = groupHeader ? pageGroupById(groupHeader.dataset.groupToggle) : null;
+      if (group) showPageGroupMenu(group, event.clientX, event.clientY);
+      else if (!event.target.closest("button")) showPagerPlacementMenu(event.clientX, event.clientY);
       return;
     }
     const page = pageById(chip.dataset.pageId);
     if (!page) return;
     const items = [
       { label: "Rename\u2026", icon: "pencil", shortcutId: "page.rename", run: () => startPageRename(chip) },
+      { separator: true },
+      ...pageGroupMenuItems(page),
       { separator: true, spacious: true },
       { label: "New page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage() }
     ];
@@ -15789,7 +16441,8 @@ function saveWorkspace(rawName) {
   state.workspaces[name] = {
     savedAt: new Date().toISOString(),
     settings: { ...state.settings },
-    pages: state.pages.map((page) => ({ id: page.id, name: page.name })),
+    pages: state.pages.map((page) => ({ id: page.id, name: page.name, groupId: page.groupId })),
+    pageGroups: state.pageGroups.map((group) => ({ ...group })),
     activePageId: state.activePageId,
     terminals: [...state.terminals.values()].map((terminal) => ({
       title: terminal.titleInput.value,
@@ -15842,9 +16495,18 @@ function restoreWorkspace(name) {
   const savedPages = Array.isArray(workspace.pages) && workspace.pages.length > 0
     ? workspace.pages
         .filter((page) => page && typeof page.id === "string" && page.id)
-        .map((page) => ({ id: page.id, name: String(page.name || "Page") }))
+        .map((page) => ({
+          id: page.id,
+          name: String(page.name || "Page"),
+          groupId: typeof page.groupId === "string" && page.groupId ? page.groupId : null
+        }))
     : [];
   state.pages = savedPages.length > 0 ? savedPages : defaultPages();
+  state.pageGroups = (Array.isArray(workspace.pageGroups) ? workspace.pageGroups : [])
+    .filter((group) => group && typeof group.id === "string" && group.id)
+    .map((group) => ({ id: group.id, name: String(group.name || "Group"), collapsed: group.collapsed === true }));
+  pruneEmptyPageGroups();
+  orderPagesByGroup();
   state.activePageId = state.pages.some((page) => page.id === workspace.activePageId)
     ? workspace.activePageId
     : state.pages[0].id;
@@ -16791,6 +17453,7 @@ function loadTerminalArtifacts() {
         cwd: typeof raw.cwd === "string" ? raw.cwd : "",
         notes: typeof raw.notes === "string" ? raw.notes : "",
         notesUpdatedAt: typeof raw.notesUpdatedAt === "string" ? raw.notesUpdatedAt : null,
+        aiSessionId: typeof raw.aiSessionId === "string" ? raw.aiSessionId : "",
         queue: (Array.isArray(raw.queue) ? raw.queue : [])
           .map((item, index) => normalizeQueueItem(item, index, `queue-${id}`))
           .filter(Boolean)
@@ -16805,6 +17468,7 @@ function loadTerminalArtifacts() {
         .map((entry, index) => ({
           ...entry,
           id: typeof entry.id === "string" && entry.id ? entry.id : `recovered-${index}-${Date.now()}`,
+          aiSessionId: typeof entry.aiSessionId === "string" ? entry.aiSessionId : "",
           pid: normalizeArtifactPid(entry.pid)
         })),
       unparentedQueue: (Array.isArray(parsed.unparentedQueue) ? parsed.unparentedQueue : [])
@@ -16829,7 +17493,8 @@ function terminalArtifactMetadata(terminal) {
     startedAt: terminal.startedAt || null,
     title: terminal.titleInput.value || "Terminal",
     shell: terminal.shell || "",
-    cwd: terminal.cwd || ""
+    cwd: terminal.cwd || "",
+    aiSessionId: terminal.aiSessionId || ""
   };
 }
 
@@ -16947,6 +17612,7 @@ function archiveArtifactRecord(record, reason) {
     title: record.title || "Terminal",
     shell: record.shell || "",
     cwd: record.cwd || "",
+    aiSessionId: record.aiSessionId || "",
     recoveredAt,
     reason
   };
@@ -22063,10 +22729,35 @@ function quotedAiArgument(value) {
   return AI_MODEL_ID_PATTERN.test(argument) ? `"${argument}"` : "";
 }
 
+// The CLI mints its own UUID for a fresh session and never reports it back, so
+// MultiTerm supplies one through --session-id. That id is the only stable link
+// between a terminal's notes and a session the picker can resume later: unlike a
+// title it cannot be edited, and unlike a PID it is never recycled.
+function createAiSessionId() {
+  if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    return (char === "x" ? random : (random & 0x3) | 0x8).toString(16);
+  });
+}
+
+function claimAiSessionId(terminal, existingId = "") {
+  const id = COPILOT_RESUME_ID_PATTERN.test(existingId) ? existingId : createAiSessionId();
+  if (!terminal) return id;
+  terminal.aiSessionId = id;
+  const record = state.terminalArtifacts.terminals[terminal.id];
+  if (record) {
+    record.aiSessionId = id;
+    saveTerminalArtifacts();
+  }
+  return id;
+}
+
 function buildAiAssistantCommand({
   provider = state.settings.aiSessionProvider,
   resumeId = "",
   connectId = "",
+  sessionId = "",
   remote = provider === "copilot" && state.settings.copilotRemoteSessions,
   model = state.settings.aiSessionModel,
   effort = state.settings.aiSessionEffort,
@@ -22083,6 +22774,9 @@ function buildAiAssistantCommand({
     parts.push(`--connect=${connect}`);
   } else if (resumeId && COPILOT_RESUME_ID_PATTERN.test(resumeId)) {
     parts.push("--resume", quotedAiArgument(resumeId));
+  } else if (provider === "copilot" && COPILOT_RESUME_ID_PATTERN.test(sessionId)) {
+    // Sets the UUID of the new session rather than resuming one.
+    parts.push(`--session-id=${sessionId}`);
   }
   // Passing nothing when the toggle is off leaves ~/.copilot/settings.json authoritative.
   if (provider === "copilot" && remote && !connect) parts.push("--remote");
@@ -22184,7 +22878,9 @@ async function copyRemoteSessionLink(terminal) {
 }
 
 function invokeAiAssistant(terminal) {
-  const command = buildAiAssistantCommand();
+  const provider = state.settings.aiSessionProvider;
+  const sessionId = provider === "copilot" ? claimAiSessionId(terminal) : "";
+  const command = buildAiAssistantCommand({ sessionId });
   if (!command || !aiAssistantAvailable()) {
     toast(`${aiAssistantName()} is not installed and signed in`, "error", 2800);
     return false;
@@ -22361,12 +23057,12 @@ function buildSurfaceContextMenu() {
 }
 
 function buildPaneOverflowMenu(terminal) {
-  const compact = elements.host.classList.contains("compact");
-  const narrow = terminal.pane.classList.contains("is-narrow");
   // Whatever the measured fit pushed out of the header belongs in here.
   const responsiveOverflow = [...terminal.pane.querySelectorAll('.pane-actions button[data-auto-overflow="true"]')]
     .map((button) => button.dataset.action)
     .filter((action) => HEADER_ACTION_ID_SET.has(action));
+  const notificationsOverflowed = terminal.pane
+    .querySelector('button[data-action="notifications"]')?.dataset.autoOverflow === "true";
   const menuActions = HEADER_ACTION_IDS.filter((action) => headerActionPlacement(terminal, action) === "menu");
   const visibleActions = [...new Set([...responsiveOverflow, ...menuActions])];
   const items = visibleActions
@@ -22396,7 +23092,7 @@ function buildPaneOverflowMenu(terminal) {
         )
       };
     });
-  if (narrow) {
+  if (notificationsOverflowed) {
     items.unshift({
       label: "Notifications\u2026",
       icon: "bell",

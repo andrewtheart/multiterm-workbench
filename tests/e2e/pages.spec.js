@@ -293,13 +293,19 @@ test.describe("Pages and the quick switcher", () => {
     await doomedTab.click({ button: "right" });
 
     const items = page.locator("#contextMenu .ctx-item");
-    const firstThree = await items.evaluateAll((rows) => rows.slice(0, 3).map((row) => {
+    // The creative and destructive rows each keep a generous gap above them so
+    // neither is a misclick away from renaming or regrouping.
+    const rows = await items.evaluateAll((all) => all.map((row) => {
       const rect = row.getBoundingClientRect();
-      return { top: rect.top, bottom: rect.bottom };
+      return { text: row.textContent.trim(), top: rect.top, bottom: rect.bottom };
     }));
-    expect(firstThree[1].top - firstThree[0].bottom).toBeGreaterThanOrEqual(28);
-    expect(firstThree[2].top - firstThree[1].bottom).toBeGreaterThanOrEqual(28);
-    await expect(items).toContainText(["Rename…", "New page", "Close page", "Close other pages", "Close all"]);
+    const gapAbove = (label) => {
+      const index = rows.findIndex((row) => row.text.startsWith(label));
+      return rows[index].top - rows[index - 1].bottom;
+    };
+    expect(gapAbove("New page")).toBeGreaterThanOrEqual(28);
+    expect(gapAbove("Close page")).toBeGreaterThanOrEqual(28);
+    await expect(items).toContainText(["Rename…", "Add to group", "New page", "Close page", "Close other pages", "Close all"]);
     await expect(items.filter({ hasText: "Close Doomed" })).toHaveCount(0);
     await items.filter({ hasText: "Close page" }).click();
     await expect(page.locator("#pageCloseOverlay")).toBeVisible();

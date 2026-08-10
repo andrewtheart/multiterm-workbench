@@ -35,9 +35,10 @@ async function reset(page, count = 1) {
 // Header buttons only surface on hover, so force the right-click through rather
 // than waiting on a reveal that never happens without a real pointer.
 async function openShortcutFlyout(page, action, paneIndex = 0) {
-  await page.locator(".terminal-pane").nth(paneIndex)
-    .locator(`.pane-actions button[data-action="${action}"]`)
-    .click({ button: "right", force: true });
+  const button = page.locator(".terminal-pane").nth(paneIndex)
+    .locator(`.pane-actions button[data-action="${action}"]`);
+  if (await button.isVisible()) await button.click({ button: "right" });
+  else await openShortcutFlyoutFromMenu(page, action, paneIndex);
   await expect(page.locator(FLYOUT)).toBeVisible();
 }
 

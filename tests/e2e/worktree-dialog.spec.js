@@ -156,4 +156,72 @@ test.describe("Run in a worktree dialog", () => {
     await expect(page.locator("#worktreeStatus")).toContainText("cannot be used as a folder");
     await expect(page.locator("#worktreeCreate")).toBeDisabled();
   });
+
+  test("mints session ids only for Copilot worktree launches", async ({ page }) => {
+    await open(page);
+    await page.locator("#worktreeFolderInput").fill("D:\\multiTerm");
+    await expect(page.locator("#worktreeCreate")).toBeEnabled();
+
+    const folderClaude = await page.evaluate(async () => {
+      const originalRequest = window.requestBridge;
+      const originalSend = window.sendBridge;
+      window.__worktreeFrames = [];
+      window.requestBridge = async () => ({ ok: true, importedPending: false });
+      window.sendBridge = (message) => { window.__worktreeFrames.push(message); return true; };
+      state.settings.aiSessionProvider = "claude";
+      await createWorktreeAndRun();
+      const terminal = [...state.terminals.values()][0];
+      const result = { id: terminal.aiSessionId, frames: window.__worktreeFrames };
+      window.requestBridge = originalRequest;
+      window.sendBridge = originalSend;
+      return result;
+    });
+    expect(folderClaude.id).toBe("");
+    expect(folderClaude.frames.some((frame) => String(frame.data || "").includes("claude"))).toBe(true);
+
+    await page.evaluate(() => openWorktreeDialog({ terminalId: [...state.terminals.keys()][0] }));
+    const urlCopilot = await page.evaluate(async () => {
+      const originalSend = window.sendBridge;
+      window.__worktreeFrames = [];
+      window.sendBridge = (message) => { window.__worktreeFrames.push(message); return true; };
+      worktreeDialog.source = "url";
+      worktreeDialog.openInNewTerminal = false;
+      elements.worktreeUrlInput.value = "https://example.com/org/repo.git";
+      elements.worktreeSharedRootInput.value = "D:\\shared";
+      elements.worktreeBranchInput.value = "main";
+      elements.worktreePlacement.value = "shared";
+      elements.worktreeNameInput.value = "agent-test";
+      state.settings.aiSessionProvider = "copilot";
+      await createWorktreeAndRun();
+      const terminal = [...state.terminals.values()][0];
+      const result = { id: terminal.aiSessionId, frames: window.__worktreeFrames };
+      window.sendBridge = originalSend;
+      return result;
+    });
+    expect(urlCopilot.id).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(urlCopilot.frames.some((frame) => String(frame.data || "").includes(`--session-id=${urlCopilot.id}`))).toBe(true);
+
+    await page.evaluate(() => openWorktreeDialog({ terminalId: [...state.terminals.keys()][0] }));
+    const urlClaude = await page.evaluate(async () => {
+      const originalSend = window.sendBridge;
+      window.__worktreeFrames = [];
+      window.sendBridge = (message) => { window.__worktreeFrames.push(message); return true; };
+      worktreeDialog.source = "url";
+      worktreeDialog.openInNewTerminal = false;
+      elements.worktreeUrlInput.value = "https://example.com/org/repo.git";
+      elements.worktreeSharedRootInput.value = "D:\\shared";
+      elements.worktreeBranchInput.value = "main";
+      elements.worktreePlacement.value = "shared";
+      elements.worktreeNameInput.value = "agent-claude";
+      state.settings.aiSessionProvider = "claude";
+      const terminal = [...state.terminals.values()][0];
+      terminal.aiSessionId = "";
+      await createWorktreeAndRun();
+      const result = { id: terminal.aiSessionId, frames: window.__worktreeFrames };
+      window.sendBridge = originalSend;
+      return result;
+    });
+    expect(urlClaude.id).toBe("");
+    expect(urlClaude.frames.some((frame) => String(frame.data || "").includes("claude"))).toBe(true);
+  });
 });
