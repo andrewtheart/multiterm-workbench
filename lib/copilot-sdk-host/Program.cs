@@ -67,7 +67,11 @@ namespace MultiTerm.CopilotSdkHost
             {
                 BaseDirectory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot"),
                 LogLevel = CopilotLogLevel.Error,
-                Mode = CopilotClientMode.Empty,
+                // CopilotCli mode is what lets the runtime read the signed-in CLI user.
+                // Empty mode isolates the runtime from that credential store, so
+                // UseLoggedInUser is ignored and auth.getStatus always reports
+                // "Not authenticated". Session isolation is enforced by SessionConfig below.
+                Mode = CopilotClientMode.CopilotCli,
                 UseLoggedInUser = true
             };
 

@@ -5739,7 +5739,10 @@ function createCopilotSdkClient() {
   return new CopilotClient({
     baseDirectory: path.join(os.homedir(), ".copilot"),
     logLevel: "error",
-    mode: "empty",
+    // "copilot-cli" mode is what lets the runtime read the signed-in CLI user.
+    // "empty" mode isolates the runtime from that credential store, so
+    // useLoggedInUser is ignored and auth status always reports "Not authenticated".
+    mode: "copilot-cli",
     useLoggedInUser: true
   });
 }
