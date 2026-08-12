@@ -7777,6 +7777,8 @@ function terminalHistoryMatches(terminal, query) {
 }
 
 const TUI_JUMP_MAX_STEPS = 80;
+const TUI_SCROLL_SETTLE_MS = 90;
+const TUI_SCROLL_STABLE_STEPS = 2;
 
 function tuiHistoryMatchLines(terminal, query) {
   const needle = normalizeSearchText(query);
@@ -7815,6 +7817,28 @@ function tuiScrollStep(terminal, direction) {
   sendBridge({ type: "input", id: terminal.id, data: direction === "up" ? "\u001b[5~" : "\u001b[6~" });
 }
 
+async function scrollTuiToBottom(terminal) {
+  if (!terminal) return { ok: false, reason: "That terminal is no longer available." };
+  terminal.term.focus();
+  let previous = terminalVisibleText(terminal);
+  let stableSteps = 0;
+  let movedSteps = 0;
+  for (let step = 1; step <= TUI_JUMP_MAX_STEPS; step += 1) {
+    tuiScrollStep(terminal, "down");
+    await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_SETTLE_MS); });
+    const current = terminalVisibleText(terminal);
+    if (current === previous) {
+      stableSteps += 1;
+      if (stableSteps >= TUI_SCROLL_STABLE_STEPS) return { ok: true, steps: movedSteps };
+    } else {
+      previous = current;
+      stableSteps = 0;
+      movedSteps = step;
+    }
+  }
+  return { ok: true, steps: movedSteps };
+}
+
 async function jumpToTuiMatch(terminal, query) {
   const needle = normalizeSearchText(query);
   if (!terminal || !needle) return { ok: false, reason: "Nothing to look for." };
@@ -7827,8 +7851,10 @@ async function jumpToTuiMatch(terminal, query) {
 
   for (let step = 1; step <= TUI_JUMP_MAX_STEPS; step += 1) {
     tuiScrollStep(terminal, "up");
-    await new Promise((resolve) => { window.setTimeout(resolve, 90); });
+    await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_SETTLE_MS); });
     if (terminalVisibleText(terminal).includes(needle)) {
+      terminal.tuiScrolledUp = true;
+      syncScrollToBottomControl(terminal);
       searchTerminalPane(terminal, query);
       return { ok: true, steps: step };
     }
@@ -13236,40 +13262,70 @@ function updateMaximizeButton(terminal) {
 // Track each pane's directory from OSC 7 (file://) and OSC 9;9 (ConEmu/Windows
 // Terminal) sequences when the shell emits them; otherwise the initial cwd
 // stands in. Powers "Open folder" and "New terminal here".
-// The control only makes sense while a scrollback exists: an alternate-screen
-// TUI (a full-screen Copilot view, vim, less) has none, and xterm ignores
-// scrollToBottom there, so a visible button would silently do nothing.
+function scrollableCopilotTuiActive(terminal) {
+  if (terminal?.term?.buffer?.active?.type !== "alternate") return false;
+  if (terminal.aiAssistantTuiProvider) return terminal.aiAssistantTuiProvider === "copilot";
+  const lines = activeBufferLines(terminal);
+  const provider = promptDetector.aiAssistantTuiProvider(lines)
+    || (promptDetector.isCopilotTui(lines) ? "copilot" : "");
+  if (provider) terminal.aiAssistantTuiProvider = provider;
+  return provider === "copilot";
+}
+
+function syncScrollToBottomControl(terminal) {
+  const button = terminal.pane.querySelector(".pane-scroll-bottom");
+  if (!button) return;
+  const buffer = terminal.term.buffer.active;
+  const copilotTui = scrollableCopilotTuiActive(terminal);
+  button.hidden = buffer.type === "alternate" && !copilotTui;
+  const label = copilotTui ? "Scroll Copilot to the bottom" : "Scroll this terminal to the bottom";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  if (!copilotTui) terminal.tuiScrolledUp = false;
+  const away = copilotTui ? terminal.tuiScrolledUp === true : buffer.viewportY < buffer.baseY;
+  button.classList.toggle("is-scrolled-up", away);
+}
+
 function bindScrollToBottomControl(terminal) {
   const button = terminal.pane.querySelector(".pane-scroll-bottom");
   if (!button) return;
 
-  let scrolledUp = false;
-  const sync = () => {
-    const buffer = terminal.term.buffer.active;
-    button.hidden = buffer.type === "alternate";
-    // At the bottom the control has nowhere to go, so it stays a faint hint.
-    const away = buffer.viewportY < buffer.baseY;
-    if (away === scrolledUp) return;
-    scrolledUp = away;
-    button.classList.toggle("is-scrolled-up", away);
-  };
-
-  button.addEventListener("click", (event) => {
+  button.addEventListener("click", async (event) => {
     event.preventDefault();
-    terminal.term.scrollToBottom();
-    terminal.term.focus();
+    if (terminal.tuiScrollToBottomActive) return;
+    if (scrollableCopilotTuiActive(terminal)) {
+      terminal.tuiScrollToBottomActive = true;
+      button.setAttribute("aria-busy", "true");
+      try {
+        await scrollTuiToBottom(terminal);
+        terminal.tuiScrolledUp = false;
+      } finally {
+        terminal.tuiScrollToBottomActive = false;
+        button.removeAttribute("aria-busy");
+        syncScrollToBottomControl(terminal);
+      }
+    } else {
+      terminal.term.scrollToBottom();
+      terminal.term.focus();
+      syncScrollToBottomControl(terminal);
+    }
   });
+  terminal.pane.addEventListener("wheel", (event) => {
+    if (event.deltaY >= 0 || !scrollableCopilotTuiActive(terminal)) return;
+    terminal.tuiScrolledUp = true;
+    syncScrollToBottomControl(terminal);
+  }, true);
   // Keep the pointer out of xterm's mouse-reporting path; a TUI that owns the
   // mouse would otherwise receive a click at these coordinates.
   for (const name of ["mousedown", "pointerdown", "contextmenu"]) {
     button.addEventListener(name, (event) => event.stopPropagation());
   }
-  terminal.term.buffer.onBufferChange(sync);
+  terminal.term.buffer.onBufferChange(() => syncScrollToBottomControl(terminal));
   // onScroll covers the user moving the viewport; onRender covers new output
   // arriving underneath while they stay scrolled up.
-  terminal.term.onScroll(sync);
-  terminal.term.onRender(sync);
-  sync();
+  terminal.term.onScroll(() => syncScrollToBottomControl(terminal));
+  terminal.term.onRender(() => syncScrollToBottomControl(terminal));
+  syncScrollToBottomControl(terminal);
 }
 
 function registerCwdTracking(terminal) {

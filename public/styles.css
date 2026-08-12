@@ -11932,7 +11932,7 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
   opacity: 1;
 }
 
-/* An alternate-screen TUI has no scrollback, so the control would do nothing. */
+/* Generic alternate-screen apps hide this; Copilot supplies its own scroll path. */
 .pane-scroll-bottom[hidden] {
   display: none;
 }

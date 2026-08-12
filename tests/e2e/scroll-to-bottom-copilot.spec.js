@@ -1,9 +1,8 @@
 const { test, expect } = require("../support/renderer-coverage");
 
-// Copilot CLI takes over the alternate screen, where xterm keeps no scrollback
-// at all (baseY and viewportY are pinned to 0). A scroll-to-bottom control is
-// meaningless there, so the real requirement is that it disappears for the
-// duration and comes back, working, the moment Copilot gives the screen up.
+// Copilot CLI owns scrolling inside its alternate-screen TUI, so xterm's
+// scrollToBottom cannot move it. The control stays available and drives the
+// same mouse-wheel path used when selecting retained TUI search results.
 test.describe("Scroll to bottom control with a live Copilot TUI", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -24,7 +23,7 @@ test.describe("Scroll to bottom control with a live Copilot TUI", () => {
     };
   }, id);
 
-  test("hides for the full-screen session and returns usable afterwards", async ({ page }) => {
+  test("scrolls the full-screen Copilot session and returns to xterm scrolling afterwards", async ({ page }) => {
     test.setTimeout(240000);
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -54,17 +53,60 @@ test.describe("Scroll to bottom control with a live Copilot TUI", () => {
     // Copilot has the screen once xterm reports the alternate buffer.
     await expect.poll(async () => (await readBuffer(page, id)).type,
       { timeout: 150000, intervals: [1000] }).toBe("alternate");
-    await expect(control(page)).toBeHidden();
 
-    // The alternate buffer flips the moment Copilot claims the screen, well
-    // before it has painted its composer, so wait for the UI itself.
+    // Wait for the UI itself rather than relying on the brief transition
+    // between alternate-screen activation and provider recognition.
     await expect.poll(async () => (await readBuffer(page, id)).text,
       { timeout: 120000, intervals: [1000] }).toMatch(/commands|help/i);
     const duringCopilot = await readBuffer(page, id);
     expect(duringCopilot.type).toBe("alternate");
-    // Nothing to scroll to on the alternate screen; the hidden control is honest.
     expect(duringCopilot.baseY).toBe(0);
-    await expect(control(page)).toBeHidden();
+    await expect(control(page)).toBeVisible();
+    await expect(control(page)).toHaveAttribute("aria-label", "Scroll Copilot to the bottom");
+
+    const tuiScroll = await page.evaluate(async (terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      const button = terminal.pane.querySelector(".pane-scroll-bottom");
+      const originalVisibleText = terminalVisibleText;
+      const originalSendBridge = window.sendBridge;
+      const frames = [];
+      let position = 0;
+      try {
+        button.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+        const scrolledUpBefore = button.classList.contains("is-scrolled-up");
+        terminalVisibleText = () => `copilot-scroll-position-${position}`;
+        window.sendBridge = (message) => {
+          if (message.id === terminalId && message.data === "\u001b[<65;1;1M") {
+            frames.push(message);
+            if (position < 3) position += 1;
+          }
+          return true;
+        };
+        button.click();
+        while (terminal.tuiScrollToBottomActive) {
+          await new Promise((resolve) => window.setTimeout(resolve, 20));
+        }
+        return {
+          busy: button.hasAttribute("aria-busy"),
+          frames,
+          scrolledUpBefore,
+          scrolledUp: button.classList.contains("is-scrolled-up")
+        };
+      } finally {
+        terminalVisibleText = originalVisibleText;
+        window.sendBridge = originalSendBridge;
+      }
+    }, id);
+    expect(tuiScroll).toEqual({
+      busy: false,
+      frames: Array.from({ length: 5 }, () => ({
+        type: "input",
+        id,
+        data: "\u001b[<65;1;1M"
+      })),
+      scrolledUpBefore: true,
+      scrolledUp: false
+    });
 
     await page.evaluate((terminalId) => {
       sendBridge({ type: "input", id: terminalId, data: "/exit\r" });
