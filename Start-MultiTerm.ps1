@@ -6846,11 +6846,13 @@ namespace MultiTerm.PowerShellBridge
                 try
                 {
                     string script = "Add-Type -AssemblyName System.Windows.Forms; "
+                        + "Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Windows.Forms; public sealed class MultiTermDialogOwner : IWin32Window { [DllImport(\"user32.dll\")] private static extern IntPtr GetForegroundWindow(); private readonly IntPtr handle = GetForegroundWindow(); public IntPtr Handle { get { return handle; } } }'; "
+                        + "$owner = New-Object MultiTermDialogOwner; "
                         + "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
                         + "$d.Description = 'Select a working directory'; "
                         + "$d.ShowNewFolderButton = $true; "
                         + "if ($env:MT_PICK_DIR) { $d.SelectedPath = $env:MT_PICK_DIR }; "
-                        + "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }";
+                        + "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }";
                     ProcessStartInfo start = new ProcessStartInfo();
                     start.FileName = "powershell.exe";
                     start.Arguments = "-NoProfile -STA -Command " + QuoteProcessArgument(script);
@@ -9826,11 +9828,15 @@ namespace MultiTerm.PowerShellBridge
         [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetSaveFileNameW", ExactSpelling = true, SetLastError = true)]
         private static extern bool GetSaveFileNameW(ref OpenFileName options);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
         // Returns the chosen path, or null when the user cancelled.
         public static string Open(string title, string initialDirectory)
         {
             OpenFileName options = new OpenFileName();
             options.lStructSize = Marshal.SizeOf(typeof(OpenFileName));
+            options.hwndOwner = GetForegroundWindow();
             // Each filter is a "label\0pattern\0" pair, and the list as a whole ends
             // with a second NUL. Embedded NULs survive marshalling, which copies the
             // string by length rather than stopping at the first one.
@@ -9870,6 +9876,7 @@ namespace MultiTerm.PowerShellBridge
         {
             OpenFileName options = new OpenFileName();
             options.lStructSize = Marshal.SizeOf(typeof(OpenFileName));
+            options.hwndOwner = GetForegroundWindow();
             options.lpstrFilter = "Script and source files (*.ps1;*.bat;*.cmd;*.cs;*.txt)\0*.ps1;*.bat;*.cmd;*.cs;*.txt\0PowerShell (*.ps1)\0*.ps1\0Batch (*.bat;*.cmd)\0*.bat;*.cmd\0C# (*.cs)\0*.cs\0Text (*.txt)\0*.txt\0All files (*.*)\0*.*\0\0";
             options.nFilterIndex = 1;
             options.lpstrTitle = title;

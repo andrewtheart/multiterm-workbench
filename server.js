@@ -2467,6 +2467,14 @@ function revealPath(client, message) {
   }
 }
 
+function nativeDialogOwnerScript() {
+  return [
+    "Add-Type -AssemblyName System.Windows.Forms",
+    "Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Windows.Forms; public sealed class MultiTermDialogOwner : IWin32Window { [DllImport(\"user32.dll\")] private static extern IntPtr GetForegroundWindow(); private readonly IntPtr handle = GetForegroundWindow(); public IntPtr Handle { get { return handle; } } }'",
+    "$owner = New-Object MultiTermDialogOwner"
+  ];
+}
+
 // Opens a native "choose a script" dialog on the user's desktop and reports the
 // chosen path back. The browser cannot do this: a file input never exposes a
 // real path, so the bridge has to own the dialog. Windows only — the picker is
@@ -2502,12 +2510,12 @@ function pickScript(client, message) {
   // literal and inject PowerShell. The chosen path is written to stdout on its own
   // line so an empty result reads as a cancellation rather than a failure.
   const script = [
-    "Add-Type -AssemblyName System.Windows.Forms",
+    ...nativeDialogOwnerScript(),
     "$d = New-Object System.Windows.Forms.OpenFileDialog",
     "$d.Title = 'Select a script to run'",
     "$d.Filter = 'Scripts (*.ps1;*.bat;*.cmd)|*.ps1;*.bat;*.cmd|PowerShell (*.ps1)|*.ps1|Batch (*.bat;*.cmd)|*.bat;*.cmd|All files (*.*)|*.*'",
     "if ($env:MT_PICK_DIR) { $d.InitialDirectory = $env:MT_PICK_DIR }",
-    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"
+    "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"
   ].join("; ");
 
   let child;
@@ -3624,12 +3632,12 @@ function pickFolder(client, message) {
   } catch { /* let the native dialog choose its default location */ }
 
   const script = [
-    "Add-Type -AssemblyName System.Windows.Forms",
+    ...nativeDialogOwnerScript(),
     "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
     "$d.Description = 'Select a working directory'",
     "$d.ShowNewFolderButton = $true",
     "if ($env:MT_PICK_DIR) { $d.SelectedPath = $env:MT_PICK_DIR }",
-    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }"
+    "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }"
   ].join("; ");
 
   let child;
@@ -3753,14 +3761,14 @@ function savePreparedText(client, message) {
   }
 
   const script = [
-    "Add-Type -AssemblyName System.Windows.Forms",
+    ...nativeDialogOwnerScript(),
     "$d = New-Object System.Windows.Forms.SaveFileDialog",
     "$d.Title = 'Save prepared text'",
     "$d.Filter = 'Script and source files (*.ps1;*.bat;*.cmd;*.cs;*.txt)|*.ps1;*.bat;*.cmd;*.cs;*.txt|PowerShell (*.ps1)|*.ps1|Batch (*.bat;*.cmd)|*.bat;*.cmd|C# (*.cs)|*.cs|Text (*.txt)|*.txt|All files (*.*)|*.*'",
     "$d.OverwritePrompt = $true",
     "if ($env:MT_SAVE_DIR) { $d.InitialDirectory = $env:MT_SAVE_DIR }",
     "if ($env:MT_SAVE_NAME) { $d.FileName = $env:MT_SAVE_NAME }",
-    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"
+    "if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }"
   ].join("; ");
 
   let child;

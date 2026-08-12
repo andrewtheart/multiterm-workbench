@@ -316,6 +316,8 @@ describe("pickScript", () => {
     // -STA is not cosmetic: the shell file dialog cannot be shown from an MTA thread.
     expect(args).toContain("-STA");
     expect(options.windowsHide).toBe(true);
+    expect(args.at(-1)).toContain("MultiTermDialogOwner : IWin32Window");
+    expect(args.at(-1)).toContain("$d.ShowDialog($owner)");
     // The directory travels in the environment, so it can never close the quoted
     // PowerShell string literal it used to be interpolated into.
     expect(args.at(-1)).not.toContain("C:\\work");
@@ -413,6 +415,7 @@ describe("working directory picker and validation", () => {
 
     expect(spawn.mock.calls[0][0]).toBe("powershell.exe");
     expect(spawn.mock.calls[0][1]).toContain("-STA");
+    expect(spawn.mock.calls[0][1].at(-1)).toContain("$d.ShowDialog($owner)");
     expect(spawn.mock.calls[0][2].env.MT_PICK_DIR).toBe("C:\\work");
     expect(client.send).toHaveBeenCalledWith({ type: "folderPicked", requestId: "folder-1", path: "C:\\work\\repo" });
   });
@@ -578,6 +581,7 @@ describe("prepared text tools", () => {
     process.emitStdout("C:\\work\\deploy.ps1\r\n");
     process.emitClose();
 
+    expect(spawn.mock.calls[0][1].at(-1)).toContain("$d.ShowDialog($owner)");
     expect(spawn.mock.calls[0][2].env).toMatchObject({ MT_SAVE_DIR: "C:\\work", MT_SAVE_NAME: "deploy.ps1" });
     expect(writeFile).toHaveBeenCalledWith(
       "C:\\work\\deploy.ps1",
