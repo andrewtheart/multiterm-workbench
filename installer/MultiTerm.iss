@@ -20,7 +20,7 @@
 ; Output: installer\Output\MultiTerm-Setup-<version>.exe
 
 #define MyAppName "MultiTerm Workbench"
-#define MyAppVersion "0.1.89"
+#define MyAppVersion "0.1.90"
 #define MyAppPublisher "MultiTerm Workbench"
 #define MyAppURL "https://github.com/andrewtheart/multiterm-workbench"
 #define MyScriptFile "Start-MultiTerm.ps1"

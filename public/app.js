@@ -306,7 +306,7 @@ const HEADER_ACTION_SHORTCUT_DEFAULTS = Object.freeze({
 });
 
 // Bumped on each rebuild. See /memories/repo for the convention.
-const APP_VERSION = "0.1.89";
+const APP_VERSION = "0.1.90";
 const AUTOMATIONS_STORAGE_KEY = "multiterm.automations";
 const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const TITLE_SUGGESTION_HISTORY_STORAGE_KEY = "multiterm.titleSuggestionHistory";
