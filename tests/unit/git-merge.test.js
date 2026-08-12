@@ -55,8 +55,8 @@ describe("git repository and worktree bridge", () => {
   test("reports Git spawn, stream error, and timeout outcomes", async () => {
     const spawn = vi.spyOn(childProcess, "spawn");
     spawn.mockImplementationOnce(() => { throw new Error("spawn denied"); });
-    await expect(require("../../server.js").runGit(["status"], root)).resolves.toEqual({
-      ok: false, code: -1, stdout: "", stderr: "spawn denied"
+    await expect(require("../../server.js").runGit(["status"], root)).resolves.toMatchObject({
+      ok: false, code: -1, timedOut: false, stdout: "", stderr: "spawn denied"
     });
 
     const failed = new EventEmitter();
@@ -69,8 +69,8 @@ describe("git repository and worktree bridge", () => {
     failed.stderr.emit("data", Buffer.from("partial err"));
     failed.emit("error", new Error("process failed"));
     failed.emit("close", 1);
-    await expect(failedResult).resolves.toEqual({
-      ok: false, code: -1, stdout: "partial out", stderr: "partial errprocess failed"
+    await expect(failedResult).resolves.toMatchObject({
+      ok: false, code: -1, timedOut: false, stdout: "partial out", stderr: "partial errprocess failed"
     });
 
     vi.useFakeTimers();
@@ -82,8 +82,10 @@ describe("git repository and worktree bridge", () => {
     const timedResult = require("../../server.js").runGit(["status"], root, 1);
     await vi.advanceTimersByTimeAsync(2);
     expect(timed.kill).toHaveBeenCalledOnce();
-    timed.emit("close", 9);
-    await expect(timedResult).resolves.toMatchObject({ ok: false, code: 9 });
+    await expect(timedResult).resolves.toMatchObject({
+      ok: false, code: -1, timedOut: true
+    });
+    expect((await timedResult).durationMs).toBeGreaterThanOrEqual(1);
     vi.useRealTimers();
   });
 
@@ -304,10 +306,16 @@ describe("git repository and worktree bridge", () => {
     await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "gitMergeStarted", requestId: "merge-start", ok: true, status: "staged"
     })));
-    const mergeSessionId = client.send.mock.calls.find(([frame]) => frame.requestId === "merge-start")[0].sessionId;
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "operationProgress", requestId: "merge-start", operation: "gitMergeStart", phase: "snapshotting"
+    }));
+    const mergeSessionId = client.send.mock.calls.find(([frame]) => frame.type === "gitMergeStarted" && frame.requestId === "merge-start")[0].sessionId;
     send({ type: "gitMergeFinish", requestId: "merge-abort", sessionId: mergeSessionId, abort: true });
     await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
       type: "gitMergeFinished", requestId: "merge-abort", ok: true, reason: ""
+    }));
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "operationProgress", requestId: "merge-abort", operation: "gitMergeFinish", phase: "rolling-back"
     }));
     send({ type: "gitConflictRead", requestId: "conflict-read", sessionId: "missing", path: "shared.txt" });
     await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({

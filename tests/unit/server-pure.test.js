@@ -1221,16 +1221,16 @@ describe("output coalescing", () => {
     const client = fakeClient();
     server.applyClientConfig(client, { type: "config", outputCoalesceMs: 250 });
     expect(server.getOutputCoalesceMs()).toBe(server.OUTPUT_COALESCE_MAX_MS);
-    expect(client.send).toHaveBeenCalledWith({
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "config",
       outputCoalesceMs: server.OUTPUT_COALESCE_MAX_MS
-    });
+    }));
   });
 
   it("is reachable over the wire as a config message", () => {
     const client = fakeClient();
     server.handleClientMessage(client, JSON.stringify({ type: "config", outputCoalesceMs: 12 }));
     expect(server.getOutputCoalesceMs()).toBe(12);
-    expect(client.send).toHaveBeenCalledWith({ type: "config", outputCoalesceMs: 12 });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "config", outputCoalesceMs: 12 }));
   });
 });

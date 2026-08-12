@@ -8,6 +8,8 @@ test.describe("Automatic terminal title suggestions", () => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await page.evaluate(() => {
+      localStorage.setItem(AUTO_TITLE_NOTICE_STORAGE_KEY, "true");
+      state.settings.startupCommand = "";
       closeAllTerminals();
       addTerminal({ reveal: true });
     });
@@ -44,6 +46,390 @@ test.describe("Automatic terminal title suggestions", () => {
     expect(parsed.empty).toEqual([5, 60, 120, 240, 360, 720, 1440, 2160]);
     expect(parsed.capped).toEqual([43200]);
     expect(parsed.normalized).toBe("15, 45");
+  });
+
+  test("supports a repeating interval instead of the progressive ladder", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      const original = {
+        mode: state.settings.autoTitleScheduleMode,
+        repeat: state.settings.autoTitleRepeatMinutes,
+        schedule: state.settings.autoTitleSchedule
+      };
+      state.settings.autoTitleScheduleMode = "repeat";
+      state.settings.autoTitleRepeatMinutes = 5;
+      syncCopilotTitleSettings();
+      const repeatDelays = [0, 1, 4, 99].map((step) => {
+        terminal.autoTitleStep = step;
+        return automaticTitleDelayMs(terminal) / 60000;
+      });
+      elements.autoTitleRepeatMinutes.value = "999999";
+      elements.autoTitleRepeatMinutes.dispatchEvent(new Event("change", { bubbles: true }));
+      const clamped = {
+        setting: state.settings.autoTitleRepeatMinutes,
+        visible: elements.autoTitleRepeatMinutes.value
+      };
+      elements.autoTitleScheduleMode.value = "progressive";
+      elements.autoTitleScheduleMode.dispatchEvent(new Event("change", { bubbles: true }));
+      const fields = {
+        progressiveHidden: elements.autoTitleScheduleRow.hidden,
+        repeatHidden: elements.autoTitleRepeatRow.hidden,
+        schedule: state.settings.autoTitleSchedule
+      };
+      state.settings.autoTitleScheduleMode = original.mode;
+      state.settings.autoTitleRepeatMinutes = original.repeat;
+      state.settings.autoTitleSchedule = original.schedule;
+      syncCopilotTitleSettings();
+      return { clamped, fields, repeatDelays };
+    });
+    expect(result.repeatDelays).toEqual([5, 5, 5, 5]);
+    expect(result.clamped).toEqual({ setting: 43200, visible: "43200" });
+    expect(result.fields).toEqual({ progressiveHidden: false, repeatHidden: true, schedule: "5, 60, 120, 240, 360, 720, 1440, 2160" });
+  });
+
+  test("shows one disclosure before the first generated title and applies its timing", async ({ page }) => {
+    await ready(page);
+    await page.evaluate(() => {
+      localStorage.removeItem(AUTO_TITLE_NOTICE_STORAGE_KEY);
+      window.__autoTitleNoticeOriginalGenerate = generateTerminalTitle;
+      window.__autoTitleNoticeGenerated = 0;
+      generateTerminalTitle = async () => { window.__autoTitleNoticeGenerated += 1; return true; };
+      const [terminal] = [...state.terminals.values()];
+      cancelAutoTitle(terminal);
+      terminal.hasTerminalInput = true;
+      terminal.outputRevision += 1;
+      void runAutoTitle(terminal);
+    });
+
+    const notice = page.locator("#autoTitleNoticeOverlay");
+    await expect(notice).toBeVisible();
+    await expect(page.locator("#autoTitleNoticeTitle")).toHaveText("Automatic terminal titles are on");
+    await expect(notice).toContainText("current title, shell type, and working directory");
+    await expect(notice).toContainText("most recent rendered terminal text");
+    await expect(notice).toContainText("Notes, queued commands, clipboard contents, keystroke timing, the process ID, and other terminals are not sent");
+    expect(await page.evaluate(() => localStorage.getItem(AUTO_TITLE_NOTICE_STORAGE_KEY))).toBe("true");
+    await expect(page.locator(".auto-title-notice .combobox-input")).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.locator("#autoTitleNoticeContinue")).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(page.locator(".auto-title-notice .combobox-input")).toBeFocused();
+
+    await page.setViewportSize({ width: 390, height: 720 });
+    const mobile = await page.locator(".auto-title-notice").evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        overflow: element.scrollWidth > element.clientWidth,
+        right: rect.right,
+        viewportWidth: innerWidth
+      };
+    });
+    expect(mobile.left).toBeGreaterThanOrEqual(0);
+    expect(mobile.right).toBeLessThanOrEqual(mobile.viewportWidth);
+    expect(mobile.overflow).toBe(false);
+
+    await page.evaluate(() => {
+      elements.autoTitleNoticeMode.value = "repeat";
+      elements.autoTitleNoticeMode.dispatchEvent(new Event("change", { bubbles: true }));
+      elements.autoTitleNoticeMode._combo?.sync();
+    });
+    await expect(page.locator("#autoTitleNoticeScheduleRow")).toBeHidden();
+    await expect(page.locator("#autoTitleNoticeRepeatRow")).toBeVisible();
+    await page.locator("#autoTitleNoticeRepeatMinutes").fill("7");
+    await page.locator("#autoTitleNoticeContinue").click();
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expect(notice).toBeHidden();
+    await expect.poll(() => page.evaluate(() => window.__autoTitleNoticeGenerated)).toBe(1);
+    await expect.poll(() => page.evaluate(() => ({
+      mode: state.settings.autoTitleScheduleMode,
+      repeat: state.settings.autoTitleRepeatMinutes,
+      stored: JSON.parse(localStorage.getItem("multiterm.settings"))
+    }))).toMatchObject({ mode: "repeat", repeat: 7, stored: { autoTitleScheduleMode: "repeat", autoTitleRepeatMinutes: 7 } });
+
+    await page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      cancelAutoTitle(terminal);
+      terminal.outputRevision += 1;
+      void runAutoTitle(terminal);
+    });
+    await expect.poll(() => page.evaluate(() => window.__autoTitleNoticeGenerated)).toBe(2);
+    await expect(notice).toBeHidden();
+
+    await page.evaluate(() => {
+      generateTerminalTitle = window.__autoTitleNoticeOriginalGenerate;
+      delete window.__autoTitleNoticeOriginalGenerate;
+      delete window.__autoTitleNoticeGenerated;
+      state.settings.autoTitleScheduleMode = "progressive";
+      state.settings.autoTitleRepeatMinutes = 5;
+      saveSettings();
+      syncCopilotTitleSettings();
+      rescheduleAllAutoTitles();
+    });
+  });
+
+  test("does not consume the one-time disclosure before generation is ready", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(async () => {
+      localStorage.removeItem(AUTO_TITLE_NOTICE_STORAGE_KEY);
+      const [terminal] = [...state.terminals.values()];
+      cancelAutoTitle(terminal);
+      terminal.hasTerminalInput = false;
+      terminal.outputRevision += 1;
+      await runAutoTitle(terminal);
+      const untouched = {
+        shown: localStorage.getItem(AUTO_TITLE_NOTICE_STORAGE_KEY),
+        visible: !elements.autoTitleNoticeOverlay.hidden
+      };
+      recordTerminalInput({ type: "input", id: terminal.id, data: "echo used" });
+      cancelAutoTitle(terminal);
+      await runAutoTitle(terminal);
+      const noFreshOutput = {
+        shown: localStorage.getItem(AUTO_TITLE_NOTICE_STORAGE_KEY),
+        visible: !elements.autoTitleNoticeOverlay.hidden
+      };
+      localStorage.setItem(AUTO_TITLE_NOTICE_STORAGE_KEY, "true");
+      return { noFreshOutput, untouched };
+    });
+    expect(result).toEqual({
+      untouched: { shown: null, visible: false },
+      noFreshOutput: { shown: null, visible: false }
+    });
+  });
+
+  test("holds simultaneous automatic requests behind the same disclosure", async ({ page }) => {
+    await ready(page);
+    await page.evaluate(() => {
+      localStorage.removeItem(AUTO_TITLE_NOTICE_STORAGE_KEY);
+      window.__autoTitleConcurrentOriginalGenerate = generateTerminalTitle;
+      window.__autoTitleConcurrentGenerated = [];
+      generateTerminalTitle = async (terminal) => { window.__autoTitleConcurrentGenerated.push(terminal.id); return true; };
+      const first = [...state.terminals.values()][0];
+      const second = addTerminal({ title: "Second disclosure terminal" });
+      for (const terminal of [first, second]) {
+        cancelAutoTitle(terminal);
+        terminal.status = "live";
+        terminal.hasTerminalInput = true;
+        terminal.outputRevision += 1;
+        void runAutoTitle(terminal);
+      }
+    });
+    await expect(page.locator("#autoTitleNoticeOverlay")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__autoTitleConcurrentGenerated)).toEqual([]);
+    await page.locator("#autoTitleNoticeContinue").click();
+    await expect.poll(() => page.evaluate(() => window.__autoTitleConcurrentGenerated.length)).toBe(2);
+    await expect(page.locator("#autoTitleNoticeOverlay")).toBeHidden();
+    await page.evaluate(() => {
+      generateTerminalTitle = window.__autoTitleConcurrentOriginalGenerate;
+      delete window.__autoTitleConcurrentOriginalGenerate;
+      delete window.__autoTitleConcurrentGenerated;
+      const second = [...state.terminals.values()].find((terminal) => terminal.titleInput.value === "Second disclosure terminal");
+      if (second) removeTerminal(second.id);
+    });
+  });
+
+  test("turns automatic titles off without showing the disclosure again", async ({ page }) => {
+    await ready(page);
+    await page.evaluate(() => {
+      localStorage.removeItem(AUTO_TITLE_NOTICE_STORAGE_KEY);
+      window.__autoTitleDisableOriginalGenerate = generateTerminalTitle;
+      window.__autoTitleDisableGenerated = 0;
+      generateTerminalTitle = async () => { window.__autoTitleDisableGenerated += 1; return true; };
+      const [terminal] = [...state.terminals.values()];
+      cancelAutoTitle(terminal);
+      terminal.hasTerminalInput = true;
+      terminal.outputRevision += 1;
+      void runAutoTitle(terminal);
+    });
+
+    const notice = page.locator("#autoTitleNoticeOverlay");
+    await expect(notice).toBeVisible();
+    await page.locator("#autoTitleNoticeDisable").click();
+    await expect(notice).toBeHidden();
+    await expect.poll(() => page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      return {
+        enabled: state.settings.autoTitleSuggestions,
+        generated: window.__autoTitleDisableGenerated,
+        shown: localStorage.getItem(AUTO_TITLE_NOTICE_STORAGE_KEY),
+        timer: terminal.autoTitleTimer
+      };
+    })).toEqual({ enabled: false, generated: 0, shown: "true", timer: 0 });
+
+    await page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      state.settings.autoTitleSuggestions = true;
+      elements.autoTitleSuggestions.checked = true;
+      terminal.outputRevision += 1;
+      void runAutoTitle(terminal);
+    });
+    await expect.poll(() => page.evaluate(() => window.__autoTitleDisableGenerated)).toBe(1);
+    await expect(notice).toBeHidden();
+    await page.evaluate(() => {
+      generateTerminalTitle = window.__autoTitleDisableOriginalGenerate;
+      delete window.__autoTitleDisableOriginalGenerate;
+      delete window.__autoTitleDisableGenerated;
+      saveSettings();
+      rescheduleAllAutoTitles();
+    });
+  });
+
+  test("sends only rendered terminal context and configured title metadata", async ({ page }) => {
+    await ready(page);
+    const request = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      const original = {
+        artifact: state.terminalArtifacts.terminals[terminal.id]
+          ? structuredClone(state.terminalArtifacts.terminals[terminal.id])
+          : null,
+        cwd: terminal.cwd,
+        pid: terminal.pid,
+        shell: terminal.shell,
+        title: terminal.titleInput.value
+      };
+      terminal.cwd = "D:\\title-context";
+      terminal.shell = "pwsh";
+      terminal.pid = 45678;
+      commitTerminalTitle(terminal, "Current context title", false);
+      ensureTerminalArtifact(terminal).notes = [{
+        id: "private-note",
+        text: "PRIVATE NOTE MUST NOT BE SENT",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }];
+      ensureTerminalArtifact(terminal).queue = [{ id: "private-queue", command: "PRIVATE QUEUE MUST NOT BE SENT", createdAt: new Date().toISOString() }];
+      await new Promise((resolve) => terminal.term.write("VISIBLE RENDERED TITLE CONTEXT", resolve));
+      const originalRequestBridge = requestBridge;
+      const originalProviders = state.aiProviders;
+      let captured = null;
+      state.aiProviders = [];
+      requestBridge = async (message) => {
+        captured = structuredClone(message);
+        return { title: "Generated context title" };
+      };
+      try {
+        await generateTerminalTitle(terminal);
+        clearTerminalTitleSuggestion(terminal);
+        return captured;
+      } finally {
+        requestBridge = originalRequestBridge;
+        state.aiProviders = originalProviders;
+        terminal.cwd = original.cwd;
+        terminal.pid = original.pid;
+        terminal.shell = original.shell;
+        commitTerminalTitle(terminal, original.title, false);
+        if (original.artifact) state.terminalArtifacts.terminals[terminal.id] = original.artifact;
+        else delete state.terminalArtifacts.terminals[terminal.id];
+        updateTerminalArtifactIndicators();
+      }
+    });
+    expect(Object.keys(request).sort()).toEqual([
+      "context", "contextKb", "currentTitle", "cwd", "effort", "maxWords", "minWords", "model", "provider", "shell", "text", "type"
+    ]);
+    expect(request).toMatchObject({
+      currentTitle: "Current context title",
+      cwd: "D:\\title-context",
+      provider: "copilot",
+      shell: "pwsh",
+      text: expect.stringContaining("VISIBLE RENDERED TITLE CONTEXT"),
+      type: "generateTerminalTitle"
+    });
+    expect(JSON.stringify(request)).not.toContain("45678");
+    expect(JSON.stringify(request)).not.toContain("PRIVATE NOTE MUST NOT BE SENT");
+    expect(JSON.stringify(request)).not.toContain("PRIVATE QUEUE MUST NOT BE SENT");
+  });
+
+  test("starts the automatic-title clock only after meaningful terminal input", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(async () => {
+      const [terminal] = [...state.terminals.values()];
+      const originalGenerate = generateTerminalTitle;
+      const originalBuildAssistantCommand = buildAiAssistantCommand;
+      const originalAssistantAvailable = aiAssistantAvailable;
+      const originalProvider = state.settings.aiSessionProvider;
+      let generated = 0;
+      generateTerminalTitle = async () => { generated += 1; };
+      try {
+        terminal.outputRevision += 1;
+        await runAutoTitle(terminal);
+        const untouched = {
+          generated,
+          hasInput: terminal.hasTerminalInput,
+          step: terminal.autoTitleStep,
+          timer: terminal.autoTitleTimer
+        };
+
+        sendBridge({ type: "input", id: terminal.id, data: "\u001b[I" });
+        const afterFocusReport = {
+          hasInput: terminal.hasTerminalInput,
+          timer: terminal.autoTitleTimer
+        };
+
+        state.settings.aiSessionProvider = "claude";
+        buildAiAssistantCommand = () => "echo automated-menu-input";
+        aiAssistantAvailable = () => true;
+        const assistantLaunched = invokeAiAssistant(terminal);
+        const afterCommand = {
+          assistantLaunched,
+          hasInput: terminal.hasTerminalInput,
+          revision: terminal.autoTitleRevision,
+          timerStarted: terminal.autoTitleTimer !== 0
+        };
+
+        cancelAutoTitle(terminal);
+        terminal.outputRevision += 1;
+        await runAutoTitle(terminal);
+        return {
+          afterCommand,
+          afterFocusReport,
+          generated,
+          rescheduled: terminal.autoTitleTimer !== 0,
+          untouched
+        };
+      } finally {
+        generateTerminalTitle = originalGenerate;
+        buildAiAssistantCommand = originalBuildAssistantCommand;
+        aiAssistantAvailable = originalAssistantAvailable;
+        state.settings.aiSessionProvider = originalProvider;
+      }
+    });
+
+    expect(result.untouched).toEqual({ generated: 0, hasInput: false, step: 0, timer: 0 });
+    expect(result.afterFocusReport).toEqual({ hasInput: false, timer: 0 });
+    expect(result.afterCommand.assistantLaunched).toBe(true);
+    expect(result.afterCommand.hasInput).toBe(true);
+    expect(result.afterCommand.timerStarted).toBe(true);
+    expect(result.generated).toBe(1);
+    expect(result.rescheduled).toBe(true);
+  });
+
+  test("restores input-gated scheduling when live terminals reattach", async ({ page }) => {
+    await ready(page);
+    const ids = await page.evaluate(() => {
+      const [used] = [...state.terminals.values()];
+      const untouched = addTerminal({ reveal: true });
+      recordTerminalInput({ type: "input", id: used.id, data: "echo used" });
+      saveSessionSnapshot();
+      return { untouched: untouched.id, used: used.id };
+    });
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect.poll(() => page.evaluate((terminalIds) => {
+      const used = state.terminals.get(terminalIds.used);
+      const untouched = state.terminals.get(terminalIds.untouched);
+      return used && untouched ? {
+        untouchedHasInput: untouched.hasTerminalInput,
+        untouchedTimer: untouched.autoTitleTimer,
+        usedHasInput: used.hasTerminalInput,
+        usedTimerStarted: used.autoTitleTimer !== 0
+      } : null;
+    }, ids), { timeout: 30000 }).toEqual({
+      untouchedHasInput: false,
+      untouchedTimer: 0,
+      usedHasInput: true,
+      usedTimerStarted: true
+    });
   });
 
   test("reveals an automatic suggestion for approval without taking focus", async ({ page }) => {
@@ -133,6 +519,7 @@ test.describe("Automatic terminal title suggestions", () => {
     await ready(page);
     const timers = await page.evaluate(() => {
       const [terminal] = [...state.terminals.values()];
+      recordTerminalInput({ type: "input", id: terminal.id, data: "echo used" });
       const scheduled = terminal.autoTitleTimer !== 0;
       state.settings.autoTitleSuggestions = false;
       rescheduleAllAutoTitles();
@@ -151,6 +538,7 @@ test.describe("Automatic terminal title suggestions", () => {
     await ready(page);
     const timers = await page.evaluate(() => {
       const [terminal] = [...state.terminals.values()];
+      recordTerminalInput({ type: "input", id: terminal.id, data: "echo used" });
       state.settings.autoTitleSuppressions = [];
       applyAutoTitleSuppressions();
       const before = terminal.autoTitleTimer;
@@ -197,6 +585,8 @@ test.describe("Automatic terminal title suggestions", () => {
     await page.evaluate(() => {
       state.settings.autoTitleSuppressions = [];
       applyAutoTitleSuppressions();
+      const [terminal] = [...state.terminals.values()];
+      recordTerminalInput({ type: "input", id: terminal.id, data: "echo used" });
     });
 
     const pane = page.locator(".terminal-pane").first();
@@ -526,6 +916,54 @@ test.describe("Automatic terminal title suggestions", () => {
       await expect(overlay).toContainText(/test runner.*PID 9999.*Aug 10, 2026/i);
     } finally {
       await page.evaluate((stored) => {
+        if (stored == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
+        else localStorage.setItem("multiterm.titleSuggestionHistory", stored);
+        state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      }, original);
+    }
+  });
+
+  test("reveals title history five suggestions at a time", async ({ page }) => {
+    await ready(page);
+    const original = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
+    try {
+      await page.evaluate(() => {
+        state.titleSuggestionHistory = Array.from({ length: 12 }, (_, index) => ({
+          id: `paged-title-${index}`,
+          terminalId: `terminal-${index}`,
+          terminalTitle: "batch runner",
+          pid: 9000 + index,
+          suggestion: `batch suggestion ${index + 1}`,
+          suggestedAt: new Date(Date.UTC(2026, 7, 11, 12, index)).toISOString(),
+          decidedAt: null,
+          accepted: null,
+          automatic: false
+        }));
+        saveTitleSuggestionHistory();
+        openTitleSuggestionHistory();
+      });
+
+      const overlay = page.locator("#titleSuggestionHistoryOverlay");
+      const rows = overlay.locator(".title-suggestion-history-row");
+      const more = page.locator("#titleSuggestionHistoryMore");
+      await expect(rows).toHaveCount(5);
+      await expect(page.locator("#titleSuggestionHistorySummary")).toHaveText("Showing 5 of 12 suggestions");
+      await expect(more).toBeVisible();
+
+      await more.click();
+      await expect(rows).toHaveCount(10);
+      await expect(page.locator("#titleSuggestionHistorySummary")).toHaveText("Showing 10 of 12 suggestions");
+
+      await page.locator("#titleSuggestionHistoryFilter").fill("batch");
+      await expect(rows).toHaveCount(5);
+      await more.click();
+      await more.click();
+      await expect(rows).toHaveCount(12);
+      await expect(page.locator("#titleSuggestionHistorySummary")).toHaveText("12 suggestions");
+      await expect(more).toBeHidden();
+    } finally {
+      await page.evaluate((stored) => {
+        closeTitleSuggestionHistory();
         if (stored == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
         else localStorage.setItem("multiterm.titleSuggestionHistory", stored);
         state.titleSuggestionHistory = loadTitleSuggestionHistory();

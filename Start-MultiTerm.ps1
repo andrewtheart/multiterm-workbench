@@ -1515,6 +1515,467 @@ namespace MultiTerm.PowerShellBridge
         }
     }
 
+    internal sealed class RuntimeDiagnosticsStore
+    {
+        private static readonly string[] RecordFields = new string[]
+        {
+            "clean", "code", "copilotLogKey", "elapsedMs", "error", "event", "level", "message", "operation",
+            "outcome", "pendingRequests", "phase", "readyState", "reason", "requestId",
+            "requestType", "responseType", "socketReady", "source", "terminalId", "terminalTitle", "time", "timeoutMs"
+        };
+        private static readonly HashSet<string> NumericFields = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "code", "elapsedMs", "pendingRequests", "readyState", "time", "timeoutMs"
+        };
+        private static readonly HashSet<string> BooleanFields = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "clean", "socketReady"
+        };
+        private static readonly Regex UrlPattern = new Regex(@"\bhttps?://[^\s""'<>]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private readonly object sync = new object();
+        private readonly string directory;
+        private readonly string startedStamp;
+        private int sequence;
+        private string currentPath;
+        private DateTime lastPrunedAt = DateTime.MinValue;
+        private long retentionDays = 14;
+        private long rotationMb = 10;
+        private long viewerEntries = 5000;
+
+        public RuntimeDiagnosticsStore()
+        {
+            string configured = Environment.GetEnvironmentVariable("MULTITERM_DIAGNOSTICS_DIR");
+            this.directory = String.IsNullOrWhiteSpace(configured)
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MultiTerm", "Diagnostics")
+                : Path.GetFullPath(configured);
+            this.startedStamp = DateTime.UtcNow.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture);
+            this.currentPath = this.NextPath();
+        }
+
+        public string DirectoryPath { get { return this.directory; } }
+        public long RetentionDays { get { lock (this.sync) return this.retentionDays; } }
+        public long RotationMb { get { lock (this.sync) return this.rotationMb; } }
+        public long ViewerEntries { get { lock (this.sync) return this.viewerEntries; } }
+
+        private string NextPath()
+        {
+            return Path.Combine(this.directory, "runtime-" + this.startedStamp + "-" + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture)
+                + "-" + (this.sequence++).ToString("000", CultureInfo.InvariantCulture) + ".jsonl");
+        }
+
+        internal static long NonNegativeLong(Dictionary<string, string> values, string key, long fallback)
+        {
+            long parsed;
+            return Int64.TryParse(Json.Get(values, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) && parsed >= 0
+                ? parsed
+                : fallback;
+        }
+
+        public void Configure(Dictionary<string, string> message)
+        {
+            lock (this.sync)
+            {
+                if (message.ContainsKey("diagnosticRetentionDays"))
+                {
+                    this.retentionDays = NonNegativeLong(message, "diagnosticRetentionDays", this.retentionDays);
+                }
+                if (message.ContainsKey("diagnosticRotationMb"))
+                {
+                    this.rotationMb = NonNegativeLong(message, "diagnosticRotationMb", this.rotationMb);
+                }
+                if (message.ContainsKey("diagnosticViewerEntries"))
+                {
+                    this.viewerEntries = NonNegativeLong(message, "diagnosticViewerEntries", this.viewerEntries);
+                }
+            }
+        }
+
+        internal static string RedactUrls(string value)
+        {
+            return UrlPattern.Replace(value ?? String.Empty, delegate(Match match)
+            {
+                Uri parsed;
+                if (!Uri.TryCreate(match.Value, UriKind.Absolute, out parsed)) return "[redacted-url]";
+                UriBuilder builder = new UriBuilder(parsed);
+                builder.UserName = String.Empty;
+                builder.Password = String.Empty;
+                builder.Query = String.Empty;
+                builder.Fragment = String.Empty;
+                return builder.Uri.AbsoluteUri;
+            });
+        }
+
+        private static string RecordJson(Dictionary<string, string> message)
+        {
+            Dictionary<string, string> values = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string field in RecordFields)
+            {
+                if (message.ContainsKey(field)) values[field] = Json.Get(message, field);
+            }
+            if (!values.ContainsKey("time"))
+            {
+                values["time"] = ((long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds)
+                    .ToString(CultureInfo.InvariantCulture);
+            }
+            if (!values.ContainsKey("level")) values["level"] = "info";
+            if (!values.ContainsKey("source")) values["source"] = "bridge";
+            if (!values.ContainsKey("event")) values["event"] = "log";
+            if (!values.ContainsKey("message")) values["message"] = String.Empty;
+
+            StringBuilder json = new StringBuilder("{");
+            bool first = true;
+            foreach (string field in RecordFields)
+            {
+                string value;
+                if (!values.TryGetValue(field, out value)) continue;
+                if (!first) json.Append(',');
+                first = false;
+                json.Append(Json.Quote(field)).Append(':');
+                long numeric;
+                if (NumericFields.Contains(field) && Int64.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out numeric))
+                {
+                    json.Append(numeric.ToString(CultureInfo.InvariantCulture));
+                }
+                else if (BooleanFields.Contains(field) && (value == "true" || value == "false"))
+                {
+                    json.Append(value);
+                }
+                else
+                {
+                    json.Append(Json.Quote(RedactUrls(value)));
+                }
+            }
+            return json.Append('}').ToString();
+        }
+
+        public void Append(Dictionary<string, string> message)
+        {
+            string line = RecordJson(message) + Environment.NewLine;
+            lock (this.sync)
+            {
+                Directory.CreateDirectory(this.directory);
+                this.PruneIfDue(DateTime.UtcNow);
+                FileInfo current = new FileInfo(this.currentPath);
+                decimal maximumBytes = (decimal)this.rotationMb * 1024m * 1024m;
+                if (maximumBytes > 0 && current.Exists && current.Length > 0 && (decimal)current.Length + Encoding.UTF8.GetByteCount(line) > maximumBytes)
+                {
+                    this.currentPath = this.NextPath();
+                }
+                File.AppendAllText(this.currentPath, line, new UTF8Encoding(false));
+            }
+        }
+
+        public void Append(string level, string source, string eventName, string message)
+        {
+            this.Append(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                { "level", level },
+                { "source", source },
+                { "event", eventName },
+                { "message", message }
+            });
+        }
+
+        private void PruneIfDue(DateTime now)
+        {
+            if (this.lastPrunedAt != DateTime.MinValue && now - this.lastPrunedAt < TimeSpan.FromHours(1)) return;
+            this.lastPrunedAt = now;
+            if (this.retentionDays == 0) return;
+            DateTime oldestAllowed;
+            try { oldestAllowed = now.AddDays(-this.retentionDays); }
+            catch { oldestAllowed = DateTime.MinValue; }
+            foreach (FileInfo file in new DirectoryInfo(this.directory).GetFiles("*.jsonl"))
+            {
+                if (String.Equals(file.FullName, this.currentPath, StringComparison.OrdinalIgnoreCase)) continue;
+                if (file.LastWriteTimeUtc >= oldestAllowed) continue;
+                try { file.Delete(); } catch { }
+            }
+        }
+
+        public string RecentJson(long requestedLimit)
+        {
+            lock (this.sync)
+            {
+                long limit = requestedLimit >= 0 ? requestedLimit : this.viewerEntries;
+                if (!Directory.Exists(this.directory)) return "[]";
+                FileInfo[] files = new DirectoryInfo(this.directory).GetFiles("*.jsonl");
+                Array.Sort(files, delegate(FileInfo left, FileInfo right)
+                {
+                    int byTime = left.LastWriteTimeUtc.CompareTo(right.LastWriteTimeUtc);
+                    return byTime != 0 ? byTime : StringComparer.OrdinalIgnoreCase.Compare(left.FullName, right.FullName);
+                });
+                List<string> records = new List<string>();
+                foreach (FileInfo file in files)
+                {
+                    foreach (string line in File.ReadLines(file.FullName, Encoding.UTF8))
+                    {
+                        if (String.IsNullOrWhiteSpace(line)) continue;
+                        try
+                        {
+                            Json.ParseFlatObject(line);
+                            records.Add(line);
+                        }
+                        catch { }
+                    }
+                }
+                if (limit > 0 && records.Count > limit)
+                {
+                    int removeCount = records.Count - (int)Math.Min(limit, Int32.MaxValue);
+                    records.RemoveRange(0, removeCount);
+                }
+                return "[" + String.Join(",", records.ToArray()) + "]";
+            }
+        }
+    }
+
+    internal sealed class CopilotLogAggregator : IDisposable
+    {
+        private sealed class FileState
+        {
+            public long Offset;
+            public string Remainder = String.Empty;
+        }
+
+        private sealed class Registration
+        {
+            public string TerminalId = String.Empty;
+            public string TerminalTitle = String.Empty;
+        }
+
+        private static readonly Regex LogLinePattern = new Regex(
+            @"^(\d{4}-\d{2}-\d{2}T\S+) \[(ERROR|WARNING|INFO|DEBUG)\]\s?(.*)$",
+            RegexOptions.Compiled);
+        private readonly object sync = new object();
+        private readonly Dictionary<string, FileState> files = new Dictionary<string, FileState>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Registration> registrations = new Dictionary<string, Registration>(StringComparer.OrdinalIgnoreCase);
+        private readonly RuntimeDiagnosticsStore diagnostics;
+        private readonly Action<string> broadcast;
+        private Timer timer;
+        private bool enabled;
+        private long enabledAt;
+        private bool initialScanComplete;
+        private long initialTailKb = 256;
+
+        public CopilotLogAggregator(RuntimeDiagnosticsStore diagnostics, Action<string> broadcast)
+        {
+            this.diagnostics = diagnostics;
+            this.broadcast = broadcast;
+            this.RootPath = Path.Combine(diagnostics.DirectoryPath, "Copilot");
+        }
+
+        public string RootPath { get; private set; }
+        public bool Enabled { get { lock (this.sync) return this.enabled; } }
+        public long InitialTailKb { get { lock (this.sync) return this.initialTailKb; } }
+
+        public bool Register(Dictionary<string, string> message)
+        {
+            string key = Json.Get(message, "key");
+            if (String.IsNullOrWhiteSpace(key) || key.Length > 128 || !Regex.IsMatch(key, @"^[a-z0-9-]+$", RegexOptions.IgnoreCase)) return false;
+            string terminalId = Json.Get(message, "terminalId") ?? String.Empty;
+            string terminalTitle = Regex.Replace(Json.Get(message, "terminalTitle") ?? String.Empty, @"[\x00-\x1f\x7f]", String.Empty);
+            if (terminalId.Length > 128) terminalId = terminalId.Substring(0, 128);
+            if (terminalTitle.Length > 200) terminalTitle = terminalTitle.Substring(0, 200);
+            lock (this.sync)
+            {
+                this.registrations[key] = new Registration { TerminalId = terminalId, TerminalTitle = terminalTitle };
+            }
+            return true;
+        }
+
+        public void Configure(Dictionary<string, string> message)
+        {
+            bool nextEnabled = this.enabled;
+            long nextEnabledAt = this.enabledAt;
+            long nextInitialTailKb = this.initialTailKb;
+            if (message.ContainsKey("copilotLogViewerEnabled"))
+            {
+                nextEnabled = String.Equals(Json.Get(message, "copilotLogViewerEnabled"), "true", StringComparison.OrdinalIgnoreCase);
+            }
+            if (message.ContainsKey("copilotLogInitialTailKb"))
+            {
+                nextInitialTailKb = RuntimeDiagnosticsStore.NonNegativeLong(message, "copilotLogInitialTailKb", this.initialTailKb);
+            }
+            if (message.ContainsKey("copilotLogEnabledAt"))
+            {
+                nextEnabledAt = RuntimeDiagnosticsStore.NonNegativeLong(message, "copilotLogEnabledAt", this.enabledAt);
+            }
+
+            bool poll;
+            lock (this.sync)
+            {
+                if (nextEnabled != this.enabled || nextInitialTailKb != this.initialTailKb || nextEnabledAt != this.enabledAt)
+                {
+                    this.files.Clear();
+                    this.initialScanComplete = false;
+                }
+                this.enabled = nextEnabled;
+                this.enabledAt = nextEnabledAt;
+                this.initialTailKb = nextInitialTailKb;
+                if (this.enabled && this.timer == null)
+                {
+                    this.timer = new Timer(delegate { this.PollSafe(); }, null, 1000, 1000);
+                }
+                else if (!this.enabled && this.timer != null)
+                {
+                    this.timer.Dispose();
+                    this.timer = null;
+                }
+                poll = this.enabled;
+            }
+            if (poll) this.PollSafe();
+        }
+
+        private void PollSafe()
+        {
+            try { this.Poll(); }
+            catch { }
+        }
+
+        private void Poll()
+        {
+            lock (this.sync)
+            {
+                if (!this.enabled) return;
+                if (!Directory.Exists(this.RootPath))
+                {
+                    this.initialScanComplete = true;
+                    return;
+                }
+                bool initialScan = !this.initialScanComplete;
+                List<string> ownedPaths = new List<string>(Directory.GetFiles(this.RootPath, "*", SearchOption.TopDirectoryOnly));
+                foreach (string directory in Directory.GetDirectories(this.RootPath, "*", SearchOption.TopDirectoryOnly))
+                {
+                    DirectoryInfo info = new DirectoryInfo(directory);
+                    if ((info.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                    ownedPaths.AddRange(Directory.GetFiles(directory, "*", SearchOption.TopDirectoryOnly));
+                }
+                string[] paths = ownedPaths.ToArray();
+                HashSet<string> present = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+                foreach (string path in paths) this.ReadFile(path, initialScan);
+                List<string> trackedPaths = new List<string>(this.files.Keys);
+                foreach (string path in trackedPaths)
+                {
+                    if (!present.Contains(path)) this.files.Remove(path);
+                }
+                this.initialScanComplete = true;
+            }
+        }
+
+        private void ReadFile(string path, bool initialScan)
+        {
+            FileInfo info = new FileInfo(path);
+            FileState state;
+            bool discardPartial = false;
+            if (!this.files.TryGetValue(path, out state))
+            {
+                long tailBytes = this.initialTailKb > Int64.MaxValue / 1024L ? Int64.MaxValue : this.initialTailKb * 1024L;
+                long lastWriteTime = (long)(info.LastWriteTimeUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+                bool writtenSinceEnable = this.enabledAt > 0 && lastWriteTime >= this.enabledAt;
+                long offset = initialScan
+                    ? (tailBytes == 0 ? (writtenSinceEnable ? 0 : info.Length) : Math.Max(0, info.Length - tailBytes))
+                    : 0;
+                state = new FileState { Offset = offset };
+                this.files[path] = state;
+                discardPartial = offset > 0 && !this.PreviousByteIsLineFeed(path, offset);
+            }
+            else if (info.Length < state.Offset)
+            {
+                state.Offset = 0;
+                state.Remainder = String.Empty;
+            }
+            if (info.Length == state.Offset) return;
+
+            string text;
+            using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                stream.Seek(state.Offset, SeekOrigin.Begin);
+                using (StreamReader reader = new StreamReader(stream, new UTF8Encoding(false, false), false))
+                {
+                    text = state.Remainder + reader.ReadToEnd();
+                    state.Offset = stream.Position;
+                }
+            }
+            text = text.Replace("\r\n", "\n");
+            if (discardPartial)
+            {
+                int firstBreak = text.IndexOf('\n');
+                text = firstBreak >= 0 ? text.Substring(firstBreak + 1) : String.Empty;
+            }
+            string[] lines = text.Split(new char[] { '\n' });
+            state.Remainder = lines.Length == 0 ? String.Empty : lines[lines.Length - 1];
+            for (int index = 0; index < lines.Length - 1; index++)
+            {
+                if (lines[index].Length > 0) this.Emit(lines[index].TrimEnd('\r'), path);
+            }
+        }
+
+        private bool PreviousByteIsLineFeed(string path, long offset)
+        {
+            using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                stream.Seek(offset - 1, SeekOrigin.Begin);
+                return stream.ReadByte() == (byte)'\n';
+            }
+        }
+
+        private void Emit(string line, string path)
+        {
+            Match match = LogLinePattern.Match(line);
+            string level = "info";
+            string message = line;
+            long time = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            if (match.Success)
+            {
+                if (match.Groups[2].Value == "ERROR") level = "error";
+                else if (match.Groups[2].Value == "WARNING") level = "warn";
+                else if (match.Groups[2].Value == "DEBUG") level = "debug";
+                message = match.Groups[3].Value;
+                DateTimeOffset parsed;
+                if (DateTimeOffset.TryParse(match.Groups[1].Value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out parsed))
+                {
+                    time = parsed.ToUnixTimeMilliseconds();
+                }
+            }
+            message = RuntimeDiagnosticsStore.RedactUrls(message);
+            string relativePath = path.Substring(this.RootPath.Length).TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            int separator = relativePath.IndexOfAny(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar });
+            string key = separator >= 0 ? relativePath.Substring(0, separator) : relativePath;
+            Registration registration;
+            if (!this.registrations.TryGetValue(key, out registration)) registration = new Registration();
+            string terminalTag = !String.IsNullOrWhiteSpace(registration.TerminalTitle)
+                ? registration.TerminalTitle
+                : !String.IsNullOrWhiteSpace(registration.TerminalId) ? registration.TerminalId : !String.IsNullOrWhiteSpace(key) ? key : "session";
+            string source = "copilot:" + terminalTag;
+            this.diagnostics.Append(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                { "time", time.ToString(CultureInfo.InvariantCulture) },
+                { "level", level },
+                { "source", source },
+                { "event", "copilot-log" },
+                { "message", message },
+                { "copilotLogKey", key },
+                { "terminalId", registration.TerminalId },
+                { "terminalTitle", registration.TerminalTitle }
+            });
+            this.broadcast("{\"type\":\"log\",\"time\":" + time.ToString(CultureInfo.InvariantCulture)
+                + ",\"level\":" + Json.Quote(level) + ",\"source\":" + Json.Quote(source) + ",\"event\":\"copilot-log\",\"message\":"
+                + Json.Quote(message) + ",\"copilotLogKey\":" + Json.Quote(key) + ",\"terminalId\":" + Json.Quote(registration.TerminalId)
+                + ",\"terminalTitle\":" + Json.Quote(registration.TerminalTitle) + "}");
+        }
+
+        public void Dispose()
+        {
+            lock (this.sync)
+            {
+                if (this.timer != null) this.timer.Dispose();
+                this.timer = null;
+                this.files.Clear();
+                this.registrations.Clear();
+                this.initialScanComplete = false;
+            }
+        }
+    }
+
     public sealed class BridgeServer
     {
         private sealed class OutputBatch
@@ -1556,6 +2017,8 @@ namespace MultiTerm.PowerShellBridge
         private const int TerminalMessageClaimSeconds = 15;
         private readonly ConcurrentDictionary<string, OutputBatch> outputBatches = new ConcurrentDictionary<string, OutputBatch>();
         private int outputCoalesceMs = 8;
+        private readonly RuntimeDiagnosticsStore runtimeDiagnostics = new RuntimeDiagnosticsStore();
+        private readonly CopilotLogAggregator copilotLogs;
         private readonly object gitMergeLock = new object();
         private readonly Dictionary<string, GitMergeSession> gitMergeSessions = new Dictionary<string, GitMergeSession>(StringComparer.Ordinal);
 
@@ -1623,6 +2086,7 @@ namespace MultiTerm.PowerShellBridge
             this.publicDir = Path.GetFullPath(publicDir);
             this.openBrowser = openBrowser;
             this.consoleDashboardEnabled = consoleDashboardEnabled;
+            this.copilotLogs = new CopilotLogAggregator(this.runtimeDiagnostics, this.Broadcast);
             string folder = this.NormalizeOpenFolder(startupOpenFolder);
             bool hasOptions = false;
             string launch = null;
@@ -1816,6 +2280,7 @@ namespace MultiTerm.PowerShellBridge
                 try { this.listener.Stop(); } catch { }
                 try { this.listener.Close(); } catch { }
             }
+            this.copilotLogs.Dispose();
             this.promptLibraryHost.Dispose();
             this.UnregisterInstance();
         }
@@ -2094,6 +2559,9 @@ namespace MultiTerm.PowerShellBridge
         private sealed class GitResult
         {
             public bool Ok;
+            public bool TimedOut;
+            public int ExitCode = -1;
+            public long DurationMilliseconds;
             public string StandardOutput = String.Empty;
             public string StandardError = String.Empty;
         }
@@ -2134,6 +2602,7 @@ namespace MultiTerm.PowerShellBridge
         private static GitResult RunGit(string[] arguments, string workingDirectory, int timeoutMilliseconds, Dictionary<string, string> environment = null)
         {
             GitResult result = new GitResult();
+            Stopwatch stopwatch = Stopwatch.StartNew();
             try
             {
                 ProcessStartInfo startInfo = new ProcessStartInfo();
@@ -2159,22 +2628,48 @@ namespace MultiTerm.PowerShellBridge
                 }
                 using (Process process = Process.Start(startInfo))
                 {
-                    string output = process.StandardOutput.ReadToEnd();
-                    string error = process.StandardError.ReadToEnd();
-                    if (!process.WaitForExit(timeoutMilliseconds))
+                    Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+                    Task<string> errorTask = process.StandardError.ReadToEndAsync();
+                    bool exited = process.WaitForExit(timeoutMilliseconds);
+                    if (!exited)
                     {
+                        result.TimedOut = true;
                         try { process.Kill(); } catch { }
-                        result.StandardError = "git did not finish in time.";
-                        return result;
+                        try { process.WaitForExit(5000); } catch { }
                     }
-                    result.Ok = process.ExitCode == 0;
-                    result.StandardOutput = output;
-                    result.StandardError = error;
+                    try
+                    {
+                        Task.WaitAll(new Task[] { outputTask, errorTask }, 5000);
+                    }
+                    catch
+                    {
+                        // A killed child may close a redirected stream abruptly.
+                    }
+                    if (outputTask.Status == TaskStatus.RanToCompletion) result.StandardOutput = outputTask.Result;
+                    if (errorTask.Status == TaskStatus.RanToCompletion) result.StandardError = errorTask.Result;
+                    if (result.TimedOut)
+                    {
+                        if (result.StandardError.Length > 0 && !result.StandardError.EndsWith("\n", StringComparison.Ordinal))
+                        {
+                            result.StandardError += Environment.NewLine;
+                        }
+                        result.StandardError += "git did not finish in time.";
+                    }
+                    else
+                    {
+                        result.ExitCode = process.ExitCode;
+                        result.Ok = result.ExitCode == 0;
+                    }
                 }
             }
             catch (Exception error)
             {
                 result.StandardError = error.Message;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                result.DurationMilliseconds = stopwatch.ElapsedMilliseconds;
             }
             return result;
         }
@@ -2390,9 +2885,21 @@ namespace MultiTerm.PowerShellBridge
             RunGit(new string[] { "branch", "-D", branch }, repositoryRoot, 30000);
         }
 
+        private static void SendOperationProgress(BridgeClient client, string requestId, string operation,
+            string phase, string statusMessage, Stopwatch stopwatch)
+        {
+            client.Send("{\"type\":\"operationProgress\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"operation\":" + Json.Quote(operation)
+                + ",\"phase\":" + Json.Quote(phase)
+                + ",\"message\":" + Json.Quote(statusMessage)
+                + ",\"elapsedMs\":" + stopwatch.ElapsedMilliseconds.ToString() + "}");
+        }
+
         private void SendGitWorktreeCreate(BridgeClient client, Dictionary<string, string> message)
         {
             string requestId = Json.Get(message, "requestId");
+            Stopwatch operationStopwatch = Stopwatch.StartNew();
+            SendOperationProgress(client, requestId, "gitWorktreeCreate", "started", "Starting worktree creation...", operationStopwatch);
             string requestedRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
             string parentBranch = (Json.Get(message, "parentBranch") ?? String.Empty).Trim();
             string branch = (Json.Get(message, "branch") ?? String.Empty).Trim();
@@ -2405,6 +2912,7 @@ namespace MultiTerm.PowerShellBridge
 
             if (requestedRoot.Length > 0 && parentBranch.Length > 0 && branch.Length > 0 && worktreePath.Length > 0)
             {
+                SendOperationProgress(client, requestId, "gitWorktreeCreate", "validating", "Checking the repository and branch names...", operationStopwatch);
                 string repositoryRoot;
                 GitInspectionJson(requestedRoot, out repositoryRoot);
                 bool exactRoot = repositoryRoot.Length > 0
@@ -2427,11 +2935,13 @@ namespace MultiTerm.PowerShellBridge
                         GitResult status = RunGit(new string[] { "status", "--porcelain=v1", "--untracked-files=all" }, repositoryRoot, 30000);
                         if (importPending && status.Ok && status.StandardOutput.Trim().Length > 0)
                         {
+                            SendOperationProgress(client, requestId, "gitWorktreeCreate", "snapshotting", "Capturing pending parent changes...", operationStopwatch);
                             snapshot = SnapshotGitWorktree(repositoryRoot, "MultiTerm imported pending changes from " + parentBranch);
                             if (!snapshot.Ok) reason = snapshot.Reason;
                         }
                         if (snapshot == null || snapshot.Ok)
                         {
+                            SendOperationProgress(client, requestId, "gitWorktreeCreate", "creating", "Creating the Git worktree...", operationStopwatch);
                             GitResult added = RunGit(new string[] { "worktree", "add", "-b", branch, worktreePath, parentBranch }, repositoryRoot, 120000);
                             if (!added.Ok)
                             {
@@ -2442,6 +2952,7 @@ namespace MultiTerm.PowerShellBridge
                                 bool materialized = true;
                                 if (snapshot != null)
                                 {
+                                    SendOperationProgress(client, requestId, "gitWorktreeCreate", "importing", "Importing pending changes into the worktree...", operationStopwatch);
                                     GitResult read = RunGit(new string[] { "read-tree", "--reset", "-u", snapshot.Commit }, worktreePath, 120000);
                                     GitResult reset = read.Ok
                                         ? RunGit(new string[] { "reset", "--mixed", "HEAD" }, worktreePath, 30000)
@@ -2453,6 +2964,7 @@ namespace MultiTerm.PowerShellBridge
                                     }
                                     else
                                     {
+                                        SendOperationProgress(client, requestId, "gitWorktreeCreate", "verifying", "Verifying the imported worktree...", operationStopwatch);
                                         GitSnapshot verified = SnapshotGitWorktree(worktreePath, "MultiTerm imported snapshot verification");
                                         if (!verified.Ok || !String.Equals(verified.Tree, snapshot.Tree, StringComparison.Ordinal))
                                         {
@@ -2467,6 +2979,7 @@ namespace MultiTerm.PowerShellBridge
                                 }
                                 else
                                 {
+                                    SendOperationProgress(client, requestId, "gitWorktreeCreate", "recording", "Recording worktree metadata...", operationStopwatch);
                                     RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".parent", parentBranch }, repositoryRoot, 15000);
                                     RunGit(new string[] { "config", "--local", "multiterm.worktree." + branch + ".created", DateTime.UtcNow.ToString("o") }, repositoryRoot, 15000);
                                     if (snapshot != null)
@@ -2676,6 +3189,8 @@ namespace MultiTerm.PowerShellBridge
         private void SendGitMergeStart(BridgeClient client, Dictionary<string, string> message)
         {
             string requestId = Json.Get(message, "requestId");
+            Stopwatch operationStopwatch = Stopwatch.StartNew();
+            SendOperationProgress(client, requestId, "gitMergeStart", "started", "Starting bring-back checks...", operationStopwatch);
             string repositoryRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
             string parentBranch = (Json.Get(message, "parentBranch") ?? String.Empty).Trim();
             string worktreeBranch = (Json.Get(message, "worktreeBranch") ?? String.Empty).Trim();
@@ -2697,6 +3212,7 @@ namespace MultiTerm.PowerShellBridge
             }
             else
             {
+                SendOperationProgress(client, requestId, "gitMergeStart", "locating", "Locating the source and parent worktrees...", operationStopwatch);
                 string sourcePath = BranchCheckoutPath(repositoryRoot, worktreeBranch);
                 string parentPath = BranchCheckoutPath(repositoryRoot, parentBranch);
                 GitMergeSession session = new GitMergeSession
@@ -2714,6 +3230,7 @@ namespace MultiTerm.PowerShellBridge
                     else if (parentPath.Length == 0) reason = parentBranch + " must be checked out so the result can remain pending there.";
                     else
                     {
+                        SendOperationProgress(client, requestId, "gitMergeStart", "snapshotting", "Capturing both worktree states...", operationStopwatch);
                         session.ParentSnapshot = SnapshotGitWorktree(parentPath, "MultiTerm snapshot of " + parentBranch);
                         session.WorktreeSnapshot = SnapshotGitWorktree(sourcePath, "MultiTerm snapshot of " + worktreeBranch);
                         if (!session.ParentSnapshot.Ok || !session.WorktreeSnapshot.Ok)
@@ -2722,6 +3239,7 @@ namespace MultiTerm.PowerShellBridge
                         }
                         else
                         {
+                            SendOperationProgress(client, requestId, "gitMergeStart", "preparing", "Preparing an isolated merge worktree...", operationStopwatch);
                             workPath = Path.Combine(Path.GetTempPath(), "multiterm-merge-" + Guid.NewGuid().ToString("N").Substring(0, 12));
                             GitResult added = RunGit(new string[] { "worktree", "add", "--detach", workPath, session.ParentSnapshot.Commit }, repositoryRoot, 120000);
                             if (!added.Ok) reason = GitResultReason(added, "Could not prepare a merge worktree.");
@@ -2729,7 +3247,9 @@ namespace MultiTerm.PowerShellBridge
                             {
                                 session.WorkPath = workPath;
                                 session.Temporary = true;
+                                SendOperationProgress(client, requestId, "gitMergeStart", "merging", "Combining committed and pending worktree changes...", operationStopwatch);
                                 GitResult merged = RunGit(new string[] { "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", session.WorktreeSnapshot.Commit }, workPath, 120000);
+                                SendOperationProgress(client, requestId, "gitMergeStart", "checking-conflicts", "Checking the provisional merge for conflicts...", operationStopwatch);
                                 conflicts = GitConflictedPaths(workPath);
                                 if (!merged.Ok && conflicts.Count == 0)
                                 {
@@ -2747,6 +3267,7 @@ namespace MultiTerm.PowerShellBridge
                 }
                 else
                 {
+                    SendOperationProgress(client, requestId, "gitMergeStart", "checking", "Checking both worktrees for safe merge conditions...", operationStopwatch);
                     GitResult sourceStatus = sourcePath.Length > 0
                         ? RunGit(new string[] { "status", "--porcelain" }, sourcePath, 30000)
                         : new GitResult { Ok = true };
@@ -2779,6 +3300,7 @@ namespace MultiTerm.PowerShellBridge
                             workPath = parentPath;
                             if (workPath.Length == 0)
                             {
+                                SendOperationProgress(client, requestId, "gitMergeStart", "preparing", "Preparing a temporary parent worktree...", operationStopwatch);
                                 workPath = Path.Combine(Path.GetTempPath(), "multiterm-merge-" + Guid.NewGuid().ToString("N").Substring(0, 12));
                                 GitResult added = RunGit(new string[] { "worktree", "add", workPath, parentBranch }, repositoryRoot, 120000);
                                 if (!added.Ok) reason = GitResultReason(added, "Could not prepare a merge worktree.");
@@ -2790,7 +3312,9 @@ namespace MultiTerm.PowerShellBridge
                                 string[] mergeArguments = strategy == "squash"
                                     ? new string[] { "-c", "merge.conflictStyle=diff3", "merge", "--squash", worktreeBranch }
                                     : new string[] { "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", worktreeBranch };
+                                SendOperationProgress(client, requestId, "gitMergeStart", "merging", "Applying worktree commits to the parent...", operationStopwatch);
                                 GitResult merged = RunGit(mergeArguments, workPath, 120000);
+                                SendOperationProgress(client, requestId, "gitMergeStart", "checking-conflicts", "Checking the merge for conflicts...", operationStopwatch);
                                 conflicts = GitConflictedPaths(workPath);
                                 if (!merged.Ok && conflicts.Count == 0)
                                 {
@@ -2825,6 +3349,9 @@ namespace MultiTerm.PowerShellBridge
             string requestId = Json.Get(message, "requestId");
             string sessionId = Json.Get(message, "sessionId");
             bool abort = String.Equals(Json.Get(message, "abort"), "true", StringComparison.OrdinalIgnoreCase);
+            Stopwatch operationStopwatch = Stopwatch.StartNew();
+            SendOperationProgress(client, requestId, "gitMergeFinish", "started",
+                abort ? "Starting merge rollback..." : "Finishing bring-back operation...", operationStopwatch);
             GitMergeSession session;
             lock (this.gitMergeLock) this.gitMergeSessions.TryGetValue(sessionId, out session);
             if (session == null)
@@ -2840,6 +3367,7 @@ namespace MultiTerm.PowerShellBridge
             string recoveryStash = String.Empty;
             if (abort)
             {
+                SendOperationProgress(client, requestId, "gitMergeFinish", "rolling-back", "Rolling back the provisional merge...", operationStopwatch);
                 lock (this.gitMergeLock) this.gitMergeSessions.Remove(sessionId);
                 if (session.Strategy == "pending") CleanupPendingMergeSession(session);
                 else
@@ -2852,6 +3380,7 @@ namespace MultiTerm.PowerShellBridge
             }
             else if (session.Strategy != "pending")
             {
+                SendOperationProgress(client, requestId, "gitMergeFinish", "committing", "Creating the parent commit...", operationStopwatch);
                 string commitMessage = (Json.Get(message, "commitMessage") ?? String.Empty).Trim();
                 if (commitMessage.Length == 0) commitMessage = "Merge " + session.WorktreeBranch + " into " + session.ParentBranch;
                 GitResult committed = RunGit(new string[] { "commit", "-m", commitMessage }, session.WorkPath, 60000);
@@ -2865,6 +3394,7 @@ namespace MultiTerm.PowerShellBridge
             }
             else
             {
+                SendOperationProgress(client, requestId, "gitMergeFinish", "checking", "Checking the provisional merge result...", operationStopwatch);
                 List<string> conflicts = GitConflictedPaths(session.WorkPath);
                 if (conflicts.Count > 0)
                 {
@@ -2873,6 +3403,7 @@ namespace MultiTerm.PowerShellBridge
                 else
                 {
                     GitResult resultTree = RunGit(new string[] { "write-tree" }, session.WorkPath, 30000);
+                    SendOperationProgress(client, requestId, "gitMergeFinish", "verifying-parent", "Verifying that the parent checkout is unchanged...", operationStopwatch);
                     GitSnapshot currentParent = SnapshotGitWorktree(session.ParentPath, "MultiTerm parent verification");
                     if (!resultTree.Ok) reason = GitResultReason(resultTree, "Git could not write the merged result.");
                     else if (!currentParent.Ok || currentParent.Head != session.ParentSnapshot.Head
@@ -2886,6 +3417,7 @@ namespace MultiTerm.PowerShellBridge
                         string patchPath = Path.Combine(Path.GetTempPath(), "multiterm-bring-back-" + sessionId + ".patch");
                         try
                         {
+                            SendOperationProgress(client, requestId, "gitMergeFinish", "preparing", "Preparing the pending result...", operationStopwatch);
                             GitResult patch = RunGit(new string[] {
                                 "diff", "--binary", "--full-index", "--output=" + patchPath,
                                 session.ParentSnapshot.Head, resultTree.StandardOutput.Trim()
@@ -2896,6 +3428,7 @@ namespace MultiTerm.PowerShellBridge
                             }
                             else
                             {
+                                SendOperationProgress(client, requestId, "gitMergeFinish", "protecting-parent", "Protecting existing parent changes...", operationStopwatch);
                                 GitResult stashBefore = RunGit(new string[] { "rev-parse", "--quiet", "--verify", "refs/stash" }, session.ParentPath, 30000);
                                 GitResult stashed = RunGit(new string[] {
                                     "stash", "push", "--include-untracked", "--message", "MultiTerm bring-back " + sessionId
@@ -2913,6 +3446,7 @@ namespace MultiTerm.PowerShellBridge
                                     GitResult applied = new GitResult { Ok = true };
                                     if (new FileInfo(patchPath).Length > 0)
                                     {
+                                        SendOperationProgress(client, requestId, "gitMergeFinish", "applying", "Applying the merged result to the parent...", operationStopwatch);
                                         applied = RunGit(new string[] { "apply", "--binary", "--whitespace=nowarn", patchPath }, session.ParentPath, 120000);
                                     }
                                     if (!applied.Ok)
@@ -2924,6 +3458,7 @@ namespace MultiTerm.PowerShellBridge
                                     }
                                     else
                                     {
+                                        SendOperationProgress(client, requestId, "gitMergeFinish", "verifying-result", "Verifying the parent result...", operationStopwatch);
                                         GitSnapshot materialized = SnapshotGitWorktree(session.ParentPath, "MultiTerm result verification");
                                         if (!materialized.Ok || materialized.Head != session.ParentSnapshot.Head
                                             || materialized.Tree != resultTree.StandardOutput.Trim())
@@ -2935,6 +3470,7 @@ namespace MultiTerm.PowerShellBridge
                                         }
                                         else
                                         {
+                                            SendOperationProgress(client, requestId, "gitMergeFinish", "cleaning-up", "Removing temporary safety state...", operationStopwatch);
                                             GitResult dropped = DropExactStash(session.ParentPath, recoveryStash);
                                             if (!dropped.Ok)
                                             {
@@ -4737,7 +5273,40 @@ namespace MultiTerm.PowerShellBridge
             {
                 int requested = Json.GetInt(message, "outputCoalesceMs", 8);
                 this.outputCoalesceMs = Math.Min(100, Math.Max(0, requested));
-                client.Send("{\"type\":\"config\",\"outputCoalesceMs\":" + this.outputCoalesceMs + "}");
+                this.runtimeDiagnostics.Configure(message);
+                this.copilotLogs.Configure(message);
+                client.Send("{\"type\":\"config\",\"outputCoalesceMs\":" + this.outputCoalesceMs
+                    + ",\"diagnosticRetentionDays\":" + this.runtimeDiagnostics.RetentionDays.ToString(CultureInfo.InvariantCulture)
+                    + ",\"diagnosticRotationMb\":" + this.runtimeDiagnostics.RotationMb.ToString(CultureInfo.InvariantCulture)
+                    + ",\"diagnosticViewerEntries\":" + this.runtimeDiagnostics.ViewerEntries.ToString(CultureInfo.InvariantCulture)
+                    + ",\"copilotLogViewerEnabled\":" + (this.copilotLogs.Enabled ? "true" : "false")
+                    + ",\"copilotLogInitialTailKb\":" + this.copilotLogs.InitialTailKb.ToString(CultureInfo.InvariantCulture)
+                    + ",\"copilotLogDirectory\":" + Json.Quote(this.copilotLogs.RootPath) + "}");
+            }
+            else if (type == "diagnosticRecord")
+            {
+                try { this.runtimeDiagnostics.Append(message); }
+                catch (Exception error) { Console.Error.WriteLine("[bridge] Could not persist runtime diagnostics: " + error.Message); }
+            }
+            else if (type == "diagnosticList")
+            {
+                try
+                {
+                    long limit = RuntimeDiagnosticsStore.NonNegativeLong(message, "limit", -1);
+                    client.Send("{\"type\":\"diagnostics\",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
+                        + ",\"directory\":" + Json.Quote(this.runtimeDiagnostics.DirectoryPath)
+                        + ",\"entries\":" + this.runtimeDiagnostics.RecentJson(limit) + "}");
+                }
+                catch (Exception error)
+                {
+                    client.Send("{\"type\":\"diagnostics\",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
+                        + ",\"directory\":" + Json.Quote(this.runtimeDiagnostics.DirectoryPath)
+                        + ",\"entries\":[],\"error\":" + Json.Quote(error.Message) + "}");
+                }
+            }
+            else if (type == "copilotLogRegister")
+            {
+                this.copilotLogs.Register(message);
             }
             else if (type == "statistics")
             {
@@ -4750,6 +5319,10 @@ namespace MultiTerm.PowerShellBridge
             else if (type == "automationLease")
             {
                 this.HandleAutomationLease(client, message);
+            }
+            else if (type == "machineLockState")
+            {
+                this.SendMachineLockState(client, message);
             }
             else if (type == "messageSend")
             {
@@ -4877,6 +5450,49 @@ namespace MultiTerm.PowerShellBridge
                 + ",\"occurrenceClaimed\":" + (occurrenceClaimed ? "true" : "false")
                 + ",\"released\":" + (released ? "true" : "false")
                 + ",\"expiresAt\":" + expiresAt + "}");
+        }
+
+        [DllImport("wtsapi32.dll", SetLastError = true)]
+        private static extern bool WTSQuerySessionInformation(
+            IntPtr server,
+            int sessionId,
+            int infoClass,
+            out IntPtr buffer,
+            out int bytes);
+
+        [DllImport("wtsapi32.dll")]
+        private static extern void WTSFreeMemory(IntPtr buffer);
+
+        private static string MachineLockState()
+        {
+            IntPtr buffer = IntPtr.Zero;
+            int bytes = 0;
+            try
+            {
+                if (!WTSQuerySessionInformation(IntPtr.Zero, -1, 25, out buffer, out bytes) || bytes < 20)
+                {
+                    return "unknown";
+                }
+                int flags = Marshal.ReadInt32(buffer, 16);
+                if (flags == 0) return "locked";
+                if (flags == 1) return "unlocked";
+                return "unknown";
+            }
+            catch
+            {
+                return "unknown";
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero) WTSFreeMemory(buffer);
+            }
+        }
+
+        private void SendMachineLockState(BridgeClient client, Dictionary<string, string> message)
+        {
+            client.Send("{\"type\":\"machineLockState\",\"requestId\":"
+                + Json.Quote(Json.Get(message, "requestId"))
+                + ",\"state\":" + Json.Quote(MachineLockState()) + "}");
         }
 
         private void ReleaseAutomationLease(string clientId)
@@ -8697,6 +9313,7 @@ namespace MultiTerm.PowerShellBridge
             return "{\"type\":\"welcome\",\"aiProviderBootstrap\":" + ReadAiProviderBootstrapJson()
                 + ",\"bridgeId\":" + Json.Quote(this.BridgeId)
                 + ",\"canFocusBridgeTerminal\":" + (this.consoleDashboard == null ? "false" : "true")
+                + ",\"copilotLogDirectory\":" + Json.Quote(this.copilotLogs.RootPath)
                 + ",\"copilotSetupScript\":" + Json.Quote(this.CopilotSetupScriptPath())
                 + ",\"currentUser\":" + Json.Quote(Environment.UserName)
                 + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + ",\"sessions\":" + this.SessionsJson()
@@ -8834,6 +9451,8 @@ namespace MultiTerm.PowerShellBridge
         private void Log(string level, string message)
         {
             long epochMillis = (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+            try { this.runtimeDiagnostics.Append(level, "server", "bridge-log", message); }
+            catch (Exception error) { Console.Error.WriteLine("[bridge] Could not persist runtime diagnostics: " + error.Message); }
             if (this.consoleDashboard != null)
             {
                 this.consoleDashboard.AddLog(level, message);

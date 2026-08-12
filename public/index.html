@@ -478,8 +478,19 @@
               <input id="autoTitleSuggestions" type="checkbox">
             </label>
             <label class="control-row">
+              <span>Suggestion timing</span>
+              <select id="autoTitleScheduleMode">
+                <option value="progressive">Progressive delays</option>
+                <option value="repeat">Repeating interval</option>
+              </select>
+            </label>
+            <label id="autoTitleScheduleRow" class="control-row">
               <span title="Minutes before each automatic suggestion, in order. The gaps widen so a long-lived terminal does not keep making AI requests; the last value repeats.">Suggestion delays (minutes)</span>
               <input id="autoTitleSchedule" type="text" spellcheck="false" autocomplete="off" placeholder="5, 60, 120, 240">
+            </label>
+            <label id="autoTitleRepeatRow" class="control-row" hidden>
+              <span title="Minutes between every automatic title suggestion for a terminal.">Repeat every (minutes)</span>
+              <input id="autoTitleRepeatMinutes" type="number" min="1" max="43200" step="1" inputmode="numeric">
             </label>
             <label class="control-row">
               <span title="Maximum title suggestions retained across terminal names and process IDs.">History entries</span>
@@ -519,6 +530,30 @@
             <label class="control-row">
               <span title="Largest installer the updater may download. The SHA-256 digest and exact release size are verified before launch.">Maximum installer size (MB)</span>
               <input id="maxInstallerSizeMb" type="number" min="1" step="1" inputmode="numeric">
+            </label>
+          </section>
+
+          <section class="control-section">
+            <h2>Diagnostics</h2>
+            <label class="toggle-row">
+              <input id="copilotLogViewerEnabled" type="checkbox">
+              <span title="Launch GitHub Copilot CLI sessions with a MultiTerm-owned log directory and include those records in the Logs viewer.">Include Copilot CLI logs</span>
+            </label>
+            <label class="control-row">
+              <span title="Existing content read from each MultiTerm-owned Copilot log when aggregation starts. 0 skips existing content and follows only new lines.">Copilot initial tail (KB)</span>
+              <input id="copilotLogInitialTailKb" type="number" min="0" step="64" inputmode="numeric">
+            </label>
+            <label class="control-row">
+              <span title="Delete diagnostic JSONL files older than this many days. 0 keeps them indefinitely.">Retention (days)</span>
+              <input id="diagnosticRetentionDays" type="number" min="0" step="1" inputmode="numeric">
+            </label>
+            <label class="control-row">
+              <span title="Start a new diagnostic JSONL file before the current file crosses this size. 0 disables size rotation.">Rotate at (MB)</span>
+              <input id="diagnosticRotationMb" type="number" min="0" step="1" inputmode="numeric">
+            </label>
+            <label class="control-row">
+              <span title="Maximum durable records loaded into the Logs viewer. 0 loads every available record.">Viewer entries</span>
+              <input id="diagnosticViewerEntries" type="number" min="0" step="100" inputmode="numeric">
             </label>
           </section>
 
@@ -1608,6 +1643,48 @@
       </div>
     </div>
 
+    <div id="autoTitleNoticeOverlay" class="palette-overlay" hidden>
+      <div class="palette auto-title-notice" role="dialog" aria-modal="true" aria-labelledby="autoTitleNoticeTitle" aria-describedby="autoTitleNoticeText">
+        <div class="confirm-head">
+          <i data-lucide="sparkles"></i>
+          <h2 id="autoTitleNoticeTitle">Automatic terminal titles are on</h2>
+        </div>
+        <p id="autoTitleNoticeText" class="confirm-body">MultiTerm is about to ask your selected AI title provider for a suggested name. This notice appears once for this application profile.</p>
+        <section class="auto-title-notice-data" aria-labelledby="autoTitleNoticeDataTitle">
+          <h3 id="autoTitleNoticeDataTitle">Data sent for a title</h3>
+          <ul>
+            <li>The terminal's current title, shell type, and working directory</li>
+            <li>The most recent rendered terminal text, limited by <strong>Terminal text (KB)</strong> in Settings</li>
+          </ul>
+          <p>Notes, queued commands, clipboard contents, keystroke timing, the process ID, and other terminals are not sent.</p>
+        </section>
+        <div class="auto-title-notice-schedule">
+          <label>
+            <span>Suggestion timing</span>
+            <select id="autoTitleNoticeMode">
+              <option value="progressive">Progressive delays</option>
+              <option value="repeat">Repeating interval</option>
+            </select>
+          </label>
+          <label id="autoTitleNoticeScheduleRow">
+            <span>Delays in minutes</span>
+            <input id="autoTitleNoticeSchedule" type="text" spellcheck="false" autocomplete="off" placeholder="5, 60, 120, 240">
+          </label>
+          <label id="autoTitleNoticeRepeatRow" hidden>
+            <span>Repeat every</span>
+            <span class="auto-title-notice-repeat-input">
+              <input id="autoTitleNoticeRepeatMinutes" type="number" min="1" max="43200" step="1" inputmode="numeric">
+              <span>minutes</span>
+            </span>
+          </label>
+        </div>
+        <div class="confirm-actions auto-title-notice-actions">
+          <button id="autoTitleNoticeDisable" type="button" class="confirm-cancel">Turn off automatic titles</button>
+          <button id="autoTitleNoticeContinue" type="button" class="confirm-proceed">Save and generate title</button>
+        </div>
+      </div>
+    </div>
+
     <div id="updateOverlay" class="palette-overlay" hidden>
       <div class="palette update" role="dialog" aria-modal="true" aria-labelledby="updateTitle">
         <div class="update-head">
@@ -1927,6 +2004,7 @@
                   <button type="button" data-day="1" aria-pressed="true">M</button><button type="button" data-day="2" aria-pressed="true">T</button><button type="button" data-day="3" aria-pressed="true">W</button><button type="button" data-day="4" aria-pressed="true">T</button><button type="button" data-day="5" aria-pressed="true">F</button><button type="button" data-day="6" aria-pressed="false">S</button><button type="button" data-day="0" aria-pressed="false">S</button>
                 </div>
               </div>
+              <label class="automation-machine-state"><span>Run when workstation is</span><select id="automationMachineState"><option value="both">Locked or unlocked</option><option value="locked">Locked</option><option value="unlocked">Unlocked</option></select></label>
               <label class="automation-check"><input id="automationCatchUp" type="checkbox"><span>Run once after sleep or reconnect</span></label>
             </fieldset>
 
@@ -1995,9 +2073,21 @@
                 <h3>Notes</h3>
                 <p id="terminalNotesIdentity">Associated with this terminal process.</p>
               </div>
-              <span id="terminalNotesSaved" class="artifact-saved" role="status" aria-live="polite"></span>
+              <div class="terminal-notes-head-actions">
+                <span id="terminalNotesSaved" class="artifact-saved" role="status" aria-live="polite"></span>
+                <button id="terminalNotesAdd" type="button" class="secondary-action">
+                  <i data-lucide="plus"></i>
+                  <span>New note</span>
+                </button>
+              </div>
             </div>
-            <textarea id="terminalNotesInput" class="terminal-notes-input" rows="5" spellcheck="true" placeholder="Add context, decisions, links, or reminders for this terminal…"></textarea>
+            <div id="terminalNotesList" class="terminal-notes-list" role="list" aria-label="Notes for this terminal"></div>
+            <div class="terminal-note-editor">
+              <textarea id="terminalNotesInput" class="terminal-notes-input" rows="5" spellcheck="true" placeholder="Select a note or create a new one…"></textarea>
+              <button id="terminalNotesDelete" type="button" class="icon-button terminal-note-delete" title="Delete selected note" aria-label="Delete selected note">
+                <i data-lucide="trash-2"></i>
+              </button>
+            </div>
           </section>
 
           <section class="artifact-section command-queue-section">
@@ -2058,6 +2148,12 @@
           <i data-lucide="tag"></i>
           <p>No title suggestions match this view.</p>
         </div>
+        <footer id="titleSuggestionHistoryFooter" class="title-suggestion-history-footer" hidden>
+          <button id="titleSuggestionHistoryMore" class="secondary" type="button">
+            <i data-lucide="chevrons-down"></i>
+            <span>Show 5 more</span>
+          </button>
+        </footer>
       </div>
     </div>
 
@@ -2316,16 +2412,28 @@
       <div id="terminalNotesFlyoutList" class="terminal-notes-flyout-list"></div>
       <div id="terminalNotesFlyoutEmpty" class="terminal-notes-flyout-empty" hidden>
         <i data-lucide="notebook"></i>
-        <p>No note saved for this terminal.</p>
+        <p>No notes saved for this terminal.</p>
+      </div>
+      <form id="terminalNotesFlyoutComposer" class="terminal-notes-flyout-composer" hidden>
+        <label for="terminalNotesFlyoutInput">Note</label>
+        <textarea id="terminalNotesFlyoutInput" rows="4" spellcheck="true" placeholder="Add context, a decision, link, or reminder…"></textarea>
+        <div class="terminal-notes-flyout-composer-actions">
+          <button id="terminalNotesFlyoutExpand" type="button" class="secondary-action">
+            <i data-lucide="expand"></i>
+            <span>Expand</span>
+          </button>
+          <button id="terminalNotesFlyoutCancel" type="button" class="ghost">Cancel</button>
+          <button id="terminalNotesFlyoutSave" type="submit" class="confirm-proceed">Save note</button>
+        </div>
+      </form>
+      <footer class="terminal-notes-flyout-footer">
         <button id="terminalNotesFlyoutAdd" type="button" class="secondary-action">
-          <i data-lucide="pencil"></i>
+          <i data-lucide="plus"></i>
           <span>Add note</span>
         </button>
-      </div>
-      <footer class="terminal-notes-flyout-footer">
         <button id="terminalNotesFlyoutDetails" type="button" class="secondary-action">
           <i data-lucide="list"></i>
-          <span>View more details</span>
+          <span>Open full notes</span>
         </button>
       </footer>
     </div>

@@ -253,7 +253,7 @@ test.describe("MultiTerm Workbench UI", () => {
 
   test("collapses, expands, and filters settings groups", async () => {
     const groups = page.locator(".settings-group-toggle");
-    await expect(groups).toHaveCount(11);
+    await expect(groups).toHaveCount(12);
     for (let index = 0; index < await groups.count(); index += 1) {
       await expect(groups.nth(index)).toHaveAttribute("aria-expanded", "false");
     }
@@ -310,12 +310,12 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#settingsSearch")).toHaveValue("");
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("title", "Collapse all settings");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(11);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(12);
 
     await page.locator("#settingsSearch").fill("startup");
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsSearch")).toHaveValue("");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(11);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(12);
 
     // The single glyph flips instead of swapping icons, so lucide never re-renders it.
     const chevronRotation = () => page.locator("#settingsShowAll svg").evaluate(
@@ -326,7 +326,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await page.locator("#settingsShowAll").click();
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("aria-pressed", "false");
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("title", "Show all settings");
-    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(11);
+    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(12);
     await expect.poll(chevronRotation).toBe("none");
   });
 
@@ -2591,6 +2591,42 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(after.activeId).toBe(info.bId);
     expect(after.focusPaneId).toBe(info.bId);
     expect(after.isTerminalTextarea).toBe(true);
+  });
+
+  test("recovers only when terminal focus is genuinely stranded", async () => {
+    const result = await page.evaluate(() => {
+      const terminal = state.terminals.get(state.activeId);
+      terminal.term.focus();
+      terminal.term.textarea.blur();
+      const strandedBefore = document.activeElement === document.body;
+      const recovered = recoverStrandedTerminalFocus("test");
+      const recoveredToTerminal = terminal.term.element.contains(document.activeElement);
+
+      elements.terminalSearchInput.focus();
+      const keptSetting = !recoverStrandedTerminalFocus("test-setting")
+        && document.activeElement === elements.terminalSearchInput;
+
+      elements.stage.focus();
+      const keptBackground = !recoverStrandedTerminalFocus("test-background")
+        && document.activeElement === elements.stage;
+
+      elements.paletteOverlay.hidden = false;
+      document.activeElement.blur();
+      const keptModal = !recoverStrandedTerminalFocus("test-modal")
+        && document.activeElement === document.body;
+      elements.paletteOverlay.hidden = true;
+
+      return { strandedBefore, recovered, recoveredToTerminal, keptSetting, keptBackground, keptModal };
+    });
+
+    expect(result).toEqual({
+      strandedBefore: true,
+      recovered: true,
+      recoveredToTerminal: true,
+      keptSetting: true,
+      keptBackground: true,
+      keptModal: true
+    });
   });
 
   test("moves keyboard focus into a pane when its Focus button is used", async () => {

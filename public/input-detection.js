@@ -287,7 +287,7 @@
     return values.map((line) => normalize(line));
   }
 
-  const COPILOT_FOOTER_PATTERN = /^\s*\/\s*commands\s*[·•]\s*\?\s*help\b/i;
+  const COPILOT_FOOTER_PATTERN = /(?:^\s*|[·•]\s*)\/\s*commands\s*[·•]\s*\?\s*help\b/i;
   const COPILOT_EMPTY_COMPOSER_PATTERN = /^\s*(?:❯|┃)\s*$/;
 
   function hasCopilotEmptyComposer(screen) {

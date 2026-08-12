@@ -377,12 +377,23 @@ it replaces.
 - "Infinite" scrollback also means 1,000,000 lines; it is not unbounded.
 - Search transcripts are capped at 200,000 characters per pane while active.
 - The in-app log console retains a bounded number of entries.
+- Copilot log aggregation is disabled by default; its initial read defaults to
+  256 KB per existing owned file and can be set to zero for follow-only mode.
 - Renderer output queues have configurable per-pane drain ceilings.
 - Pending request entries have timeouts and are removed when settled.
 
 Large scrollback multiplies memory across panes and increases the first on-demand
 search rebuild. Increasing output backlog can smooth bursts but retains more
 strings and delays side effects. Tune both only for a demonstrated workload.
+
+Durable diagnostics are written one JSON record per line and rotate at a visible
+size threshold. The viewer-entry setting bounds the records returned to the
+renderer, but the current reader still opens and parses every retained JSONL file
+before taking the newest records. Copilot aggregation polls the dedicated owned
+root once per second while enabled. Its initial-tail limit is per file, so many
+retained process logs multiply startup I/O even though unrelated Copilot logs are
+excluded. Retention and raw Copilot-log cleanup should be considered when
+diagnosing a slow Logs panel or an unusually large diagnostics directory.
 
 ## Process statistics and memory telemetry
 

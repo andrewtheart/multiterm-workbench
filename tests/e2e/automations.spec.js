@@ -39,11 +39,16 @@ test.describe("Automation Studio", () => {
     await page.locator("#automationNew").click();
     await page.locator("#automationName").fill("Morning checks");
     await page.locator("#automationRunAs").fill("andre");
+    await page.locator("#automationMachineState").selectOption("locked");
     await page.locator("[data-schedule-mode='weekly']").click();
     await page.locator("#automationTime").fill("08:30");
     await page.locator("[data-day='5']").click();
     await page.locator(".automation-action-command").fill("npm test");
     await page.locator(".automation-action-delivery").selectOption("stage");
+    await page.locator(".automation-action-page-mode").selectOption("existing");
+    await expect(page.locator(".automation-action-page-name-field")).toBeVisible();
+    await expect(page.locator(".automation-action-page-name-field datalist option")).toHaveValue("Page 1");
+    await page.locator(".automation-action-page-name").fill("Page 1");
     await page.locator("#automationActionAdd").click();
     const secondStep = page.locator(".automation-action-row").nth(1);
     await secondStep.locator(".automation-action-command").fill("git status");
@@ -56,9 +61,15 @@ test.describe("Automation Studio", () => {
     await expect(page.locator(".automation-rule-copy strong")).toHaveText("Morning checks");
     await expect(page.locator(".automation-rule-state")).toHaveText("On");
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.automations")));
-    expect(stored.rules[0]).toMatchObject({ enabled: true, name: "Morning checks", runAs: "andre", type: "command" });
+    expect(stored.rules[0]).toMatchObject({ enabled: true, machineState: "locked", name: "Morning checks", runAs: "andre", type: "command" });
     expect(stored.rules[0].actions).toHaveLength(2);
-    expect(stored.rules[0].actions[0]).toMatchObject({ command: "npm test", submit: false, targetName: "Tests" });
+    expect(stored.rules[0].actions[0]).toMatchObject({
+      command: "npm test",
+      pageMode: "existing",
+      pageName: "Page 1",
+      submit: false,
+      targetName: "Tests"
+    });
     expect(stored.rules[0].actions[1]).toMatchObject({
       command: "git status",
       condition: "success",
@@ -467,6 +478,57 @@ test.describe("Automation Studio", () => {
     await expect(step.locator(".automation-action-target-pid-field")).toBeVisible();
   });
 
+  test("opens automation terminals on the current, named, or a new page", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const originalPages = structuredClone(state.pages);
+      const originalActivePageId = state.activePageId;
+      const namedPageId = addPage({ activate: false, name: "Build output" });
+      const activeBefore = state.activePageId;
+      const named = resolveAutomationActionTarget({
+        cwd: "D:\\multiTerm",
+        pageMode: "existing",
+        pageName: "Build output",
+        targetMode: "new"
+      });
+      setActivePage(namedPageId, { focus: false });
+      const current = resolveAutomationActionTarget({ pageMode: "current", targetMode: "new" });
+      const pageCountBeforeNew = state.pages.length;
+      const fresh = resolveAutomationActionTarget({ pageMode: "new", targetMode: "new" });
+      const missing = resolveAutomationActionTarget({
+        pageMode: "existing",
+        pageName: "Missing page",
+        targetMode: "new"
+      });
+      const value = {
+        activeBefore,
+        activeAfter: state.activePageId,
+        currentPageId: current.terminal?.pageId,
+        freshPageId: fresh.terminal?.pageId,
+        freshPageName: pageName(fresh.terminal?.pageId),
+        missingError: missing.error,
+        namedPageId,
+        namedTerminalPageId: named.terminal?.pageId,
+        pageCountAfterNew: state.pages.length,
+        pageCountBeforeNew
+      };
+      closeAllTerminals();
+      state.pages = originalPages;
+      state.activePageId = originalActivePageId;
+      savePages();
+      renderPager();
+      return value;
+    });
+
+    expect(result.namedTerminalPageId).toBe(result.namedPageId);
+    expect(result.activeBefore).not.toBe(result.namedPageId);
+    expect(result.currentPageId).toBe(result.namedPageId);
+    expect(result.pageCountAfterNew).toBe(result.pageCountBeforeNew + 1);
+    expect(result.freshPageId).not.toBe(result.namedPageId);
+    expect(result.freshPageName).toMatch(/^Page \d+$/);
+    expect(result.activeAfter).toBe(result.namedPageId);
+    expect(result.missingError).toBe("No page is named Missing page");
+  });
+
   test("advances arbitrary success and failure branches from terminal exit markers", async ({ page }) => {
     const result = await page.evaluate(() => {
       const terminal = [...state.terminals.values()][0];
@@ -559,6 +621,67 @@ test.describe("Automation Studio", () => {
     });
     expect(result.started).toBe(1);
     expect(result.queued).toEqual(["/cwd D:\\multiTerm", "Review the pending changes"]);
+  });
+
+  test("offers Copilot staging and inserts only when the TUI is ready without Enter", async ({ page }) => {
+    await page.locator("#automationsToggle").click();
+    await page.locator("#automationNew").click();
+    await page.locator("[data-automation-type='copilot']").click();
+    await expect(page.locator(".automation-action-delivery-field")).toBeVisible();
+    await expect(page.locator(".automation-action-delivery option")).toHaveText(["Run when ready", "Stage without Enter"]);
+    await page.locator("#automationCancel").click();
+
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0]?.status)).toBe("live");
+    const result = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      const originalPaused = state.automations.paused;
+      const originalReadiness = terminalExecutionReadiness;
+      const originalSend = state.socket.send;
+      const frames = [];
+      state.automations.paused = true;
+      terminalExecutionReadiness = () => ({ mode: "copilot", ready: true });
+      state.socket.send = (payload) => {
+        const frame = JSON.parse(payload);
+        if (frame.type === "input") frames.push(frame);
+        return originalSend.call(state.socket, payload);
+      };
+      const rule = automationApi.normalizeRule({
+        actions: [{
+          command: "Review but do not submit",
+          id: "action-copilot-stage1",
+          submit: false,
+          targetMode: "title",
+          targetName: terminal.titleInput.value
+        }],
+        enabled: true,
+        id: "automation-copilot-stage1",
+        name: "Staged Copilot review",
+        type: "copilot",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      const started = runAutomationRule(rule, { manual: true });
+      window.clearTimeout(terminal.handoffDeliveryTimer);
+      terminal.handoffDeliveryTimer = 0;
+      state.automations.paused = false;
+      terminalExecutionReadiness = () => ({ mode: "shell", ready: true });
+      const whileShell = await dispatchTerminalHandoff(terminal);
+      window.clearTimeout(terminal.handoffDeliveryTimer);
+      terminal.handoffDeliveryTimer = 0;
+      terminalExecutionReadiness = () => ({ mode: "copilot", ready: true });
+      const whileCopilot = await dispatchTerminalHandoff(terminal);
+      window.clearTimeout(terminal.handoffDeliveryTimer);
+      terminal.handoffDeliveryTimer = 0;
+      state.socket.send = originalSend;
+      terminalExecutionReadiness = originalReadiness;
+      state.automations.paused = originalPaused;
+      return { frames, pending: state.automations.pendingStages.length, started, whileCopilot, whileShell };
+    });
+
+    expect(result).toMatchObject({ pending: 0, started: 1, whileCopilot: true, whileShell: false });
+    expect(result.frames).toHaveLength(1);
+    expect(result.frames[0].data).toContain("Review but do not submit");
+    expect(result.frames[0].data).not.toContain("\r");
+    expect(result.frames[0].data).not.toContain("\x1b[13u");
   });
 
   test("launches Copilot from the requested CWD in each shell", async ({ page }) => {
@@ -767,6 +890,66 @@ test.describe("Automation Studio", () => {
     expect(result.historyTitles.filter((title) => title.endsWith("· Step 1"))).toHaveLength(2);
     expect(result.rules).toHaveLength(2);
     expect(result.rules.every((rule) => Boolean(rule.lastRunAt)), JSON.stringify(result.rules)).toBe(true);
+  });
+
+  test("runs schedules only in their configured workstation lock state", async ({ page }) => {
+    const result = await page.evaluate(async () => {
+      const originalLockState = currentMachineLockState;
+      const originalRun = runAutomationRule;
+      const runs = [];
+      let detected = "unlocked";
+      let lockQueries = 0;
+      currentMachineLockState = async () => { lockQueries += 1; return detected; };
+      runAutomationRule = (rule) => { runs.push(rule.id); return 1; };
+      const runCase = async (suffix, machineState, detectedState) => {
+        const now = Date.now();
+        detected = detectedState;
+        state.automations.history = [];
+        state.automations.rules = [automationApi.normalizeRule({
+          actions: [{ command: "echo lock policy", id: `action-${suffix}`, targetName: "Tests" }],
+          createdAt: new Date(now - 120000).toISOString(),
+          enabled: true,
+          id: `automation-${suffix}`,
+          machineState,
+          name: `Lock policy ${suffix}`,
+          trigger: { catchUp: "once", intervalMinutes: 1, mode: "interval" }
+        })];
+        state.automationRuntime.lastTickAt = now - 120000;
+        await tickAutomationSchedules(new Date(now));
+        return {
+          history: state.automations.history.map((entry) => ({ detail: entry.detail, status: entry.status })),
+          lastRunAt: state.automations.rules[0].lastRunAt
+        };
+      };
+      try {
+        return {
+          both: await runCase("lock-both", "both", "unknown"),
+          lockedMatch: await runCase("lock-match", "locked", "locked"),
+          lockedMismatch: await runCase("lock-mismatch", "locked", "unlocked"),
+          lockQueries: 0,
+          runs,
+          unknown: await runCase("lock-unknown", "unlocked", "unknown"),
+          get queryCount() { return lockQueries; }
+        };
+      } finally {
+        currentMachineLockState = originalLockState;
+        runAutomationRule = originalRun;
+      }
+    });
+
+    expect(result.runs).toEqual(["automation-lock-both", "automation-lock-match"]);
+    expect(result.queryCount).toBe(3);
+    expect(result.both.history).toEqual([]);
+    expect(result.lockedMatch.history).toEqual([]);
+    expect(result.lockedMismatch.history).toEqual([{
+      detail: "Workstation is unlocked; automation requires locked",
+      status: "skipped"
+    }]);
+    expect(result.unknown.history).toEqual([{
+      detail: "Workstation lock state unavailable; occurrence skipped",
+      status: "skipped"
+    }]);
+    expect([result.lockedMismatch.lastRunAt, result.unknown.lastRunAt].every(Boolean)).toBe(true);
   });
 
   test("queues a handoff in the bridge and stages it when the consumer is ready", async ({ page }) => {

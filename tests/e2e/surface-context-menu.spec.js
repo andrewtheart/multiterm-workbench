@@ -759,7 +759,7 @@ test.describe("Surface context menu", () => {
       const oversizedStored = loadContextMenuLayout();
 
       const originalSetItem = Storage.prototype.setItem;
-      const warningCount = logStore.entries.length;
+      const warningSequence = logStore.seq;
       Storage.prototype.setItem = () => { throw new Error("storage denied"); };
       const savedDespiteFailure = saveContextMenuLayout({
         sections: [{ id: "clipboard", name: "Clipboard", items: ["terminal.copy"] }]
@@ -778,8 +778,9 @@ test.describe("Surface context menu", () => {
           sectionId: recoveredRemovedSection.sections[0].id
         },
         savedDespiteFailure,
-        storageWarnings: logStore.entries.slice(warningCount).filter((entry) =>
-          entry.source === "context-menu" && entry.message.includes("persist context-menu layout")
+        storageWarnings: logStore.entries.filter((entry) => entry.id > warningSequence
+          && entry.source === "context-menu"
+          && entry.message.includes("persist context-menu layout")
         ).length,
         tooManySections: tooManySections.sections.length,
         wrongVersion

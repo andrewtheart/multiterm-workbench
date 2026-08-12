@@ -1303,10 +1303,13 @@ describe("Copilot terminal title generation", () => {
     await expect(server.generateTerminalTitle({
       context: "default",
       contextKb: 64,
+      currentTitle: "Test runner",
+      cwd: "D:\\multiTerm",
       effort: "medium",
       maxWords: 8,
       minWords: 2,
       model: "claude-opus-4.6",
+      shell: "pwsh",
       text: "npm test\n699 tests passed"
     }, fixture.createClient)).resolves.toEqual({ title: "Verify MultiTerm Test Suite" });
     expect(fixture.client.start).toHaveBeenCalledOnce();
@@ -1324,7 +1327,11 @@ describe("Copilot terminal title generation", () => {
       remoteSession: "off",
       skipCustomInstructions: true
     }));
-    expect(fixture.session.sendAndWait.mock.calls[0][0].prompt).toContain("699 tests passed");
+    const prompt = fixture.session.sendAndWait.mock.calls[0][0].prompt;
+    expect(prompt).toContain("Current title: Test runner");
+    expect(prompt).toContain("Shell: pwsh");
+    expect(prompt).toContain("Working directory: D:\\multiTerm");
+    expect(prompt).toContain("699 tests passed");
     expect(fixture.session.sendAndWait).toHaveBeenCalledWith(expect.any(Object), 180000);
     expect(fixture.session.disconnect).toHaveBeenCalledOnce();
     expect(fixture.client.stop).toHaveBeenCalledOnce();

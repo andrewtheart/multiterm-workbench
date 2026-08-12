@@ -68,6 +68,10 @@ describe("installed bridge Copilot session protocol", () => {
     expect(source).toContain("process.StandardInput.BaseStream.Write(payloadBytes, 0, payloadBytes.Length)");
     expect(source).toContain("private static CopilotSdkResult RunCopilotSdkOperation(");
     expect(source).toContain('RunCopilotSdkOperation("title", prompt, model, effort, context)');
+    expect(source).toContain('"Current title: " + (String.IsNullOrEmpty(currentTitle) ? "Terminal" : currentTitle)');
+    expect(source).toContain('"Shell: " + (String.IsNullOrEmpty(shell) ? "Unknown" : shell)');
+    expect(source).toContain('"Working directory: " + (String.IsNullOrEmpty(cwd) ? "Unknown" : cwd)');
+    expect(source).toContain("+ terminalText;");
     expect(source).toContain('"<terminal-context> " + terminalContext');
     expect(source).toContain("process.WaitForExit(180000)");
     expect(source).toContain('\\"terminalTitleSuggestion\\"');

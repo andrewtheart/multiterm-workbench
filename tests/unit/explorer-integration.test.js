@@ -77,7 +77,8 @@ describe("File Explorer integration", () => {
     expect(renderer.indexOf("function openFolderInNewTerminal")).toBeGreaterThan(
       renderer.indexOf("function handleBridgeMessage")
     );
-    expect(renderer).toContain('window.addEventListener("focus", announceRendererPresence)');
+    expect(renderer).toContain('window.addEventListener("focus", () => {');
+    expect(renderer).toContain('scheduleStrandedTerminalFocusRecovery("window-focus")');
     expect(renderer).toContain('visible: document.visibilityState === "visible"');
   });
 

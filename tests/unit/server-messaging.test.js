@@ -656,6 +656,30 @@ describe("Node bridge terminal messaging", () => {
     ]));
   });
 
+  it("reports normalized Windows workstation lock state", async () => {
+    const unlockedExec = vi.fn((file, args, options, callback) => callback(null, "unlocked\r\n", ""));
+    const invalidExec = vi.fn((file, args, options, callback) => callback(null, "surprising", ""));
+    const failedExec = vi.fn((file, args, options, callback) => callback(new Error("WTS unavailable"), "", ""));
+
+    if (process.platform === "win32") {
+      await expect(server.queryMachineLockState(unlockedExec)).resolves.toBe("unlocked");
+      await expect(server.queryMachineLockState(invalidExec)).resolves.toBe("unknown");
+      await expect(server.queryMachineLockState(failedExec)).resolves.toBe("unknown");
+      expect(unlockedExec.mock.calls[0][1]).toContain("-NonInteractive");
+    } else {
+      await expect(server.queryMachineLockState(unlockedExec)).resolves.toBe("unknown");
+      expect(unlockedExec).not.toHaveBeenCalled();
+    }
+
+    const bridgeClient = client("lock-state-client");
+    await server.sendMachineLockState(bridgeClient, { requestId: "lock-state-1" }, unlockedExec);
+    expect(bridgeClient.send).toHaveBeenCalledWith({
+      type: "machineLockState",
+      requestId: "lock-state-1",
+      state: process.platform === "win32" ? "unlocked" : "unknown"
+    });
+  });
+
   it("grants the scheduler lease to only one renderer at a time", () => {
     const first = client("renderer-first");
     const second = client("renderer-second");

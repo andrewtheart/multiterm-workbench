@@ -376,7 +376,10 @@ test.describe("Copilot remote control", () => {
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
     await expect(page.locator(".terminal-pane")).toHaveCount(before + 1);
     await expect(page.locator(".terminal-pane").last().locator(".pane-title")).toHaveValue("Copilot remote picker");
-    expect((await readLaunches()).at(-1).pendingCommand).toBe("copilot --connect");
+    const pickerCommand = (await readLaunches()).at(-1).pendingCommand;
+    expect(pickerCommand).toContain("copilot --yolo");
+    expect(pickerCommand).toContain("--connect");
+    expect(pickerCommand).not.toContain("--session-id");
 
     await readFrames();
     await page.evaluate((count) => {

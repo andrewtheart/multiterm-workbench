@@ -40,54 +40,132 @@ test.describe("Terminal notes and command queue", () => {
     });
   });
 
-  test("saves PID-bound notes and restores them after a reload", async ({ page }) => {
+  test("adds a PID-bound note inline and restores it after a reload", async ({ page }) => {
     await reset(page);
     await page.locator('.terminal-pane [data-action="artifacts"]').click();
 
     await expect(page.locator("#terminalNotesFlyout")).toBeVisible();
     await expect(page.locator("#terminalNotesFlyoutEmpty")).toBeVisible();
     await page.locator("#terminalNotesFlyoutAdd").click();
-    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
-    await expect(page.locator("#terminalArtifactsTarget option").first()).toContainText(/PID \d+/);
-    await page.locator("#terminalNotesInput").fill("Investigate the parser edge case.\nKeep the reproduction command.");
-    await expect(page.locator("#terminalNotesSaved")).toHaveText("Saved");
+    await expect(page.locator("#terminalNotesFlyoutComposer")).toBeVisible();
+    await expect(page.locator("#terminalNotesFlyoutInput")).toBeFocused();
+    await page.locator("#terminalNotesFlyoutInput").fill("Investigate the parser edge case.\nKeep the reproduction command.");
+    await page.locator("#terminalNotesFlyoutSave").click();
+    await expect(page.locator("#terminalNotesFlyoutComposer")).toBeHidden();
+    await expect(page.locator(".terminal-notes-flyout-preview")).toContainText("parser edge case");
 
     const stored = await page.evaluate(() => {
       const terminal = [...state.terminals.values()][0];
       const record = state.terminalArtifacts.terminals[terminal.id];
       return { notes: record.notes, pid: record.pid, terminalPid: terminal.pid, terminalId: terminal.id };
     });
-    expect(stored.notes).toContain("parser edge case");
+    expect(stored.notes).toHaveLength(1);
+    expect(stored.notes[0]).toMatchObject({
+      id: expect.any(String),
+      text: expect.stringContaining("parser edge case"),
+      createdAt: expect.any(String),
+      updatedAt: expect.any(String)
+    });
     expect(stored.pid).toBe(stored.terminalPid);
 
-    await page.locator("#terminalArtifactsClose").click();
+    await page.keyboard.press("Escape");
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await expect.poll(() => page.evaluate((id) => state.terminals.has(id), stored.terminalId)).toBe(true);
     await page.locator("#terminalArtifactsToggle").click();
     await page.locator("#terminalArtifactsTarget").selectOption(stored.terminalId);
-    await expect(page.locator("#terminalNotesInput")).toHaveValue(stored.notes);
+    await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(1);
+    await expect(page.locator("#terminalNotesInput")).toHaveValue(stored.notes[0].text);
   });
 
-  test("previews, edits, and deletes a note from the centered pane flyout", async ({ page }) => {
+  test("migrates a version-one note string into one identified note", async ({ page }) => {
     await reset(page);
-    const note = "Investigate the parser edge case before release.\nKeep the reproduction command and compare the next trace.";
-    await page.locator("#terminalArtifactsToggle").click();
-    await page.locator("#terminalNotesInput").fill(note);
-    await expect(page.locator("#terminalNotesSaved")).toHaveText("Saved");
-    await page.locator("#terminalArtifactsClose").click();
-    await expect(page.locator("#terminalArtifactsOverlay")).toBeHidden();
+    const migrated = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      localStorage.setItem("multiterm.terminalArtifacts", JSON.stringify({
+        version: 1,
+        terminals: {
+          [terminal.id]: {
+            terminalId: terminal.id,
+            title: terminal.titleInput.value,
+            notes: "Legacy single note",
+            notesUpdatedAt: "2026-08-10T12:30:00.000Z",
+            queue: []
+          }
+        },
+        recoveredNotes: [],
+        unparentedQueue: []
+      }));
+      state.terminalArtifacts = loadTerminalArtifacts();
+      saveTerminalArtifacts();
+      return {
+        note: state.terminalArtifacts.terminals[terminal.id].notes[0],
+        persisted: JSON.parse(localStorage.getItem("multiterm.terminalArtifacts"))
+      };
+    });
+    expect(migrated.note).toMatchObject({
+      id: expect.any(String),
+      text: "Legacy single note",
+      createdAt: "2026-08-10T12:30:00.000Z",
+      updatedAt: "2026-08-10T12:30:00.000Z"
+    });
+    expect(migrated.persisted.version).toBe(2);
+    expect(migrated.persisted.terminals[Object.keys(migrated.persisted.terminals)[0]].notes).toHaveLength(1);
+  });
 
+  test("manages multiple notes inline and expands a draft into the full editor", async ({ page }) => {
+    await reset(page);
     const notesButton = page.locator('.terminal-pane [data-action="artifacts"]');
     await notesButton.click();
     const flyout = page.locator("#terminalNotesFlyout");
     await expect(flyout).toBeVisible();
     await expect(notesButton).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator("#terminalNotesFlyoutSubtitle")).toContainText(/Artifact terminal 1 · PID \d+/);
-    await expect(page.locator(".terminal-notes-flyout-preview")).toHaveText(note);
-    await expect(page.locator(".terminal-notes-flyout-time")).toHaveText(/^Saved /);
-    await expect(page.locator(".terminal-notes-flyout-time")).not.toHaveAttribute("datetime", "");
-    await expect(page.locator(".terminal-notes-flyout-preview")).toHaveCSS("-webkit-line-clamp", "4");
+
+    for (const note of ["First investigation note", "Second deployment note"]) {
+      await page.locator("#terminalNotesFlyoutAdd").click();
+      await page.locator("#terminalNotesFlyoutInput").fill(note);
+      await page.locator("#terminalNotesFlyoutSave").click();
+    }
+    await expect(page.locator(".terminal-notes-flyout-item")).toHaveCount(2);
+    await expect(page.locator(".terminal-notes-flyout-preview")).toHaveText([
+      "Second deployment note",
+      "First investigation note"
+    ]);
+    await expect(page.locator(".terminal-notes-flyout-time").first()).toHaveText(/^Saved /);
+    await expect(page.locator(".terminal-notes-flyout-time").first()).not.toHaveAttribute("datetime", "");
+    await expect(page.locator(".terminal-notes-flyout-preview").first()).toHaveCSS("-webkit-line-clamp", "4");
+
+    await page.locator("[data-notes-flyout-edit]").first().click();
+    await expect(page.locator("#terminalNotesFlyoutInput")).toHaveValue("Second deployment note");
+    await page.locator("#terminalNotesFlyoutInput").fill("Second deployment note, revised inline");
+    await page.locator("#terminalNotesFlyoutSave").click();
+    await expect(page.locator(".terminal-notes-flyout-preview")).toHaveText([
+      "Second deployment note, revised inline",
+      "First investigation note"
+    ]);
+
+    await page.setViewportSize({ width: 390, height: 720 });
+    await page.locator("#terminalNotesFlyoutAdd").click();
+    await page.locator("#terminalNotesFlyoutInput").fill("Discard this draft");
+    const mobileFlyout = await flyout.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        bottom: rect.bottom,
+        left: rect.left,
+        overflow: element.scrollWidth > element.clientWidth,
+        right: rect.right,
+        viewportHeight: innerHeight,
+        viewportWidth: innerWidth
+      };
+    });
+    expect(mobileFlyout.left).toBeGreaterThanOrEqual(0);
+    expect(mobileFlyout.right).toBeLessThanOrEqual(mobileFlyout.viewportWidth);
+    expect(mobileFlyout.bottom).toBeLessThanOrEqual(mobileFlyout.viewportHeight);
+    expect(mobileFlyout.overflow).toBe(false);
+    await page.locator("#terminalNotesFlyoutCancel").click();
+    await expect(page.locator(".terminal-notes-flyout-item")).toHaveCount(2);
+    await page.setViewportSize({ width: 1280, height: 720 });
 
     const geometry = await page.evaluate(() => {
       const anchor = document.querySelector('.terminal-pane [data-action="artifacts"]').getBoundingClientRect();
@@ -106,27 +184,65 @@ test.describe("Terminal notes and command queue", () => {
     expect(Math.abs(geometry.flyoutTop - geometry.expectedTop)).toBeLessThanOrEqual(1);
     expect(geometry.overflow).toBe(false);
 
-    await page.locator('[data-notes-flyout-edit]').click();
+    await page.locator("#terminalNotesFlyoutAdd").click();
+    await page.locator("#terminalNotesFlyoutInput").fill("Expanded draft note");
+    await page.locator("#terminalNotesFlyoutExpand").click();
     await expect(flyout).toBeHidden();
     await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
     await expect(page.locator("#terminalNotesInput")).toBeFocused();
-    await expect(page.locator("#terminalNotesInput")).toHaveValue(note);
+    await expect(page.locator("#terminalNotesInput")).toHaveValue("Expanded draft note");
+    await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(3);
+    await page.setViewportSize({ width: 390, height: 720 });
+    const mobileEditor = await page.locator(".terminal-artifacts").evaluate((element) => ({
+      overflow: element.scrollWidth > element.clientWidth,
+      right: element.getBoundingClientRect().right,
+      viewportWidth: innerWidth
+    }));
+    expect(mobileEditor.overflow).toBe(false);
+    expect(mobileEditor.right).toBeLessThanOrEqual(mobileEditor.viewportWidth);
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    await page.locator("#terminalNotesAdd").click();
+    await expect(page.locator("#terminalNotesInput")).toHaveValue("");
+    await page.locator("#terminalNotesInput").fill("Fourth note from full editor");
+    await expect(page.locator("#terminalNotesSaved")).toHaveText("Saved");
+    await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(4);
+
+    await page.locator("#terminalNotesList .terminal-note-list-item").filter({ hasText: "First investigation note" }).click();
+    await expect(page.locator("#terminalNotesInput")).toHaveValue("First investigation note");
+    await page.locator("#terminalNotesDelete").click();
+    await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(3);
+    await expect(page.locator("#terminalNotesList")).not.toContainText("First investigation note");
     await page.locator("#terminalArtifactsClose").click();
 
     await notesButton.click();
-    await page.locator('[data-notes-flyout-delete]').click();
-    await expect(page.locator("#terminalNotesFlyoutEmpty")).toBeVisible();
-    await expect(notesButton).not.toHaveClass(/has-artifacts/);
+    await expect(page.locator(".terminal-notes-flyout-item")).toHaveCount(3);
+    await page.locator('[data-notes-flyout-delete]').first().click();
+    await expect(page.locator(".terminal-notes-flyout-item")).toHaveCount(2);
+    await expect(notesButton).toHaveClass(/has-artifacts/);
+  });
+
+  test("preserves a cleared inline edit when expanding into the full editor", async ({ page }) => {
+    await reset(page);
+    await page.locator('.terminal-pane [data-action="artifacts"]').click();
+    await page.locator("#terminalNotesFlyoutAdd").click();
+    await page.locator("#terminalNotesFlyoutInput").fill("Original saved note");
+    await page.locator("#terminalNotesFlyoutSave").click();
+
+    await page.locator("[data-notes-flyout-edit]").click();
+    await page.locator("#terminalNotesFlyoutInput").fill("");
+    await page.locator("#terminalNotesFlyoutExpand").click();
+    await expect(page.locator("#terminalNotesInput")).toHaveValue("");
     await expect.poll(() => page.evaluate(() => {
       const terminal = [...state.terminals.values()][0];
-      const record = state.terminalArtifacts.terminals[terminal.id];
-      return { notes: record.notes, notesUpdatedAt: record.notesUpdatedAt };
-    })).toEqual({ notes: "", notesUpdatedAt: null });
+      return state.terminalArtifacts.terminals[terminal.id].notes[0].text;
+    })).toBe("Original saved note");
 
-    await page.locator("#terminalNotesFlyoutDetails").click();
-    await expect(flyout).toBeHidden();
-    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
-    await expect(page.locator("#terminalNotesInput")).toHaveValue("");
+    await page.locator("#terminalNotesInput").fill("Replacement from full editor");
+    await expect.poll(() => page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      return state.terminalArtifacts.terminals[terminal.id].notes[0].text;
+    })).toBe("Replacement from full editor");
   });
 
   test("uses the same notes flyout when the pane action is in overflow", async ({ page }) => {
@@ -498,10 +614,19 @@ test.describe("Terminal notes and command queue", () => {
       }).id;
     });
 
-    const copilotCommand = "copilot --yolo --model \"gpt-5.4\" --effort high --context long_context\r";
-    await expect.poll(() => page.evaluate((command) => window.__externalLaunchFrames
-      .filter((frame) => frame.type === "input" && frame.id === window.__externalCopilotId && frame.data === command)
-      .map((frame) => frame.data), copilotCommand)).toEqual([copilotCommand]);
+    await expect.poll(() => page.evaluate(() => window.__externalLaunchFrames
+      .some((frame) => frame.type === "input"
+        && frame.id === window.__externalCopilotId
+        && frame.data.startsWith("copilot --yolo ")
+        && frame.data.includes("--session-id=")
+        && frame.data.includes('--model "gpt-5.4"')
+        && frame.data.includes("--effort high")
+        && frame.data.includes("--context long_context")
+        && frame.data.endsWith("\r")))).toBe(true);
+    const copilotCommand = await page.evaluate(() => window.__externalLaunchFrames
+      .find((frame) => frame.type === "input"
+        && frame.id === window.__externalCopilotId
+        && frame.data.startsWith("copilot --yolo ")).data);
     await expect(page.locator(`[data-id="${await page.evaluate(() => window.__externalCopilotId)}"] .pane-title`))
       .toHaveValue("External Copilot review");
 
@@ -587,13 +712,19 @@ test.describe("Terminal notes and command queue", () => {
     const ids = await page.evaluate(() => [...state.terminals.keys()]);
     await page.locator("#terminalArtifactsToggle").click();
     await page.locator("#terminalArtifactsTarget").selectOption(ids[0]);
+    await page.locator("#terminalNotesAdd").click();
     await page.locator("#terminalNotesInput").fill("Do not lose this process context.");
+    await page.locator("#terminalNotesAdd").click();
+    await page.locator("#terminalNotesInput").fill("Keep the second investigation result too.");
     await page.locator("#commandQueueInput").fill("echo recovered-command");
     await page.locator("#commandQueueAdd").click();
 
     await page.evaluate((id) => handleBridgeMessage({ type: "exited", id, code: 1 }), ids[0]);
     await expect(page.locator("#terminalArtifactsTarget")).toHaveValue("__unparented__");
-    await expect(page.locator(".recovered-note-input")).toHaveValue("Do not lose this process context.");
+    await expect.poll(() => page.locator(".recovered-note-input").evaluateAll((inputs) => inputs.map((input) => input.value))).toEqual([
+      "Keep the second investigation result too.",
+      "Do not lose this process context."
+    ]);
     await expect(page.locator(".command-queue-item.is-unparented")).toContainText("echo recovered-command");
     await expect(page.locator("#unparentedQueueTarget")).toHaveValue(ids[1]);
 

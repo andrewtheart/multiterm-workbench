@@ -173,6 +173,78 @@ test.describe("Copilot session notes", () => {
     expect(result.generated).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   });
 
+  test("adds MultiTerm-owned Copilot logs only when opted in and quotes each shell", async () => {
+    const result = await page.evaluate(() => {
+      const originalEnabled = state.settings.copilotLogViewerEnabled;
+      const originalDirectory = state.copilotLogDirectory;
+      const sessionId = "9f1d4a52-6c3b-4d21-9a77-2b8e0c5f1a34";
+      state.copilotLogDirectory = "C:\\Users\\andre\\AppData\\Local\\MultiTerm\\Diagnostics\\Copilot";
+      try {
+        state.settings.copilotLogViewerEnabled = false;
+        const disabled = buildAiAssistantCommand({ provider: "copilot", sessionId });
+        state.settings.copilotLogViewerEnabled = true;
+        return {
+          disabled,
+          powershell: buildAiAssistantCommand({ provider: "copilot", sessionId, shell: "pwsh" }),
+          cmd: buildAiAssistantCommand({ provider: "copilot", sessionId, shell: "cmd" }),
+          wsl: buildAiAssistantCommand({ provider: "copilot", sessionId, shell: "wsl" }),
+          claude: buildAiAssistantCommand({ provider: "claude", sessionId, shell: "pwsh" }),
+          picker: buildAiAssistantCommand({ provider: "copilot", connectPicker: true, shell: "pwsh" })
+        };
+      } finally {
+        state.settings.copilotLogViewerEnabled = originalEnabled;
+        state.copilotLogDirectory = originalDirectory;
+      }
+    });
+
+    expect(result.disabled).not.toContain("--log-dir");
+    expect(result.powershell).toContain("--log-dir 'C:\\Users\\andre\\AppData\\Local\\MultiTerm\\Diagnostics\\Copilot\\9f1d4a52-6c3b-4d21-9a77-2b8e0c5f1a34'");
+    expect(result.cmd).toContain('--log-dir "C:\\Users\\andre\\AppData\\Local\\MultiTerm\\Diagnostics\\Copilot\\9f1d4a52-6c3b-4d21-9a77-2b8e0c5f1a34"');
+    expect(result.wsl).toContain("--log-dir '/mnt/c/Users/andre/AppData/Local/MultiTerm/Diagnostics/Copilot/9f1d4a52-6c3b-4d21-9a77-2b8e0c5f1a34'");
+    expect(result.claude).not.toContain("--log-dir");
+    expect(result.picker).toContain("--connect");
+  });
+
+  test("registers the terminal before sending a Copilot launch command", async () => {
+    const frames = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const original = {
+        directory: state.copilotLogDirectory,
+        enabled: state.settings.copilotLogViewerEnabled,
+        provider: state.settings.aiSessionProvider,
+        providers: state.aiProviders,
+        send: state.socket.send
+      };
+      const sent = [];
+      try {
+        state.copilotLogDirectory = "C:\\Users\\andre\\AppData\\Local\\MultiTerm\\Diagnostics\\Copilot";
+        state.settings.copilotLogViewerEnabled = true;
+        state.settings.aiSessionProvider = "copilot";
+        state.aiProviders = [{ id: "copilot", interactiveAvailable: true }];
+        state.socket.send = (payload) => sent.push(JSON.parse(payload));
+        invokeAiAssistant(terminal);
+        return sent;
+      } finally {
+        state.socket.send = original.send;
+        state.copilotLogDirectory = original.directory;
+        state.settings.copilotLogViewerEnabled = original.enabled;
+        state.settings.aiSessionProvider = original.provider;
+        state.aiProviders = original.providers;
+      }
+    });
+
+    expect(frames[0]).toEqual(expect.objectContaining({
+      type: "copilotLogRegister",
+      terminalId: expect.any(String),
+      terminalTitle: expect.any(String),
+      key: expect.stringMatching(/^[0-9a-f-]{36}$/i)
+    }));
+    expect(frames[1]).toEqual(expect.objectContaining({ type: "input", id: frames[0].terminalId }));
+    expect(frames[1].data).toContain(`\\${frames[0].key}'`);
+    expect(frames[1].data).toContain(`--session-id=${frames[0].key}`);
+    expect(frames[2]).toEqual({ type: "input", id: frames[0].terminalId, data: "\r" });
+  });
+
   test("covers exact, inferred, empty, and generated-id edge cases", async () => {
     const result = await page.evaluate(({ linked }) => {
       state.terminalArtifacts.terminals = {
@@ -349,11 +421,11 @@ test.describe("Copilot session notes", () => {
       title: "Terminal",
       shell: "",
       cwd: "",
-      notes: "",
-      notesUpdatedAt: null,
+      notes: [],
       aiSessionId: "",
       queue: []
     });
+    expect(result.normalized.version).toBe(2);
     expect(result.normalized.recoveredNotes).toHaveLength(2);
     expect(result.normalized.recoveredNotes[0]).toMatchObject({ notes: "legacy", pid: 9, aiSessionId: LINKED });
     expect(result.normalized.recoveredNotes[0].id).toMatch(/^recovered-/);

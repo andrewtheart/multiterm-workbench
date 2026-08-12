@@ -1016,7 +1016,10 @@ test.describe("Enhancement milestone", () => {
       key: "vscode:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:62d43a25-c209-4933-af9a-24d9bff3789c",
       maxContextKb: 64
     }));
-    expect(frames.some((frame) => frame.type === "input" && frame.data.includes("copilot --yolo -i"))).toBe(true);
+    expect(frames.some((frame) => frame.type === "input"
+      && frame.data.includes("copilot --yolo")
+      && frame.data.includes("--session-id=")
+      && frame.data.includes(" -i "))).toBe(true);
     await page.evaluate(() => {
       const terminal = [...state.terminals.values()].at(-1);
       removeTerminal(terminal.id);
@@ -1347,6 +1350,9 @@ test.describe("Enhancement milestone", () => {
       state.settings.notifySilence = false;
       state.settings.bellNotify = false;
       saveSettings();
+      state.settings.layout = "vertical";
+      elements.layoutMode.value = "vertical";
+      applySettings();
       addTerminal({ title: "Inherited notifications" });
       addTerminal({ title: "Build watcher" });
     });
@@ -1364,6 +1370,19 @@ test.describe("Enhancement milestone", () => {
     await expect(flyout).toBeVisible();
     await expect(page.locator("#terminalNotificationSubtitle")).toHaveText("Build watcher");
     await expect(flyout.locator('[data-notification-channel="activity"] [data-notification-value="global"]')).toHaveAttribute("aria-checked", "true");
+    const geometry = await page.evaluate(() => {
+      const anchor = terminalNotificationFlyoutAnchor.getBoundingClientRect();
+      const flyout = elements.terminalNotificationFlyout.getBoundingClientRect();
+      const centeredLeft = anchor.left + (anchor.width - flyout.width) / 2;
+      return {
+        expectedLeft: Math.max(8, Math.min(centeredLeft, innerWidth - flyout.width - 8)),
+        expectedTop: anchor.bottom + 7,
+        left: flyout.left,
+        top: flyout.top
+      };
+    });
+    expect(geometry.left).toBeCloseTo(geometry.expectedLeft, 0);
+    expect(geometry.top).toBeCloseTo(geometry.expectedTop, 0);
 
     await flyout.locator('[data-notification-channel="activity"] [data-notification-value="on"]').click();
     await flyout.locator('[data-notification-channel="question"] [data-notification-value="on"]').click();

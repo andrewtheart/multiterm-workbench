@@ -441,6 +441,23 @@ credentials, tokens, paths, and command output. Notes, queues, workspaces,
 session metadata, and preferences are stored in the browser profile or local
 application data. There is no encryption-at-rest or retention policy.
 
+Bridge and application diagnostics are rotating JSONL files under
+`%LOCALAPPDATA%\MultiTerm\Diagnostics`. Records omit sensitive named detail
+fields and remove URL credentials, query strings, and fragments before they are
+persisted or broadcast. This is bounded sanitization, not general secret
+detection: an unlabelled token or secret in a plain message can still be stored.
+Retention, rotation size, and viewer-entry limits are visible persisted settings.
+The viewer limit bounds returned records but does not delete them; retention
+applies only to diagnostic JSONL files.
+
+Copilot CLI aggregation is explicit opt-in. MultiTerm assigns newly launched
+Copilot processes a child directory under `Diagnostics\Copilot`, scans only that
+owned root, and tags normalized records with the launching terminal ID and title.
+It does not discover or read Copilot processes launched outside MultiTerm. The
+underlying process log files are written by Copilot and remain raw; the JSONL
+retention policy does not remove them. Disabling aggregation stops following the
+files but does not delete either raw or already aggregated records.
+
 Users and maintainers should treat exported logs, browser profiles, crash traces,
 and test artifacts as sensitive. A future privacy pass should define retention,
 delete controls, and redaction guidance.

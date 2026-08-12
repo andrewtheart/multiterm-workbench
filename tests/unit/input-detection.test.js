@@ -85,6 +85,18 @@ describe("input-detection: Copilot CLI TUI readiness", () => {
     expect(isCopilotPromptReady(screen)).toBe(true);
   });
 
+  it("recognises the sidebar-prefixed footer from Copilot CLI 1.0.79", () => {
+    const screen = [
+      "  Copilot v1.0.79 uses AI.",
+      "╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+      "┃",
+      "╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+      " ← open sidebar · / commands · ? help · tab next tab   Claude Opus 5"
+    ];
+    expect(isCopilotTui(screen)).toBe(true);
+    expect(isCopilotPromptReady(screen)).toBe(true);
+  });
+
   it.each([
     " ◉ Loading: 32 skills                   Claude Opus 5 · 1M context",
     " ○ Working esc interrupt                Claude Opus 5 · 1M context",

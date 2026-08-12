@@ -17,7 +17,7 @@ describe("PowerShell bridge terminal messaging", () => {
   });
 
   it("supports the same configurable routing operations as the Node bridge", () => {
-    for (const type of ["communicationConfig", "automationLease", "messageSend", "messageList", "messageAction"]) {
+    for (const type of ["communicationConfig", "automationLease", "machineLockState", "messageSend", "messageList", "messageAction"]) {
       expect(bridgeScript).toContain(`else if (type == "${type}")`);
     }
     expect(bridgeScript).toContain('Json.GetInt(message, "terminalMessageMaxKb"');
@@ -32,6 +32,9 @@ describe("PowerShell bridge terminal messaging", () => {
     expect(bridgeScript).toContain("this.automationOccurrences[ruleId] = dueAt");
     expect(bridgeScript).toContain('\\"occurrenceClaimed\\":');
     expect(bridgeScript).toContain("this.ReleaseAutomationLease(client.Id)");
+    expect(bridgeScript).toContain("WTSQuerySessionInformation(IntPtr.Zero, -1, 25");
+    expect(bridgeScript).toContain("Marshal.ReadInt32(buffer, 16)");
+    expect(bridgeScript).toContain('Json.Quote(MachineLockState())');
   });
 
   it("stores pending messages under a lock and rejects unsupported persistence", () => {

@@ -59,9 +59,15 @@ Choose **Run GitHub Copilot** or **Run Claude** from a terminal or blank-workspa
 
 Select the sparkle immediately after a terminal title to suggest a new title from that terminal's recent output. MultiTerm uses the selected title provider and shows the suggestion in place without committing it. GitHub Copilot requests use the official Copilot SDK; Claude requests use the authenticated Claude CLI's structured output. Select the green check to apply and synchronize the title, or the red X to restore the original. Configure the provider, model, thinking effort, context window, terminal-text limit, and title word range under **AI assistants** in Settings.
 
-When **Suggest titles automatically** is on, suggestions also arrive on the schedule in Settings and present the same green check and red X for approval. An automatic suggestion never renames a terminal on its own and never takes keyboard focus, so it cannot interrupt what you are typing. If you are renaming that terminal when one arrives, it waits as a badge on the sparkle instead of replacing what you are typing; select the sparkle to review it. Right-click the sparkle to pause automatic titles for that terminal, its process, or every terminal sharing the title.
+When **Suggest titles automatically** is on, the schedule in Settings starts after the terminal first receives meaningful input. Typed and pasted text count, as do commands sent by MultiTerm actions such as **Run GitHub Copilot**; an untouched terminal does not spend an AI request on a title. Choose **Progressive delays** to use an ordered list whose last delay repeats, or **Repeating interval** to request a suggestion at the same configurable minute interval every time. Immediately before the first automatic title request that is actually ready to run, MultiTerm shows a one-time notice for the application profile. That dialog can adjust either timing mode, continue with the pending request, or turn automatic titles off. Once shown, it never appears again, even if automatic titles are later re-enabled.
 
-MultiTerm records every title suggestion with its timestamp, terminal title, process ID, automatic or manual source, and whether it was accepted. Select the editable title or press Down while editing it to see the five most recent suggestions associated with that terminal name or PID; select one to reuse it. The terminal hamburger menu exposes the same recent history in a flyout. Choose **View all history** there, or open **Title suggestion history** from the command palette, to search the complete retained history by title, suggestion, PID, or outcome. Configure the number of retained entries with **History entries** under **AI assistants** in Settings.
+For each title request, MultiTerm sends the selected AI title provider the terminal's current title, shell type, working directory, and the most recent text in xterm's rendered active buffer: scrollback plus the current screen, with trailing blank space removed. Only the newest UTF-8 tail up to **Terminal text (KB)** is sent (4-24 KB). The request also carries the selected model, reasoning effort, provider context tier, and minimum/maximum title word counts. When GitHub Copilot is selected, this becomes a tool-free, non-persistent Copilot SDK request; no shell, MCP, built-in, or custom tools are available to that request. MultiTerm does not send the terminal PID, terminal notes, queued commands, clipboard contents, keystroke timing, input events that are no longer visible in the rendered buffer, or content from other terminals. Commands or secrets that remain visible in the selected terminal buffer can be part of the transcript, so reduce **Terminal text (KB)** or disable AI titles when that context should not leave the terminal.
+
+Automatic suggestions present the same green check and red X for approval. An automatic suggestion never renames a terminal on its own and never takes keyboard focus, so it cannot interrupt what you are typing. If you are renaming that terminal when one arrives, it waits as a badge on the sparkle instead of replacing what you are typing; select the sparkle to review it. Right-click the sparkle to pause automatic titles for that terminal, its process, or every terminal sharing the title.
+
+MultiTerm records every title suggestion with its timestamp, terminal title, process ID, automatic or manual source, and whether it was accepted. Select the editable title or press Down while editing it to see the five most recent suggestions associated with that terminal name or PID; select one to reuse it. The terminal hamburger menu exposes the same recent history in a flyout. Choose **View all history** there, or open **Title suggestion history** from the command palette, to search the complete retained history by title, suggestion, PID, or outcome. The history dialog shows five matches initially; **Show 5 more** reveals the next five without moving the header, search, or footer. Changing the filter starts again with the first five matches. Configure the number of retained entries with **History entries** under **AI assistants** in Settings.
+
+Each terminal can keep multiple process-bound notes. Select its Notes button, then **Add note** to write and save directly in the flyout; each saved note has its own Edit and Delete actions. Select **Expand** while composing to continue that draft in the full notes and command-queue dialog. The full dialog lists every note for the selected terminal, lets you switch between them, create another with **New note**, and delete only the selected note. When a terminal process ends, MultiTerm recovers every note separately so one note never overwrites another.
 
 Model, thinking effort, and context all default to **Auto (provider default)**, so each provider applies its own current default instead of MultiTerm pinning a model that ages out. The model lists are grouped by family — Anthropic Claude, OpenAI GPT, xAI Grok, Microsoft MAI, and so on — with families and their models in alphabetical order.
 
@@ -229,7 +235,7 @@ Open **Automations** from the workflow button in the header or the command palet
 
 Choose **Command based automation** for ad-hoc shell commands, ad-hoc PowerShell, or `.ps1`, `.cmd`, and `.bat` script paths. Choose **Copilot automation** for scheduled Copilot CLI prompts. Create an interval, daily, or selected-weekday schedule, then build the workflow from connected visual step cards.
 
-A step can target a terminal by exact title, exact PID, or **New terminal**. Title and PID targets offer **Send to new terminal if selected terminal cannot be located**, enabled by default. Each step can specify a working directory; new terminals start there, and existing command steps run there without permanently moving the terminal. Script steps include a file picker. Copilot steps launch Copilot when needed, optionally change its working directory, and queue the prompt for its empty composer.
+A step can target a terminal by exact title, exact PID, or **New terminal**. Title and PID targets offer **Send to new terminal if selected terminal cannot be located**, enabled by default. Whenever a step opens a terminal, choose the page that is active when the automation runs, a new page, or an existing page by title. The page-title field accepts freeform text and suggests current page names. Each step can specify a working directory; new terminals start there, and existing command steps run there without permanently moving the terminal. Script steps include a file picker. Copilot steps launch Copilot when needed, optionally change its working directory, and wait for its empty composer.
 
 The rule's **Run as user** defaults to the current account reported by the bridge. Entering another Windows account does not store a password: Windows displays its credential prompt when the workflow runs, waits for that process, and returns its exit result to the workflow.
 
@@ -237,10 +243,10 @@ Every step after the first has a graphical conditional gate. Select any prior st
 
 Each action has an explicit delivery mode:
 
-- **Run when ready** presses Enter only after a regular shell prompt is confirmed and reports the process exit code to the visual workflow.
-- **Stage when ready** pastes the command or prompt without Enter, leaving it visible for review. Accepted staged actions survive a UI reload while their terminal session remains available.
+- **Run when ready** inserts the command or Copilot prompt and presses Enter only after the target shell or Copilot composer is ready. Command steps report the process exit code to the visual workflow.
+- **Stage without Enter** inserts the command or Copilot prompt only after the target is ready, leaving it visible for review. Accepted staged actions survive a UI reload while their terminal session remains available.
 
-Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. **Run once after sleep or reconnect** catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.
+Use **Run when workstation is** to allow each automation while Windows is locked, unlocked, or in either state. MultiTerm reads the current Windows session state when a restricted rule is due; a mismatched or unavailable state is recorded as skipped. Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. **Run once after sleep or reconnect** catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.
 
 Use the global **Pause** control to stop both scheduled delivery and automatic handoffs. Right-click an automation name to pause or unpause that rule, snooze it for a specified duration, or delete it. **Run History** records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible **Keep _ events** setting controls persisted history retention; `0` keeps no history.
 
@@ -415,6 +421,12 @@ A keystroke is one physical keyboard event handled by xterm; pasted text, snippe
 
 Use **Log to file...** from a terminal context menu to capture output. Stop logging from the same menu, then use **Reveal last log** or **Reveal log folder** to locate the file.
 
+The **Logs** button in the status bar shows application and bridge diagnostics from the current launch together with durable records from earlier launches. MultiTerm stores these records as rotating JSONL files under `%LOCALAPPDATA%\MultiTerm\Diagnostics`. **Diagnostics** settings control how many days old JSONL files are retained, the size at which a new JSONL file begins, and the maximum number of durable records loaded into the viewer. A zero retention value keeps JSONL files indefinitely, zero rotation disables size rotation, and zero viewer entries loads every retained record.
+
+**Include Copilot CLI logs** is off by default. When enabled, MultiTerm launches GitHub Copilot sessions with a dedicated log directory below `Diagnostics\Copilot`, follows every such MultiTerm-owned session, and labels each aggregated row with its terminal title and stable terminal ID. Copilot processes launched elsewhere are not included. **Copilot initial tail (KB)** controls how much existing content is loaded from each owned log when aggregation starts; the default is 256 KB per file, while zero ignores existing content and follows only lines written after opt-in. This setting does not affect Claude.
+
+Diagnostic records remove sensitive named fields and strip credentials, query strings, and fragments from URLs, but this is not comprehensive secret detection. Copilot CLI's source files are written by Copilot itself and remain raw. Treat both directories as sensitive local data; the JSONL retention setting does not delete the raw files below `Diagnostics\Copilot`.
+
 ## Notifications, tray, and closing
 
 Settings define the default notifications for terminal activity, questions, inactivity, and the terminal bell. To change one terminal, use its **bell** button and set each channel to **Global**, **On**, or **Off**. Global follows Settings; On and Off override that channel only for the selected terminal. **Questions** alerts when an interactive question is detected, including GitHub Copilot ask-user panels and Claude Code multi-step question forms. It works independently of **Highlight input prompts**, and repeated TUI redraws do not repeat the alert until the question is cleared or answered. On mobile, the bell stays beside the terminal title; on narrow desktop panes, the same control is under **More terminal actions**. Per-terminal choices follow restored sessions, duplicated terminals, restarted terminals, and saved workspaces. Browser notification permission may be required.
@@ -523,11 +535,11 @@ Open **About MultiTerm** from the header or command palette to see the running v
 - For PowerShell 7, verify `pwsh` runs from a normal terminal.
 - For WSL, run `wsl --status` and confirm a distribution is installed.
 - Try another working directory; inaccessible paths are rejected.
-- Check **Runtime logs** for the bridge error.
+- Check **Logs** for the bridge error.
 
 ### The app disconnected
 
-The UI reconnects automatically when the local bridge restarts. If it remains disconnected, reopen MultiTerm and inspect the runtime logs. Source launches use the configured local bridge port; installed concurrent launches automatically claim available fallback ports.
+The UI reconnects automatically when the local bridge restarts. If it remains disconnected, reopen MultiTerm and inspect **Logs**. Source launches use the configured local bridge port; installed concurrent launches automatically claim available fallback ports.
 
 ### Explorer or `multiterm` is missing
 
@@ -539,7 +551,7 @@ Use **Fit all terminals**, then **Reset layout**. If a manual layout is off-scre
 
 ### Getting more detail
 
-Open **Runtime logs** from the status bar and choose the appropriate severity. Include the MultiTerm version, shell type, and relevant log messages when reporting an issue.
+Open **Logs** from the status bar and choose the appropriate severity. Include the MultiTerm version, shell type, and relevant log messages when reporting an issue.
 
 ## Privacy and security
 

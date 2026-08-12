@@ -24,6 +24,7 @@ const path = require("node:path");
 const net = require("node:net");
 const readline = require("node:readline");
 const childProcess = require("node:child_process");
+const util = require("node:util");
 const { CopilotClient } = require("@github/copilot-sdk");
 const pty = require("@homebridge/node-pty-prebuilt-multiarch");
 const { decodeMulti } = require("@msgpack/msgpack");
@@ -33,6 +34,8 @@ const {
   requestPromptLibraryHost,
   stopPromptLibraryHost
 } = require("./lib/prompt-library-client");
+const { CopilotLogAggregator } = require("./lib/copilot-log-aggregator");
+const { RuntimeDiagnostics, normalizeDiagnosticRecord } = require("./lib/runtime-diagnostics");
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3177);
@@ -58,9 +61,40 @@ const copilotTitleWordBounds = { min: 1, max: 20 };
 const copilotTitleEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const copilotTitleContexts = new Set(["default", "long_context"]);
 const nanoAiUnitsPerCredit = 1_000_000_000;
+const machineLockStatePowerShell = String.raw`
+$source = @'
+using System;
+using System.Runtime.InteropServices;
+public static class MultiTermWtsSession {
+  [DllImport("wtsapi32.dll", SetLastError = true)]
+  public static extern bool WTSQuerySessionInformation(IntPtr server, int sessionId, int infoClass, out IntPtr buffer, out int bytes);
+  [DllImport("wtsapi32.dll")]
+  public static extern void WTSFreeMemory(IntPtr buffer);
+}
+'@
+Add-Type -TypeDefinition $source
+$buffer = [IntPtr]::Zero
+$bytes = 0
+if (-not [MultiTermWtsSession]::WTSQuerySessionInformation([IntPtr]::Zero, -1, 25, [ref]$buffer, [ref]$bytes)) { exit 1 }
+try {
+  $flags = [Runtime.InteropServices.Marshal]::ReadInt32($buffer, 16)
+  if ($flags -eq 0) { 'locked' } elseif ($flags -eq 1) { 'unlocked' } else { 'unknown' }
+} finally {
+  [MultiTermWtsSession]::WTSFreeMemory($buffer)
+}
+`;
 
 const sessions = new Map();
 const clients = new Set();
+const runtimeDiagnostics = new RuntimeDiagnostics();
+const copilotLogAggregator = new CopilotLogAggregator({
+  root: path.join(runtimeDiagnostics.directory, "Copilot"),
+  emit(record) {
+    const normalized = normalizeDiagnosticRecord(record);
+    runtimeDiagnostics.append(normalized);
+    broadcast({ type: "log", ...normalized });
+  }
+});
 // Folders forwarded by Explorer or the VS Code extension before any renderer was
 // connected; the first renderer receives them in its welcome frame.
 const pendingOpenFolders = [];
@@ -548,9 +582,107 @@ function getOutputCoalesceMs() {
   return outputCoalesceMs;
 }
 
-function applyClientConfig(client, message) {
+function applyClientConfig(
+  client,
+  message,
+  diagnostics = runtimeDiagnostics,
+  copilotLogs = copilotLogAggregator
+) {
   const applied = setOutputCoalesceMs(message.outputCoalesceMs);
-  client.send({ type: "config", outputCoalesceMs: applied });
+  const diagnosticConfig = diagnostics.configure({
+    retentionDays: message.diagnosticRetentionDays,
+    rotationMb: message.diagnosticRotationMb,
+    viewerEntries: message.diagnosticViewerEntries
+  });
+  const copilotLogConfig = copilotLogs.configure({
+    enabled: message.copilotLogViewerEnabled,
+    initialTailKb: message.copilotLogInitialTailKb,
+    enabledAt: message.copilotLogEnabledAt
+  });
+  client.send({
+    type: "config",
+    outputCoalesceMs: applied,
+    diagnosticRetentionDays: diagnosticConfig.retentionDays,
+    diagnosticRotationMb: diagnosticConfig.rotationMb,
+    diagnosticViewerEntries: diagnosticConfig.viewerEntries,
+    copilotLogViewerEnabled: copilotLogConfig.enabled,
+    copilotLogInitialTailKb: copilotLogConfig.initialTailKb,
+    copilotLogDirectory: copilotLogConfig.root
+  });
+}
+
+const DIAGNOSTIC_RECORD_FIELDS = [
+  "clean", "code", "copilotLogKey", "elapsedMs", "error", "event", "level", "message", "operation",
+  "outcome", "pendingRequests", "phase", "readyState", "reason", "requestId",
+  "requestType", "responseType", "socketReady", "source", "terminalId", "terminalTitle", "time", "timeoutMs"
+];
+
+function diagnosticRecordFromMessage(message) {
+  return Object.fromEntries(DIAGNOSTIC_RECORD_FIELDS
+    .filter((field) => message[field] !== undefined)
+    .map((field) => [field, message[field]]));
+}
+
+function recordRuntimeDiagnostic(message, diagnostics = runtimeDiagnostics) {
+  try {
+    diagnostics.append(diagnosticRecordFromMessage(message));
+    return true;
+  } catch (error) {
+    console.error("[bridge] Could not persist runtime diagnostics:", error && error.stack ? error.stack : error);
+    return false;
+  }
+}
+
+function sendRuntimeDiagnostics(client, message, diagnostics = runtimeDiagnostics) {
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  try {
+    client.send({
+      type: "diagnostics",
+      requestId,
+      directory: diagnostics.directory,
+      entries: diagnostics.readRecent(message.limit)
+    });
+  } catch (error) {
+    client.send({
+      type: "diagnostics",
+      requestId,
+      directory: diagnostics.directory,
+      entries: [],
+      error: String(error?.message || error)
+    });
+  }
+}
+
+function installConsoleDiagnostics(targetConsole = console, diagnostics = runtimeDiagnostics) {
+  const levels = { log: "info", warn: "warn", error: "error" };
+  const originals = Object.fromEntries(Object.keys(levels)
+    .map((method) => [method, targetConsole[method]]));
+  const reportFailure = typeof originals.error === "function"
+    ? originals.error.bind(targetConsole)
+    : () => {};
+
+  for (const [method, level] of Object.entries(levels)) {
+    if (typeof originals[method] !== "function") continue;
+    targetConsole[method] = (...args) => {
+      originals[method].apply(targetConsole, args);
+      try {
+        diagnostics.append({
+          source: "server",
+          level,
+          event: `bridge-console-${method}`,
+          message: util.format(...args)
+        });
+      } catch (error) {
+        reportFailure("[bridge] Could not persist runtime diagnostics:", error?.stack || error);
+      }
+    };
+  }
+
+  return () => {
+    for (const [method, original] of Object.entries(originals)) {
+      if (typeof original === "function") targetConsole[method] = original;
+    }
+  };
 }
 
 function applyCommunicationConfig(client, message) {
@@ -616,6 +748,31 @@ function handleAutomationLease(client, message) {
     occurrenceClaimed,
     released,
     expiresAt: acquired ? automationLeaseExpiresAt : 0
+  });
+}
+
+function queryMachineLockState(execFile = childProcess.execFile) {
+  if (process.platform !== "win32") return Promise.resolve("unknown");
+  return new Promise((resolve) => {
+    const executable = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    execFile(
+      executable,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", machineLockStatePowerShell],
+      { encoding: "utf8", timeout: 8000, windowsHide: true },
+      (error, stdout) => {
+        const state = String(stdout || "").trim().toLowerCase();
+        resolve(!error && ["locked", "unlocked"].includes(state) ? state : "unknown");
+      }
+    );
+  });
+}
+
+async function sendMachineLockState(client, message, execFile = childProcess.execFile) {
+  const state = await queryMachineLockState(execFile);
+  client.send({
+    type: "machineLockState",
+    requestId: typeof message.requestId === "string" ? message.requestId : "",
+    state
   });
 }
 
@@ -1105,6 +1262,7 @@ server.on("upgrade", (request, socket) => {
     bridgeId: bridgeIdentifier,
     // Only the installed bridge owns a console window worth focusing.
     canFocusBridgeTerminal: false,
+    copilotLogDirectory: copilotLogAggregator.root,
     copilotSetupScript,
     cwd: process.cwd(),
     currentUser: os.userInfo().username,
@@ -1209,6 +1367,7 @@ function handleProcessExit() {
 
 /* v8 ignore next 3 -- only executes when server.js is the process entry point */
 if (require.main === module) {
+  if (!process.env.MULTITERM_UI_OWNER_PID) installConsoleDiagnostics();
   start();
 } else { void 0; }
 
@@ -1674,7 +1833,21 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       requestMemStats(client);
       break;
     case "config":
-      applyClientConfig(client, message);
+      applyClientConfig(
+        client,
+        message,
+        dependencies.diagnostics || runtimeDiagnostics,
+        dependencies.copilotLogs || copilotLogAggregator
+      );
+      break;
+    case "diagnosticRecord":
+      recordRuntimeDiagnostic(message, dependencies.diagnostics || runtimeDiagnostics);
+      break;
+    case "diagnosticList":
+      sendRuntimeDiagnostics(client, message, dependencies.diagnostics || runtimeDiagnostics);
+      break;
+    case "copilotLogRegister":
+      (dependencies.copilotLogs || copilotLogAggregator).register(message);
       break;
     case "statistics":
       requestStatistics(client, message);
@@ -1684,6 +1857,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "automationLease":
       handleAutomationLease(client, message);
+      break;
+    case "machineLockState":
+      void sendMachineLockState(client, message, dependencies.execFile || childProcess.execFile);
       break;
     case "messageSend":
       sendTerminalMessage(client, message);
@@ -2371,6 +2547,7 @@ function pickScript(client, message) {
 function runGit(args, cwd, timeoutMs = 30000, options = {}) {
   /* v8 ignore next */
   return new Promise((resolve) => {
+    const startedAt = Date.now();
     let child;
     try {
       child = childProcess.spawn("git", args, {
@@ -2379,25 +2556,43 @@ function runGit(args, cwd, timeoutMs = 30000, options = {}) {
         ...(options.env ? { env: { ...process.env, ...options.env } } : {})
       });
     } catch (error) {
-      resolve({ ok: false, code: -1, stdout: "", stderr: error.message });
+      resolve({
+        ok: false,
+        code: -1,
+        timedOut: false,
+        durationMs: Date.now() - startedAt,
+        stdout: "",
+        stderr: error.message
+      });
       return;
     }
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const timer = setTimeout(() => {
+    let timedOut = false;
+    let timer;
+    const settle = (code) => {
+      if (settled) return; else { void 0; }
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        ok: code === 0 && !timedOut,
+        code,
+        timedOut,
+        durationMs: Date.now() - startedAt,
+        stdout,
+        stderr
+      });
+    };
+    timer = setTimeout(() => {
+      timedOut = true;
       try {
         child.kill();
       } catch {
         // The process already exited.
       }
+      settle(-1);
     }, timeoutMs);
-    const settle = (code) => {
-      if (settled) return; else { void 0; }
-      settled = true;
-      clearTimeout(timer);
-      resolve({ ok: code === 0, code, stdout, stderr });
-    };
     child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
     child.on("error", (error) => {
@@ -2544,15 +2739,29 @@ async function sendGitWorktreeRecord(client, message) {
   client.send({ type: "gitWorktreeRecorded", requestId, ok: true, reason: "" });
 }
 
+function createOperationReporter(client, requestId, operation) {
+  const startedAt = Date.now();
+  return (phase, message) => client.send({
+    type: "operationProgress",
+    requestId,
+    operation,
+    phase,
+    message,
+    elapsedMs: Date.now() - startedAt
+  });
+}
+
 async function sendGitWorktreeCreate(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const reportProgress = createOperationReporter(client, requestId, "gitWorktreeCreate");
+  reportProgress("started", "Starting worktree creation...");
   const result = await createGitWorktree({
     repositoryRoot: message.repositoryRoot,
     parentBranch: message.parentBranch,
     branch: message.branch,
     worktreePath: message.worktreePath,
     importPending: message.importPending === true
-  });
+  }, reportProgress);
   client.send({ type: "gitWorktreeCreated", requestId, ...result });
 }
 
@@ -2583,20 +2792,25 @@ async function sendGitDiff(client, message) {
 
 async function sendGitMergeStart(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const reportProgress = createOperationReporter(client, requestId, "gitMergeStart");
+  reportProgress("started", "Starting bring-back checks...");
   const result = await startWorktreeMerge({
     repositoryRoot: String(message.repositoryRoot || "").trim(),
     parentBranch: String(message.parentBranch || "").trim(),
     worktreeBranch: String(message.worktreeBranch || "").trim(),
     strategy: String(message.strategy || "").trim()
-  });
+  }, reportProgress);
   client.send({ type: "gitMergeStarted", requestId, ...result });
 }
 
 async function sendGitMergeFinish(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  const reportProgress = createOperationReporter(client, requestId, "gitMergeFinish");
+  reportProgress("started", message.abort === true ? "Starting merge rollback..." : "Finishing bring-back operation...");
   const result = await finishWorktreeMerge(String(message.sessionId || ""), {
     abort: message.abort === true,
-    commitMessage: typeof message.commitMessage === "string" ? message.commitMessage : ""
+    commitMessage: typeof message.commitMessage === "string" ? message.commitMessage : "",
+    onProgress: reportProgress
   });
   client.send({ type: "gitMergeFinished", requestId, ...result });
 }
@@ -2723,7 +2937,7 @@ async function snapshotGitWorktree(directory, label = "MultiTerm worktree snapsh
   }
 }
 
-async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktreePath, importPending }) {
+async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktreePath, importPending }, onProgress = () => {}) {
   const root = String(repositoryRoot || "").trim();
   const parent = String(parentBranch || "").trim();
   const name = String(branch || "").trim();
@@ -2732,6 +2946,7 @@ async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktre
     return { ok: false, reason: "Repository, parent branch, worktree branch and path are all required." };
   } else { void 0; }
 
+  onProgress("validating", "Checking the repository and branch names...");
   const inspection = await inspectGitRepository(root);
   if (!inspection.isRepository || inspection.repositoryRoot !== path.resolve(root)) {
     return { ok: false, reason: inspection.reason || "That repository path is not a checkout root." };
@@ -2746,10 +2961,12 @@ async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktre
 
   let snapshot = null;
   if (importPending && inspection.isDirty) {
+    onProgress("snapshotting", "Capturing pending parent changes...");
     snapshot = await snapshotGitWorktree(root, `MultiTerm imported pending changes from ${parent}`);
     if (!snapshot.ok) return { ok: false, reason: snapshot.reason }; else { void 0; }
   } else { void 0; }
 
+  onProgress("creating", "Creating the Git worktree...");
   const added = await runGit(["worktree", "add", "-b", name, target, parent], root, 120000);
   if (!added.ok) {
     return { ok: false, reason: (added.stderr || added.stdout).trim() || "Git could not create that worktree." };
@@ -2760,6 +2977,7 @@ async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktre
     await runGit(["branch", "-D", name], root, 30000);
   };
   if (snapshot) {
+    onProgress("importing", "Importing pending changes into the worktree...");
     const materialized = await runGit(["read-tree", "--reset", "-u", snapshot.commit], target, 120000);
     const reset = materialized.ok
       ? await runGit(["reset", "--mixed", "HEAD"], target, 30000)
@@ -2770,6 +2988,7 @@ async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktre
       await discardCreatedWorktree();
       return { ok: false, reason };
     } else { void 0; }
+    onProgress("verifying", "Verifying the imported worktree...");
     const verified = await snapshotGitWorktree(target, "MultiTerm imported snapshot verification");
     if (!verified.ok || verified.tree !== snapshot.tree) {
       await discardCreatedWorktree();
@@ -2777,6 +2996,7 @@ async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktre
     } else { void 0; }
   } else { void 0; }
 
+  onProgress("recording", "Recording worktree metadata...");
   await recordWorktreeParent(root, name, parent);
   if (snapshot) {
     await runGit(["config", "--local", `multiterm.worktree.${name}.importedSnapshot`, snapshot.commit], root);
@@ -2836,13 +3056,15 @@ async function restoreParentSafetyStash(session, stashOid) {
   return dropExactStash(session.parentPath, stashOid);
 }
 
-async function finishPendingWorktreeMerge(sessionId, session, { abort = false } = {}) {
+async function finishPendingWorktreeMerge(sessionId, session, { abort = false, onProgress = () => {} } = {}) {
   if (abort) {
+    onProgress("rolling-back", "Removing the provisional merge worktree...");
     gitMergeSessions.delete(sessionId);
     await cleanupPendingMergeSession(session);
     return { ok: true, reason: "" };
   } else { void 0; }
 
+  onProgress("checking", "Checking the provisional merge result...");
   const conflicts = await conflictedPaths(session.workPath);
   if (conflicts.length) {
     return { ok: false, reason: "Resolve every conflicted file before bringing the changes back.", conflicts };
@@ -2852,6 +3074,7 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false } 
 
   // Objects written while fingerprinting do not alter the checkout. This catches
   // edits made after the dialog opened before the safety stash moves anything.
+  onProgress("verifying-parent", "Verifying that the parent checkout is unchanged...");
   const currentParent = await snapshotGitWorktree(session.parentPath, "MultiTerm parent verification");
   if (!currentParent.ok || currentParent.head !== session.parentSnapshot.head
     || currentParent.tree !== session.parentSnapshot.tree || currentParent.indexTree !== session.parentSnapshot.indexTree
@@ -2862,12 +3085,14 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false } 
   const patchPath = path.join(os.tmpdir(), `multiterm-bring-back-${sessionId}.patch`);
   let stashOid = "";
   try {
+    onProgress("preparing", "Preparing the pending result...");
     const patch = await runGit([
       "diff", "--binary", "--full-index", `--output=${patchPath}`,
       session.parentSnapshot.head, resultTree.stdout.trim()
     ], session.repositoryRoot, 120000);
     if (!patch.ok) return { ok: false, reason: (patch.stderr || patch.stdout).trim() || "Git could not prepare the pending result." }; else { void 0; }
 
+    onProgress("protecting-parent", "Protecting existing parent changes...");
     const stashBefore = await runGit(["rev-parse", "--quiet", "--verify", "refs/stash"], session.parentPath);
     const stashed = await runGit([
       "stash", "push", "--include-untracked", "--message", `MultiTerm bring-back ${sessionId}`
@@ -2879,6 +3104,7 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false } 
     stashOid = afterOid && afterOid !== beforeOid ? afterOid : "";
 
     if (fs.statSync(patchPath).size > 0) {
+      onProgress("applying", "Applying the merged result to the parent...");
       const applied = await runGit(["apply", "--binary", "--whitespace=nowarn", patchPath], session.parentPath, 120000);
       if (!applied.ok) {
         const restored = await restoreParentSafetyStash(session, stashOid);
@@ -2891,6 +3117,7 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false } 
       } else { void 0; }
     } else { void 0; }
 
+    onProgress("verifying-result", "Verifying the parent result...");
     const materialized = await snapshotGitWorktree(session.parentPath, "MultiTerm result verification");
     if (!materialized.ok || materialized.head !== session.parentSnapshot.head || materialized.tree !== resultTree.stdout.trim()) {
       const restored = await restoreParentSafetyStash(session, stashOid);
@@ -2902,6 +3129,7 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false } 
       };
     } else { void 0; }
 
+    onProgress("cleaning-up", "Removing temporary safety state...");
     const dropped = await dropExactStash(session.parentPath, stashOid);
     if (!dropped.ok) return { ok: false, reason: dropped.reason, recoveryStash: stashOid }; else { void 0; }
     gitMergeSessions.delete(sessionId);
@@ -2915,7 +3143,7 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false } 
 // git couples a branch ref to its checkout: whichever tree holds the parent
 // branch is the tree the merge has to happen in, because updating the ref
 // underneath a different checkout would silently desync it.
-async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch, strategy }) {
+async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch, strategy }, onProgress = () => {}) {
   if (!repositoryRoot || !parentBranch || !worktreeBranch) {
     return { ok: false, status: "refused", reason: "A repository, parent branch and worktree branch are required." };
   } else { void 0; }
@@ -2923,6 +3151,7 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
     return { ok: false, status: "refused", reason: `Unsupported merge strategy: ${strategy}.` };
   } else { void 0; }
 
+  onProgress("locating", "Locating the source and parent worktrees...");
   const worktreePath = await branchCheckoutPath(repositoryRoot, worktreeBranch);
   if (worktreePath && strategy !== "pending") {
     const dirty = await worktreeIsDirty(worktreePath);
@@ -2956,6 +3185,7 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
     } else if (!parentPath) {
       return { ok: false, status: "refused", reason: `${parentBranch} must be checked out so the result can remain pending there.` };
     } else { void 0; }
+    onProgress("snapshotting", "Capturing both worktree states...");
     const [parentSnapshot, worktreeSnapshot] = await Promise.all([
       snapshotGitWorktree(parentPath, `MultiTerm snapshot of ${parentBranch}`),
       snapshotGitWorktree(worktreePath, `MultiTerm snapshot of ${worktreeBranch}`)
@@ -2967,14 +3197,17 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
         reason: parentSnapshot.reason || worktreeSnapshot.reason || "Git could not snapshot those worktrees."
       };
     } else { void 0; }
+    onProgress("preparing", "Preparing an isolated merge worktree...");
     const workPath = path.join(os.tmpdir(), `multiterm-merge-${crypto.randomBytes(6).toString("hex")}`);
     const added = await runGit(["worktree", "add", "--detach", workPath, parentSnapshot.commit], repositoryRoot, 120000);
     if (!added.ok) {
       return { ok: false, status: "refused", reason: (added.stderr || added.stdout).trim() || "Could not prepare a merge worktree." };
     } else { void 0; }
+    onProgress("merging", "Combining committed and pending worktree changes...");
     const merged = await runGit([
       "-c", "merge.conflictStyle=diff3", "merge", "--no-ff", "--no-commit", worktreeSnapshot.commit
     ], workPath, 120000);
+    onProgress("checking-conflicts", "Checking the provisional merge for conflicts...");
     const conflicts = await conflictedPaths(workPath);
     const sessionId = crypto.randomBytes(8).toString("hex");
     gitMergeSessions.set(sessionId, {
@@ -2999,6 +3232,7 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
 
   let workPath = parentPath;
   let temporary = false;
+  onProgress("checking", "Checking both worktrees for safe merge conditions...");
   if (parentPath) {
     const dirty = await worktreeIsDirty(parentPath);
     if (dirty) {
@@ -3010,6 +3244,7 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
       };
     } else { void 0; }
   } else {
+    onProgress("preparing", "Preparing a temporary parent worktree...");
     workPath = path.join(os.tmpdir(), `multiterm-merge-${crypto.randomBytes(6).toString("hex")}`);
     const added = await runGit(["worktree", "add", workPath, parentBranch], repositoryRoot, 120000);
     /* v8 ignore next */
@@ -3024,7 +3259,9 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
     : ["merge", "--no-ff", "--no-commit", worktreeBranch];
   // diff3 puts the base into the conflict markers, so the resolver gets all
   // three sides straight from git rather than recomputing them.
+  onProgress("merging", "Applying worktree commits to the parent...");
   const merged = await runGit(["-c", "merge.conflictStyle=diff3", ...mergeArguments], workPath, 120000);
+  onProgress("checking-conflicts", "Checking the merge for conflicts...");
   const conflicts = await conflictedPaths(workPath);
   const sessionId = crypto.randomBytes(8).toString("hex");
   gitMergeSessions.set(sessionId, { repositoryRoot, workPath, temporary, parentBranch, worktreeBranch, strategy });
@@ -3041,17 +3278,19 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
   return { ok: true, status: "staged", sessionId, workPath, conflicts: [], reason: "" };
 }
 
-async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "" } = {}) {
+async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "", onProgress = () => {} } = {}) {
   const session = gitMergeSessions.get(sessionId);
   if (!session) return { ok: false, reason: "That merge is no longer in progress." }; else { void 0; }
-  if (session.strategy === "pending") return finishPendingWorktreeMerge(sessionId, session, { abort }); else { void 0; }
+  if (session.strategy === "pending") return finishPendingWorktreeMerge(sessionId, session, { abort, onProgress }); else { void 0; }
 
   let result = { ok: true, reason: "" };
   if (abort) {
+    onProgress("rolling-back", "Rolling back the provisional merge...");
     gitMergeSessions.delete(sessionId);
     await runGit(["merge", "--abort"], session.workPath);
     await runGit(["reset", "--hard"], session.workPath);
   } else {
+    onProgress("committing", "Creating the parent commit...");
     const message = commitMessage
       || `Merge ${session.worktreeBranch} into ${session.parentBranch}`;
     const committed = await runGit(["commit", "-m", message], session.workPath, 60000);
@@ -3062,6 +3301,7 @@ async function finishWorktreeMerge(sessionId, { abort = false, commitMessage = "
   }
 
   if (session.temporary) {
+    onProgress("cleaning-up", "Removing the temporary merge worktree...");
     await runGit(["worktree", "remove", "--force", session.workPath], session.repositoryRoot, 120000);
   } else { void 0; }
   return result;
@@ -6378,9 +6618,15 @@ module.exports = {
     setOutputCoalesceMs,
     getOutputCoalesceMs,
     applyClientConfig,
+    diagnosticRecordFromMessage,
+    recordRuntimeDiagnostic,
+    sendRuntimeDiagnostics,
+    installConsoleDiagnostics,
     applyCommunicationConfig,
     handleAutomationLease,
+    queryMachineLockState,
     releaseAutomationLease,
+    sendMachineLockState,
     queueSessionOutput,
     scheduleOutputFlush,
     flushSessionOutput,

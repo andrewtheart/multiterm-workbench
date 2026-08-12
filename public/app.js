@@ -34,7 +34,9 @@ const defaultSettings = {
   // discoverability, and the menu defaults already free most of the bar.
   headerActionsRevealOnHover: false,
   resumeAssistantSessions: "ask",
+  autoTitleScheduleMode: "progressive",
   autoTitleSchedule: "5, 60, 120, 240, 360, 720, 1440, 2160",
+  autoTitleRepeatMinutes: 5,
   // Terminals, process ids and titles that automatic suggestions skip. Built
   // from the pane's own suggest-title menu, never from the settings panel.
   autoTitleSuppressions: [],
@@ -49,6 +51,8 @@ const defaultSettings = {
   columns: 2,
   compactChrome: false,
   copilotImportContextKb: 64,
+  copilotLogInitialTailKb: 256,
+  copilotLogViewerEnabled: false,
   copilotRemoteKeepAlive: "off",
   copilotRemoteSessions: false,
   copilotSessionSearchContextKb: 1024,
@@ -62,6 +66,9 @@ const defaultSettings = {
   ctrlVPaste: true,
   cursorBlink: true,
   cursorStyle: "bar",
+  diagnosticRetentionDays: 14,
+  diagnosticRotationMb: 10,
+  diagnosticViewerEntries: 5000,
   focusWidth: 65,
   fontFamily: "Cascadia Mono",
   fontSize: 14,
@@ -148,6 +155,8 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   aiProvidersRefresh: "ai assistant provider refresh rescan detect installed authentication models",
   copilotRemoteSessions: "ai assistant copilot remote control steer phone mobile github.com away from desk session",
   copilotRemoteKeepAlive: "ai assistant copilot remote keep alive caffeinate sleep awake machine standby idle",
+  copilotLogInitialTailKb: "diagnostics logs github copilot cli initial tail kilobytes existing content zero follow new lines",
+  copilotLogViewerEnabled: "diagnostics logs github copilot cli viewer include opt in launch directory",
   copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
@@ -155,6 +164,9 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   titleFontScale: "terminal pane title header label text font size scale percentage larger smaller",
   cursorStyle: "caret insertion point beam bar block underline pointer shape",
   cursorBlink: "caret flashing flash pulse animation animate",
+  diagnosticRetentionDays: "diagnostics logs troubleshooting retention history days keep delete cleanup durable jsonl zero unlimited",
+  diagnosticRotationMb: "diagnostics logs troubleshooting rotation file size megabytes mb durable jsonl zero disabled",
+  diagnosticViewerEntries: "diagnostics logs troubleshooting viewer entries records history limit maximum durable jsonl zero all unlimited",
   layoutMode: "arrangement arrange tiling tile panes splits split grid mosaic stack strip rail master carousel spotlight bento canvas automatic",
   pagerPlacement: "pages page tabs tab tabbar tab-bar navigation navigator pagebar page-bar pager position placement location dock docking top bottom left right side sidebar",
   workspaceZoom: "workspace canvas stage zoom scale magnify shrink density overview wheel scroll pinch trackpad terminals panes tiles more fewer",
@@ -174,7 +186,9 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotTitleContextKb: "copilot title terminal text transcript output context size kilobytes kb limit",
   copilotTitleMinWords: "copilot title minimum words length short concise",
   autoTitleSuggestions: "automatic periodic background terminal title suggestions ai copilot rename",
+  autoTitleScheduleMode: "automatic title timing progressive ladder repeating repeat interval frequency",
   autoTitleSchedule: "automatic title interval minutes backoff schedule frequency how often rename delay",
+  autoTitleRepeatMinutes: "automatic title repeat repeating interval minutes frequency every periodic",
   titleSuggestionHistoryLimit: "title suggestion history retention entries terminal name pid process accepted rejected timestamp",
   autoTitleSuppressionsClear: "automatic title pause paused suppress suppressed stop skip exclude ignore terminal pid process title rename resume everywhere clear",
   resumeAssistantSessions: "resume restore copilot claude sessions relaunch restart crash recover reopen tui",
@@ -296,6 +310,7 @@ const APP_VERSION = "0.1.89";
 const AUTOMATIONS_STORAGE_KEY = "multiterm.automations";
 const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const TITLE_SUGGESTION_HISTORY_STORAGE_KEY = "multiterm.titleSuggestionHistory";
+const TITLE_SUGGESTION_HISTORY_PAGE_SIZE = 5;
 const TITLE_SUGGESTION_HISTORY_MAX_LIMIT = 10000;
 const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
 const MIN_FONT_SIZE = 10;
@@ -477,6 +492,7 @@ const elements = {
   automationInterval: document.querySelector("#automationInterval"),
   automationIntervalFields: document.querySelector("#automationIntervalFields"),
   automationIntervalUnit: document.querySelector("#automationIntervalUnit"),
+  automationMachineState: document.querySelector("#automationMachineState"),
   automationName: document.querySelector("#automationName"),
   automationNew: document.querySelector("#automationNew"),
   automationOverlay: document.querySelector("#automationsOverlay"),
@@ -600,7 +616,19 @@ const elements = {
   copilotTitleMinWords: document.querySelector("#copilotTitleMinWords"),
   copilotTitleModel: document.querySelector("#copilotTitleModel"),
   autoTitleSuggestions: document.querySelector("#autoTitleSuggestions"),
+  autoTitleScheduleMode: document.querySelector("#autoTitleScheduleMode"),
   autoTitleSchedule: document.querySelector("#autoTitleSchedule"),
+  autoTitleScheduleRow: document.querySelector("#autoTitleScheduleRow"),
+  autoTitleRepeatMinutes: document.querySelector("#autoTitleRepeatMinutes"),
+  autoTitleRepeatRow: document.querySelector("#autoTitleRepeatRow"),
+  autoTitleNoticeContinue: document.querySelector("#autoTitleNoticeContinue"),
+  autoTitleNoticeDisable: document.querySelector("#autoTitleNoticeDisable"),
+  autoTitleNoticeMode: document.querySelector("#autoTitleNoticeMode"),
+  autoTitleNoticeOverlay: document.querySelector("#autoTitleNoticeOverlay"),
+  autoTitleNoticeRepeatMinutes: document.querySelector("#autoTitleNoticeRepeatMinutes"),
+  autoTitleNoticeRepeatRow: document.querySelector("#autoTitleNoticeRepeatRow"),
+  autoTitleNoticeSchedule: document.querySelector("#autoTitleNoticeSchedule"),
+  autoTitleNoticeScheduleRow: document.querySelector("#autoTitleNoticeScheduleRow"),
   titleSuggestionHistoryLimit: document.querySelector("#titleSuggestionHistoryLimit"),
   autoTitleSuppressionRow: document.querySelector("#autoTitleSuppressionRow"),
   autoTitleSuppressionList: document.querySelector("#autoTitleSuppressionList"),
@@ -708,10 +736,15 @@ const elements = {
   contextSubmenu: document.querySelector("#contextSubmenu"),
   controlPanel: document.querySelector(".control-panel"),
   cleanCopilotClipboard: document.querySelector("#cleanCopilotClipboard"),
+  copilotLogInitialTailKb: document.querySelector("#copilotLogInitialTailKb"),
+  copilotLogViewerEnabled: document.querySelector("#copilotLogViewerEnabled"),
   copyOnSelect: document.querySelector("#copyOnSelect"),
   ctrlVPaste: document.querySelector("#ctrlVPaste"),
   cursorBlink: document.querySelector("#cursorBlink"),
   cursorStyle: document.querySelector("#cursorStyle"),
+  diagnosticRetentionDays: document.querySelector("#diagnosticRetentionDays"),
+  diagnosticRotationMb: document.querySelector("#diagnosticRotationMb"),
+  diagnosticViewerEntries: document.querySelector("#diagnosticViewerEntries"),
   cwdInput: document.querySelector("#cwdInput"),
   fitAll: document.querySelector("#fitAll"),
   focusWidth: document.querySelector("#focusWidth"),
@@ -957,7 +990,9 @@ const elements = {
   titleSuggestionHistoryClose: document.querySelector("#titleSuggestionHistoryClose"),
   titleSuggestionHistoryEmpty: document.querySelector("#titleSuggestionHistoryEmpty"),
   titleSuggestionHistoryFilter: document.querySelector("#titleSuggestionHistoryFilter"),
+  titleSuggestionHistoryFooter: document.querySelector("#titleSuggestionHistoryFooter"),
   titleSuggestionHistoryList: document.querySelector("#titleSuggestionHistoryList"),
+  titleSuggestionHistoryMore: document.querySelector("#titleSuggestionHistoryMore"),
   titleSuggestionHistoryOverlay: document.querySelector("#titleSuggestionHistoryOverlay"),
   titleSuggestionHistorySubtitle: document.querySelector("#titleSuggestionHistorySubtitle"),
   titleSuggestionHistorySummary: document.querySelector("#titleSuggestionHistorySummary"),
@@ -983,14 +1018,22 @@ const elements = {
   terminalConnectionPaths: document.querySelector("#terminalConnectionPaths"),
   terminalConnectionsOverlay: document.querySelector("#terminalConnectionsOverlay"),
   terminalNotesIdentity: document.querySelector("#terminalNotesIdentity"),
+  terminalNotesAdd: document.querySelector("#terminalNotesAdd"),
+  terminalNotesDelete: document.querySelector("#terminalNotesDelete"),
   terminalNotesInput: document.querySelector("#terminalNotesInput"),
+  terminalNotesList: document.querySelector("#terminalNotesList"),
   terminalNotesSaved: document.querySelector("#terminalNotesSaved"),
   terminalNotesSection: document.querySelector("#terminalNotesSection"),
   terminalNotesFlyout: document.querySelector("#terminalNotesFlyout"),
   terminalNotesFlyoutAdd: document.querySelector("#terminalNotesFlyoutAdd"),
+  terminalNotesFlyoutCancel: document.querySelector("#terminalNotesFlyoutCancel"),
+  terminalNotesFlyoutComposer: document.querySelector("#terminalNotesFlyoutComposer"),
   terminalNotesFlyoutDetails: document.querySelector("#terminalNotesFlyoutDetails"),
   terminalNotesFlyoutEmpty: document.querySelector("#terminalNotesFlyoutEmpty"),
+  terminalNotesFlyoutExpand: document.querySelector("#terminalNotesFlyoutExpand"),
+  terminalNotesFlyoutInput: document.querySelector("#terminalNotesFlyoutInput"),
   terminalNotesFlyoutList: document.querySelector("#terminalNotesFlyoutList"),
+  terminalNotesFlyoutSave: document.querySelector("#terminalNotesFlyoutSave"),
   terminalNotesFlyoutSubtitle: document.querySelector("#terminalNotesFlyoutSubtitle"),
   terminalTheme: document.querySelector("#terminalTheme"),
   themeToggle: document.querySelector("#themeToggle"),
@@ -1032,6 +1075,7 @@ let terminalNotificationFlyoutId = null;
 let terminalNotificationFlyoutAnchor = null;
 let terminalNotesFlyoutId = null;
 let terminalNotesFlyoutAnchor = null;
+let terminalNotesFlyoutEditingId = null;
 let titleSuggestionFlyoutId = null;
 let titleSuggestionFlyoutAnchor = null;
 
@@ -1147,14 +1191,17 @@ const state = {
   socketReady: false,
   bridgeId: "",
   canFocusBridgeTerminal: false,
+  copilotLogEnabledAt: initialSettings.copilotLogViewerEnabled ? Date.now() : 0,
+  copilotLogDirectory: "",
   copilotSetupScript: "",
   sharedBrowserProfile: false,
   sharedBrowserProfileWarned: false,
   statistics: { terminalId: null, loading: false, requestGeneration: 0, returnFocus: null },
   terminalArtifacts: loadTerminalArtifacts(),
-  terminalArtifactsHub: { returnFocus: null, savedTimer: 0 },
+  terminalArtifactsHub: { draftText: null, noteTerminalId: null, returnFocus: null, savedTimer: 0, selectedNoteId: null },
+  autoTitleNotice: { promise: null, resolve: null },
   titleSuggestionHistory: loadTitleSuggestionHistory(),
-  titleSuggestionHistoryHub: { returnFocus: null, scope: null },
+  titleSuggestionHistoryHub: { returnFocus: null, scope: null, visibleCount: TITLE_SUGGESTION_HISTORY_PAGE_SIZE },
   terminalMessages: new Map(),
   terminalMessagesHub: { returnFocus: null },
   terminalLinks: loadTerminalLinks(),
@@ -1175,19 +1222,27 @@ const LOG_LEVEL_RANK = { debug: 0, info: 1, warn: 2, error: 3 };
 
 const logStore = {
   entries: [],
-  max: 2000,
+  max: 5000,
   seq: 0,
   minLevel: "info",
   autoscroll: true,
   unseenError: false
 };
 
-function logEvent(level, source, message, detail) {
+const pendingDiagnosticRecords = [];
+const DURABLE_DIAGNOSTIC_DETAIL_FIELDS = [
+  "clean", "code", "elapsedMs", "error", "operation", "outcome", "pendingRequests",
+  "phase", "readyState", "reason", "requestId", "requestType", "responseType",
+  "socketReady", "timeoutMs"
+];
+
+function logEvent(level, source, message, detail, options = {}) {
   const entry = {
     id: ++logStore.seq,
-    time: Date.now(),
+    time: Number.isFinite(Number(options.time)) ? Number(options.time) : Date.now(),
     level: level in LOG_LEVEL_RANK ? level : "info",
     source: source || "app",
+    event: typeof options.event === "string" && options.event ? options.event : "log",
     message: typeof message === "string" ? message : String(message)
   };
   if (detail !== undefined && detail !== null) {
@@ -1195,18 +1250,90 @@ function logEvent(level, source, message, detail) {
   }
 
   logStore.entries.push(entry);
-  if (logStore.entries.length > logStore.max) {
+  if (logStore.max > 0 && logStore.entries.length > logStore.max) {
     logStore.entries.splice(0, logStore.entries.length - logStore.max);
   }
 
-  mirrorLogToConsole(entry);
+  if (options.mirror !== false) mirrorLogToConsole(entry);
   appendLogRow(entry);
+  if (options.persist !== false) persistDiagnosticEntry(entry);
 
   if (entry.level === "error" && elements.logPanel && elements.logPanel.hidden) {
     logStore.unseenError = true;
     if (elements.logToggleDot) elements.logToggleDot.hidden = false;
   }
   return entry;
+}
+
+function diagnosticRecordForEntry(entry) {
+  const record = {
+    type: "diagnosticRecord",
+    time: entry.time,
+    level: entry.level,
+    source: entry.source,
+    event: entry.event,
+    message: entry.message
+  };
+  if (entry.detail && typeof entry.detail === "object" && !Array.isArray(entry.detail)) {
+    for (const field of DURABLE_DIAGNOSTIC_DETAIL_FIELDS) {
+      if (entry.detail[field] !== undefined) record[field] = entry.detail[field];
+    }
+  }
+  return record;
+}
+
+function persistDiagnosticEntry(entry) {
+  const record = diagnosticRecordForEntry(entry);
+  if (!sendBridge(record)) pendingDiagnosticRecords.push(record);
+}
+
+function flushPendingDiagnosticRecords() {
+  while (pendingDiagnosticRecords.length > 0) {
+    if (!sendBridge(pendingDiagnosticRecords[0])) return;
+    pendingDiagnosticRecords.shift();
+  }
+}
+
+function durableDiagnosticKey(entry) {
+  return [entry.time, entry.level, entry.source, entry.event, entry.message, entry.detail?.requestId || ""].join("\u0000");
+}
+
+function mergeDurableDiagnostics(records) {
+  const known = new Set(logStore.entries.map(durableDiagnosticKey));
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) continue;
+    const detail = Object.fromEntries(DURABLE_DIAGNOSTIC_DETAIL_FIELDS
+      .filter((field) => record[field] !== undefined)
+      .map((field) => [field, record[field]]));
+    const entry = {
+      id: ++logStore.seq,
+      time: Number.isFinite(Number(record.time)) ? Number(record.time) : Date.now(),
+      level: record.level in LOG_LEVEL_RANK ? record.level : "info",
+      source: typeof record.source === "string" && record.source ? record.source : "bridge",
+      event: typeof record.event === "string" && record.event ? record.event : "log",
+      message: typeof record.message === "string" ? record.message : ""
+    };
+    if (Object.keys(detail).length > 0) entry.detail = detail;
+    const key = durableDiagnosticKey(entry);
+    if (known.has(key)) continue;
+    known.add(key);
+    logStore.entries.push(entry);
+  }
+  logStore.entries.sort((left, right) => left.time - right.time || left.id - right.id);
+  if (logStore.max > 0 && logStore.entries.length > logStore.max) {
+    logStore.entries.splice(0, logStore.entries.length - logStore.max);
+  }
+  renderAllLogs();
+}
+
+async function loadDurableDiagnostics() {
+  const response = await requestBridge({ type: "diagnosticList", limit: logStore.max }, { timeout: 30000 });
+  if (!response) return;
+  if (response.error) {
+    log.warn("diagnostics", "Could not load durable diagnostics", { error: response.error });
+    return;
+  }
+  mergeDurableDiagnostics(response.entries);
 }
 
 function mirrorLogToConsole(entry) {
@@ -1266,6 +1393,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindCloseConfirm();
   bindPageCloseConfirm();
   bindUpdateConsent();
+  bindAutoTitleNotice();
   bindUpdateDialog();
   bindStatisticsDialog();
   bindTerminalAnalytics();
@@ -1292,10 +1420,16 @@ window.addEventListener("DOMContentLoaded", () => {
     for (const terminal of minimizedTerminalsOnActivePage()) restoreTerminal(terminal.id);
   });
   window.addEventListener("resize", noteResizeGesture);
-  window.addEventListener("focus", announceRendererPresence);
+  window.addEventListener("focus", () => {
+    announceRendererPresence();
+    scheduleStrandedTerminalFocusRecovery("window-focus");
+  });
   document.addEventListener("visibilitychange", () => {
     flushAllTerminalOutput();
     announceRendererPresence();
+    if (document.visibilityState === "visible") {
+      scheduleStrandedTerminalFocusRecovery("document-visible");
+    }
   });
   systemThemeQuery.addEventListener("change", () => {
     if (state.settings.appTheme === "system") applyAppTheme();
@@ -1356,6 +1490,28 @@ function bindControls() {
   elements.headerActionDragScope.value = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
   elements.cursorStyle.value = state.settings.cursorStyle;
   elements.cursorBlink.checked = state.settings.cursorBlink;
+  state.settings.diagnosticRetentionDays = normalizeDiagnosticSetting(
+    state.settings.diagnosticRetentionDays,
+    elements.diagnosticRetentionDays,
+    defaultSettings.diagnosticRetentionDays
+  );
+  state.settings.diagnosticRotationMb = normalizeDiagnosticSetting(
+    state.settings.diagnosticRotationMb,
+    elements.diagnosticRotationMb,
+    defaultSettings.diagnosticRotationMb
+  );
+  state.settings.diagnosticViewerEntries = normalizeDiagnosticSetting(
+    state.settings.diagnosticViewerEntries,
+    elements.diagnosticViewerEntries,
+    defaultSettings.diagnosticViewerEntries
+  );
+  state.settings.copilotLogInitialTailKb = normalizeDiagnosticSetting(
+    state.settings.copilotLogInitialTailKb,
+    elements.copilotLogInitialTailKb,
+    defaultSettings.copilotLogInitialTailKb
+  );
+  elements.copilotLogViewerEnabled.checked = Boolean(state.settings.copilotLogViewerEnabled);
+  logStore.max = state.settings.diagnosticViewerEntries;
   elements.compactChrome.checked = state.settings.compactChrome;
   elements.syncInput.checked = state.settings.syncInput;
   elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
@@ -1604,7 +1760,9 @@ function bindControls() {
   bindSetting(elements.copilotTitleMinWords, "copilotTitleMinWords", "change", clampCopilotTitleMinWords);
   bindSetting(elements.copilotTitleMaxWords, "copilotTitleMaxWords", "change", clampCopilotTitleMaxWords);
   bindSetting(elements.autoTitleSuggestions, "autoTitleSuggestions", "change", (_, element) => element.checked);
+  bindSetting(elements.autoTitleScheduleMode, "autoTitleScheduleMode", "change", normalizeAutoTitleScheduleMode);
   bindSetting(elements.autoTitleSchedule, "autoTitleSchedule", "change", normalizeAutoTitleSchedule);
+  bindSetting(elements.autoTitleRepeatMinutes, "autoTitleRepeatMinutes", "change", clampAutoTitleRepeatMinutes);
   bindSetting(elements.titleSuggestionHistoryLimit, "titleSuggestionHistoryLimit", "change", clampTitleSuggestionHistoryLimit);
   elements.titleSuggestionHistoryLimit.addEventListener("change", saveTitleSuggestionHistory);
   elements.autoTitleSuppressionsClear?.addEventListener("click", clearAutoTitleSuppressions);
@@ -1620,6 +1778,19 @@ function bindControls() {
   bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
   bindSetting(elements.outputCoalesceMs, "outputCoalesceMs", "change", clampOutputCoalesceMs);
   bindSetting(elements.outputBacklogKb, "outputBacklogKb", "change", clampOutputBacklogKb);
+  bindSetting(elements.copilotLogViewerEnabled, "copilotLogViewerEnabled", "change", (_, element) => element.checked);
+  bindSetting(elements.copilotLogInitialTailKb, "copilotLogInitialTailKb", "change", (value, element) => (
+    normalizeDiagnosticSetting(value, element, defaultSettings.copilotLogInitialTailKb)
+  ));
+  bindSetting(elements.diagnosticRetentionDays, "diagnosticRetentionDays", "change", (value, element) => (
+    normalizeDiagnosticSetting(value, element, defaultSettings.diagnosticRetentionDays)
+  ));
+  bindSetting(elements.diagnosticRotationMb, "diagnosticRotationMb", "change", (value, element) => (
+    normalizeDiagnosticSetting(value, element, defaultSettings.diagnosticRotationMb)
+  ));
+  bindSetting(elements.diagnosticViewerEntries, "diagnosticViewerEntries", "change", (value, element) => (
+    normalizeDiagnosticSetting(value, element, defaultSettings.diagnosticViewerEntries)
+  ));
   bindSetting(elements.pageCloseAction, "pageCloseAction", "change", normalizePageCloseAction);
   bindSetting(elements.terminalMessageMaxKb, "terminalMessageMaxKb", "change", clampTerminalMessageMaxKb);
   bindSetting(elements.terminalInboxCapacity, "terminalInboxCapacity", "change", clampTerminalInboxCapacity);
@@ -1714,6 +1885,9 @@ function toggleChrome(key) {
 function bindSetting(element, key, eventName, transform) {
   element.addEventListener(eventName, () => {
     state.settings[key] = transform(element.value, element);
+    if (key === "copilotLogViewerEnabled") {
+      state.copilotLogEnabledAt = state.settings.copilotLogViewerEnabled ? Date.now() : 0;
+    }
     if (key === "aiTitleProvider" || key === "copilotTitleModel") {
       syncAiTitleControls();
     } else if (key === "aiSessionProvider" || key === "aiSessionModel") {
@@ -1721,14 +1895,30 @@ function bindSetting(element, key, eventName, transform) {
     } else if (key === "copilotRemoteSessions" || key === "copilotRemoteKeepAlive") {
       syncCopilotRemoteControls();
     }
-    if (key === "aiTitleProvider" || key === "autoTitleSuggestions" || key === "autoTitleSchedule") {
+    if (key === "autoTitleScheduleMode") syncAutoTitleScheduleControls();
+    if (key === "aiTitleProvider" || key === "autoTitleSuggestions" || key === "autoTitleSchedule"
+      || key === "autoTitleScheduleMode" || key === "autoTitleRepeatMinutes") {
       rescheduleAllAutoTitles();
     }
     if (key === "layout") {
       clearSnapLayout(false);
     }
-    if (key === "outputCoalesceMs") {
+    if (key === "outputCoalesceMs" || key === "copilotLogViewerEnabled"
+      || key === "copilotLogInitialTailKb" || key === "diagnosticRetentionDays"
+        || key === "diagnosticRotationMb" || key === "diagnosticViewerEntries") {
+      if (key === "diagnosticViewerEntries") {
+        logStore.max = state.settings.diagnosticViewerEntries;
+        if (logStore.max > 0 && logStore.entries.length > logStore.max) {
+          logStore.entries.splice(0, logStore.entries.length - logStore.max);
+          renderAllLogs();
+        }
+      }
       sendBridgeConfig();
+      if (key === "copilotLogViewerEnabled" && state.settings.copilotLogViewerEnabled) {
+        for (const terminal of state.terminals.values()) {
+          for (const logKey of terminal.copilotLogKeys || []) registerCopilotLogTerminal(logKey, terminal);
+        }
+      }
     } else if (key === "terminalMessageMaxKb" || key === "terminalInboxCapacity") {
       sendCommunicationConfig();
     }
@@ -1741,7 +1931,22 @@ function bindSetting(element, key, eventName, transform) {
 // it has to be pushed across on connect and on every change. An older bridge that
 // does not understand "config" answers with an "error" frame, which is ignored.
 function sendBridgeConfig() {
-  sendBridge({ type: "config", outputCoalesceMs: Number(state.settings.outputCoalesceMs) });
+  const diagnostics = {
+    retentionDays: Number(state.settings.diagnosticRetentionDays),
+    rotationMb: Number(state.settings.diagnosticRotationMb),
+    viewerEntries: Number(state.settings.diagnosticViewerEntries)
+  };
+  sendBridge({
+    type: "config",
+    outputCoalesceMs: Number(state.settings.outputCoalesceMs),
+    diagnosticRetentionDays: diagnostics.retentionDays,
+    diagnosticRotationMb: diagnostics.rotationMb,
+    diagnosticViewerEntries: diagnostics.viewerEntries,
+    copilotLogViewerEnabled: Boolean(state.settings.copilotLogViewerEnabled),
+    copilotLogInitialTailKb: Number(state.settings.copilotLogInitialTailKb),
+    copilotLogEnabledAt: Number(state.copilotLogEnabledAt)
+  });
+  window.multiterm?.configureDiagnostics?.(diagnostics)?.catch?.(() => {});
 }
 
 function sendCommunicationConfig() {
@@ -1769,6 +1974,14 @@ const COPILOT_TITLE_EFFORTS = new Set(["none", "minimal", "low", "medium", "high
 const COPILOT_TITLE_CONTEXTS = new Set(["default", "long_context"]);
 const AI_PROVIDER_IDS = new Set(["none", "copilot", "claude"]);
 const INSTALLER_SIZE_MB_FALLBACK = 256;
+
+function normalizeDiagnosticSetting(value, element, fallback) {
+  const text = String(value ?? "").trim();
+  const requested = text ? Math.round(Number(text)) : Number.NaN;
+  const next = Number.isSafeInteger(requested) && requested >= 0 ? requested : fallback;
+  element.value = next;
+  return next;
+}
 
 function clampSettingNumber(value, element, bounds) {
   const requested = Number(value);
@@ -1883,7 +2096,9 @@ function syncCopilotTitleSettings() {
   state.settings.copilotTitleContextKb = clampCopilotTitleContextKb(state.settings.copilotTitleContextKb);
   state.settings.copilotTitleMinWords = clampCopilotTitleMinWords(state.settings.copilotTitleMinWords);
   state.settings.copilotTitleMaxWords = clampCopilotTitleMaxWords(state.settings.copilotTitleMaxWords);
+  state.settings.autoTitleScheduleMode = normalizeAutoTitleScheduleMode(state.settings.autoTitleScheduleMode);
   state.settings.autoTitleSchedule = normalizeAutoTitleSchedule(state.settings.autoTitleSchedule);
+  state.settings.autoTitleRepeatMinutes = clampAutoTitleRepeatMinutes(state.settings.autoTitleRepeatMinutes);
   state.settings.titleSuggestionHistoryLimit = clampTitleSuggestionHistoryLimit(state.settings.titleSuggestionHistoryLimit);
   state.settings.autoTitleSuppressions = normalizeAutoTitleSuppressions(state.settings.autoTitleSuppressions);
   state.settings.resumeAssistantSessions = normalizeResumeAssistantSessions(state.settings.resumeAssistantSessions);
@@ -1891,7 +2106,10 @@ function syncCopilotTitleSettings() {
   elements.resumeAssistantSessions.value = state.settings.resumeAssistantSessions;
   elements.headerActionsRevealOnHover.checked = state.settings.headerActionsRevealOnHover === true;
   elements.autoTitleSuggestions.checked = state.settings.autoTitleSuggestions;
+  elements.autoTitleScheduleMode.value = state.settings.autoTitleScheduleMode;
   elements.autoTitleSchedule.value = state.settings.autoTitleSchedule;
+  elements.autoTitleRepeatMinutes.value = state.settings.autoTitleRepeatMinutes;
+  syncAutoTitleScheduleControls();
   renderAutoTitleSuppressions();
   elements.copilotTitleEffort.value = state.settings.copilotTitleEffort;
   elements.copilotTitleContext.value = state.settings.copilotTitleContext;
@@ -2142,6 +2360,11 @@ function connectBridge(locationProtocol = window.location.protocol) {
     log.info("bridge", wasReconnecting ? "WebSocket reconnected" : "WebSocket connected");
     announceRendererPresence();
     sendBridgeConfig();
+    for (const terminal of state.terminals.values()) {
+      for (const logKey of terminal.copilotLogKeys || []) registerCopilotLogTerminal(logKey, terminal);
+    }
+    flushPendingDiagnosticRecords();
+    void loadDurableDiagnostics();
     sendCommunicationConfig();
     if (!navigator.webdriver && shouldAutomaticallyRefreshAiProviders()) {
       refreshAiProviders();
@@ -2168,8 +2391,16 @@ function connectBridge(locationProtocol = window.location.protocol) {
     handleBridgeMessage(message);
   });
 
-  state.socket.addEventListener("close", () => {
+  state.socket.addEventListener("close", (event) => {
     state.socketReady = false;
+    const closeDetail = {
+      clean: event.wasClean,
+      code: event.code,
+      pendingRequests: pendingBridgeRequests.size,
+      reason: event.reason || ""
+    };
+    log.warn("bridge", "WebSocket closed", closeDetail);
+    settlePendingBridgeRequests("disconnected", closeDetail);
     for (const terminal of state.terminals.values()) {
       setTerminalStatus(terminal, "offline", "dead");
     }
@@ -2179,7 +2410,10 @@ function connectBridge(locationProtocol = window.location.protocol) {
 
   state.socket.addEventListener("error", () => {
     state.socketReady = false;
-    log.error("bridge", "WebSocket error");
+    log.error("bridge", "WebSocket error", {
+      pendingRequests: pendingBridgeRequests.size,
+      readyState: state.socket?.readyState
+    });
     updateTerminalActions();
     // The browser fires "close" after "error"; reconnection is scheduled there.
   });
@@ -2204,6 +2438,11 @@ function scheduleReconnect() {
 }
 
 function handleBridgeMessage(message) {
+  if (message.type === "operationProgress") {
+    notifyBridgeRequestProgress(message);
+    return;
+  }
+
   if (message.type === "title") {
     const terminal = state.terminals.get(message.id);
     if (terminal) commitTerminalTitle(terminal, message.title, false);
@@ -2242,7 +2481,7 @@ function handleBridgeMessage(message) {
     return;
   }
 
-  if (message.type === "automationLease" || message.type === "messageSent" || message.type === "messageActionResult" || message.type === "messageError") {
+  if (message.type === "automationLease" || message.type === "machineLockState" || message.type === "messageSent" || message.type === "messageActionResult" || message.type === "messageError") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -2252,6 +2491,11 @@ function handleBridgeMessage(message) {
       terminalInboxCapacity: message.terminalInboxCapacity,
       terminalMessageMaxKb: message.terminalMessageMaxKb
     });
+    return;
+  }
+
+  if (message.type === "diagnostics") {
+    resolveBridgeRequest(message, message);
     return;
   }
 
@@ -2335,6 +2579,7 @@ function handleBridgeMessage(message) {
     acceptAiProviderBootstrap(message.aiProviderBootstrap);
     state.bridgeId = typeof message.bridgeId === "string" ? message.bridgeId : "";
     state.canFocusBridgeTerminal = message.canFocusBridgeTerminal === true;
+    state.copilotLogDirectory = typeof message.copilotLogDirectory === "string" ? message.copilotLogDirectory : "";
     state.copilotSetupScript = typeof message.copilotSetupScript === "string" ? message.copilotSetupScript : "";
     state.hostUser = typeof message.currentUser === "string" ? message.currentUser.trim() : state.hostUser;
     warnAboutSharedBrowserProfile(message.sharedBrowserProfile === true);
@@ -2591,6 +2836,7 @@ function handleBridgeMessage(message) {
   }
 
   if (message.type === "config") {
+    if (typeof message.copilotLogDirectory === "string") state.copilotLogDirectory = message.copilotLogDirectory;
     log.debug("bridge", "Bridge output batching applied", { outputCoalesceMs: message.outputCoalesceMs });
     return;
   }
@@ -2698,15 +2944,18 @@ function openExternalTerminal(value) {
   const launch = normalizeExternalTerminalLaunch(value);
   if (!launch) return null;
   focusAppWindow();
+  const copilotLogKey = launch.assistantType === "copilot" ? createAiSessionId() : "";
   const assistantCommand = launch.assistantType
     ? buildAiAssistantCommand({
       provider: launch.assistantType,
       model: launch.assistantModel,
       effort: launch.assistantEffort,
-      context: launch.assistantContext
+      context: launch.assistantContext,
+      sessionId: copilotLogKey,
+      logKey: copilotLogKey
     })
     : "";
-  return addTerminal({
+  const terminal = addTerminal({
     reveal: true,
     runStartup: !assistantCommand,
     cwd: launch.path,
@@ -2719,6 +2968,11 @@ function openExternalTerminal(value) {
       provider: launch.assistantType
     } : null
   });
+  if (copilotLogKey) {
+    claimAiSessionId(terminal, copilotLogKey);
+    registerCopilotLogTerminal(copilotLogKey, terminal);
+  }
+  return terminal;
 }
 
 // After an auto-reconnect the bridge re-announces sessions it kept alive. Mark
@@ -2971,6 +3225,7 @@ function addTerminal(options = {}) {
     autoTitleStep: 0,
     autoTitleTimer: 0,
     autoTitleRevision: 0,
+    hasTerminalInput: savedMeta?.hasTerminalInput === true,
     tmux: options.tmux || session.tmux || null
   };
 
@@ -4042,7 +4297,8 @@ function positionTerminalNotificationFlyout(anchor) {
   flyout.style.left = "0px";
   flyout.style.top = "0px";
   const rect = flyout.getBoundingClientRect();
-  const left = Math.max(8, Math.min(anchorRect.right - rect.width, window.innerWidth - rect.width - 8));
+  const centered = anchorRect.left + (anchorRect.width - rect.width) / 2;
+  const left = Math.max(8, Math.min(centered, window.innerWidth - rect.width - 8));
   const below = anchorRect.bottom + 7;
   const top = below + rect.height <= window.innerHeight - 8
     ? below
@@ -4377,6 +4633,7 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
   updateTerminalTitleGenerateButton(terminal);
   if (terminalNotificationFlyoutId === terminal.id) renderTerminalNotificationFlyout();
   saveSessionSnapshot();
+  for (const key of terminal.copilotLogKeys || []) registerCopilotLogTerminal(key, terminal);
   if (notifyBridge) sendBridge({ type: "title", id: terminal.id, title });
 }
 
@@ -4389,6 +4646,8 @@ function terminalTitleContextText(terminal) {
 }
 
 const DEFAULT_AUTO_TITLE_SCHEDULE = [5, 60, 120, 240, 360, 720, 1440, 2160];
+const AUTO_TITLE_REPEAT_BOUNDS = { min: 1, max: 60 * 24 * 30, step: 1, fallback: 5 };
+const AUTO_TITLE_NOTICE_STORAGE_KEY = "multiterm.autoTitleNoticeShown";
 
 // The ladder is deliberately steep: each suggestion is a real Copilot CLI call,
 // so a long-lived terminal must not keep paying for one every few minutes.
@@ -4396,6 +4655,101 @@ function normalizeAutoTitleSchedule(value, element) {
   const normalized = parseAutoTitleSchedule(value).join(", ");
   if (element) element.value = normalized;
   return normalized;
+}
+
+function normalizeAutoTitleScheduleMode(value) {
+  return value === "repeat" ? "repeat" : "progressive";
+}
+
+function clampAutoTitleRepeatMinutes(value, element = elements.autoTitleRepeatMinutes) {
+  return clampSettingNumber(value, element, AUTO_TITLE_REPEAT_BOUNDS);
+}
+
+function syncAutoTitleScheduleControls() {
+  const repeats = normalizeAutoTitleScheduleMode(state.settings.autoTitleScheduleMode) === "repeat";
+  elements.autoTitleScheduleRow.hidden = repeats;
+  elements.autoTitleRepeatRow.hidden = !repeats;
+  elements.autoTitleScheduleMode._combo?.sync();
+}
+
+function automaticTitleNoticeWasShown() {
+  return localStorage.getItem(AUTO_TITLE_NOTICE_STORAGE_KEY) === "true";
+}
+
+function syncAutoTitleNoticeControls() {
+  const mode = normalizeAutoTitleScheduleMode(elements.autoTitleNoticeMode.value || state.settings.autoTitleScheduleMode);
+  elements.autoTitleNoticeMode.value = mode;
+  elements.autoTitleNoticeScheduleRow.hidden = mode === "repeat";
+  elements.autoTitleNoticeRepeatRow.hidden = mode !== "repeat";
+}
+
+function openAutoTitleNotice() {
+  if (state.autoTitleNotice.promise) return state.autoTitleNotice.promise;
+  if (automaticTitleNoticeWasShown()) return Promise.resolve(true);
+  localStorage.setItem(AUTO_TITLE_NOTICE_STORAGE_KEY, "true");
+  elements.autoTitleNoticeMode.value = normalizeAutoTitleScheduleMode(state.settings.autoTitleScheduleMode);
+  elements.autoTitleNoticeSchedule.value = normalizeAutoTitleSchedule(state.settings.autoTitleSchedule);
+  elements.autoTitleNoticeRepeatMinutes.value = clampAutoTitleRepeatMinutes(state.settings.autoTitleRepeatMinutes);
+  syncAutoTitleNoticeControls();
+  elements.autoTitleNoticeMode._combo?.sync();
+  elements.autoTitleNoticeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.autoTitleNoticeOverlay.classList.add("is-open");
+    const input = elements.autoTitleNoticeMode.parentElement?.querySelector(".combobox-input");
+    (input || elements.autoTitleNoticeContinue).focus({ preventScroll: true });
+  });
+  state.autoTitleNotice.promise = new Promise((resolve) => {
+    state.autoTitleNotice.resolve = resolve;
+  });
+  return state.autoTitleNotice.promise;
+}
+
+function closeAutoTitleNotice() {
+  elements.autoTitleNoticeOverlay.classList.remove("is-open");
+  window.setTimeout(() => { elements.autoTitleNoticeOverlay.hidden = true; }, 150);
+}
+
+function finishAutoTitleNotice(enabled) {
+  if (enabled) {
+    state.settings.autoTitleScheduleMode = normalizeAutoTitleScheduleMode(elements.autoTitleNoticeMode.value);
+    state.settings.autoTitleSchedule = normalizeAutoTitleSchedule(elements.autoTitleNoticeSchedule.value, elements.autoTitleNoticeSchedule);
+    state.settings.autoTitleRepeatMinutes = clampAutoTitleRepeatMinutes(
+      elements.autoTitleNoticeRepeatMinutes.value,
+      elements.autoTitleNoticeRepeatMinutes
+    );
+  } else {
+    state.settings.autoTitleSuggestions = false;
+  }
+  saveSettings();
+  syncCopilotTitleSettings();
+  rescheduleAllAutoTitles();
+  closeAutoTitleNotice();
+  const resolve = state.autoTitleNotice.resolve;
+  state.autoTitleNotice.resolve = null;
+  state.autoTitleNotice.promise = null;
+  resolve?.(enabled);
+}
+
+function bindAutoTitleNotice() {
+  elements.autoTitleNoticeMode.addEventListener("change", syncAutoTitleNoticeControls);
+  elements.autoTitleNoticeContinue.addEventListener("click", () => finishAutoTitleNotice(true));
+  elements.autoTitleNoticeDisable.addEventListener("click", () => finishAutoTitleNotice(false));
+  elements.autoTitleNoticeOverlay.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const focusable = [...elements.autoTitleNoticeOverlay.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter((element) => element.getClientRects().length > 0);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
 }
 
 function normalizeResumeAssistantSessions(value) {
@@ -4417,6 +4771,13 @@ function autoTitleDelayMs(step, schedule) {
   return ladder[index] * 60 * 1000;
 }
 
+function automaticTitleDelayMs(terminal) {
+  if (normalizeAutoTitleScheduleMode(state.settings.autoTitleScheduleMode) === "repeat") {
+    return clampAutoTitleRepeatMinutes(state.settings.autoTitleRepeatMinutes) * 60 * 1000;
+  }
+  return autoTitleDelayMs(terminal.autoTitleStep, parseAutoTitleSchedule(state.settings.autoTitleSchedule));
+}
+
 function cancelAutoTitle(terminal) {
   if (!terminal) return;
   window.clearTimeout(terminal.autoTitleTimer);
@@ -4426,18 +4787,19 @@ function cancelAutoTitle(terminal) {
 function scheduleAutoTitle(terminal) {
   cancelAutoTitle(terminal);
   if (!terminal || !state.settings.autoTitleSuggestions) return;
+  if (!terminal.hasTerminalInput) return;
   if (state.settings.aiTitleProvider === "none") return;
   if (autoTitleSuppressed(terminal)) return;
-  const schedule = parseAutoTitleSchedule(state.settings.autoTitleSchedule);
   terminal.autoTitleTimer = window.setTimeout(() => {
     terminal.autoTitleTimer = 0;
     runAutoTitle(terminal);
-  }, autoTitleDelayMs(terminal.autoTitleStep, schedule));
+  }, automaticTitleDelayMs(terminal));
 }
 
 async function runAutoTitle(terminal) {
   if (!terminal || state.terminals.get(terminal.id) !== terminal) return;
   if (!state.settings.autoTitleSuggestions || state.settings.aiTitleProvider === "none") return;
+  if (!terminal.hasTerminalInput) return;
   // A title-keyed pause can start matching between the timer being set and it
   // firing, so the rules are checked again here rather than only at schedule time.
   if (autoTitleSuppressed(terminal)) return;
@@ -4447,8 +4809,16 @@ async function runAutoTitle(terminal) {
   const producedOutput = terminal.outputRevision !== terminal.autoTitleRevision;
   const busy = Boolean(terminal.titleSuggestion) || terminal.titleGenerate.disabled;
   if (terminal.status === "live" && producedOutput && !busy) {
-    terminal.autoTitleRevision = terminal.outputRevision;
-    await generateTerminalTitle(terminal, { auto: true });
+    const enabled = await openAutoTitleNotice();
+    if (state.terminals.get(terminal.id) !== terminal) return;
+    const stillReady = terminal.status === "live"
+      && terminal.outputRevision !== terminal.autoTitleRevision
+      && !terminal.titleSuggestion
+      && !terminal.titleGenerate.disabled;
+    if (enabled && state.settings.autoTitleSuggestions && stillReady) {
+      terminal.autoTitleRevision = terminal.outputRevision;
+      await generateTerminalTitle(terminal, { auto: true });
+    }
   }
   scheduleAutoTitle(terminal);
 }
@@ -4888,11 +5258,19 @@ async function restoreAssistantSessions(rows) {
     const match = catalog
       .filter((session) => session?.id && sameHostDirectory(session.cwd || "", row.cwd))
       .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+    const copilotLogKey = row.provider === "copilot" ? match?.id || createAiSessionId() : "";
     const command = safeTerminalCommand(buildAiAssistantCommand({
       provider: row.provider,
-      resumeId: match?.id || ""
+      resumeId: match?.id || "",
+      sessionId: copilotLogKey,
+      logKey: copilotLogKey,
+      shell: cwdTerminalShell(terminal)
     }));
     if (!command || state.terminals.get(terminal.id) !== terminal) return;
+    if (copilotLogKey) {
+      claimAiSessionId(terminal, copilotLogKey);
+      registerCopilotLogTerminal(copilotLogKey, terminal);
+    }
     if (terminal.status === "live") {
       sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
     } else {
@@ -5180,10 +5558,14 @@ function scopedTitleSuggestionHistory() {
 function renderTitleSuggestionHistory() {
   const records = scopedTitleSuggestionHistory()
     .filter((record) => titleSuggestionHistoryMatches(record, elements.titleSuggestionHistoryFilter.value));
+  const visibleRecords = records.slice(0, state.titleSuggestionHistoryHub.visibleCount);
   elements.titleSuggestionHistoryList.textContent = "";
-  for (const record of records) elements.titleSuggestionHistoryList.append(titleSuggestionHistoryOption(record, null));
+  for (const record of visibleRecords) elements.titleSuggestionHistoryList.append(titleSuggestionHistoryOption(record, null));
   elements.titleSuggestionHistoryEmpty.hidden = records.length > 0;
-  elements.titleSuggestionHistorySummary.textContent = `${records.length} suggestion${records.length === 1 ? "" : "s"}`;
+  elements.titleSuggestionHistoryFooter.hidden = visibleRecords.length >= records.length;
+  elements.titleSuggestionHistorySummary.textContent = records.length > visibleRecords.length
+    ? `Showing ${visibleRecords.length} of ${records.length} suggestions`
+    : `${records.length} suggestion${records.length === 1 ? "" : "s"}`;
 }
 
 function openTitleSuggestionHistory(terminal = null) {
@@ -5202,6 +5584,7 @@ function openTitleSuggestionHistory(terminal = null) {
     ? `${terminal.titleInput.value || "Terminal"} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : "process starting"}`
     : "Suggestions retained across terminal names and process IDs.";
   elements.titleSuggestionHistoryFilter.value = "";
+  state.titleSuggestionHistoryHub.visibleCount = TITLE_SUGGESTION_HISTORY_PAGE_SIZE;
   renderTitleSuggestionHistory();
   elements.titleSuggestionHistoryOverlay.hidden = false;
   window.requestAnimationFrame(() => elements.titleSuggestionHistoryOverlay.classList.add("is-open"));
@@ -5213,6 +5596,7 @@ function closeTitleSuggestionHistory() {
   const returnFocus = state.titleSuggestionHistoryHub.returnFocus;
   state.titleSuggestionHistoryHub.returnFocus = null;
   state.titleSuggestionHistoryHub.scope = null;
+  state.titleSuggestionHistoryHub.visibleCount = TITLE_SUGGESTION_HISTORY_PAGE_SIZE;
   elements.titleSuggestionHistoryOverlay.classList.remove("is-open");
   window.setTimeout(() => {
     elements.titleSuggestionHistoryOverlay.hidden = true;
@@ -5245,7 +5629,14 @@ function titleSuggestionHistoryMenuItems(terminal) {
 
 function bindTitleSuggestionHistory() {
   elements.titleSuggestionHistoryClose.addEventListener("click", closeTitleSuggestionHistory);
-  elements.titleSuggestionHistoryFilter.addEventListener("input", renderTitleSuggestionHistory);
+  elements.titleSuggestionHistoryFilter.addEventListener("input", () => {
+    state.titleSuggestionHistoryHub.visibleCount = TITLE_SUGGESTION_HISTORY_PAGE_SIZE;
+    renderTitleSuggestionHistory();
+  });
+  elements.titleSuggestionHistoryMore.addEventListener("click", () => {
+    state.titleSuggestionHistoryHub.visibleCount += TITLE_SUGGESTION_HISTORY_PAGE_SIZE;
+    renderTitleSuggestionHistory();
+  });
   elements.titleSuggestionHistoryOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.titleSuggestionHistoryOverlay) closeTitleSuggestionHistory();
   });
@@ -7472,11 +7863,25 @@ function safeTerminalCommand(value) {
   return command;
 }
 
+function recordTerminalInput(message) {
+  if (message?.type !== "input" || typeof message.id !== "string") return;
+  const data = typeof message.data === "string" ? message.data : "";
+  if (!data || FOCUS_REPORT_SEQUENCE.test(data) || MOUSE_REPORT_SEQUENCE.test(data)) return;
+  const terminal = state.terminals.get(message.id);
+  if (!terminal || terminal.hasTerminalInput) return;
+  terminal.hasTerminalInput = true;
+  terminal.autoTitleStep = 0;
+  terminal.autoTitleRevision = terminal.outputRevision;
+  scheduleAutoTitle(terminal);
+  saveSessionSnapshot();
+}
+
 function sendBridge(message) {
   if (!state.socketReady || !state.socket || state.socket.readyState !== WebSocket.OPEN) return false;
 
   try {
     state.socket.send(JSON.stringify(message));
+    recordTerminalInput(message);
     return true;
   } catch {
     return false;
@@ -7488,31 +7893,104 @@ function sendBridge(message) {
 // and resolve to null when the bridge is unreachable or never replies.
 const pendingBridgeRequests = new Map();
 
-function requestBridge(message, { timeout = 300000 } = {}) {
+function requestBridge(message, { timeout = 300000, onProgress = null } = {}) {
   return new Promise((resolve) => {
     const requestId = createId();
-    const settle = (value) => {
+    const startedAt = performance.now();
+    const requestType = typeof message?.type === "string" ? message.type : "unknown";
+    const settle = (value, outcome = "response", detail = null) => {
       const pending = pendingBridgeRequests.get(requestId);
       if (!pending) return;
       pendingBridgeRequests.delete(requestId);
       window.clearTimeout(pending.timer);
+      const elapsedMs = Math.max(0, Math.round(performance.now() - startedAt));
+      const logDetail = {
+        requestId,
+        requestType,
+        outcome,
+        elapsedMs,
+        timeoutMs: timeout
+      };
+      if (detail && typeof detail === "object") Object.assign(logDetail, detail);
+      if (outcome === "response") log.debug("bridge-request", `Completed ${requestType}`, logDetail);
+      else log.warn("bridge-request", `Failed ${requestType}: ${outcome}`, logDetail);
       resolve(value);
     };
 
     pendingBridgeRequests.set(requestId, {
+      onProgress: typeof onProgress === "function" ? onProgress : null,
+      requestId,
       settle,
-      timer: window.setTimeout(() => settle(null), timeout),
-      type: message.type
+      startedAt,
+      timer: window.setTimeout(() => settle(null, "timeout"), timeout),
+      type: requestType
     });
-    if (!sendBridge({ ...message, requestId })) settle(null);
+    log.debug("bridge-request", `Started ${requestType}`, {
+      requestId,
+      requestType,
+      timeoutMs: timeout,
+      readyState: state.socket?.readyState,
+      socketReady: state.socketReady
+    });
+    if (!sendBridge({ ...message, requestId })) {
+      const connected = state.socketReady && state.socket?.readyState === WebSocket.OPEN;
+      settle(null, connected ? "send-error" : "disconnected");
+    }
   });
+}
+
+function notifyBridgeRequestProgress(message) {
+  const pending = message.requestId ? pendingBridgeRequests.get(message.requestId) : null;
+  if (!pending) {
+    if (message.requestId) {
+      log.warn("bridge-request", "Ignored unmatched operationProgress", {
+        operation: message.operation || "unknown",
+        phase: message.phase || "unknown",
+        requestId: message.requestId
+      });
+    }
+    return false;
+  }
+  log.debug("bridge-request", `Progress ${pending.type}: ${message.phase || "update"}`, {
+    elapsedMs: message.elapsedMs,
+    operation: message.operation || pending.type,
+    phase: message.phase || "update",
+    requestId: message.requestId,
+    requestType: pending.type
+  });
+  if (pending.onProgress) {
+    try {
+      pending.onProgress(message);
+    } catch (error) {
+      log.error("bridge-request", `Progress handler failed for ${pending.type}`, {
+        error: String(error),
+        requestId: message.requestId,
+        requestType: pending.type
+      });
+    }
+  }
+  return true;
+}
+
+function settlePendingBridgeRequests(outcome, detail = null) {
+  for (const pending of [...pendingBridgeRequests.values()]) {
+    pending.settle(null, outcome, detail);
+  }
 }
 
 // Returns true when the message answered a pending request, so the caller can
 // stop routing it.
 function resolveBridgeRequest(message, value) {
   const pending = message.requestId ? pendingBridgeRequests.get(message.requestId) : null;
-  if (!pending) return false;
+  if (!pending) {
+    if (message.requestId) {
+      log.warn("bridge-request", `Ignored unmatched ${message.type || "response"}`, {
+        requestId: message.requestId,
+        responseType: message.type || "unknown"
+      });
+    }
+    return false;
+  }
   pending.settle(value);
   return true;
 }
@@ -9149,7 +9627,7 @@ function appendLogRow(entry) {
   if (empty) empty.remove();
 
   out.append(buildLogRow(entry));
-  while (out.childElementCount > logStore.max) {
+  while (logStore.max > 0 && out.childElementCount > logStore.max) {
     out.firstElementChild.remove();
   }
   if (logStore.autoscroll) scrollLogToEnd();
@@ -9208,7 +9686,11 @@ function copyLogs() {
 }
 
 function ingestServerLog(message) {
-  logEvent(message.level, message.source || "server", message.message || "", null);
+  logEvent(message.level, message.source || "server", message.message || "", null, {
+    event: message.event,
+    time: message.time,
+    persist: false
+  });
 }
 
 /* ---------------- Per-pane actions --------------- */
@@ -10461,16 +10943,19 @@ function copilotSessionNoteEntries(session) {
   const inferred = [];
 
   const consider = (entry, live) => {
-    const text = String(entry?.notes || "").trim();
-    if (!text) return;
-    const row = {
-      text,
-      live,
-      title: entry.title || "Terminal",
-      updatedAt: entry.notesUpdatedAt || entry.recoveredAt || null
-    };
-    if (sessionId && String(entry.aiSessionId || "").toLowerCase() === sessionId) exact.push(row);
-    else if (!entry.aiSessionId && sameHostDirectory(entry.cwd, session?.cwd)) inferred.push(row);
+    const notes = live
+      ? artifactNotes(entry)
+      : normalizeArtifactNotes(entry?.notes, entry?.notesUpdatedAt, `recovered-${entry?.id || "note"}`);
+    for (const note of notes) {
+      const row = {
+        text: note.text,
+        live,
+        title: entry.title || "Terminal",
+        updatedAt: note.updatedAt || entry.recoveredAt || null
+      };
+      if (sessionId && String(entry.aiSessionId || "").toLowerCase() === sessionId) exact.push(row);
+      else if (!entry.aiSessionId && sameHostDirectory(entry.cwd, session?.cwd)) inferred.push(row);
+    }
   };
 
   for (const record of Object.values(state.terminalArtifacts.terminals)) consider(record, true);
@@ -11020,6 +11505,7 @@ function openCopilotSessionTerminal(session, command, cwd = session.cwd, provide
   // gets back on it.
   const terminal = state.terminals.get(state.activeId);
   if (terminal && aiSessionId) claimAiSessionId(terminal, aiSessionId);
+  if (terminal && provider === "copilot" && aiSessionId) registerCopilotLogTerminal(aiSessionId, terminal);
   return created;
 }
 
@@ -11051,13 +11537,14 @@ function connectToRemoteCopilotSession(session) {
     return false;
   }
   closeCopilotResume();
-  addTerminal({
+  const terminal = addTerminal({
     reveal: true,
     runStartup: true,
     shell: "pwsh",
     title: `Remote \u00b7 ${copilotSessionTitle(session)}`,
     pendingCommand: command
   });
+  registerCopilotLogTerminal(id, terminal);
   return true;
 }
 
@@ -11083,13 +11570,15 @@ function openCopilotRemotePicker() {
     return false;
   }
   closeCopilotResume();
-  addTerminal({
+  const logKey = createAiSessionId();
+  const terminal = addTerminal({
     reveal: true,
     runStartup: true,
     shell: "pwsh",
     title: "Copilot remote picker",
-    pendingCommand: "copilot --connect"
+    pendingCommand: buildAiAssistantCommand({ provider: "copilot", connectPicker: true, logKey })
   });
+  registerCopilotLogTerminal(logKey, terminal);
   return true;
 }
 
@@ -11153,14 +11642,27 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
     }
     const source = copilotSourceLabel(session.source);
     const prompt = `Continue the imported ${source} Copilot session. Read the context file at ${response.contextPath} first, continue from where it stopped, and ask what to do next if the final task is unclear.`;
+    const sessionId = createAiSessionId();
     closeCopilotResume();
-    openCopilotSessionTerminal(session, `copilot --yolo -i ${powerShellLiteral(prompt)}`, confirmedCwd);
+    openCopilotSessionTerminal(
+      session,
+      buildAiAssistantCommand({ provider: "copilot", sessionId, initialPrompt: prompt }),
+      confirmedCwd,
+      "copilot",
+      null,
+      sessionId
+    );
     return true;
   }
   closeCopilotResume();
   setAwaitingInput(terminal, false);
   claimAiSessionId(terminal, id);
-  sendBridge({ type: "input", id: terminal.id, data: `${buildAiAssistantCommand({ provider, resumeId: id })}\r` });
+  registerCopilotLogTerminal(id, terminal);
+  sendBridge({
+    type: "input",
+    id: terminal.id,
+    data: `${buildAiAssistantCommand({ provider, resumeId: id, shell: cwdTerminalShell(terminal) })}\r`
+  });
   window.requestAnimationFrame(() => terminal.term.focus());
   return true;
 }
@@ -11586,6 +12088,11 @@ function bindGlobalShortcuts() {
         event.preventDefault();
         declineAutomaticUpdateChecks();
       }
+      return;
+    }
+
+    if (elements.autoTitleNoticeOverlay && !elements.autoTitleNoticeOverlay.hidden) {
+      if (event.key === "Escape") event.preventDefault();
       return;
     }
 
@@ -13561,7 +14068,13 @@ async function createWorktreeAndRun() {
       branch: name,
       worktreePath,
       importPending: inspection.isDirty && elements.worktreeImportPending.checked
-    }, { timeout: 180000 });
+    }, {
+      timeout: 180000,
+      onProgress: (progress) => {
+        const message = String(progress?.message || "").trim();
+        if (message) setWorktreeStatus(message, "waiting");
+      }
+    });
     if (!created?.ok) {
       setWorktreeStatus(created?.reason || "The bridge did not create the worktree.", "error");
       updateWorktreeReadiness();
@@ -13580,6 +14093,7 @@ async function createWorktreeAndRun() {
     }
     const sessionId = state.settings.aiSessionProvider === "copilot" ? claimAiSessionId(terminal) : "";
     const command = `Set-Location -LiteralPath ${powerShellLiteral(worktreePath)}; ${buildAiAssistantCommand({ sessionId })}`;
+    if (sessionId) registerCopilotLogTerminal(sessionId, terminal);
     setAwaitingInput(terminal, false);
     sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
     window.requestAnimationFrame(() => terminal.term.focus());
@@ -13613,7 +14127,10 @@ async function createWorktreeAndRun() {
     return;
   }
 
-  if (worktreeSessionId) claimAiSessionId(terminal, worktreeSessionId);
+  if (worktreeSessionId) {
+    claimAiSessionId(terminal, worktreeSessionId);
+    registerCopilotLogTerminal(worktreeSessionId, terminal);
+  }
   setAwaitingInput(terminal, false);
   sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
   window.requestAnimationFrame(() => terminal.term.focus());
@@ -13737,7 +14254,13 @@ async function cancelWorktreeMerge() {
     type: "gitMergeFinish",
     sessionId: worktreeMerge.sessionId,
     abort: true
-  }, { timeout: 120000 });
+  }, {
+    timeout: 120000,
+    onProgress: (progress) => {
+      const message = String(progress?.message || "").trim();
+      if (message) setWorktreeMergeStatus(message, "waiting");
+    }
+  });
   if (!response?.ok) {
     setWorktreeMergeStatus(response?.reason || bridgeSilenceReason("abort the merge"), "error");
     setWorktreeMergeBusy(false);
@@ -13755,7 +14278,13 @@ async function finishWorktreeMergeFromDialog() {
     type: "gitMergeFinish",
     sessionId: worktreeMerge.sessionId,
     commitMessage: elements.worktreeMergeCommitMessage.value.trim()
-  }, { timeout: 120000 });
+  }, {
+    timeout: 120000,
+    onProgress: (progress) => {
+      const message = String(progress?.message || "").trim();
+      if (message) setWorktreeMergeStatus(message, "waiting");
+    }
+  });
   if (!response?.ok) {
     setWorktreeMergeStatus(response?.reason || bridgeSilenceReason("finish the merge"), "error");
     setWorktreeMergeDetails(response?.conflicts || []);
@@ -13798,7 +14327,13 @@ async function runWorktreeMerge() {
     parentBranch: worktreeMerge.worktree.parentBranch,
     worktreeBranch: worktreeMerge.worktree.branch,
     strategy: mode
-  }, { timeout: 120000 });
+  }, {
+    timeout: 120000,
+    onProgress: (progress) => {
+      const message = String(progress?.message || "").trim();
+      if (message) setWorktreeMergeStatus(message, "waiting");
+    }
+  });
   if (!response?.ok) {
     setWorktreeMergeStatus(response?.reason || bridgeSilenceReason("start the merge"), "error");
     setWorktreeMergeDetails(response?.changes || []);
@@ -14940,6 +15475,28 @@ function keyboardFocusedTerminal() {
   return [...state.terminals.values()].find((terminal) => (
     terminal.term.element?.contains(document.activeElement)
   )) || null;
+}
+
+function visibleFocusSurface() {
+  return [...document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"]')]
+    .some((element) => element.isConnected && !element.closest("[hidden]") && element.getClientRects().length > 0);
+}
+
+function recoverStrandedTerminalFocus(reason = "unknown") {
+  if (document.visibilityState !== "visible" || !document.hasFocus()) return false;
+  if (document.activeElement && document.activeElement !== document.body && document.activeElement !== document.documentElement) {
+    return false;
+  }
+  if (visibleFocusSurface()) return false;
+  const terminal = state.terminals.get(state.activeId);
+  if (!terminal || terminal.minimized || !isOnActivePage(terminal) || !terminal.pane?.isConnected) return false;
+  terminal.term.focus();
+  log.debug("focus", "Recovered stranded terminal focus", { id: terminal.id, reason });
+  return true;
+}
+
+function scheduleStrandedTerminalFocusRecovery(reason) {
+  window.requestAnimationFrame(() => recoverStrandedTerminalFocus(reason));
 }
 
 async function pasteAndExecute() {
@@ -16956,6 +17513,12 @@ function syncControlsFromSettings() {
   elements.headerActionDragScope.value = normalizeHeaderActionDragScope(state.settings.headerActionDragScope);
   elements.cursorStyle.value = state.settings.cursorStyle;
   elements.cursorBlink.checked = state.settings.cursorBlink;
+  elements.diagnosticRetentionDays.value = state.settings.diagnosticRetentionDays;
+  elements.diagnosticRotationMb.value = state.settings.diagnosticRotationMb;
+  elements.diagnosticViewerEntries.value = state.settings.diagnosticViewerEntries;
+  elements.copilotLogInitialTailKb.value = state.settings.copilotLogInitialTailKb;
+  elements.copilotLogViewerEnabled.checked = Boolean(state.settings.copilotLogViewerEnabled);
+  logStore.max = state.settings.diagnosticViewerEntries;
   elements.compactChrome.checked = state.settings.compactChrome;
   elements.syncInput.checked = state.settings.syncInput;
   elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
@@ -17735,6 +18298,7 @@ function saveSessionSnapshot() {
     headerActionOverrides: { ...terminal.headerActionOverrides },
     headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
     notificationOverrides: { ...terminal.notificationOverrides },
+    hasTerminalInput: terminal.hasTerminalInput,
     minimized: terminal.minimized,
     pageId: terminal.pageId,
     remoteEnabledAt: terminal.remoteEnabledAt,
@@ -17788,7 +18352,7 @@ const UNPARENTED_QUEUE_VALUE = "__unparented__";
 
 function emptyTerminalArtifacts() {
   return {
-    version: 1,
+    version: 2,
     terminals: {},
     recoveredNotes: [],
     unparentedQueue: []
@@ -17820,6 +18384,38 @@ function normalizeQueueItem(item, index, prefix) {
   };
 }
 
+function normalizeArtifactNotes(value, legacyUpdatedAt = null, prefix = "note") {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string" && value.trim()
+      ? [{ text: value, updatedAt: legacyUpdatedAt }]
+      : [];
+  return source.map((raw, index) => {
+    const text = typeof raw === "string" ? raw : typeof raw?.text === "string" ? raw.text : "";
+    if (!text.trim()) return null;
+    const updatedAt = typeof raw?.updatedAt === "string"
+      ? raw.updatedAt
+      : typeof legacyUpdatedAt === "string"
+        ? legacyUpdatedAt
+        : new Date().toISOString();
+    return {
+      id: typeof raw?.id === "string" && raw.id ? raw.id : `${prefix}-${index}-${Date.now()}`,
+      text,
+      createdAt: typeof raw?.createdAt === "string" ? raw.createdAt : updatedAt,
+      updatedAt
+    };
+  }).filter(Boolean);
+}
+
+function artifactNotes(record) {
+  if (!record) return [];
+  if (!Array.isArray(record.notes)) {
+    record.notes = normalizeArtifactNotes(record.notes, record.notesUpdatedAt, `note-${record.terminalId || "terminal"}`);
+    delete record.notesUpdatedAt;
+  }
+  return record.notes;
+}
+
 function loadTerminalArtifacts() {
   const empty = emptyTerminalArtifacts();
   try {
@@ -17836,8 +18432,7 @@ function loadTerminalArtifacts() {
         title: typeof raw.title === "string" ? raw.title : "Terminal",
         shell: typeof raw.shell === "string" ? raw.shell : "",
         cwd: typeof raw.cwd === "string" ? raw.cwd : "",
-        notes: typeof raw.notes === "string" ? raw.notes : "",
-        notesUpdatedAt: typeof raw.notesUpdatedAt === "string" ? raw.notesUpdatedAt : null,
+        notes: normalizeArtifactNotes(raw.notes, raw.notesUpdatedAt, `note-${id}`),
         aiSessionId: typeof raw.aiSessionId === "string" ? raw.aiSessionId : "",
         queue: (Array.isArray(raw.queue) ? raw.queue : [])
           .map((item, index) => normalizeQueueItem(item, index, `queue-${id}`))
@@ -17846,7 +18441,7 @@ function loadTerminalArtifacts() {
     }
 
     return {
-      version: 1,
+      version: 2,
       terminals,
       recoveredNotes: (Array.isArray(parsed.recoveredNotes) ? parsed.recoveredNotes : [])
         .filter((entry) => entry && typeof entry === "object" && typeof entry.notes === "string")
@@ -17888,13 +18483,13 @@ function ensureTerminalArtifact(terminal) {
   if (!record) {
     record = {
       ...terminalArtifactMetadata(terminal),
-      notes: "",
-      notesUpdatedAt: null,
+      notes: [],
       queue: []
     };
     state.terminalArtifacts.terminals[terminal.id] = record;
   } else {
     Object.assign(record, terminalArtifactMetadata(terminal));
+    artifactNotes(record);
   }
   return record;
 }
@@ -18003,13 +18598,14 @@ function archiveArtifactRecord(record, reason) {
   };
   let changed = false;
 
-  if (String(record.notes || "").trim()) {
-    state.terminalArtifacts.recoveredNotes.unshift({
-      id: createId(),
-      notes: record.notes,
-      notesUpdatedAt: record.notesUpdatedAt || recoveredAt,
+  const notes = artifactNotes(record);
+  if (notes.length > 0) {
+    state.terminalArtifacts.recoveredNotes.unshift(...notes.map((note) => ({
+      id: note.id || createId(),
+      notes: note.text,
+      notesUpdatedAt: note.updatedAt || recoveredAt,
       ...source
-    });
+    })));
     changed = true;
   }
 
@@ -18116,7 +18712,8 @@ function updateTerminalArtifactIndicators() {
     const record = state.terminalArtifacts.terminals[terminal.id];
     const queueCount = record?.queue.length || 0;
     const autoQueueCount = record?.queue.filter((item) => item.runWhenReady).length || 0;
-    const hasNotes = Boolean(record?.notes.trim());
+    const noteCount = artifactNotes(record).length;
+    const hasNotes = noteCount > 0;
     const button = terminal.pane.querySelector('[data-action="artifacts"]');
     const badge = button?.querySelector(".pane-artifacts-badge");
     const dequeueButton = terminal.pane.querySelector('[data-action="dequeue"]');
@@ -18127,7 +18724,7 @@ function updateTerminalArtifactIndicators() {
     badge.hidden = queueCount === 0;
     badge.textContent = queueCount > 9 ? "9+" : String(queueCount);
     button.classList.toggle("has-artifacts", hasNotes || queueCount > 0);
-    const label = `Terminal notes and command queue${queueCount ? `, ${queueCount} queued` : ""}${hasNotes ? ", notes saved" : ""}`;
+    const label = `Terminal notes and command queue${queueCount ? `, ${queueCount} queued` : ""}${hasNotes ? `, ${noteCount} note${noteCount === 1 ? "" : "s"} saved` : ""}`;
     button.title = label;
     button.setAttribute("aria-label", label);
     if (dequeueButton && dequeueBadge) {
@@ -18227,25 +18824,26 @@ function renderTerminalNotesFlyout() {
   }
 
   const record = state.terminalArtifacts.terminals[terminal.id];
-  const notes = String(record?.notes || "").trim();
+  const notes = artifactNotes(record);
   const title = terminal.titleInput.value || "Terminal";
   elements.terminalNotesFlyoutSubtitle.textContent = `${title} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : "process starting"}`;
   elements.terminalNotesFlyoutList.textContent = "";
-  elements.terminalNotesFlyoutEmpty.hidden = Boolean(notes);
+  elements.terminalNotesFlyoutEmpty.hidden = notes.length > 0;
 
-  if (notes) {
+  for (const note of notes) {
     const item = document.createElement("article");
     item.className = "terminal-notes-flyout-item";
+    item.dataset.noteId = note.id;
 
     const copy = document.createElement("div");
     copy.className = "terminal-notes-flyout-copy";
     const preview = document.createElement("p");
     preview.className = "terminal-notes-flyout-preview";
-    preview.textContent = notes;
-    const savedAt = artifactTimeLabel(record?.notesUpdatedAt);
-    const time = document.createElement(record?.notesUpdatedAt ? "time" : "span");
+    preview.textContent = note.text;
+    const savedAt = artifactTimeLabel(note.updatedAt);
+    const time = document.createElement(note.updatedAt ? "time" : "span");
     time.className = "terminal-notes-flyout-time";
-    if (record?.notesUpdatedAt) time.dateTime = record.notesUpdatedAt;
+    if (note.updatedAt) time.dateTime = note.updatedAt;
     time.textContent = savedAt ? `Saved ${savedAt}` : "Saved time unavailable";
     copy.append(preview, time);
 
@@ -18255,15 +18853,17 @@ function renderTerminalNotesFlyout() {
     edit.type = "button";
     edit.className = "icon-button";
     edit.dataset.notesFlyoutEdit = "";
+    edit.dataset.noteId = note.id;
     edit.title = "Edit note";
-    edit.setAttribute("aria-label", `Edit note for ${title}`);
+    edit.setAttribute("aria-label", `Edit note saved ${savedAt || "at an unknown time"}`);
     edit.innerHTML = '<i data-lucide="pencil"></i>';
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "icon-button terminal-notes-flyout-delete";
     remove.dataset.notesFlyoutDelete = "";
+    remove.dataset.noteId = note.id;
     remove.title = "Delete note";
-    remove.setAttribute("aria-label", `Delete note for ${title}`);
+    remove.setAttribute("aria-label", `Delete note saved ${savedAt || "at an unknown time"}`);
     remove.innerHTML = '<i data-lucide="trash-2"></i>';
     actions.append(edit, remove);
 
@@ -18305,6 +18905,10 @@ function openTerminalNotesFlyout(terminal, anchor) {
   }
   terminalNotesFlyoutId = terminal.id;
   terminalNotesFlyoutAnchor = anchor;
+  terminalNotesFlyoutEditingId = null;
+  elements.terminalNotesFlyoutComposer.hidden = true;
+  elements.terminalNotesFlyoutInput.value = "";
+  elements.terminalNotesFlyoutAdd.disabled = false;
   if (anchor.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "true");
   renderTerminalNotesFlyout();
   positionTerminalNotesFlyout(anchor);
@@ -18316,6 +18920,10 @@ function closeTerminalNotesFlyout({ restoreFocus = false } = {}) {
   elements.terminalNotesFlyout.hidden = true;
   terminalNotesFlyoutId = null;
   terminalNotesFlyoutAnchor = null;
+  terminalNotesFlyoutEditingId = null;
+  elements.terminalNotesFlyoutComposer.hidden = true;
+  elements.terminalNotesFlyoutInput.value = "";
+  elements.terminalNotesFlyoutAdd.disabled = false;
   if (anchor?.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "false");
   if (restoreFocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
 }
@@ -18329,28 +18937,95 @@ function toggleTerminalNotesFlyout(terminal, anchor) {
   openTerminalNotesFlyout(terminal, anchor);
 }
 
-function openTerminalNotesDetails({ focusNotes = false } = {}) {
+function openTerminalNotesDetails({ focusNotes = false, noteId = null, draftText = null } = {}) {
   const terminalId = terminalNotesFlyoutId;
   const returnFocus = terminalNotesFlyoutAnchor;
   if (!terminalId) return;
   closeTerminalNotesFlyout();
-  openTerminalArtifacts(terminalId);
+  openTerminalArtifacts(terminalId, { draftText, noteId });
   state.terminalArtifactsHub.returnFocus = returnFocus;
   if (focusNotes) {
     window.requestAnimationFrame(() => elements.terminalNotesInput.focus({ preventScroll: true }));
   }
 }
 
-function deleteTerminalFlyoutNote() {
+function showTerminalNotesFlyoutComposer(noteId = null) {
+  const terminal = state.terminals.get(terminalNotesFlyoutId);
+  if (!artifactTerminalIsAvailable(terminal)) return;
+  const note = artifactNotes(ensureTerminalArtifact(terminal)).find((item) => item.id === noteId) || null;
+  terminalNotesFlyoutEditingId = note?.id || null;
+  elements.terminalNotesFlyoutInput.value = note?.text || "";
+  elements.terminalNotesFlyoutComposer.hidden = false;
+  elements.terminalNotesFlyoutAdd.disabled = true;
+  positionTerminalNotesFlyout(terminalNotesFlyoutAnchor);
+  elements.terminalNotesFlyoutInput.focus({ preventScroll: true });
+  if (note) elements.terminalNotesFlyoutInput.select();
+}
+
+function hideTerminalNotesFlyoutComposer({ restoreFocus = true } = {}) {
+  terminalNotesFlyoutEditingId = null;
+  elements.terminalNotesFlyoutComposer.hidden = true;
+  elements.terminalNotesFlyoutInput.value = "";
+  elements.terminalNotesFlyoutAdd.disabled = false;
+  if (terminalNotesFlyoutAnchor?.isConnected) positionTerminalNotesFlyout(terminalNotesFlyoutAnchor);
+  if (restoreFocus) elements.terminalNotesFlyoutAdd.focus({ preventScroll: true });
+}
+
+function upsertArtifactNote(record, noteId, rawText) {
+  const text = String(rawText || "");
+  if (!text.trim()) return null;
+  const notes = artifactNotes(record);
+  const now = new Date().toISOString();
+  let note = notes.find((item) => item.id === noteId) || null;
+  if (note) {
+    note.text = text;
+    note.updatedAt = now;
+  } else {
+    note = { id: createId(), text, createdAt: now, updatedAt: now };
+    notes.unshift(note);
+  }
+  return note;
+}
+
+function saveTerminalNotesFlyoutComposer() {
+  const terminal = state.terminals.get(terminalNotesFlyoutId);
+  if (!artifactTerminalIsAvailable(terminal)) return null;
+  const note = upsertArtifactNote(
+    ensureTerminalArtifact(terminal),
+    terminalNotesFlyoutEditingId,
+    elements.terminalNotesFlyoutInput.value
+  );
+  if (!note) {
+    toast("Enter a note before saving.", "info", 1800);
+    elements.terminalNotesFlyoutInput.focus({ preventScroll: true });
+    return null;
+  }
+  hideTerminalNotesFlyoutComposer({ restoreFocus: false });
+  saveTerminalArtifacts();
+  renderTerminalNotesFlyout();
+  positionTerminalNotesFlyout(terminalNotesFlyoutAnchor);
+  elements.terminalNotesFlyout.querySelector(`[data-notes-flyout-edit][data-note-id="${note.id}"]`)?.focus({ preventScroll: true });
+  return note;
+}
+
+function expandTerminalNotesFlyoutComposer() {
+  const text = elements.terminalNotesFlyoutInput.value;
+  const note = text.trim() ? saveTerminalNotesFlyoutComposer() : null;
+  if (text.trim() && !note) return;
+  openTerminalNotesDetails({ focusNotes: true, noteId: note?.id || terminalNotesFlyoutEditingId, draftText: note ? null : text });
+}
+
+function deleteTerminalFlyoutNote(noteId) {
   const terminal = state.terminals.get(terminalNotesFlyoutId);
   if (!artifactTerminalIsAvailable(terminal)) {
     closeTerminalNotesFlyout();
     return;
   }
   const record = state.terminalArtifacts.terminals[terminal.id];
-  if (!record?.notes.trim()) return;
-  record.notes = "";
-  record.notesUpdatedAt = null;
+  const notes = artifactNotes(record);
+  const index = notes.findIndex((note) => note.id === noteId);
+  if (index < 0) return;
+  notes.splice(index, 1);
   saveTerminalArtifacts();
   renderTerminalNotesFlyout();
   elements.terminalNotesFlyoutAdd.focus({ preventScroll: true });
@@ -18359,13 +19034,31 @@ function deleteTerminalFlyoutNote() {
 
 function bindTerminalNotesFlyout() {
   elements.terminalNotesFlyout.addEventListener("click", (event) => {
-    if (event.target.closest("[data-notes-flyout-edit]")) {
-      openTerminalNotesDetails({ focusNotes: true });
+    const edit = event.target.closest("[data-notes-flyout-edit]");
+    if (edit) {
+      showTerminalNotesFlyoutComposer(edit.dataset.noteId);
       return;
     }
-    if (event.target.closest("[data-notes-flyout-delete]")) deleteTerminalFlyoutNote();
+    const remove = event.target.closest("[data-notes-flyout-delete]");
+    if (remove) deleteTerminalFlyoutNote(remove.dataset.noteId);
   });
-  elements.terminalNotesFlyoutAdd.addEventListener("click", () => openTerminalNotesDetails({ focusNotes: true }));
+  elements.terminalNotesFlyoutAdd.addEventListener("click", () => showTerminalNotesFlyoutComposer());
+  elements.terminalNotesFlyoutCancel.addEventListener("click", () => hideTerminalNotesFlyoutComposer());
+  elements.terminalNotesFlyoutExpand.addEventListener("click", expandTerminalNotesFlyoutComposer);
+  elements.terminalNotesFlyoutComposer.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveTerminalNotesFlyoutComposer();
+  });
+  elements.terminalNotesFlyoutInput.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      hideTerminalNotesFlyoutComposer();
+    } else if (event.key === "Enter" && event.ctrlKey && !event.isComposing) {
+      event.preventDefault();
+      elements.terminalNotesFlyoutComposer.requestSubmit();
+    }
+  });
   elements.terminalNotesFlyoutDetails.addEventListener("click", () => openTerminalNotesDetails());
   document.addEventListener("pointerdown", (event) => {
     if (elements.terminalNotesFlyout.hidden) return;
@@ -18471,6 +19164,58 @@ function renderRecoveredNotes() {
   }
 }
 
+function renderTerminalNoteList(record) {
+  const notes = artifactNotes(record);
+  elements.terminalNotesList.textContent = "";
+  elements.terminalNotesList.hidden = notes.length === 0;
+  for (const note of notes) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "terminal-note-list-item";
+    button.dataset.noteId = note.id;
+    button.setAttribute("role", "listitem");
+    button.setAttribute("aria-current", String(state.terminalArtifactsHub.selectedNoteId === note.id));
+
+    const preview = document.createElement("span");
+    preview.className = "terminal-note-list-preview";
+    preview.textContent = note.text.trim() || "Empty note";
+    const time = document.createElement("time");
+    time.className = "terminal-note-list-time";
+    time.dateTime = note.updatedAt;
+    time.textContent = artifactTimeLabel(note.updatedAt) || "Saved time unavailable";
+    button.append(preview, time);
+    elements.terminalNotesList.append(button);
+  }
+}
+
+function beginTerminalArtifactNote(draftText = "") {
+  state.terminalArtifactsHub.selectedNoteId = null;
+  state.terminalArtifactsHub.draftText = String(draftText || "");
+  renderTerminalArtifacts();
+  elements.terminalNotesInput.focus({ preventScroll: true });
+}
+
+function selectTerminalArtifactNote(noteId) {
+  state.terminalArtifactsHub.selectedNoteId = noteId;
+  state.terminalArtifactsHub.draftText = null;
+  renderTerminalArtifacts();
+  elements.terminalNotesInput.focus({ preventScroll: true });
+}
+
+function deleteSelectedTerminalArtifactNote() {
+  const terminal = state.terminals.get(elements.terminalArtifactsTarget.value);
+  if (!artifactTerminalIsAvailable(terminal)) return;
+  const notes = artifactNotes(ensureTerminalArtifact(terminal));
+  const index = notes.findIndex((note) => note.id === state.terminalArtifactsHub.selectedNoteId);
+  if (index < 0) return;
+  notes.splice(index, 1);
+  state.terminalArtifactsHub.selectedNoteId = notes[Math.min(index, notes.length - 1)]?.id || null;
+  state.terminalArtifactsHub.draftText = null;
+  saveTerminalArtifacts();
+  renderTerminalArtifacts();
+  toast("Note deleted", "info", 1600);
+}
+
 function renderTerminalArtifacts() {
   if (!elements.terminalArtifactsOverlay) return;
   const selected = elements.terminalArtifactsTarget.value;
@@ -18485,13 +19230,37 @@ function renderTerminalArtifacts() {
 
   if (liveTerminal) {
     const record = ensureTerminalArtifact(liveTerminal);
-    elements.terminalNotesInput.value = record.notes;
+    const notes = artifactNotes(record);
+    if (state.terminalArtifactsHub.noteTerminalId !== liveTerminal.id) {
+      state.terminalArtifactsHub.noteTerminalId = liveTerminal.id;
+      state.terminalArtifactsHub.selectedNoteId = notes.some((note) => note.id === state.terminalArtifactsHub.selectedNoteId)
+        ? state.terminalArtifactsHub.selectedNoteId
+        : notes[0]?.id || null;
+      if (!state.terminalArtifactsHub.selectedNoteId && state.terminalArtifactsHub.draftText == null) {
+        state.terminalArtifactsHub.draftText = "";
+      }
+    } else if (state.terminalArtifactsHub.selectedNoteId
+        && !notes.some((note) => note.id === state.terminalArtifactsHub.selectedNoteId)) {
+      state.terminalArtifactsHub.selectedNoteId = notes[0]?.id || null;
+    } else if (!state.terminalArtifactsHub.selectedNoteId
+        && state.terminalArtifactsHub.draftText == null
+        && notes.length > 0) {
+      state.terminalArtifactsHub.selectedNoteId = notes[0].id;
+    }
+    const selectedNote = notes.find((note) => note.id === state.terminalArtifactsHub.selectedNoteId) || null;
+    renderTerminalNoteList(record);
+    elements.terminalNotesInput.disabled = !selectedNote && state.terminalArtifactsHub.draftText == null;
+    elements.terminalNotesInput.value = state.terminalArtifactsHub.draftText ?? selectedNote?.text ?? "";
+    elements.terminalNotesDelete.disabled = !selectedNote;
     elements.terminalNotesIdentity.textContent = `${liveTerminal.titleInput.value || "Terminal"} \u00b7 ${liveTerminal.pid ? `PID ${liveTerminal.pid}` : "process starting"}`;
     elements.terminalArtifactsSubtitle.textContent = "Notes and queued commands stay with this terminal process.";
     elements.commandQueueHint.textContent = "Click a queued command to insert it into this terminal without pressing Enter.";
     elements.commandQueueInput.placeholder = "Stage a command or prompt for this terminal\u2026";
     queue = record.queue;
   } else {
+    state.terminalArtifactsHub.noteTerminalId = null;
+    state.terminalArtifactsHub.selectedNoteId = null;
+    state.terminalArtifactsHub.draftText = null;
     elements.terminalArtifactsSubtitle.textContent = "Commands from ended terminals stay usable in the unparented queue.";
     elements.commandQueueHint.textContent = "Choose a live target, then click a command to insert it without pressing Enter.";
     elements.commandQueueInput.placeholder = "Stage an unparented command or prompt\u2026";
@@ -18669,7 +19438,7 @@ function dequeueTerminalCommand(terminal, id) {
   });
 }
 
-function openTerminalArtifacts(terminalId = null) {
+function openTerminalArtifacts(terminalId = null, { draftText = null, noteId = null } = {}) {
   if (!elements.terminalArtifactsOverlay) return;
   closeTerminalNotesFlyout();
   closePalette();
@@ -18682,6 +19451,9 @@ function openTerminalArtifacts(terminalId = null) {
     : artifactTerminalIsAvailable(state.terminals.get(state.activeId))
       ? state.activeId
       : UNPARENTED_QUEUE_VALUE;
+  state.terminalArtifactsHub.noteTerminalId = preferred === UNPARENTED_QUEUE_VALUE ? null : preferred;
+  state.terminalArtifactsHub.selectedNoteId = noteId;
+  state.terminalArtifactsHub.draftText = typeof draftText === "string" ? draftText : null;
   refreshTerminalArtifactTargets(preferred);
   renderTerminalArtifacts();
   elements.terminalArtifactsOverlay.hidden = false;
@@ -18709,7 +19481,18 @@ function bindTerminalArtifactsHub() {
   elements.terminalArtifactsOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.terminalArtifactsOverlay) closeTerminalArtifacts();
   });
-  elements.terminalArtifactsTarget.addEventListener("change", renderTerminalArtifacts);
+  elements.terminalArtifactsTarget.addEventListener("change", () => {
+    state.terminalArtifactsHub.noteTerminalId = null;
+    state.terminalArtifactsHub.selectedNoteId = null;
+    state.terminalArtifactsHub.draftText = null;
+    renderTerminalArtifacts();
+  });
+  elements.terminalNotesAdd.addEventListener("click", () => beginTerminalArtifactNote());
+  elements.terminalNotesDelete.addEventListener("click", deleteSelectedTerminalArtifactNote);
+  elements.terminalNotesList.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-note-id]");
+    if (item) selectTerminalArtifactNote(item.dataset.noteId);
+  });
   elements.terminalNotesInput.addEventListener("input", () => {
     const terminal = state.terminals.get(elements.terminalArtifactsTarget.value);
     if (!artifactTerminalIsAvailable(terminal)) {
@@ -18718,15 +19501,31 @@ function bindTerminalArtifactsHub() {
       return;
     }
     const record = ensureTerminalArtifact(terminal);
-    record.notes = elements.terminalNotesInput.value;
-    record.notesUpdatedAt = new Date().toISOString();
-    elements.terminalNotesSaved.textContent = "Saved";
+    const notes = artifactNotes(record);
+    const value = elements.terminalNotesInput.value;
+    const now = new Date().toISOString();
+    let note = notes.find((item) => item.id === state.terminalArtifactsHub.selectedNoteId) || null;
+    if (note) {
+      note.text = value;
+      note.updatedAt = now;
+      state.terminalArtifactsHub.draftText = null;
+    } else {
+      state.terminalArtifactsHub.draftText = value;
+      if (value.trim()) {
+        note = upsertArtifactNote(record, null, value);
+        state.terminalArtifactsHub.selectedNoteId = note.id;
+        state.terminalArtifactsHub.draftText = null;
+      }
+    }
+    elements.terminalNotesDelete.disabled = !note;
+    renderTerminalNoteList(record);
+    elements.terminalNotesSaved.textContent = note ? "Saved" : "";
     window.clearTimeout(state.terminalArtifactsHub.savedTimer);
     state.terminalArtifactsHub.savedTimer = window.setTimeout(() => {
       elements.terminalNotesSaved.textContent = "";
       state.terminalArtifactsHub.savedTimer = 0;
     }, 1400);
-    saveTerminalArtifacts();
+    if (note) saveTerminalArtifacts();
   });
   elements.commandQueueAdd.addEventListener("click", addCommandQueueItem);
   elements.commandQueueInput.addEventListener("keydown", (event) => {
@@ -18867,6 +19666,7 @@ function selectedAutomationType() {
 
 function readAutomationActionRows() {
   return [...elements.automationActionList.querySelectorAll(".automation-action-row")].map((row) => {
+    const pageMode = row.querySelector(".automation-action-page-mode").value;
     const targetMode = row.querySelector(".automation-action-target-mode").value;
     return {
       command: row.querySelector(".automation-action-command").value,
@@ -18878,6 +19678,8 @@ function readAutomationActionRows() {
       fallbackToNew: row.querySelector(".automation-action-fallback input")?.checked !== false,
       id: row.dataset.actionId,
       inputType: row.querySelector(".automation-action-input-type")?.value || "shell",
+      pageMode,
+      pageName: pageMode === "existing" ? row.querySelector(".automation-action-page-name").value : "",
       submit: row.querySelector(".automation-action-delivery")?.value !== "stage",
       targetMode,
       targetName: targetMode === "title" ? row.querySelector(".automation-action-target-name").value : "",
@@ -18888,9 +19690,11 @@ function readAutomationActionRows() {
 
 function updateAutomationActionTarget(row) {
   const mode = row.querySelector(".automation-action-target-mode").value;
+  const pageMode = row.querySelector(".automation-action-page-mode").value;
   row.querySelector(".automation-action-target-name-field").hidden = mode !== "title";
   row.querySelector(".automation-action-target-pid-field").hidden = mode !== "pid";
   row.querySelector(".automation-action-fallback").hidden = mode === "new";
+  row.querySelector(".automation-action-page-name-field").hidden = pageMode !== "existing";
 }
 
 function renderAutomationActionRows(actions = null) {
@@ -19007,7 +19811,6 @@ function createAutomationActionRow(action = {}, index = elements.automationActio
   deliveryLabel.className = "automation-action-delivery-field";
   deliveryLabel.innerHTML = '<span>Delivery</span><select class="automation-action-delivery"><option value="run">Run when ready</option><option value="stage">Stage without Enter</option></select>';
   deliveryLabel.querySelector("select").value = action.submit === false ? "stage" : "run";
-  deliveryLabel.hidden = selectedAutomationType() === "copilot";
 
   const targetModeLabel = document.createElement("label");
   targetModeLabel.innerHTML = '<span>Destination</span><select class="automation-action-target-mode"><option value="title">Terminal title</option><option value="pid">Terminal PID</option><option value="new">New terminal</option></select>';
@@ -19045,6 +19848,23 @@ function createAutomationActionRow(action = {}, index = elements.automationActio
   fallback.innerHTML = '<input type="checkbox"><span>Send to new terminal if selected terminal cannot be located</span>';
   fallback.querySelector("input").checked = action.fallbackToNew !== false;
 
+  const pageModeLabel = document.createElement("label");
+  pageModeLabel.innerHTML = '<span>Page for new terminal</span><select class="automation-action-page-mode"><option value="current">Current page at run time</option><option value="existing">Existing page by title</option><option value="new">New page</option></select>';
+  const pageMode = pageModeLabel.querySelector("select");
+  pageMode.value = ["existing", "new"].includes(action.pageMode) ? action.pageMode : "current";
+
+  const pageNameLabel = document.createElement("label");
+  pageNameLabel.className = "automation-action-page-name-field";
+  const pageListId = `automation-pages-${row.dataset.actionId}`;
+  pageNameLabel.innerHTML = `<span>Page title</span><input class="automation-action-page-name" type="text" list="${pageListId}" autocomplete="off"><datalist id="${pageListId}"></datalist>`;
+  pageNameLabel.querySelector("input").value = action.pageName || pageName(state.activePageId) || "";
+  const pageList = pageNameLabel.querySelector("datalist");
+  for (const page of state.pages) {
+    const option = document.createElement("option");
+    option.value = page.name;
+    pageList.append(option);
+  }
+
   const cwdLabel = document.createElement("label");
   cwdLabel.className = "automation-action-cwd-field";
   const cwdCaption = document.createElement("span");
@@ -19074,7 +19894,7 @@ function createAutomationActionRow(action = {}, index = elements.automationActio
   cwdRow.append(cwd, browse);
   cwdLabel.append(cwdCaption, cwdRow);
 
-  body.append(commandLabel, inputTypeLabel, deliveryLabel, targetModeLabel, titleLabel, pidLabel, fallback, cwdLabel);
+  body.append(commandLabel, inputTypeLabel, deliveryLabel, targetModeLabel, titleLabel, pidLabel, fallback, pageModeLabel, pageNameLabel, cwdLabel);
 
   const gate = document.createElement("section");
   gate.className = "automation-step-gate";
@@ -19102,6 +19922,10 @@ function createAutomationActionRow(action = {}, index = elements.automationActio
   }
 
   targetMode.addEventListener("change", () => {
+    updateAutomationActionTarget(row);
+    updateAutomationPreview();
+  });
+  pageMode.addEventListener("change", () => {
     updateAutomationActionTarget(row);
     updateAutomationPreview();
   });
@@ -19150,6 +19974,7 @@ function readAutomationEditorRule(existing = null) {
     enabled: existing?.enabled === true,
     id: existing?.id || createId(),
     lastRunAt: existing?.lastRunAt || null,
+    machineState: elements.automationMachineState.value,
     name: elements.automationName.value,
     runAs: elements.automationRunAs.value,
     snoozedUntil: existing?.snoozedUntil || null,
@@ -19188,6 +20013,7 @@ function openAutomationEditor(id = null) {
     ? `Current user: ${state.hostUser}. Another Windows account will prompt for credentials when the workflow runs.`
     : "Defaults to the current user. Another Windows account will prompt for credentials when the workflow runs.";
   elements.automationCatchUp.checked = rule?.trigger.catchUp === "once";
+  elements.automationMachineState.value = rule?.machineState || "both";
   elements.automationTime.value = rule?.trigger.time || "09:00";
   const intervalMinutes = rule?.trigger.intervalMinutes || 60;
   const usesHours = intervalMinutes >= 60 && intervalMinutes % 60 === 0;
@@ -19523,6 +20349,7 @@ function bindAutomationStudio() {
       fallbackToNew: true,
       id: createId(),
       inputType: "shell",
+      pageMode: "current",
       submit: true,
       targetMode: "title",
       targetName: automationLiveTerminals()[0]?.titleInput.value || ""
@@ -19582,8 +20409,15 @@ function bindAutomationStudio() {
 }
 
 async function acquireAutomationRunner() {
-  const response = await requestBridge({ type: "automationLease", action: "acquire", ttlMs: 4000 }, { timeout: 3000 });
+  const response = await requestBridge({ type: "automationLease", action: "acquire", ttlMs: 10000 }, { timeout: 3000 });
   return response?.type === "automationLease" && response.acquired === true;
+}
+
+async function currentMachineLockState() {
+  const response = await requestBridge({ type: "machineLockState" }, { timeout: 9000 });
+  return response?.type === "machineLockState" && ["locked", "unlocked"].includes(response.state)
+    ? response.state
+    : "unknown";
 }
 
 async function claimAutomationOccurrence(ruleId, dueAt) {
@@ -19631,7 +20465,22 @@ function resolveAutomationActionTarget(action) {
     const resolution = resolveAutomationTerminal(action);
     if (resolution.terminal || !action.fallbackToNew) return resolution;
   }
-  const terminal = addTerminal({ cwd: action.cwd || undefined, runStartup: true });
+  let pageId = state.activePageId;
+  if (action.pageMode === "existing") {
+    const normalized = automationApi.terminalName(action.pageName);
+    const matches = state.pages.filter((page) => automationApi.terminalName(page.name) === normalized);
+    if (matches.length !== 1) {
+      return {
+        error: matches.length > 1
+          ? `More than one page is named ${action.pageName}`
+          : `No page is named ${action.pageName}`
+      };
+    }
+    pageId = matches[0].id;
+  } else if (action.pageMode === "new") {
+    pageId = addPage({ activate: false });
+  }
+  const terminal = addTerminal({ cwd: action.cwd || undefined, pageId, runStartup: true });
   return terminal ? { launched: true, terminal } : { error: "Could not open a new terminal" };
 }
 
@@ -19719,7 +20568,9 @@ function completeAutomationStep(run, action, succeeded, detail = "") {
 }
 
 function automationCopilotLaunchCommand(terminal, cwd = "") {
-  const launch = buildAiAssistantCommand({ provider: "copilot" });
+  const logKey = /^[a-z0-9-]{1,128}$/i.test(terminal?.id || "") ? terminal.id : createAiSessionId();
+  registerCopilotLogTerminal(logKey, terminal);
+  const launch = buildAiAssistantCommand({ provider: "copilot", logKey, shell: cwdTerminalShell(terminal) });
   if (!cwd) return launch;
   const separator = cwdTerminalShell(terminal) === "cmd" ? " & " : "; ";
   return `${buildCwdChangeCommand(terminal, cwd)}${separator}${launch}`;
@@ -19732,7 +20583,7 @@ function queueCopilotAutomationStep(run, action, resolution) {
   if (terminal.status === "starting") {
     terminal.pendingExternalAssistant = {
       command: launchCommand,
-      followup: action.command,
+      followup: action.submit ? action.command : "",
       provider: "copilot"
     };
     terminal.cwd = action.cwd || terminal.cwd;
@@ -19745,9 +20596,22 @@ function queueCopilotAutomationStep(run, action, resolution) {
     } else if (cwdCommand) {
       queueAutomaticTerminalCommand(terminal, cwdCommand, { occurrenceKey: `${run.id}:${action.id}:cwd` });
     }
-    queueAutomaticTerminalCommand(terminal, action.command, { occurrenceKey: `${run.id}:${action.id}:prompt` });
+    if (action.submit) {
+      queueAutomaticTerminalCommand(terminal, action.command, { occurrenceKey: `${run.id}:${action.id}:prompt` });
+    }
   }
-  completeAutomationStep(run, action, true, `Copilot prompt queued in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`);
+  if (!action.submit) {
+    queueAutomationStage(terminal, action.command, run.rule, {
+      occurrenceKey: `${run.id}:${action.id}:stage`,
+      requiredMode: "copilot"
+    });
+  }
+  completeAutomationStep(
+    run,
+    action,
+    true,
+    `Copilot prompt ${action.submit ? "queued" : "staged without Enter"} in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`
+  );
 }
 
 function queueAutomationWorkflowStep(run, action, resolution) {
@@ -19913,6 +20777,7 @@ function queueAutomationStage(terminal, command, rule, options = {}) {
     id: createId(),
     occurrenceKey,
     payload,
+    requiredMode: options.requiredMode === "copilot" ? "copilot" : "",
     targetId: terminal.id,
     title: rule.name
   });
@@ -19940,6 +20805,7 @@ async function tickAutomationSchedules(now = new Date()) {
     }
 
     let changed = false;
+    let machineState = "";
     const dueRules = [];
     const wokeAfterGap = nowMs - state.automationRuntime.lastTickAt > 5000;
     for (const rule of state.automations.rules) {
@@ -19952,14 +20818,23 @@ async function tickAutomationSchedules(now = new Date()) {
       }
       const due = automationDueAt(rule);
       if (!due || due.getTime() > nowMs) continue;
-      if (!await claimAutomationOccurrence(rule.id, due)) continue;
       const missedBeforeThisRenderer = due.getTime() < state.automationRuntime.lastTickAt;
       const shouldSkip = rule.trigger.catchUp !== "once" && (missedBeforeThisRenderer || (wokeAfterGap && due.getTime() < nowMs - 5000));
+      let skipDetail = shouldSkip ? "Missed occurrence skipped" : "";
+      if (!skipDetail && rule.machineState !== "both") {
+        if (!machineState) machineState = await currentMachineLockState();
+        if (machineState !== rule.machineState) {
+          skipDetail = machineState === "unknown"
+            ? "Workstation lock state unavailable; occurrence skipped"
+            : `Workstation is ${machineState}; automation requires ${rule.machineState}`;
+        }
+      }
+      if (!await claimAutomationOccurrence(rule.id, due)) continue;
       dueRules.push({
         id: rule.id,
         occurrenceAt: due.toISOString(),
         runAt: (shouldSkip || wokeAfterGap ? now : due).toISOString(),
-        skip: shouldSkip
+        skipDetail
       });
       changed = true;
     }
@@ -19969,7 +20844,7 @@ async function tickAutomationSchedules(now = new Date()) {
         if (!rule) continue;
         rule.lastRunAt = dueRule.runAt;
         rule.updatedAt = now.toISOString();
-        if (dueRule.skip) addAutomationHistory("skipped", rule.name, "Missed occurrence skipped", rule.id);
+        if (dueRule.skipDetail) addAutomationHistory("skipped", rule.name, dueRule.skipDetail, rule.id);
         else runAutomationRule(rule, { occurrenceAt: dueRule.occurrenceAt });
       }
       renderAutomationRuleList();
@@ -20151,6 +21026,10 @@ async function dispatchTerminalHandoff(terminal) {
   const scheduledStage = pendingAutomationStage(terminal);
   if (!message && !scheduledStage) return false;
   const readiness = terminalExecutionReadiness(terminal);
+  if (scheduledStage?.requiredMode && readiness.mode !== scheduledStage.requiredMode) {
+    scheduleTerminalHandoffDelivery(terminal, AUTO_QUEUE_SETTLE_MS);
+    return false;
+  }
   if (terminal.handoffRequiresAssistant && !["copilot", "claude"].includes(readiness.mode)) {
     scheduleTerminalHandoffDelivery(terminal, AUTO_QUEUE_SETTLE_MS);
     return false;
@@ -23139,11 +24018,42 @@ function claimAiSessionId(terminal, existingId = "") {
   return id;
 }
 
+function copilotLogDirectoryForShell(directory, shell) {
+  const value = String(directory || "");
+  if (shell !== "wsl") return value;
+  const match = /^([a-z]):[\\/](.*)$/i.exec(value);
+  return match ? `/mnt/${match[1].toLowerCase()}/${match[2].replace(/\\/g, "/")}` : "";
+}
+
+function quotedCopilotLogDirectory(directory, shell) {
+  const terminalPath = copilotLogDirectoryForShell(directory, shell);
+  if (!terminalPath) return "";
+  if (shell === "wsl") return quotePosixPath(terminalPath);
+  if (shell === "cmd") return `"${terminalPath.replace(/%/g, "^%").replace(/"/g, "\"\"")}"`;
+  return powerShellLiteral(terminalPath);
+}
+
+function registerCopilotLogTerminal(key, terminal) {
+  if (!state.settings.copilotLogViewerEnabled || !terminal || !/^[a-z0-9-]{1,128}$/i.test(String(key || ""))) return false;
+  terminal.copilotLogKeys ??= new Set();
+  terminal.copilotLogKeys.add(String(key));
+  return sendBridge({
+    type: "copilotLogRegister",
+    key,
+    terminalId: terminal.id,
+    terminalTitle: terminal.titleInput?.value || terminal.id
+  });
+}
+
 function buildAiAssistantCommand({
   provider = state.settings.aiSessionProvider,
   resumeId = "",
   connectId = "",
+  connectPicker = false,
   sessionId = "",
+  logKey = "",
+  shell = "pwsh",
+  initialPrompt = "",
   remote = provider === "copilot" && state.settings.copilotRemoteSessions,
   model = state.settings.aiSessionModel,
   effort = state.settings.aiSessionEffort,
@@ -23153,11 +24063,19 @@ function buildAiAssistantCommand({
   const parts = provider === "claude"
     ? ["claude", "--dangerously-skip-permissions"]
     : ["copilot", "--yolo"];
+  if (provider === "copilot" && state.settings.copilotLogViewerEnabled && state.copilotLogDirectory) {
+    const launchLogKey = /^[a-z0-9-]{1,128}$/i.test(logKey) ? logKey : connectId || resumeId || sessionId || createAiSessionId();
+    const logDirectory = `${state.copilotLogDirectory.replace(/[\\/]+$/, "")}\\${launchLogKey}`;
+    const quotedLogDirectory = quotedCopilotLogDirectory(logDirectory, shell);
+    if (quotedLogDirectory) parts.push("--log-dir", quotedLogDirectory);
+  }
   const connect = provider === "copilot" && COPILOT_RESUME_ID_PATTERN.test(connectId) ? connectId : "";
   // --connect and --resume compete for the session the CLI opens, so the
   // remote id always wins and the local one is dropped.
   if (connect) {
     parts.push(`--connect=${connect}`);
+  } else if (provider === "copilot" && connectPicker) {
+    parts.push("--connect");
   } else if (resumeId && COPILOT_RESUME_ID_PATTERN.test(resumeId)) {
     parts.push("--resume", quotedAiArgument(resumeId));
   } else if (provider === "copilot" && COPILOT_RESUME_ID_PATTERN.test(sessionId)) {
@@ -23174,6 +24092,7 @@ function buildAiAssistantCommand({
   if (provider === "copilot" && COPILOT_TITLE_CONTEXTS.has(context)) {
     parts.push("--context", context);
   }
+  if (provider === "copilot" && initialPrompt) parts.push("-i", powerShellLiteral(initialPrompt));
   return parts.filter(Boolean).join(" ");
 }
 
@@ -23266,11 +24185,12 @@ async function copyRemoteSessionLink(terminal) {
 function invokeAiAssistant(terminal) {
   const provider = state.settings.aiSessionProvider;
   const sessionId = provider === "copilot" ? claimAiSessionId(terminal) : "";
-  const command = buildAiAssistantCommand({ sessionId });
+  const command = buildAiAssistantCommand({ sessionId, shell: cwdTerminalShell(terminal) });
   if (!command || !aiAssistantAvailable()) {
     toast(`${aiAssistantName()} is not installed and signed in`, "error", 2800);
     return false;
   }
+  if (sessionId) registerCopilotLogTerminal(sessionId, terminal);
   setAwaitingInput(terminal, false);
   if (!sendBridge({ type: "input", id: terminal.id, data: command })) return false;
   sendBridge({ type: "input", id: terminal.id, data: "\r" });
@@ -25583,6 +26503,8 @@ function createComboboxOptionIcon(option) {
 
 function enhanceComboboxes() {
   const targets = [
+    elements.autoTitleScheduleMode,
+    elements.autoTitleNoticeMode,
     elements.aiSessionProvider,
     elements.aiSessionModel,
     elements.aiSessionEffort,

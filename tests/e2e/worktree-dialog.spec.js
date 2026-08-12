@@ -148,6 +148,35 @@ test.describe("Run in a worktree dialog", () => {
     }
   });
 
+  test("shows bridge progress while worktree creation is still pending", async ({ page }) => {
+    await open(page);
+    await page.locator("#worktreeFolderInput").fill("D:\\multiTerm");
+    await expect(page.locator("#worktreeCreate")).toBeEnabled();
+    await page.locator("#worktreeNameInput").fill("progress-probe");
+    await page.evaluate(() => {
+      window.__originalWorktreeRequestBridge = requestBridge;
+      requestBridge = async (message, options = {}) => {
+        if (message.type !== "gitWorktreeCreate") return window.__originalWorktreeRequestBridge(message, options);
+        options.onProgress?.({
+          type: "operationProgress",
+          operation: "gitWorktreeCreate",
+          phase: "snapshotting",
+          message: "Capturing pending parent changes..."
+        });
+        return new Promise((resolve) => { window.__finishWorktreeProgressProbe = resolve; });
+      };
+    });
+
+    await page.locator("#worktreeCreate").click();
+    await expect(page.locator("#worktreeStatus")).toHaveText("Capturing pending parent changes...");
+    await expect(page.locator("#worktreeStatus")).toHaveAttribute("data-tone", "waiting");
+    await page.evaluate(() => {
+      window.__finishWorktreeProgressProbe({ ok: false, reason: "Progress probe complete." });
+      requestBridge = window.__originalWorktreeRequestBridge;
+    });
+    await expect(page.locator("#worktreeCreate")).toBeEnabled();
+  });
+
   test("rejects a worktree name that is not a usable folder", async ({ page }) => {
     await open(page);
     await page.locator("#worktreeFolderInput").fill("D:\\multiTerm");

@@ -13,7 +13,7 @@
 
   const DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
   const HANDOFF_MARKER = /^\s*\*\*HAND OFF\*\*(?:\s+(.+?))?\s*$/i;
-  const COPILOT_FOOTER = /^\s*\/\s*commands\s*[·•]\s*\?\s*help\b/i;
+  const COPILOT_FOOTER = /(?:^\s*|[·•]\s*)\/\s*commands\s*[·•]\s*\?\s*help\b/i;
   const MAX_COMMAND_LENGTH = 8192;
 
   function text(value, limit = 8192) {
@@ -63,6 +63,7 @@
     const source = value && typeof value === "object" ? value : {};
     const command = typeof source.command === "string" ? source.command.trim() : "";
     if (!command || command.length > MAX_COMMAND_LENGTH) return null;
+    const pageMode = ["existing", "new"].includes(source.pageMode) ? source.pageMode : "current";
     const targetMode = source.targetMode === "new"
       ? "new"
       : source.targetMode === "pid"
@@ -83,6 +84,8 @@
       fallbackToNew: targetMode === "new" ? false : source.fallbackToNew !== false,
       id: identifier(source.id) || `action-${index + 1}`,
       inputType: ["powershell", "script"].includes(source.inputType) ? source.inputType : "shell",
+      pageMode,
+      pageName: pageMode === "existing" ? text(source.pageName, 160) : "",
       submit: source.submit !== false,
       targetMode,
       targetName: targetMode === "title" ? text(source.targetName, 160) : "",
@@ -105,6 +108,7 @@
       enabled: value.enabled === true,
       id: identifier(value.id) || `automation-${index + 1}`,
       lastRunAt: text(value.lastRunAt, 64) || null,
+      machineState: ["locked", "unlocked"].includes(value.machineState) ? value.machineState : "both",
       name: text(value.name, 160) || `Automation ${index + 1}`,
       runAs: text(value.runAs, 320),
       snoozedUntil: text(value.snoozedUntil, 64) || null,
@@ -140,6 +144,7 @@
       id: identifier(value.id) || `stage-${index + 1}`,
       occurrenceKey: text(value.occurrenceKey, 320),
       payload,
+      requiredMode: value.requiredMode === "copilot" ? "copilot" : "",
       targetId,
       title: text(value.title, 160) || "Automation"
     };

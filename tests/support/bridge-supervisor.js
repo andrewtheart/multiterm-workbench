@@ -47,6 +47,7 @@ const path = require("node:path");
 const serverPath = path.join(__dirname, "..", "..", "server.js");
 const cwd = path.join(__dirname, "..", "..");
 const preferencesPath = path.join(os.tmpdir(), `multiterm-playwright-preferences-${process.pid}.json`);
+const diagnosticsPath = path.join(os.tmpdir(), `multiterm-playwright-diagnostics-${process.pid}`);
 
 let child = null;
 let shuttingDown = false;
@@ -62,7 +63,11 @@ function spawnBridge() {
   const startedAt = Date.now();
   child = childProcess.spawn(process.execPath, [serverPath], {
     cwd,
-    env: { ...process.env, MULTITERM_PREFERENCES_PATH: preferencesPath },
+    env: {
+      ...process.env,
+      MULTITERM_DIAGNOSTICS_DIR: diagnosticsPath,
+      MULTITERM_PREFERENCES_PATH: preferencesPath
+    },
     stdio: ["ignore", "inherit", "inherit"]
   });
 
@@ -110,6 +115,7 @@ process.on("SIGTERM", shutdown);
 process.on("exit", () => {
   if (child && !child.killed) child.kill();
   try { fs.rmSync(preferencesPath, { force: true }); } catch { }
+  try { fs.rmSync(diagnosticsPath, { force: true, recursive: true }); } catch { }
 });
 
 spawnBridge();

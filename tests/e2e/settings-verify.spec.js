@@ -197,14 +197,13 @@ test.describe("Settings panel verification", () => {
 
     await set("#outputCoalesceMs", "24", "change");
     expect(await setting("outputCoalesceMs")).toBe(24);
-    expect(sent).toContainEqual({ type: "config", outputCoalesceMs: 24 });
+    expect(sent).toContainEqual(expect.objectContaining({ type: "config", outputCoalesceMs: 24 }));
 
     await set("#outputCoalesceMs", "9999", "change");
     expect(await setting("outputCoalesceMs")).toBe(100);
     expect(await page.locator("#outputCoalesceMs").inputValue()).toBe("100");
 
     await set("#outputCoalesceMs", "8", "change");
-    await page.evaluate(() => window.__restoreSendBridge());
 
     // Backlog ceiling: reaches state and changes the byte limit the flush path
     // actually compares against.
@@ -219,6 +218,39 @@ test.describe("Settings panel verification", () => {
     await set("#outputBacklogKb", "1024", "change");
     expect(await page.evaluate(() => outputBacklogLimitBytes())).toBe(1024 * 1024);
 
+    await set("#diagnosticRetentionDays", "30", "change");
+    await set("#diagnosticRotationMb", "20", "change");
+    await set("#diagnosticViewerEntries", "7500", "change");
+    await set("#copilotLogViewerEnabled", true, "change");
+    await set("#copilotLogInitialTailKb", "512", "change");
+    expect(await setting("diagnosticRetentionDays")).toBe(30);
+    expect(await setting("diagnosticRotationMb")).toBe(20);
+    expect(await setting("diagnosticViewerEntries")).toBe(7500);
+    expect(await setting("copilotLogViewerEnabled")).toBe(true);
+    expect(await setting("copilotLogInitialTailKb")).toBe(512);
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "config",
+      diagnosticRetentionDays: 30,
+      diagnosticRotationMb: 20,
+      diagnosticViewerEntries: 7500,
+      copilotLogViewerEnabled: true,
+      copilotLogInitialTailKb: 512
+    }));
+
+    await set("#diagnosticRetentionDays", "-1", "change");
+    await set("#diagnosticRotationMb", "not-a-number", "change");
+    await set("#diagnosticViewerEntries", "0", "change");
+    await set("#copilotLogInitialTailKb", "0", "change");
+    expect(await setting("diagnosticRetentionDays")).toBe(14);
+    expect(await setting("diagnosticRotationMb")).toBe(10);
+    expect(await setting("diagnosticViewerEntries")).toBe(0);
+    expect(await setting("copilotLogInitialTailKb")).toBe(0);
+    expect(await page.locator("#diagnosticRetentionDays").inputValue()).toBe("14");
+    expect(await page.locator("#diagnosticRotationMb").inputValue()).toBe("10");
+    expect(await page.locator("#diagnosticViewerEntries").inputValue()).toBe("0");
+    expect(await page.locator("#copilotLogInitialTailKb").inputValue()).toBe("0");
+    await page.evaluate(() => window.__restoreSendBridge());
+
     await set("#maxInstallerSizeMb", "512", "change");
     expect(await setting("maxInstallerSizeMb")).toBe(512);
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).maxInstallerSizeMb)).toBe(512);
@@ -229,8 +261,14 @@ test.describe("Settings panel verification", () => {
   });
 
   test("AI title settings", async () => {
+    await openSettingsGroup("ai-assistants");
     const originalHistory = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
     const originalHistoryLimit = await setting("titleSuggestionHistoryLimit");
+    const originalTiming = await page.evaluate(() => ({
+      mode: state.settings.autoTitleScheduleMode,
+      repeat: state.settings.autoTitleRepeatMinutes,
+      schedule: state.settings.autoTitleSchedule
+    }));
     await page.evaluate(() => {
       state.aiProviders = [
         {
@@ -254,6 +292,18 @@ test.describe("Settings panel verification", () => {
     await set("#copilotTitleContextKb", "20", "change");
     await set("#copilotTitleMinWords", "5", "change");
     await set("#copilotTitleMaxWords", "10", "change");
+    await set("#autoTitleScheduleMode", "repeat", "change");
+    await expect(page.locator("#autoTitleScheduleRow")).toBeHidden();
+    await expect(page.locator("#autoTitleRepeatRow")).toBeVisible();
+    await set("#autoTitleRepeatMinutes", "11", "change");
+    expect(await setting("autoTitleRepeatMinutes")).toBe(11);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")))).toMatchObject({
+      autoTitleRepeatMinutes: 11,
+      autoTitleScheduleMode: "repeat"
+    });
+    await set("#autoTitleScheduleMode", "progressive", "change");
+    await expect(page.locator("#autoTitleScheduleRow")).toBeVisible();
+    await expect(page.locator("#autoTitleRepeatRow")).toBeHidden();
 
     await page.evaluate(() => {
       state.titleSuggestionHistory = Array.from({ length: 60 }, (_, index) => ({
@@ -341,14 +391,18 @@ test.describe("Settings panel verification", () => {
       "Extended - 128K tokens"
     ]);
     await expect(page.locator("#aiTitleProviderStatus")).toContainText("2 models");
-    await page.evaluate(({ history, limit }) => {
+    await page.evaluate(({ history, limit, timing }) => {
       state.settings.titleSuggestionHistoryLimit = limit;
+      state.settings.autoTitleScheduleMode = timing.mode;
+      state.settings.autoTitleRepeatMinutes = timing.repeat;
+      state.settings.autoTitleSchedule = timing.schedule;
       elements.titleSuggestionHistoryLimit.value = limit;
       if (history == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
       else localStorage.setItem("multiterm.titleSuggestionHistory", history);
       state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      syncCopilotTitleSettings();
       saveSettings();
-    }, { history: originalHistory, limit: originalHistoryLimit });
+    }, { history: originalHistory, limit: originalHistoryLimit, timing: originalTiming });
   });
 
   // Providers return one flat list mixing vendors, so the picker groups it by

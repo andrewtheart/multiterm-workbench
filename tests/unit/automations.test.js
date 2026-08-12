@@ -23,14 +23,22 @@ describe("automations model", () => {
     expect(automations.normalizeAction({
       command: "npm test",
       id: "action-newterm1",
+      pageMode: "new",
       targetMode: "new",
       targetName: "Old terminal"
-    })).toMatchObject({ targetMode: "new", targetName: "" });
+    })).toMatchObject({ pageMode: "new", pageName: "", targetMode: "new", targetName: "" });
     expect(automations.normalizeAction({
       command: "npm test",
       id: "action-legacy1",
       targetName: "Tests"
-    })).toMatchObject({ targetMode: "title", targetName: "Tests" });
+    })).toMatchObject({ pageMode: "current", pageName: "", targetMode: "title", targetName: "Tests" });
+    expect(automations.normalizeAction({
+      command: "npm test",
+      id: "action-page-name1",
+      pageMode: "existing",
+      pageName: "  Build output  ",
+      targetMode: "new"
+    })).toMatchObject({ pageMode: "existing", pageName: "Build output" });
   });
 
   it("normalizes PID targeting, default fallback, CWD, account, and conditional chains", () => {
@@ -77,6 +85,7 @@ describe("automations model", () => {
 
   it("preserves Copilot automation type and repairs unsafe conditional references", () => {
     const normalized = automations.normalizeRule(rule({
+      machineState: "locked",
       type: "copilot",
       actions: [
         { command: "Review the build", id: "action-prompt123", targetName: "Copilot" },
@@ -84,8 +93,9 @@ describe("automations model", () => {
       ]
     }));
 
-    expect(normalized.type).toBe("copilot");
+    expect(normalized).toMatchObject({ machineState: "locked", type: "copilot" });
     expect(normalized.actions[1].dependsOn).toEqual(["action-prompt123"]);
+    expect(automations.normalizeRule(rule({ machineState: "unknown" })).machineState).toBe("both");
   });
 
   it("normalizes rules and keeps malformed persisted rules disabled or discarded", () => {
@@ -134,6 +144,7 @@ describe("automations model", () => {
           id: "stage-valid1",
           occurrenceKey: "automation-stage1:2026-08-04T10:00:00.000Z:0",
           payload: "git status",
+          requiredMode: "copilot",
           targetId: "target-session1",
           title: "Stage status"
         },
@@ -146,6 +157,7 @@ describe("automations model", () => {
     expect(store.pendingStages[0]).toMatchObject({
       id: "stage-valid1",
       payload: "git status",
+      requiredMode: "copilot",
       targetId: "target-session1"
     });
   });
@@ -181,7 +193,7 @@ describe("automations model", () => {
       { row: 110, text: "**HAND OFF** Tests and checks" },
       { row: 111, text: "Run the focused tests." },
       { row: 112, text: "Include changed file names." },
-      { row: 113, text: "/ commands · ? help" }
+      { row: 113, text: "← open sidebar · / commands · ? help" }
     ];
 
     expect(automations.extractLatestHandoff(rows, 101)).toEqual({
