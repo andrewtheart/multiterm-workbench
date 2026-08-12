@@ -19,7 +19,7 @@
 // Page groups are a second level above pages: a named band of page tabs in the
 // pager. These tests pin down that membership lives on the page, that a group
 // always draws as one contiguous band, that collapsing can never hide the page
-// you are on, and that an emptied group stops existing.
+// you are on, and that explicitly empty drop-target groups remain available.
 
 const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
@@ -91,6 +91,88 @@ test.describe("Page groups", () => {
     await page.evaluate(() => assignPagesToGroup(["page-1", "page-3"], null));
     await expect(page.locator(".pager-group")).toHaveCount(0);
     expect(await page.evaluate(() => state.pageGroups)).toEqual([]);
+  });
+
+  test("creates an empty drop-target group from blank space in every pager position", async () => {
+    for (const placement of ["top", "bottom", "left", "right"]) {
+      await page.evaluate((nextPlacement) => {
+        state.settings.pagerPlacement = nextPlacement;
+        applyPagerPlacement();
+        elements.pagerList.dispatchEvent(new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 40
+        }));
+      }, placement);
+      await expect(page.getByRole("menuitem", { name: "Create new group", exact: true })).toBeVisible();
+      await page.evaluate(() => hideContextMenu());
+    }
+
+    await page.evaluate(() => {
+      state.settings.pagerPlacement = "top";
+      applyPagerPlacement();
+      elements.pagerList.dispatchEvent(new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 40,
+        clientY: 40
+      }));
+    });
+    await page.getByRole("menuitem", { name: "Create new group", exact: true }).click();
+    const rename = page.locator(".pager-group-rename");
+    await expect(rename).toBeVisible();
+    await rename.fill("Drop zone");
+    await rename.press("Enter");
+    await expect(page.locator(".pager-group.is-empty .pager-group-empty")).toHaveText("Drop pages here");
+    expect(await page.evaluate(() => state.pageGroups[0])).toMatchObject({ name: "Drop zone", keepEmpty: true });
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator(".pager-group.is-empty .pager-group-empty")).toHaveText("Drop pages here");
+    const groupId = await page.evaluate(() => state.pageGroups[0].id);
+
+    await page.evaluate((targetGroupId) => {
+      const source = document.querySelector('[data-page-id="page-2"]');
+      const zone = document.querySelector(`[data-group-id="${CSS.escape(targetGroupId)}"] .pager-group-chips`);
+      const sourceRect = source.getBoundingClientRect();
+      const zoneRect = zone.getBoundingClientRect();
+      const start = { x: sourceRect.right - 4, y: sourceRect.top + sourceRect.height / 2 };
+      const end = { x: zoneRect.left + zoneRect.width / 2, y: zoneRect.top + zoneRect.height / 2 };
+      const transfer = new DataTransfer();
+      const dispatch = (target, type, point) => target.dispatchEvent(new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX: point.x,
+        clientY: point.y,
+        dataTransfer: transfer
+      }));
+
+      dispatch(source, "dragstart", start);
+      for (let step = 1; step <= 15; step += 1) {
+        const point = {
+          x: start.x + ((end.x - start.x) * step / 15),
+          y: start.y + ((end.y - start.y) * step / 15)
+        };
+        dispatch(document.elementFromPoint(point.x, point.y), "dragover", point);
+      }
+      dispatch(document.elementFromPoint(end.x, end.y), "drop", end);
+      dispatch(source, "dragend", end);
+    }, groupId);
+    expect(await page.evaluate(() => pageById("page-2").groupId)).toBe(groupId);
+
+    const transfer = await page.evaluateHandle(() => new DataTransfer());
+    const groupedBeta = page.locator('[data-page-id="page-2"]');
+    await groupedBeta.dispatchEvent("dragstart", { dataTransfer: transfer });
+    await page.locator("#pagerList").dispatchEvent("dragover", { dataTransfer: transfer });
+    await page.locator("#pagerList").dispatchEvent("drop", { dataTransfer: transfer });
+    await groupedBeta.dispatchEvent("dragend", { dataTransfer: transfer });
+    expect(await page.evaluate(() => pageById("page-2").groupId)).toBeNull();
+    await expect(page.locator(".pager-group.is-empty .pager-group-empty")).toHaveText("Drop pages here");
+
+    await page.locator(".pager-group-header").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Delete group", exact: true }).click();
+    await expect(page.locator(".pager-group")).toHaveCount(0);
   });
 
   test("keeps the active page visible when its group is collapsed", async () => {
@@ -190,6 +272,8 @@ test.describe("Page groups", () => {
           { id: "group-1", name: "", collapsed: true },
           { id: "group-1", name: "Duplicate" },
           { id: "orphan", name: "Orphan" },
+          { id: "empty", name: "Inbox", keepEmpty: true },
+          { id: "", name: "Invalid empty", keepEmpty: true },
           null
         ]
       }));
@@ -252,8 +336,13 @@ test.describe("Page groups", () => {
       { id: "page-1", name: "Page", groupId: "group-1" },
       { id: "page-2", name: "Two", groupId: null }
     ]);
-    expect(result.loadedGroups).toEqual([{ id: "group-1", name: "Group", collapsed: true }]);
-    expect(result.groupsWithoutPages).toEqual([]);
+    expect(result.loadedGroups).toEqual([
+      { id: "group-1", name: "Group", collapsed: true },
+      { id: "empty", name: "Inbox", collapsed: false, keepEmpty: true }
+    ]);
+    expect(result.groupsWithoutPages).toEqual([
+      { id: "empty", name: "Inbox", collapsed: false, keepEmpty: true }
+    ]);
     expect(result.brokenPages).toEqual([{ id: "page-1", name: "Page 1", groupId: null }]);
     expect(result.brokenGroups).toEqual([]);
     expect(result).toMatchObject({

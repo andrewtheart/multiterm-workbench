@@ -118,6 +118,11 @@ test.describe("Settings panel verification", () => {
     expect(await setting("layout")).toBe("columns");
     expect(await page.evaluate(() => document.querySelector("#terminalHost").dataset.layout)).toBe("columns");
 
+    await set("#sidecarWidth", "420", "input");
+    expect(await setting("sidecarWidth")).toBe(420);
+    expect(await page.evaluate(() => document.documentElement.style.getPropertyValue("--sidecar-width"))).toBe("420px");
+    await expect(page.locator("#sidecarWidthValue")).toHaveText("420px");
+
     await set("#minWidth", "500", "input");
     expect(await setting("minWidth")).toBe(500);
     expect(await hostVar("--min-pane-width")).toBe("500px");

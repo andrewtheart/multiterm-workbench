@@ -239,6 +239,12 @@
             </label>
 
             <label class="control-row range-row">
+              <span>Settings panel width</span>
+              <input id="sidecarWidth" type="range" min="240" max="720" step="10">
+              <output id="sidecarWidthValue"></output>
+            </label>
+
+            <label class="control-row range-row">
               <span>Workspace zoom</span>
               <input id="workspaceZoom" type="range" min="25" max="200" step="5" title="Workspace zoom&#10;Ctrl+mouse wheel or trackpad pinch&#10;Keyboard: focus the slider, then use Arrow keys; Home jumps to 25%, End to 200%">
               <output id="workspaceZoomValue"></output>
@@ -729,6 +735,7 @@
             </button>
           </div>
         </aside>
+        <div id="settingsResizeHandle" class="settings-resize-handle" role="separator" aria-label="Resize settings panel" aria-orientation="vertical" aria-valuemin="240" aria-valuemax="720" aria-valuenow="300" tabindex="0" title="Drag to resize the settings panel. Use Left/Right arrows for 10px steps, Shift for 50px, Home/End for limits, or double-click to reset."></div>
 
         <main class="stage" aria-label="Terminal workbench" tabindex="-1">
           <div id="findAllBar" class="find-all-bar" hidden role="search" aria-label="Find in all terminals">
@@ -2465,14 +2472,16 @@
         </div>
       </div>
       <div id="headerBackgroundFlyoutSwatches" class="header-background-flyout-swatches" role="group" aria-label="Header background colors"></div>
-      <div id="headerBackgroundFlyoutCustomRow" class="header-background-flyout-custom-row" hidden>
+      <div id="headerBackgroundFlyoutCustomRow" class="header-background-flyout-custom-row">
         <span class="header-background-flyout-custom-label">Your colors</span>
-        <div id="headerBackgroundFlyoutCustomSwatches" class="header-background-flyout-swatches" role="group" aria-label="Saved custom header background colors"></div>
+        <div class="header-background-flyout-custom-controls">
+          <div id="headerBackgroundFlyoutCustomSwatches" class="header-background-flyout-swatches" role="group" aria-label="Saved custom header background colors"></div>
+          <button id="headerBackgroundFlyoutAddColor" type="button" class="icon-button header-background-flyout-add-color" title="Add custom color" aria-label="Add custom header background color">
+            <i data-lucide="plus"></i>
+          </button>
+          <input id="headerBackgroundFlyoutColor" class="visually-hidden" type="color" value="#5B8DEF" aria-label="Choose custom header background color" tabindex="-1">
+        </div>
       </div>
-      <label class="header-background-flyout-custom">
-        <input id="headerBackgroundFlyoutColor" type="color" value="#4FD1B0" aria-label="Custom header background color">
-        <span>Custom color</span>
-      </label>
       <footer class="header-background-flyout-footer">
         <button id="headerBackgroundFlyoutReset" type="button" class="secondary-action">
           <i data-lucide="rotate-ccw"></i>

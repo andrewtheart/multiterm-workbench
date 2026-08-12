@@ -110,6 +110,16 @@ test.describe("Automatic terminal title suggestions", () => {
     await expect(notice).toContainText("Notes, queued commands, clipboard contents, keystroke timing, the process ID, and other terminals are not sent");
     expect(await page.evaluate(() => localStorage.getItem(AUTO_TITLE_NOTICE_STORAGE_KEY))).toBe("true");
     await expect(page.locator(".auto-title-notice .combobox-input")).toBeFocused();
+    const desktopPadding = await page.locator(".auto-title-notice").evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        bottom: style.paddingBottom,
+        left: style.paddingLeft,
+        right: style.paddingRight,
+        top: style.paddingTop
+      };
+    });
+    expect(desktopPadding).toEqual({ bottom: "18px", left: "22px", right: "22px", top: "22px" });
     await page.keyboard.press("Shift+Tab");
     await expect(page.locator("#autoTitleNoticeContinue")).toBeFocused();
     await page.keyboard.press("Tab");

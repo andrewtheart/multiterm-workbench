@@ -18,6 +18,7 @@
 
 const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
 const WORKSPACE_ZOOM_BOUNDS = { min: 25, max: 200, step: 5, fallback: 100 };
+const SIDECAR_WIDTH_BOUNDS = { min: 240, max: 720, step: 10, fallback: 300 };
 
 const defaultSettings = {
   aiSessionContext: "default",
@@ -105,6 +106,7 @@ const defaultSettings = {
   scrollbackInfinite: false,
   searchAcrossPages: true,
   sidecarHidden: false,
+  sidecarWidth: SIDECAR_WIDTH_BOUNDS.fallback,
   silenceSeconds: 10,
   snippets: [
     { name: "Clear screen", command: "Clear-Host" },
@@ -129,7 +131,7 @@ const HEADER_GRADIENT_FALLBACK_COLOR = "#1E242C";
 const HEADER_BACKGROUND_QUICK_COLORS = Object.freeze([
   "#1E242C", "#2F3B46", ...PANE_COLORS.map((color) => color.toUpperCase())
 ]);
-const HEADER_BACKGROUND_CUSTOM_LIMIT = 8;
+const HEADER_BACKGROUND_CUSTOM_LIMIT = 6;
 let headerBackgroundTerminalId = null;
 let headerBackgroundReturnFocus = null;
 let headerBackgroundDraft = null;
@@ -169,6 +171,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   diagnosticViewerEntries: "diagnostics logs troubleshooting viewer entries records history limit maximum durable jsonl zero all unlimited",
   layoutMode: "arrangement arrange tiling tile panes splits split grid mosaic stack strip rail master carousel spotlight bento canvas automatic",
   pagerPlacement: "pages page tabs tab tabbar tab-bar navigation navigator pagebar page-bar pager position placement location dock docking top bottom left right side sidebar",
+  sidecarWidth: "settings panel layout controls sidebar width resize horizontal wider narrower",
   workspaceZoom: "workspace canvas stage zoom scale magnify shrink density overview wheel scroll pinch trackpad terminals panes tiles more fewer",
   minWidth: "minimum pane terminal tile width size horizontal narrow responsive compact",
   columnCount: "number columns grid across horizontal panes tiles count",
@@ -651,6 +654,7 @@ const elements = {
   headerBackgroundCancel: document.querySelector("#headerBackgroundCancel"),
   headerBackgroundClose: document.querySelector("#headerBackgroundClose"),
   headerBackgroundFlyout: document.querySelector("#headerBackgroundFlyout"),
+  headerBackgroundFlyoutAddColor: document.querySelector("#headerBackgroundFlyoutAddColor"),
   headerBackgroundFlyoutColor: document.querySelector("#headerBackgroundFlyoutColor"),
   headerBackgroundFlyoutCustomRow: document.querySelector("#headerBackgroundFlyoutCustomRow"),
   headerBackgroundFlyoutCustomSwatches: document.querySelector("#headerBackgroundFlyoutCustomSwatches"),
@@ -828,6 +832,9 @@ const elements = {
   outputBacklogKb: document.querySelector("#outputBacklogKb"),
   outputCoalesceMs: document.querySelector("#outputCoalesceMs"),
   pagerPlacement: document.querySelector("#pagerPlacement"),
+  sidecarWidth: document.querySelector("#sidecarWidth"),
+  sidecarWidthValue: document.querySelector("#sidecarWidthValue"),
+  settingsResizeHandle: document.querySelector("#settingsResizeHandle"),
   paletteInput: document.querySelector("#paletteInput"),
   paletteList: document.querySelector("#paletteList"),
   paletteOverlay: document.querySelector("#paletteOverlay"),
@@ -1719,10 +1726,12 @@ function bindControls() {
   elements.toggleSidecar.addEventListener("click", () => toggleChrome("sidecarHidden"));
   elements.toggleHeaderTop.addEventListener("click", () => toggleChrome("headerHidden"));
   elements.toggleSidecarTop.addEventListener("click", () => toggleChrome("sidecarHidden"));
+  bindSidecarResize();
   elements.shellSelect.addEventListener("change", updateStatusBar);
   elements.pagerPlacement.addEventListener("change", () => setPagerPlacement(elements.pagerPlacement.value));
 
   bindSetting(elements.layoutMode, "layout", "change", (value) => value);
+  bindSetting(elements.sidecarWidth, "sidecarWidth", "input", clampSidecarWidth);
   bindSetting(elements.minWidth, "minWidth", "input", Number);
   bindSetting(elements.columnCount, "columns", "input", Number);
   bindSetting(elements.rowCount, "rows", "input", Number);
@@ -1990,6 +1999,80 @@ function clampSettingNumber(value, element, bounds) {
     : bounds.fallback;
   element.value = next;
   return next;
+}
+
+function clampSidecarWidth(value, element = elements.sidecarWidth) {
+  return clampSettingNumber(value, element, SIDECAR_WIDTH_BOUNDS);
+}
+
+function applySidecarWidth(value) {
+  const width = clampSidecarWidth(value);
+  state.settings.sidecarWidth = width;
+  document.documentElement.style.setProperty("--sidecar-width", `${width}px`);
+  elements.sidecarWidth.value = width;
+  elements.sidecarWidthValue.textContent = `${width}px`;
+  elements.settingsResizeHandle.setAttribute("aria-valuenow", String(width));
+  elements.settingsResizeHandle.setAttribute("aria-valuetext", `${width} pixels`);
+  return width;
+}
+
+let sidecarResize = null;
+let sidecarResizeActive = false;
+
+function bindSidecarResize() {
+  const handle = elements.settingsResizeHandle;
+  const stopTracking = () => {
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onEnd);
+    window.removeEventListener("pointercancel", onEnd);
+  };
+  const finish = () => {
+    sidecarResize = null;
+    sidecarResizeActive = false;
+    document.body.classList.remove("is-sidecar-resizing");
+    stopTracking();
+    saveSettings();
+    for (const terminal of state.terminals.values()) scheduleFit(terminal);
+  };
+  const onMove = (event) => {
+    if (!sidecarResize || event.pointerId !== sidecarResize.pointerId) return;
+    applySidecarWidth(sidecarResize.width + event.clientX - sidecarResize.startX);
+  };
+  const onEnd = (event) => {
+    if (!sidecarResize || event.pointerId !== sidecarResize.pointerId) return;
+    finish();
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !window.matchMedia("(min-width: 1041px)").matches) return;
+    event.preventDefault();
+    sidecarResize = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      width: clampSidecarWidth(state.settings.sidecarWidth)
+    };
+    sidecarResizeActive = true;
+    document.body.classList.add("is-sidecar-resizing");
+    stopTracking();
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onEnd);
+    window.addEventListener("pointercancel", onEnd);
+  });
+  handle.addEventListener("keydown", (event) => {
+    const direction = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+    let next = Number(state.settings.sidecarWidth);
+    if (direction) next += direction * SIDECAR_WIDTH_BOUNDS.step * (event.shiftKey ? 5 : 1);
+    else if (event.key === "Home") next = SIDECAR_WIDTH_BOUNDS.min;
+    else if (event.key === "End") next = SIDECAR_WIDTH_BOUNDS.max;
+    else return;
+    event.preventDefault();
+    applySidecarWidth(next);
+    saveSettings();
+  });
+  handle.addEventListener("dblclick", () => {
+    applySidecarWidth(SIDECAR_WIDTH_BOUNDS.fallback);
+    saveSettings();
+  });
 }
 
 function clampOutputCoalesceMs(value, element) {
@@ -8142,6 +8225,7 @@ function applySettings() {
   applyAppTheme();
   document.body.classList.toggle("header-hidden", state.settings.headerHidden);
   document.body.classList.toggle("sidecar-hidden", state.settings.sidecarHidden);
+  applySidecarWidth(state.settings.sidecarWidth);
   document.body.dataset.revealHeaderActions = String(state.settings.headerActionsRevealOnHover === true);
   applyPagerPlacement();
   elements.host.dataset.layout = effectivePageLayout();
@@ -8574,7 +8658,7 @@ function scheduleFit(terminal) {
 // drag the size is forwarded immediately; during a drag it is suppressed and
 // endWindowResizeDrag() forwards the settled size once motion stops.
 function queueResize(terminal, cols, rows) {
-  if (resizeDragActive || paneResizeActive) return;
+  if (resizeDragActive || paneResizeActive || sidecarResizeActive) return;
   sendResize(terminal, cols, rows);
 }
 
@@ -15752,8 +15836,8 @@ function loadPages() {
 }
 
 // Groups are a second level above pages: a named, collapsible band of page tabs.
-// A group owning no page is meaningless, so membership lives on the page and the
-// group record only carries presentation.
+// Membership lives on each page. A group created from blank pager space may opt
+// into staying visible while empty so it can act as a drag target.
 function loadPageGroups(pages) {
   try {
     const raw = JSON.parse(localStorage.getItem("multiterm.pages") || "null");
@@ -15762,9 +15846,15 @@ function loadPageGroups(pages) {
     const groups = [];
     for (const group of Array.isArray(raw?.pageGroups) ? raw.pageGroups : []) {
       const id = group && typeof group.id === "string" ? group.id : "";
-      if (!referenced.has(id) || seen.has(id)) continue;
+      const keepEmpty = group?.keepEmpty === true;
+      if (!id || (!referenced.has(id) && !keepEmpty) || seen.has(id)) continue;
       seen.add(id);
-      groups.push({ id, name: String(group.name || "Group"), collapsed: group.collapsed === true });
+      groups.push({
+        id,
+        name: String(group.name || "Group"),
+        collapsed: group.collapsed === true,
+        ...(keepEmpty ? { keepEmpty: true } : {})
+      });
     }
     return groups;
   } catch {
@@ -16189,7 +16279,7 @@ function cyclePage(direction) {
 
 // A group is a named, collapsible band of page tabs. Membership lives on the page
 // rather than in the group record, so a group can never disagree with the pages it
-// claims to hold, and one that ends up empty simply stops existing.
+// claims to hold. Groups created as empty drop targets explicitly persist.
 
 function uniquePageGroupId() {
   let n = state.pageGroups.length + 1;
@@ -16233,7 +16323,7 @@ function orderPagesByGroup() {
 
 function pruneEmptyPageGroups() {
   const populated = new Set(state.pages.map((page) => page.groupId).filter(Boolean));
-  state.pageGroups = state.pageGroups.filter((group) => populated.has(group.id));
+  state.pageGroups = state.pageGroups.filter((group) => populated.has(group.id) || group.keepEmpty === true);
   for (const page of state.pages) {
     if (page.groupId && !pageGroupById(page.groupId)) page.groupId = null;
   }
@@ -16266,10 +16356,15 @@ function assignPagesToGroup(pageIds, groupId) {
   return true;
 }
 
-function createPageGroup(rawName, pageIds = []) {
+function createPageGroup(rawName, pageIds = [], options = {}) {
   const id = uniquePageGroupId();
   const name = String(rawName || "").trim() || `Group ${state.pageGroups.length + 1}`;
-  state.pageGroups.push({ id, name, collapsed: false });
+  state.pageGroups.push({
+    id,
+    name,
+    collapsed: false,
+    ...(options.keepEmpty === true ? { keepEmpty: true } : {})
+  });
   for (const pageId of pageIds) {
     const page = pageById(pageId);
     if (page) page.groupId = id;
@@ -16303,9 +16398,11 @@ function ungroupPageGroup(id) {
   const group = pageGroupById(id);
   if (!group) return false;
   const name = group.name;
+  const count = pagesInGroup(id).length;
   for (const page of pagesInGroup(id)) page.groupId = null;
+  state.pageGroups = state.pageGroups.filter((entry) => entry.id !== id);
   commitPageGroups();
-  toast(`Ungrouped \u201c${name}\u201d`, "info", 1800);
+  toast(count > 0 ? `Ungrouped \u201c${name}\u201d` : `Deleted \u201c${name}\u201d`, "info", 1800);
   return true;
 }
 
@@ -16740,6 +16837,7 @@ function showPagerPlacementMenu(x, y) {
   const current = normalizedPagerPlacement();
   renderContextMenu([
     { label: "Open new page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage() },
+    { label: "Create new group", icon: "folder-plus", run: startEmptyPageGroupCreation },
     { separator: true },
     { label: "Move pages to top", icon: "panel-top", shortcutId: "pager.move-top", disabled: current === "top", run: () => setPagerPlacement("top") },
     { label: "Move pages to bottom", icon: "panel-bottom", shortcutId: "pager.move-bottom", disabled: current === "bottom", run: () => setPagerPlacement("bottom") },
@@ -16858,8 +16956,20 @@ function bindPagerDockDrag() {
 let draggedPageId = null;
 let pageDragChanged = false;
 let pageDropAccepted = false;
+let emptyPageDropGroupId = null;
 let originalPageOrder = null;
 let suppressPageClick = false;
+
+function setEmptyPageDropTarget(groupId) {
+  emptyPageDropGroupId = groupId || null;
+  for (const zone of elements.pagerList?.querySelectorAll(".pager-group-chips.is-page-drop-target") || []) {
+    zone.classList.remove("is-page-drop-target");
+  }
+  if (!emptyPageDropGroupId) return;
+  elements.pagerList
+    ?.querySelector(`[data-group-id="${CSS.escape(emptyPageDropGroupId)}"] .pager-group-chips`)
+    ?.classList.add("is-page-drop-target");
+}
 
 function syncPageOrderFromPager() {
   const pagesById = new Map(state.pages.map((page) => [page.id, page]));
@@ -16970,19 +17080,22 @@ function buildPageChip(page) {
 // Returns the element a group's tabs go into, so the caller can keep appending
 // chips without caring whether it is inside a band or on the bar itself.
 function appendPageGroupBand(list, group) {
+  const count = pagesInGroup(group.id).length;
   const hidden = pagesInGroup(group.id).filter((page) => page.id !== state.activePageId).length;
   const band = document.createElement("div");
   band.className = "pager-group";
   band.dataset.groupId = group.id;
-  band.classList.toggle("is-collapsed", group.collapsed);
+  band.classList.toggle("is-collapsed", group.collapsed && count > 0);
+  band.classList.toggle("is-empty", count === 0);
 
   const header = document.createElement("button");
   header.type = "button";
   header.className = "pager-group-header";
   header.dataset.groupToggle = group.id;
-  header.setAttribute("aria-expanded", String(!group.collapsed));
-  const count = pagesInGroup(group.id).length;
-  header.title = `${group.name} — ${count} page${count === 1 ? "" : "s"} (click to ${group.collapsed ? "expand" : "collapse"}; right-click for group options)`;
+  header.setAttribute("aria-expanded", String(count === 0 || !group.collapsed));
+  header.title = count === 0
+    ? `${group.name} — empty group (drag pages into the empty space; right-click for group options)`
+    : `${group.name} — ${count} page${count === 1 ? "" : "s"} (click to ${group.collapsed ? "expand" : "collapse"}; right-click for group options)`;
   header.setAttribute("aria-label", header.title);
   header.innerHTML = '<i data-lucide="chevron-down"></i>';
 
@@ -17001,6 +17114,12 @@ function appendPageGroupBand(list, group) {
 
   const chips = document.createElement("div");
   chips.className = "pager-group-chips";
+  if (count === 0) {
+    const empty = document.createElement("span");
+    empty.className = "pager-group-empty";
+    empty.textContent = "Drop pages here";
+    chips.append(empty);
+  }
   band.append(header, chips);
   list.append(band);
   return chips;
@@ -17014,16 +17133,21 @@ function renderPager() {
   list.textContent = "";
   let bandGroupId = null;
   let container = list;
+  const renderedGroups = new Set();
   for (const page of state.pages) {
     const group = pageGroupOf(page);
     if ((group ? group.id : null) !== bandGroupId) {
       bandGroupId = group ? group.id : null;
       container = group ? appendPageGroupBand(list, group) : list;
+      if (group) renderedGroups.add(group.id);
     }
     // The active page stays visible even inside a collapsed group, so collapsing
     // can never hide where you actually are.
     if (group?.collapsed && page.id !== state.activePageId) continue;
     container.append(buildPageChip(page));
+  }
+  for (const group of state.pageGroups) {
+    if (!renderedGroups.has(group.id)) appendPageGroupBand(list, group);
   }
   refreshIcons();
   updatePageGroupButton();
@@ -17112,6 +17236,13 @@ function startPageGroupCreation(pageId) {
   if (header) startPageGroupRename(header);
 }
 
+function startEmptyPageGroupCreation() {
+  const id = createPageGroup("", [], { keepEmpty: true });
+  if (!id) return;
+  const header = elements.pagerList.querySelector(`[data-group-toggle="${CSS.escape(id)}"]`);
+  if (header) startPageGroupRename(header);
+}
+
 // Offered on a page tab so a group can be built from the tab you are already
 // pointing at, which is the only place membership is unambiguous.
 function pageGroupMenuItems(page) {
@@ -17134,22 +17265,28 @@ function pageGroupMenuItems(page) {
 function showPageGroupMenu(group, x, y) {
   const header = elements.pagerList.querySelector(`[data-group-toggle="${CSS.escape(group.id)}"]`);
   const count = pagesInGroup(group.id).length;
-  renderContextMenu([
-    { label: "Rename group\u2026", icon: "pencil", run: () => header && startPageGroupRename(header) },
-    {
+  const items = [
+    { label: "Rename group\u2026", icon: "pencil", run: () => header && startPageGroupRename(header) }
+  ];
+  if (count > 0) {
+    items.push({
       label: group.collapsed ? "Expand group" : "Collapse group",
       icon: group.collapsed ? "chevron-down" : "chevron-right",
       run: () => setPageGroupCollapsed(group.id, !group.collapsed)
-    },
+    });
+  }
+  items.push(
     { separator: true },
     { label: "New page in group", icon: "plus", run: () => addPage({ groupId: group.id }) },
     { separator: true, spacious: true },
     {
-      label: `Ungroup ${count} page${count === 1 ? "" : "s"}`,
-      icon: "folder-minus",
+      label: count > 0 ? `Ungroup ${count} page${count === 1 ? "" : "s"}` : "Delete group",
+      icon: count > 0 ? "folder-minus" : "trash-2",
+      danger: count === 0,
       run: () => ungroupPageGroup(group.id)
     }
-  ]);
+  );
+  renderContextMenu(items);
   showBuiltContextMenu(x, y);
 }
 
@@ -17195,7 +17332,7 @@ function bindPager() {
     if (groupHeader && !groupHeader.querySelector(".pager-rename")) {
       event.stopPropagation();
       const group = pageGroupById(groupHeader.dataset.groupToggle);
-      if (group) setPageGroupCollapsed(group.id, !group.collapsed);
+      if (group && pagesInGroup(group.id).length > 0) setPageGroupCollapsed(group.id, !group.collapsed);
       return;
     }
     const chip = event.target.closest(".pager-chip");
@@ -17232,6 +17369,7 @@ function bindPager() {
     draggedPageId = chip.dataset.pageId;
     pageDragChanged = false;
     pageDropAccepted = false;
+    setEmptyPageDropTarget(null);
     originalPageOrder = state.pages.map((page) => ({ id: page.id, groupId: page.groupId }));
     suppressPageClick = true;
     chip.classList.add("is-page-dragging");
@@ -17247,6 +17385,7 @@ function bindPager() {
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     const targetChip = event.target.closest?.(".pager-chip");
     if (targetChip) {
+      setEmptyPageDropTarget(null);
       const rect = targetChip.getBoundingClientRect();
       const before = isVerticalPager()
         ? event.clientY < rect.top + rect.height / 2
@@ -17255,7 +17394,13 @@ function bindPager() {
     } else {
       // Dropping on a band's free space joins that group; dropping on the bar
       // itself leaves the page ungrouped.
+      const emptyGroupId = event.target.closest?.(".pager-group.is-empty")?.dataset.groupId || null;
+      if (emptyGroupId) {
+        setEmptyPageDropTarget(emptyGroupId);
+        return;
+      }
       const band = event.target.closest?.(".pager-group-chips");
+      setEmptyPageDropTarget(null);
       const zone = band || list;
       const draggedChip = list.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
       if (zone && draggedChip && draggedChip !== zone.lastElementChild) {
@@ -17269,6 +17414,17 @@ function bindPager() {
   list.addEventListener("drop", (event) => {
     if (!draggedPageId) return;
     event.preventDefault();
+    if (emptyPageDropGroupId) {
+      const zone = list.querySelector(
+        `[data-group-id="${CSS.escape(emptyPageDropGroupId)}"] .pager-group-chips`
+      );
+      const draggedChip = list.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
+      if (zone && draggedChip) {
+        zone.append(draggedChip);
+        syncPageOrderFromPager();
+        pageDragChanged = true;
+      }
+    }
     pageDropAccepted = true;
   });
 
@@ -17290,6 +17446,7 @@ function bindPager() {
     draggedPageId = null;
     pageDragChanged = false;
     pageDropAccepted = false;
+    setEmptyPageDropTarget(null);
     originalPageOrder = null;
     window.setTimeout(() => { suppressPageClick = false; }, 0);
   });
@@ -17445,7 +17602,12 @@ function restoreWorkspace(name) {
   state.pages = savedPages.length > 0 ? savedPages : defaultPages();
   state.pageGroups = (Array.isArray(workspace.pageGroups) ? workspace.pageGroups : [])
     .filter((group) => group && typeof group.id === "string" && group.id)
-    .map((group) => ({ id: group.id, name: String(group.name || "Group"), collapsed: group.collapsed === true }));
+    .map((group) => ({
+      id: group.id,
+      name: String(group.name || "Group"),
+      collapsed: group.collapsed === true,
+      ...(group.keepEmpty === true ? { keepEmpty: true } : {})
+    }));
   pruneEmptyPageGroups();
   orderPagesByGroup();
   state.activePageId = state.pages.some((page) => page.id === workspace.activePageId)
@@ -17497,6 +17659,7 @@ function deleteWorkspace(name) {
 function syncControlsFromSettings() {
   elements.layoutMode.value = state.settings.layout;
   elements.pagerPlacement.value = normalizedPagerPlacement();
+  elements.sidecarWidth.value = clampSidecarWidth(state.settings.sidecarWidth);
   elements.minWidth.value = state.settings.minWidth;
   elements.columnCount.value = state.settings.columns;
   elements.rowCount.value = state.settings.rows;
@@ -18100,10 +18263,8 @@ function renderHeaderBackgroundFlyout() {
   const current = headerBackgroundCss(terminal.headerBackground);
   renderHeaderBackgroundSwatches(elements.headerBackgroundFlyoutSwatches, HEADER_BACKGROUND_QUICK_COLORS, current);
   const custom = headerBackgroundCustomColors();
-  elements.headerBackgroundFlyoutCustomRow.hidden = custom.length === 0;
-  renderHeaderBackgroundSwatches(elements.headerBackgroundFlyoutCustomSwatches, custom, current);
-  const firstStop = terminal.headerBackground?.stops?.[0]?.color;
-  if (firstStop) elements.headerBackgroundFlyoutColor.value = firstStop.toLowerCase();
+  renderHeaderBackgroundCustomColors(custom, current);
+  elements.headerBackgroundFlyoutAddColor.hidden = custom.length >= HEADER_BACKGROUND_CUSTOM_LIMIT;
   elements.headerBackgroundFlyoutReset.disabled = !terminal.headerBackground;
 }
 
@@ -18123,7 +18284,35 @@ function renderHeaderBackgroundSwatches(container, colors, current) {
   }
 }
 
-// Newest first, so the oldest pick is the one that falls off the end.
+function renderHeaderBackgroundCustomColors(colors, current) {
+  elements.headerBackgroundFlyoutCustomSwatches.replaceChildren();
+  for (const color of colors) {
+    const slot = document.createElement("span");
+    slot.className = "header-background-custom-slot";
+
+    const background = headerBackgroundFromColor(color);
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "header-background-swatch";
+    swatch.dataset.headerBackgroundColor = color;
+    swatch.style.background = headerBackgroundCss(background);
+    swatch.title = `Apply ${color}`;
+    swatch.setAttribute("aria-label", `Apply custom header background ${color}`);
+    swatch.setAttribute("aria-pressed", String(Boolean(current) && current === headerBackgroundCss(background)));
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "header-background-custom-remove";
+    remove.dataset.headerBackgroundRemove = color;
+    remove.title = `Remove ${color}`;
+    remove.setAttribute("aria-label", `Remove custom header background ${color}`);
+    remove.innerHTML = '<i data-lucide="x"></i>';
+    slot.append(swatch, remove);
+    elements.headerBackgroundFlyoutCustomSwatches.append(slot);
+  }
+  refreshIcons(elements.headerBackgroundFlyoutCustomSwatches);
+}
+
 function headerBackgroundCustomColors() {
   const stored = Array.isArray(state.settings.headerBackgroundCustomColors)
     ? state.settings.headerBackgroundCustomColors
@@ -18137,18 +18326,37 @@ function headerBackgroundCustomColors() {
     colors.push(color);
     if (colors.length >= HEADER_BACKGROUND_CUSTOM_LIMIT) break;
   }
+  const changed = stored.length !== colors.length
+    || stored.some((entry, index) => String(entry || "").toUpperCase() !== colors[index]);
   state.settings.headerBackgroundCustomColors = colors;
+  if (changed) saveSettings();
   return colors;
 }
 
 function rememberHeaderBackgroundCustomColor(hex) {
   const color = String(hex || "").toUpperCase();
   // A preset is already one click away, so it never consumes a custom slot.
-  if (!/^#[0-9A-F]{6}$/.test(color) || HEADER_BACKGROUND_QUICK_COLORS.includes(color)) return;
-  const colors = headerBackgroundCustomColors().filter((entry) => entry !== color);
-  colors.unshift(color);
-  state.settings.headerBackgroundCustomColors = colors.slice(0, HEADER_BACKGROUND_CUSTOM_LIMIT);
+  if (!/^#[0-9A-F]{6}$/.test(color) || HEADER_BACKGROUND_QUICK_COLORS.includes(color)) return false;
+  const colors = headerBackgroundCustomColors();
+  if (colors.includes(color)) return true;
+  if (colors.length >= HEADER_BACKGROUND_CUSTOM_LIMIT) return false;
+  colors.push(color);
+  state.settings.headerBackgroundCustomColors = colors;
   saveSettings();
+  return true;
+}
+
+function removeHeaderBackgroundCustomColor(hex) {
+  const color = String(hex || "").toUpperCase();
+  const colors = headerBackgroundCustomColors();
+  const remaining = colors.filter((entry) => entry !== color);
+  if (remaining.length === colors.length) return false;
+  state.settings.headerBackgroundCustomColors = remaining;
+  saveSettings();
+  renderHeaderBackgroundFlyout();
+  if (headerBackgroundFlyoutAnchor?.isConnected) positionHeaderBackgroundFlyout(headerBackgroundFlyoutAnchor);
+  elements.headerBackgroundFlyoutAddColor.focus({ preventScroll: true });
+  return true;
 }
 
 function setHeaderBackgroundFromFlyout(color, { persist = true } = {}) {
@@ -18235,16 +18443,22 @@ function bindHeaderBackgroundFlyout() {
     if (swatch) setHeaderBackgroundFromFlyout(swatch.dataset.headerBackgroundColor);
   });
   elements.headerBackgroundFlyoutCustomSwatches.addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-header-background-remove]");
+    if (remove) {
+      removeHeaderBackgroundCustomColor(remove.dataset.headerBackgroundRemove);
+      return;
+    }
     const swatch = event.target.closest("[data-header-background-color]");
     if (swatch) setHeaderBackgroundFromFlyout(swatch.dataset.headerBackgroundColor);
   });
-  elements.headerBackgroundFlyoutColor.addEventListener("input", () => {
-    setHeaderBackgroundFromFlyout(elements.headerBackgroundFlyoutColor.value, { persist: false });
+  elements.headerBackgroundFlyoutAddColor.addEventListener("click", () => {
+    elements.headerBackgroundFlyoutColor.click();
   });
   elements.headerBackgroundFlyoutColor.addEventListener("change", () => {
-    // Only the committed value earns a slot; dragging the well fires constantly.
-    rememberHeaderBackgroundCustomColor(elements.headerBackgroundFlyoutColor.value);
-    setHeaderBackgroundFromFlyout(elements.headerBackgroundFlyoutColor.value);
+    const color = elements.headerBackgroundFlyoutColor.value;
+    if (!rememberHeaderBackgroundCustomColor(color)) return;
+    setHeaderBackgroundFromFlyout(color);
+    if (headerBackgroundFlyoutAnchor?.isConnected) positionHeaderBackgroundFlyout(headerBackgroundFlyoutAnchor);
   });
   elements.headerBackgroundFlyoutReset.addEventListener("click", clearHeaderBackgroundFromFlyout);
   elements.headerBackgroundFlyoutMore.addEventListener("click", () => {

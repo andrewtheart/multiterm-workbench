@@ -387,7 +387,7 @@ test.describe("Terminal header background quick picker", () => {
     expect(await page.evaluate(() => [...state.terminals.values()][0].headerBackground)).toBeNull();
   });
 
-  test("remembers up to eight custom colors and drops the oldest", async ({ page }) => {
+  test("adds up to six custom colors one at a time without evicting them", async ({ page }) => {
     await stackedReset(page, 1);
     await page.evaluate(() => {
       state.settings.headerBackgroundCustomColors = [];
@@ -405,29 +405,50 @@ test.describe("Terminal header background quick picker", () => {
     );
     const customRow = page.locator("#headerBackgroundFlyoutCustomRow");
     const customSwatches = page.locator("#headerBackgroundFlyoutCustomSwatches .header-background-swatch");
+    const removeButtons = page.locator("#headerBackgroundFlyoutCustomSwatches [data-header-background-remove]");
+    const add = page.locator("#headerBackgroundFlyoutAddColor");
 
-    await expect(customRow).toBeHidden();
-
-    await pick("#112233");
     await expect(customRow).toBeVisible();
-    await expect(customSwatches).toHaveCount(1);
-    expect(await stored()).toEqual(["#112233"]);
+    await expect(customSwatches).toHaveCount(0);
+    await expect(add).toBeVisible();
+    expect(await page.evaluate(() => {
+      let opened = 0;
+      const original = elements.headerBackgroundFlyoutColor.click;
+      elements.headerBackgroundFlyoutColor.click = () => { opened += 1; };
+      elements.headerBackgroundFlyoutAddColor.click();
+      elements.headerBackgroundFlyoutColor.click = original;
+      return opened;
+    })).toBe(1);
 
-    // Nine picks in total, so the first one has to fall off the end.
-    const picks = ["#221133", "#331122", "#113322", "#223311", "#332211", "#111122", "#221111", "#112211"];
-    for (const color of picks) await pick(color);
-    await expect(customSwatches).toHaveCount(8);
-    expect(await stored()).toEqual([...picks].reverse());
+    const picks = ["#112233", "#221133", "#331122", "#113322", "#223311", "#332211"];
+    for (let index = 0; index < picks.length; index += 1) {
+      await pick(picks[index]);
+      await expect(customSwatches).toHaveCount(index + 1);
+      expect(await stored()).toEqual(picks.slice(0, index + 1));
+    }
+    await expect(removeButtons).toHaveCount(6);
+    await expect(add).toBeHidden();
 
-    // Re-picking a remembered colour promotes it instead of adding a ninth.
+    // A seventh pick cannot replace one the user deliberately saved.
+    await pick("#111122");
+    await expect(customSwatches).toHaveCount(6);
+    expect(await stored()).toEqual(picks);
+
+    // Re-picking a remembered colour applies it without adding another slot.
     await pick("#331122");
-    await expect(customSwatches).toHaveCount(8);
-    expect((await stored())[0]).toBe("#331122");
+    await expect(customSwatches).toHaveCount(6);
+    expect(await stored()).toEqual(picks);
+
+    await removeButtons.nth(1).click();
+    await expect(customSwatches).toHaveCount(5);
+    await expect(add).toBeVisible();
+    await expect(add).toBeFocused();
+    expect(await stored()).toEqual(picks.filter((_, index) => index !== 1));
 
     // A preset is already one click away, so it must not consume a slot.
     const preset = await page.evaluate(() => HEADER_BACKGROUND_QUICK_COLORS[0]);
     await pick(preset.toLowerCase());
-    await expect(customSwatches).toHaveCount(8);
+    await expect(customSwatches).toHaveCount(5);
     expect(await stored()).not.toContain(preset);
 
     // A remembered colour still paints the header when clicked.
@@ -436,7 +457,35 @@ test.describe("Terminal header background quick picker", () => {
 
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");
-    expect(await stored()).toHaveLength(8);
+    expect(await stored()).toEqual(picks.filter((_, index) => index !== 1));
+  });
+
+  test("migrates older palettes to six colors and keeps the full row contained", async ({ page }) => {
+    await stackedReset(page, 1);
+    const older = ["#112233", "#221133", "#331122", "#113322", "#223311", "#332211", "#111122", "#221111"];
+    await page.evaluate((colors) => {
+      state.settings.headerBackgroundCustomColors = colors;
+      saveSettings();
+    }, older);
+    await page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').first().click();
+    await expect(page.locator("#headerBackgroundFlyoutCustomSwatches .header-background-swatch")).toHaveCount(6);
+    await expect(page.locator("#headerBackgroundFlyoutAddColor")).toBeHidden();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).headerBackgroundCustomColors)).toEqual(older.slice(0, 6));
+
+    await page.setViewportSize({ width: 390, height: 720 });
+    const geometry = await page.locator("#headerBackgroundFlyout").evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: rect.left,
+        overflow: element.scrollWidth > element.clientWidth,
+        right: rect.right,
+        viewportWidth: innerWidth
+      };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth);
+    expect(geometry.overflow).toBe(false);
+    await page.setViewportSize({ width: 1280, height: 720 });
   });
 
   test("hands the same terminal to the full editor and closes on Escape", async ({ page }) => {

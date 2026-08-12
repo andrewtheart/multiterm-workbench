@@ -330,6 +330,60 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect.poll(chevronRotation).toBe("none");
   });
 
+  test("resizes the settings panel by pointer and keyboard and persists its width", async () => {
+    const originalViewport = page.viewportSize();
+    const originalSettings = await page.evaluate(() => ({
+      sidecarHidden: state.settings.sidecarHidden,
+      sidecarWidth: state.settings.sidecarWidth
+    }));
+    try {
+      await page.setViewportSize({ width: 1400, height: 900 });
+      await page.evaluate(() => {
+        state.settings.sidecarHidden = false;
+        state.settings.sidecarWidth = 300;
+        applySettings();
+        saveSettings();
+      });
+
+      const panel = page.locator(".control-panel");
+      const handle = page.locator("#settingsResizeHandle");
+      await expect(handle).toBeVisible();
+      const before = await panel.boundingBox();
+      const grip = await handle.boundingBox();
+      await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(grip.x + grip.width / 2 + 120, grip.y + grip.height / 2, { steps: 8 });
+      await page.mouse.up();
+
+      await expect.poll(() => page.evaluate(() => state.settings.sidecarWidth)).toBe(420);
+      await expect.poll(async () => (await panel.boundingBox()).width).toBeCloseTo(before.width + 120, 0);
+      await expect(handle).toHaveAttribute("aria-valuenow", "420");
+      expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).sidecarWidth)).toBe(420);
+
+      await handle.focus();
+      await handle.press("ArrowLeft");
+      await expect(handle).toHaveAttribute("aria-valuenow", "410");
+      await handle.press("Shift+ArrowRight");
+      await expect(handle).toHaveAttribute("aria-valuenow", "460");
+      await handle.press("End");
+      await expect(handle).toHaveAttribute("aria-valuenow", "720");
+      await handle.dblclick();
+      await expect(handle).toHaveAttribute("aria-valuenow", "300");
+
+      await page.setViewportSize({ width: 900, height: 720 });
+      await expect(handle).toBeHidden();
+      await expect(panel).toBeVisible();
+    } finally {
+      await page.setViewportSize(originalViewport);
+      await page.evaluate((settings) => {
+        state.settings.sidecarHidden = settings.sidecarHidden;
+        state.settings.sidecarWidth = settings.sidecarWidth;
+        applySettings();
+        saveSettings();
+      }, originalSettings);
+    }
+  });
+
   test("finds settings through comprehensive related terms without rescanning the DOM", async () => {
     const search = page.locator("#settingsSearch");
     await expect(search).toHaveAttribute("placeholder", "Search settings or related terms");
