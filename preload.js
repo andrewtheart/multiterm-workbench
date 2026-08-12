@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld("multiterm", {
   readClipboardText: () => ipcRenderer.invoke("multiterm:read-clipboard"),
   setFullscreen: (enabled) => ipcRenderer.invoke("multiterm:set-fullscreen", Boolean(enabled)),
   minimizeWindow: () => ipcRenderer.invoke("multiterm:minimize-window"),
+  configureDiagnostics: (settings) => ipcRenderer.invoke("multiterm:configure-diagnostics", settings),
   onFullscreenChange: (handler) => {
     if (typeof handler !== "function") return;
     ipcRenderer.on("multiterm:fullscreen-change", (_event, enabled) => handler(Boolean(enabled)));

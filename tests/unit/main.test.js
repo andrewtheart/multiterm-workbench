@@ -35,6 +35,7 @@ try {
 }
 
 let electron;
+let diagnostics;
 
 function makeElectron() {
   const app = {
@@ -159,6 +160,11 @@ beforeEach(() => {
   vi.restoreAllMocks();
   electron = makeElectron();
   main.__setElectron(electron);
+  diagnostics = {
+    append: vi.fn(),
+    configure: vi.fn((settings) => settings)
+  };
+  main.__setRuntimeDiagnostics(diagnostics);
   electron.BrowserWindow.mockImplementation(function BrowserWindowMock() { return makeWindow(); });
   vi.spyOn(childProcess, "spawn").mockImplementation(() => makeChild());
   main.__reset();
@@ -169,7 +175,7 @@ afterEach(() => {
 });
 
 describe("startServer", () => {
-  it("spawns the bridge under node.exe on Windows and wires stdio", () => {
+  it("spawns the bridge under node.exe on Windows and captures its lifecycle and output", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
@@ -177,10 +183,24 @@ describe("startServer", () => {
       expect(childProcess.spawn).toHaveBeenCalledWith("node.exe", expect.arrayContaining([expect.stringContaining("server.js")]), expect.objectContaining({ env: expect.objectContaining({
         MULTITERM_UI_OWNER_PID: String(process.pid),
         PORT: expect.any(String)
-      }) }));
+      }), stdio: ["ignore", "pipe", "pipe"] }));
       const child = main.getServerProcess();
       child.stdout.emit("data", Buffer.from("hello"));
       child.stderr.emit("data", Buffer.from("warn"));
+      expect(diagnostics.append).toHaveBeenCalledWith(expect.objectContaining({
+        source: "electron",
+        event: "bridge-spawn"
+      }));
+      expect(diagnostics.append).toHaveBeenCalledWith(expect.objectContaining({
+        event: "bridge-stdout",
+        level: "info",
+        message: "hello"
+      }));
+      expect(diagnostics.append).toHaveBeenCalledWith(expect.objectContaining({
+        event: "bridge-stderr",
+        level: "error",
+        message: "warn"
+      }));
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     }
@@ -219,6 +239,14 @@ describe("startServer", () => {
     const restarted = main.getServerProcess();
     expect(restarted).not.toBeNull();
     expect(restarted).not.toBe(first);
+    expect(diagnostics.append).toHaveBeenCalledWith(expect.objectContaining({
+      event: "bridge-exit",
+      code: 1
+    }));
+    expect(diagnostics.append).toHaveBeenCalledWith(expect.objectContaining({
+      event: "bridge-restart",
+      attempt: 1
+    }));
   });
 
   it("gives up and reports after repeated crash-looping exits", () => {
@@ -465,6 +493,11 @@ describe("window IPC", () => {
       .find(([channel]) => channel === "multiterm:minimize-window")?.[1];
   }
 
+  function diagnosticsHandler() {
+    return electron.ipcMain.handle.mock.calls
+      .find(([channel]) => channel === "multiterm:configure-diagnostics")?.[1];
+  }
+
   it("allows only the app renderer to change native fullscreen", () => {
     main.createWindow();
     const win = main.getMainWindow();
@@ -502,6 +535,16 @@ describe("window IPC", () => {
       sender: win.webContents,
       senderFrame: { url: "https://example.com/" }
     })).toThrow("restricted to the MultiTerm application window");
+  });
+
+  it("applies diagnostics settings only from the app renderer", () => {
+    main.createWindow();
+    main.registerWindowIpc();
+    const settings = { retentionDays: 30, rotationMb: 20, viewerEntries: 7500 };
+    expect(diagnosticsHandler()(trustedIpcEvent(), settings)).toEqual(settings);
+    expect(diagnostics.configure).toHaveBeenCalledWith(settings);
+    expect(() => diagnosticsHandler()({ sender: {} }, settings))
+      .toThrow("restricted to the MultiTerm application window");
   });
 
   it("is unavailable when ipcMain.handle is missing", () => {

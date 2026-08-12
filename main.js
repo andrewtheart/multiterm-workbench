@@ -25,6 +25,7 @@ const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
+const { RuntimeDiagnostics } = require("./lib/runtime-diagnostics");
 
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
 // `require("electron")` resolves to a path string, so these are set by tests.
@@ -36,6 +37,7 @@ function registerWindowIpc() {
   if (!ipcMain || typeof ipcMain.handle !== "function") return;
   try { ipcMain.removeHandler("multiterm:set-fullscreen"); } catch { /* no existing handler */ }
   try { ipcMain.removeHandler("multiterm:minimize-window"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:configure-diagnostics"); } catch { /* no existing handler */ }
   ipcMain.handle("multiterm:set-fullscreen", (event, enabled) => {
     assertTrustedIpcSender(event);
     const next = Boolean(enabled);
@@ -46,6 +48,14 @@ function registerWindowIpc() {
     assertTrustedIpcSender(event);
     mainWindow.minimize();
     return true;
+  });
+  ipcMain.handle("multiterm:configure-diagnostics", (event, settings) => {
+    assertTrustedIpcSender(event);
+    return runtimeDiagnostics.configure({
+      retentionDays: settings?.retentionDays,
+      rotationMb: settings?.rotationMb,
+      viewerEntries: settings?.viewerEntries
+    });
   });
 }
 
@@ -120,6 +130,7 @@ let elevationChecked = false;
 let mainWindow = null;
 let tray = null;
 let serverProcess = null;
+let runtimeDiagnostics = new RuntimeDiagnostics();
 let bridgeHandledForQuit = false;
 // Timestamps of recent unexpected bridge restarts, used as a crash-loop guard so
 // a bridge that dies immediately over and over surfaces an error instead of
@@ -127,6 +138,22 @@ let bridgeHandledForQuit = false;
 let serverRestarts = [];
 const RESTART_WINDOW_MS = 10000;
 const MAX_RESTARTS = 5;
+
+function recordElectronDiagnostic(record) {
+  try {
+    runtimeDiagnostics.append({ source: "electron", ...record });
+  } catch (error) {
+    console.error("[electron] Could not persist runtime diagnostics:", formatError(error));
+  }
+}
+
+function captureBridgeOutput(stream, level, event) {
+  stream?.on?.("data", (chunk) => {
+    const message = String(chunk ?? "").replace(/[\r\n]+$/, "");
+    if (!message) return;
+    recordElectronDiagnostic({ level, event, message });
+  });
+}
 
 // The bridge uses node-pty (a native module built for the system Node ABI),
 // so it runs under the system `node` executable rather than inside Electron's
@@ -142,11 +169,24 @@ function startServer() {
     cwd: __dirname,
     detached: true,
     env: { ...process.env, HOST, PORT: String(PORT), MULTITERM_UI_OWNER_PID: String(process.pid) },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
   });
+  recordElectronDiagnostic({
+    level: "info",
+    event: "bridge-spawn",
+    message: `Started terminal bridge on ${HOST}:${PORT}.`,
+    pid: serverProcess.pid
+  });
+  captureBridgeOutput(serverProcess.stdout, "info", "bridge-stdout");
+  captureBridgeOutput(serverProcess.stderr, "error", "bridge-stderr");
   serverProcess.unref?.();
   serverProcess.on("error", (err) => {
+    recordElectronDiagnostic({
+      level: "error",
+      event: "bridge-spawn-error",
+      message: formatError(err)
+    });
     if (!app.isQuiting) {
       dialog.showErrorBox(
         "MultiTerm",
@@ -154,7 +194,14 @@ function startServer() {
       );
     }
   });
-  serverProcess.on("exit", (code) => {
+  serverProcess.on("exit", (code, signal) => {
+    recordElectronDiagnostic({
+      level: app.isQuiting || code === 0 || code === null ? "info" : "error",
+      event: "bridge-exit",
+      message: `Terminal bridge exited with code ${code === null ? "none" : code}${signal ? ` (${signal})` : ""}.`,
+      code,
+      signal
+    });
     serverProcess = null;
     // A clean exit (0) or a kill we requested (null on signal) needs no action.
     if (app.isQuiting || code === 0 || code === null) return;
@@ -166,6 +213,12 @@ function startServer() {
     const now = Date.now();
     serverRestarts = serverRestarts.filter((t) => now - t < RESTART_WINDOW_MS);
     if (serverRestarts.length >= MAX_RESTARTS) {
+      recordElectronDiagnostic({
+        level: "error",
+        event: "bridge-restart-abandoned",
+        message: `Terminal bridge restart abandoned after ${serverRestarts.length} attempts.`,
+        code
+      });
       dialog.showErrorBox(
         "MultiTerm",
         `The terminal bridge keeps exiting unexpectedly (code ${code}). Giving up after ${serverRestarts.length} restart attempts.`
@@ -173,6 +226,13 @@ function startServer() {
       return;
     }
     serverRestarts.push(now);
+    recordElectronDiagnostic({
+      level: "warn",
+      event: "bridge-restart",
+      message: `Restarting terminal bridge after exit code ${code}.`,
+      code,
+      attempt: serverRestarts.length
+    });
     startServer();
   });
 }
@@ -1316,6 +1376,9 @@ module.exports = {
   onReady,
   bootstrap,
   __setElectron,
+  __setRuntimeDiagnostics(diagnostics) {
+    runtimeDiagnostics = diagnostics;
+  },
   formatError,
   isInternalUrl,
   isAllowedExternalUrl,
