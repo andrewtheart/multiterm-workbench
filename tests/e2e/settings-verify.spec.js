@@ -229,6 +229,8 @@ test.describe("Settings panel verification", () => {
   });
 
   test("AI title settings", async () => {
+    const originalHistory = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
+    const originalHistoryLimit = await setting("titleSuggestionHistoryLimit");
     await page.evaluate(() => {
       state.aiProviders = [
         {
@@ -252,6 +254,31 @@ test.describe("Settings panel verification", () => {
     await set("#copilotTitleContextKb", "20", "change");
     await set("#copilotTitleMinWords", "5", "change");
     await set("#copilotTitleMaxWords", "10", "change");
+
+    await page.evaluate(() => {
+      state.titleSuggestionHistory = Array.from({ length: 60 }, (_, index) => ({
+        id: `settings-history-${index}`,
+        terminalId: "settings-terminal",
+        terminalTitle: "settings terminal",
+        pid: 6000,
+        suggestion: `suggestion ${index}`,
+        suggestedAt: new Date(Date.UTC(2026, 7, 11, 10, index)).toISOString(),
+        decidedAt: null,
+        accepted: null,
+        automatic: true
+      }));
+      saveTitleSuggestionHistory();
+    });
+    await set("#titleSuggestionHistoryLimit", "50", "change");
+    expect(await setting("titleSuggestionHistoryLimit")).toBe(50);
+    expect(await page.evaluate(() => ({
+      history: state.titleSuggestionHistory.length,
+      persistedHistory: JSON.parse(localStorage.getItem("multiterm.titleSuggestionHistory")).length,
+      persistedSetting: JSON.parse(localStorage.getItem("multiterm.settings")).titleSuggestionHistoryLimit
+    }))).toEqual({ history: 50, persistedHistory: 50, persistedSetting: 50 });
+    await set("#titleSuggestionHistoryLimit", "999999", "change");
+    expect(await setting("titleSuggestionHistoryLimit")).toBe(10000);
+    expect(await page.locator("#titleSuggestionHistoryLimit").inputValue()).toBe("10000");
 
     expect(await page.evaluate(() => ({
       context: state.settings.copilotTitleContext,
@@ -314,6 +341,14 @@ test.describe("Settings panel verification", () => {
       "Extended - 128K tokens"
     ]);
     await expect(page.locator("#aiTitleProviderStatus")).toContainText("2 models");
+    await page.evaluate(({ history, limit }) => {
+      state.settings.titleSuggestionHistoryLimit = limit;
+      elements.titleSuggestionHistoryLimit.value = limit;
+      if (history == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
+      else localStorage.setItem("multiterm.titleSuggestionHistory", history);
+      state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      saveSettings();
+    }, { history: originalHistory, limit: originalHistoryLimit });
   });
 
   // Providers return one flat list mixing vendors, so the picker groups it by

@@ -311,4 +311,268 @@ test.describe("Automatic terminal title suggestions", () => {
     const remaining = await page.evaluate(() => state.settings.autoTitleSuppressions.length);
     expect(remaining).toBe(0);
   });
+
+  test("persists suggestion outcomes with terminal title, PID, and timestamps", async ({ page }) => {
+    await ready(page);
+    const original = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
+    try {
+      const pending = await page.evaluate(() => {
+        state.titleSuggestionHistory = [];
+        localStorage.removeItem("multiterm.titleSuggestionHistory");
+        const [terminal] = [...state.terminals.values()];
+        terminal.pid = 7331;
+        commitTerminalTitle(terminal, "release worker", false);
+        showTerminalTitleSuggestion(terminal, "publish artifacts", { auto: true });
+        return state.titleSuggestionHistory[0];
+      });
+      expect(pending).toMatchObject({
+        accepted: null,
+        automatic: true,
+        pid: 7331,
+        suggestion: "publish artifacts",
+        terminalTitle: "release worker"
+      });
+      expect(Number.isNaN(Date.parse(pending.suggestedAt))).toBe(false);
+
+      await page.evaluate(() => {
+        const [terminal] = [...state.terminals.values()];
+        acceptTerminalTitleSuggestion(terminal);
+        showTerminalTitleSuggestion(terminal, "discard this one");
+        rejectTerminalTitleSuggestion(terminal);
+      });
+
+      const settled = await page.evaluate(() => state.titleSuggestionHistory.map((record) => ({
+        accepted: record.accepted,
+        decidedAt: record.decidedAt,
+        suggestion: record.suggestion
+      })));
+      expect(settled.map((record) => [record.suggestion, record.accepted])).toEqual([
+        ["discard this one", false],
+        ["publish artifacts", true]
+      ]);
+      expect(settled.every((record) => !Number.isNaN(Date.parse(record.decidedAt)))).toBe(true);
+
+      const persisted = await page.evaluate(() => {
+        state.titleSuggestionHistory = [];
+        state.titleSuggestionHistory = loadTitleSuggestionHistory();
+        return state.titleSuggestionHistory.map((record) => record.accepted);
+      });
+      expect(persisted).toEqual([false, true]);
+    } finally {
+      await page.evaluate((stored) => {
+        if (stored == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
+        else localStorage.setItem("multiterm.titleSuggestionHistory", stored);
+        state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      }, original);
+    }
+  });
+
+  test("shows five timestamped prior suggestions under the editable title and reuses one", async ({ page }) => {
+    await ready(page);
+    const original = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
+    try {
+      await page.evaluate(() => {
+        const [terminal] = [...state.terminals.values()];
+        terminal.pid = 8442;
+        commitTerminalTitle(terminal, "build lane", false);
+        state.titleSuggestionHistory = Array.from({ length: 6 }, (_, index) => ({
+          id: `title-history-${index}`,
+          terminalId: terminal.id,
+          terminalTitle: "build lane",
+          pid: 8442,
+          suggestion: `history choice ${index + 1}`,
+          suggestedAt: new Date(Date.UTC(2026, 7, 11, 12, index)).toISOString(),
+          decidedAt: new Date(Date.UTC(2026, 7, 11, 12, index, 30)).toISOString(),
+          accepted: index % 2 === 0,
+          automatic: index % 2 === 1
+        }));
+        saveTitleSuggestionHistory();
+      });
+
+      const title = page.locator(".terminal-pane .pane-title").first();
+      await title.click();
+      const flyout = page.locator("#titleSuggestionFlyout");
+      await expect(flyout).toBeVisible();
+      const options = flyout.locator(".title-suggestion-flyout-option");
+      await expect(options).toHaveCount(5);
+      await expect(options.first()).toContainText("history choice 1");
+      await expect(options.first()).toContainText(/Aug 11, 2026/i);
+      await expect(options.first().locator(".title-suggestion-history-status")).toHaveText("Accepted");
+      await expect(options.nth(1)).toContainText(/Aug 11, 2026/i);
+      await expect(options.nth(1).locator(".title-suggestion-history-status")).toHaveText("Not accepted");
+
+      await options.nth(3).click();
+      await expect(title).toHaveValue("history choice 4");
+      await expect(flyout).toBeHidden();
+    } finally {
+      await page.evaluate((stored) => {
+        if (stored == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
+        else localStorage.setItem("multiterm.titleSuggestionHistory", stored);
+        state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      }, original);
+    }
+  });
+
+  test("stays out of the way while renaming and hands the keyboard its first suggestion", async ({ page }) => {
+    await ready(page);
+    const original = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
+    try {
+      await page.evaluate(() => {
+        state.titleSuggestionHistory = [];
+        localStorage.removeItem("multiterm.titleSuggestionHistory");
+        const [terminal] = [...state.terminals.values()];
+        terminal.pid = 8443;
+        commitTerminalTitle(terminal, "quiet lane", false);
+      });
+
+      const title = page.locator(".terminal-pane .pane-title").first();
+      const flyout = page.locator("#titleSuggestionFlyout");
+      await title.click();
+      await expect(flyout).toBeHidden();
+      await expect(title).toHaveAttribute("aria-expanded", "false");
+
+      await page.evaluate(() => {
+        const [terminal] = [...state.terminals.values()];
+        state.titleSuggestionHistory = [{
+          id: "title-history-keyboard",
+          terminalId: terminal.id,
+          terminalTitle: "quiet lane",
+          pid: 8443,
+          suggestion: "keyboard reachable",
+          suggestedAt: "2026-08-11T14:00:00.000Z",
+          decidedAt: null,
+          accepted: null,
+          automatic: true
+        }];
+        saveTitleSuggestionHistory();
+      });
+
+      await title.press("ArrowDown");
+      await expect(flyout).toBeVisible();
+      await expect(title).toHaveAttribute("aria-expanded", "true");
+      const first = flyout.locator(".title-suggestion-flyout-option").first();
+      await expect(first).toBeFocused();
+
+      await page.keyboard.press("Escape");
+      await expect(flyout).toBeHidden();
+      await expect(title).toHaveAttribute("aria-expanded", "false");
+      await expect(title).toBeFocused();
+    } finally {
+      await page.evaluate((stored) => {
+        if (stored == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
+        else localStorage.setItem("multiterm.titleSuggestionHistory", stored);
+        state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      }, original);
+    }
+  });
+
+  test("exposes timestamped title history from the hamburger and the app-wide history view", async ({ page }) => {
+    await ready(page);
+    const original = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
+    try {
+      await page.evaluate(() => {
+        const [terminal] = [...state.terminals.values()];
+        terminal.pid = 9553;
+        commitTerminalTitle(terminal, "deploy lane", false);
+        state.titleSuggestionHistory = [
+          {
+            id: "title-history-current",
+            terminalId: terminal.id,
+            terminalTitle: "deploy lane",
+            pid: 9553,
+            suggestion: "ship release",
+            suggestedAt: "2026-08-11T13:15:00.000Z",
+            decidedAt: "2026-08-11T13:16:00.000Z",
+            accepted: true,
+            automatic: false
+          },
+          {
+            id: "title-history-other",
+            terminalId: "ended-terminal",
+            terminalTitle: "test runner",
+            pid: 9999,
+            suggestion: "watch integration tests",
+            suggestedAt: "2026-08-10T09:30:00.000Z",
+            decidedAt: "2026-08-10T09:31:00.000Z",
+            accepted: false,
+            automatic: true
+          }
+        ];
+        saveTitleSuggestionHistory();
+      });
+
+      await page.locator('.terminal-pane [data-action="more"]').first().click();
+      await page.getByRole("menuitem", { name: "Title suggestion history", exact: true }).hover();
+      const submenu = page.locator("#contextSubmenu");
+      await expect(submenu).toBeVisible();
+      await expect(submenu).toContainText("ship release");
+      await expect(submenu).toContainText(/Accepted.*Aug 11, 2026/i);
+      await submenu.getByRole("menuitem", { name: /^View all history/ }).click();
+
+      const overlay = page.locator("#titleSuggestionHistoryOverlay");
+      await expect(overlay).toBeVisible();
+      await expect(overlay.locator(".title-suggestion-history-row")).toHaveCount(1);
+      await expect(overlay).toContainText(/deploy lane.*PID 9553.*Aug 11, 2026/i);
+      await page.locator("#titleSuggestionHistoryClose").click();
+      await expect(overlay).toBeHidden();
+
+      await page.locator("#commandPalette").click();
+      await page.locator("#paletteInput").fill("title suggestion history");
+      await page.getByRole("option", { name: /^Title suggestion history/ }).click();
+      await expect(overlay.locator(".title-suggestion-history-row")).toHaveCount(2);
+      await page.locator("#titleSuggestionHistoryFilter").fill("pid 9999");
+      await expect(overlay.locator(".title-suggestion-history-row")).toHaveCount(1);
+      await expect(overlay).toContainText(/watch integration tests.*Not accepted/i);
+      await expect(overlay).toContainText(/test runner.*PID 9999.*Aug 10, 2026/i);
+    } finally {
+      await page.evaluate((stored) => {
+        if (stored == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
+        else localStorage.setItem("multiterm.titleSuggestionHistory", stored);
+        state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      }, original);
+    }
+  });
+
+  test("replaces an undecided suggestion without losing the original title", async ({ page }) => {
+    await ready(page);
+    const original = await page.evaluate(() => localStorage.getItem("multiterm.titleSuggestionHistory"));
+    try {
+      const result = await page.evaluate(() => {
+        state.titleSuggestionHistory = [];
+        localStorage.removeItem("multiterm.titleSuggestionHistory");
+        const [terminal] = [...state.terminals.values()];
+        terminal.pid = 9664;
+        commitTerminalTitle(terminal, "release lane", false);
+        showTerminalTitleSuggestion(terminal, "first proposal");
+        showTerminalTitleSuggestion(terminal, "second proposal");
+        const beforeReject = {
+          records: state.titleSuggestionHistory.map((record) => ({
+            accepted: record.accepted,
+            suggestion: record.suggestion,
+            terminalTitle: record.terminalTitle
+          })),
+          shown: terminal.titleInput.value
+        };
+        rejectTerminalTitleSuggestion(terminal);
+        return { beforeReject, restored: terminal.titleInput.value };
+      });
+
+      expect(result).toEqual({
+        beforeReject: {
+          records: [
+            { accepted: null, suggestion: "second proposal", terminalTitle: "release lane" },
+            { accepted: false, suggestion: "first proposal", terminalTitle: "release lane" }
+          ],
+          shown: "second proposal"
+        },
+        restored: "release lane"
+      });
+    } finally {
+      await page.evaluate((stored) => {
+        if (stored == null) localStorage.removeItem("multiterm.titleSuggestionHistory");
+        else localStorage.setItem("multiterm.titleSuggestionHistory", stored);
+        state.titleSuggestionHistory = loadTitleSuggestionHistory();
+      }, original);
+    }
+  });
 });

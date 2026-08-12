@@ -29,6 +29,7 @@ const defaultSettings = {
   allowBridgeTerminalFocus: false,
   appTheme: "dark",
   autoTitleSuggestions: true,
+  titleSuggestionHistoryLimit: 500,
   // Opt-in: hiding Focus/Maximize until hover is a real trade against
   // discoverability, and the menu defaults already free most of the bar.
   headerActionsRevealOnHover: false,
@@ -174,6 +175,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotTitleMinWords: "copilot title minimum words length short concise",
   autoTitleSuggestions: "automatic periodic background terminal title suggestions ai copilot rename",
   autoTitleSchedule: "automatic title interval minutes backoff schedule frequency how often rename delay",
+  titleSuggestionHistoryLimit: "title suggestion history retention entries terminal name pid process accepted rejected timestamp",
   autoTitleSuppressionsClear: "automatic title pause paused suppress suppressed stop skip exclude ignore terminal pid process title rename resume everywhere clear",
   resumeAssistantSessions: "resume restore copilot claude sessions relaunch restart crash recover reopen tui",
   headerActionsRevealOnHover: "header actions buttons hide reveal hover show on hover terminal title space room icons",
@@ -293,6 +295,8 @@ const HEADER_ACTION_SHORTCUT_DEFAULTS = Object.freeze({
 const APP_VERSION = "0.1.89";
 const AUTOMATIONS_STORAGE_KEY = "multiterm.automations";
 const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
+const TITLE_SUGGESTION_HISTORY_STORAGE_KEY = "multiterm.titleSuggestionHistory";
+const TITLE_SUGGESTION_HISTORY_MAX_LIMIT = 10000;
 const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 22;
@@ -597,6 +601,7 @@ const elements = {
   copilotTitleModel: document.querySelector("#copilotTitleModel"),
   autoTitleSuggestions: document.querySelector("#autoTitleSuggestions"),
   autoTitleSchedule: document.querySelector("#autoTitleSchedule"),
+  titleSuggestionHistoryLimit: document.querySelector("#titleSuggestionHistoryLimit"),
   autoTitleSuppressionRow: document.querySelector("#autoTitleSuppressionRow"),
   autoTitleSuppressionList: document.querySelector("#autoTitleSuppressionList"),
   autoTitleSuppressionsClear: document.querySelector("#autoTitleSuppressionsClear"),
@@ -944,6 +949,18 @@ const elements = {
   syncInput: document.querySelector("#syncInput"),
   terminalSearchInput: document.querySelector("#terminalSearchInput"),
   terminalSearchCount: document.querySelector("#terminalSearchCount"),
+  titleSuggestionFlyout: document.querySelector("#titleSuggestionFlyout"),
+  titleSuggestionFlyoutAll: document.querySelector("#titleSuggestionFlyoutAll"),
+  titleSuggestionFlyoutEmpty: document.querySelector("#titleSuggestionFlyoutEmpty"),
+  titleSuggestionFlyoutList: document.querySelector("#titleSuggestionFlyoutList"),
+  titleSuggestionFlyoutSubtitle: document.querySelector("#titleSuggestionFlyoutSubtitle"),
+  titleSuggestionHistoryClose: document.querySelector("#titleSuggestionHistoryClose"),
+  titleSuggestionHistoryEmpty: document.querySelector("#titleSuggestionHistoryEmpty"),
+  titleSuggestionHistoryFilter: document.querySelector("#titleSuggestionHistoryFilter"),
+  titleSuggestionHistoryList: document.querySelector("#titleSuggestionHistoryList"),
+  titleSuggestionHistoryOverlay: document.querySelector("#titleSuggestionHistoryOverlay"),
+  titleSuggestionHistorySubtitle: document.querySelector("#titleSuggestionHistorySubtitle"),
+  titleSuggestionHistorySummary: document.querySelector("#titleSuggestionHistorySummary"),
   terminalArtifactsBadge: document.querySelector("#terminalArtifactsBadge"),
   terminalArtifactsClose: document.querySelector("#terminalArtifactsClose"),
   terminalArtifactsOverlay: document.querySelector("#terminalArtifactsOverlay"),
@@ -1015,6 +1032,8 @@ let terminalNotificationFlyoutId = null;
 let terminalNotificationFlyoutAnchor = null;
 let terminalNotesFlyoutId = null;
 let terminalNotesFlyoutAnchor = null;
+let titleSuggestionFlyoutId = null;
+let titleSuggestionFlyoutAnchor = null;
 
 const COPILOT_CWD_HISTORY_STORAGE_KEY = "multiterm.copilotCwdHistory";
 const COPILOT_CWD_HISTORY_LIMIT = 10;
@@ -1044,6 +1063,48 @@ function normalizeCopilotCwdHistory(value) {
 function loadCopilotCwdHistory() {
   try {
     return normalizeCopilotCwdHistory(JSON.parse(localStorage.getItem(COPILOT_CWD_HISTORY_STORAGE_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeTitleSuggestionHistory(value) {
+  if (!Array.isArray(value)) return [];
+  const history = [];
+  const ids = new Set();
+  const text = (candidate, maximum) => typeof candidate === "string"
+    ? candidate.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum)
+    : "";
+  for (const raw of value.slice(0, TITLE_SUGGESTION_HISTORY_MAX_LIMIT)) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = text(raw.id, 160);
+    const suggestion = text(raw.suggestion, 320);
+    const terminalTitle = text(raw.terminalTitle, 320);
+    const suggestedAt = typeof raw.suggestedAt === "string" && !Number.isNaN(new Date(raw.suggestedAt).getTime())
+      ? raw.suggestedAt
+      : "";
+    if (!id || ids.has(id) || !suggestion || !terminalTitle || !suggestedAt) continue;
+    ids.add(id);
+    history.push({
+      id,
+      terminalId: text(raw.terminalId, 160),
+      terminalTitle,
+      pid: Number.isInteger(Number(raw.pid)) && Number(raw.pid) > 0 ? Number(raw.pid) : null,
+      suggestion,
+      suggestedAt,
+      decidedAt: typeof raw.decidedAt === "string" && !Number.isNaN(new Date(raw.decidedAt).getTime())
+        ? raw.decidedAt
+        : null,
+      accepted: typeof raw.accepted === "boolean" ? raw.accepted : null,
+      automatic: raw.automatic === true
+    });
+  }
+  return history;
+}
+
+function loadTitleSuggestionHistory() {
+  try {
+    return normalizeTitleSuggestionHistory(JSON.parse(localStorage.getItem(TITLE_SUGGESTION_HISTORY_STORAGE_KEY) || "[]"));
   } catch {
     return [];
   }
@@ -1092,6 +1153,8 @@ const state = {
   statistics: { terminalId: null, loading: false, requestGeneration: 0, returnFocus: null },
   terminalArtifacts: loadTerminalArtifacts(),
   terminalArtifactsHub: { returnFocus: null, savedTimer: 0 },
+  titleSuggestionHistory: loadTitleSuggestionHistory(),
+  titleSuggestionHistoryHub: { returnFocus: null, scope: null },
   terminalMessages: new Map(),
   terminalMessagesHub: { returnFocus: null },
   terminalLinks: loadTerminalLinks(),
@@ -1185,6 +1248,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
   bindTerminalNotificationFlyout();
   bindTerminalNotesFlyout();
+  bindTitleSuggestionHistory();
   bindHeaderBackgroundFlyout();
   applyVersion();
   applySettings();
@@ -1541,6 +1605,8 @@ function bindControls() {
   bindSetting(elements.copilotTitleMaxWords, "copilotTitleMaxWords", "change", clampCopilotTitleMaxWords);
   bindSetting(elements.autoTitleSuggestions, "autoTitleSuggestions", "change", (_, element) => element.checked);
   bindSetting(elements.autoTitleSchedule, "autoTitleSchedule", "change", normalizeAutoTitleSchedule);
+  bindSetting(elements.titleSuggestionHistoryLimit, "titleSuggestionHistoryLimit", "change", clampTitleSuggestionHistoryLimit);
+  elements.titleSuggestionHistoryLimit.addEventListener("change", saveTitleSuggestionHistory);
   elements.autoTitleSuppressionsClear?.addEventListener("click", clearAutoTitleSuppressions);
   bindSetting(elements.resumeAssistantSessions, "resumeAssistantSessions", "change", normalizeResumeAssistantSessions);
   bindSetting(elements.headerActionsRevealOnHover, "headerActionsRevealOnHover", "change", (_, element) => element.checked);
@@ -1698,6 +1764,7 @@ const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
 const COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS = { min: 64, max: 16384, fallback: 1024 };
 const COPILOT_TITLE_CONTEXT_KB_BOUNDS = { min: 4, max: 24, fallback: 16 };
 const COPILOT_TITLE_WORD_BOUNDS = { min: 1, max: 20 };
+const TITLE_SUGGESTION_HISTORY_BOUNDS = { min: 25, max: TITLE_SUGGESTION_HISTORY_MAX_LIMIT, fallback: 500 };
 const COPILOT_TITLE_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const COPILOT_TITLE_CONTEXTS = new Set(["default", "long_context"]);
 const AI_PROVIDER_IDS = new Set(["none", "copilot", "claude"]);
@@ -1784,6 +1851,10 @@ function clampCopilotTitleContextKb(value, element = elements.copilotTitleContex
   return clampSettingNumber(value, element, COPILOT_TITLE_CONTEXT_KB_BOUNDS);
 }
 
+function clampTitleSuggestionHistoryLimit(value, element = elements.titleSuggestionHistoryLimit) {
+  return clampSettingNumber(value, element, TITLE_SUGGESTION_HISTORY_BOUNDS);
+}
+
 function clampCopilotTitleMinWords(value, element = elements.copilotTitleMinWords) {
   const minimum = clampSettingNumber(value, element, { ...COPILOT_TITLE_WORD_BOUNDS, fallback: 2 });
   const maximum = Number(state.settings.copilotTitleMaxWords) || defaultSettings.copilotTitleMaxWords;
@@ -1813,6 +1884,7 @@ function syncCopilotTitleSettings() {
   state.settings.copilotTitleMinWords = clampCopilotTitleMinWords(state.settings.copilotTitleMinWords);
   state.settings.copilotTitleMaxWords = clampCopilotTitleMaxWords(state.settings.copilotTitleMaxWords);
   state.settings.autoTitleSchedule = normalizeAutoTitleSchedule(state.settings.autoTitleSchedule);
+  state.settings.titleSuggestionHistoryLimit = clampTitleSuggestionHistoryLimit(state.settings.titleSuggestionHistoryLimit);
   state.settings.autoTitleSuppressions = normalizeAutoTitleSuppressions(state.settings.autoTitleSuppressions);
   state.settings.resumeAssistantSessions = normalizeResumeAssistantSessions(state.settings.resumeAssistantSessions);
   elements.aiTitleProvider.value = state.settings.aiTitleProvider;
@@ -2895,6 +2967,7 @@ function addTerminal(options = {}) {
     titleOriginal: "",
     titleReview,
     titleSuggestion: "",
+    titleSuggestionHistoryId: "",
     autoTitleStep: 0,
     autoTitleTimer: 0,
     autoTitleRevision: 0,
@@ -3983,6 +4056,7 @@ function openTerminalNotificationFlyout(terminal, anchor) {
   closeHeaderActionScopeFlyout();
   closeTerminalNotesFlyout();
   closeHeaderBackgroundFlyout();
+  closeTitleSuggestionFlyout();
   hideContextMenu();
   if (terminalNotificationFlyoutAnchor && terminalNotificationFlyoutAnchor !== anchor) {
     terminalNotificationFlyoutAnchor.setAttribute("aria-expanded", "false");
@@ -4143,10 +4217,22 @@ function bindPaneControls(terminal) {
   });
 
   terminal.titleInput.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" && !event.isComposing && terminal.titleReview.hidden) {
+      event.preventDefault();
+      openTitleSuggestionFlyout(terminal, terminal.titleInput, { focus: true });
+      return;
+    }
     if (event.key !== "Enter" || event.isComposing) return;
     event.preventDefault();
     event.stopPropagation();
     terminal.titleInput.blur();
+  });
+  // Clicking the title is usually the start of a rename, so an empty flyout would
+  // just be in the way; ArrowDown asks for it explicitly and always answers.
+  terminal.titleInput.addEventListener("click", () => {
+    if (!terminal.titleReview.hidden) return;
+    if (titleSuggestionHistoryForTerminal(terminal).length === 0) return;
+    openTitleSuggestionFlyout(terminal, terminal.titleInput);
   });
 
   // One button, three jobs: reveal a suggestion that is already waiting, ask for
@@ -4897,8 +4983,303 @@ function bindAssistantRestoreDialog() {
   });
 }
 
-function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
+function titleSuggestionHistoryLimit() {
+  const value = Number(state.settings.titleSuggestionHistoryLimit);
+  return Number.isFinite(value) ? Math.max(25, Math.min(10000, Math.round(value))) : 500;
+}
+
+function saveTitleSuggestionHistory() {
+  state.titleSuggestionHistory = normalizeTitleSuggestionHistory(state.titleSuggestionHistory)
+    .slice(0, titleSuggestionHistoryLimit());
+  localStorage.setItem(TITLE_SUGGESTION_HISTORY_STORAGE_KEY, JSON.stringify(state.titleSuggestionHistory));
+  refreshTitleSuggestionHistoryViews();
+}
+
+function recordTerminalTitleSuggestion(terminal, suggestion, { auto = false } = {}) {
+  const terminalTitle = terminal?.titleInput?.value?.trim();
+  if (!terminal || !terminalTitle || !String(suggestion || "").trim()) return null;
+  const record = {
+    id: createId(),
+    terminalId: terminal.id,
+    terminalTitle,
+    pid: Number.isInteger(Number(terminal.pid)) && Number(terminal.pid) > 0 ? Number(terminal.pid) : null,
+    suggestion: String(suggestion).trim(),
+    suggestedAt: new Date().toISOString(),
+    decidedAt: null,
+    accepted: null,
+    automatic: auto
+  };
+  state.titleSuggestionHistory.unshift(record);
+  terminal.titleSuggestionHistoryId = record.id;
+  saveTitleSuggestionHistory();
+  return record;
+}
+
+function settleTerminalTitleSuggestion(terminal, accepted) {
+  const id = terminal?.titleSuggestionHistoryId;
+  if (!id) return;
+  const record = state.titleSuggestionHistory.find((entry) => entry.id === id);
+  terminal.titleSuggestionHistoryId = "";
+  if (!record || record.accepted !== null) return;
+  record.accepted = accepted === true;
+  record.decidedAt = new Date().toISOString();
+  saveTitleSuggestionHistory();
+}
+
+function titleSuggestionHistoryForTerminal(terminal) {
+  if (!terminal) return [];
+  const terminalId = terminal.id;
+  const pid = Number.isInteger(Number(terminal.pid)) && Number(terminal.pid) > 0 ? Number(terminal.pid) : null;
+  const title = String(terminal.titleInput?.value || "").trim().toLocaleLowerCase();
+  return state.titleSuggestionHistory.filter((record) =>
+    record.terminalId === terminalId
+    || (pid != null && record.pid === pid)
+    || (title && record.terminalTitle.toLocaleLowerCase() === title)
+    || (title && record.accepted === true && record.suggestion.toLocaleLowerCase() === title)
+  );
+}
+
+function titleSuggestionOutcome(record) {
+  if (record.accepted === true) return { label: "Accepted", tone: "accepted" };
+  if (record.accepted === false) return { label: "Not accepted", tone: "rejected" };
+  return { label: "Awaiting decision", tone: "pending" };
+}
+
+function titleSuggestionTime(record) {
+  return artifactTimeLabel(record.suggestedAt) || "Time unavailable";
+}
+
+function titleSuggestionHistoryOption(record, terminal, { compact = false } = {}) {
+  const row = document.createElement(terminal ? "button" : "article");
+  if (terminal) row.type = "button";
+  else row.setAttribute("role", "listitem");
+  row.className = compact ? "title-suggestion-flyout-option" : "title-suggestion-history-row";
+  row.dataset.titleSuggestionHistoryId = record.id;
+  const outcome = titleSuggestionOutcome(record);
+
+  const copy = document.createElement("span");
+  copy.className = "title-suggestion-history-copy";
+  const suggestion = document.createElement("strong");
+  suggestion.textContent = record.suggestion;
+  const meta = document.createElement("span");
+  meta.className = "title-suggestion-history-meta";
+  const identity = [record.terminalTitle, record.pid ? `PID ${record.pid}` : null].filter(Boolean).join(" \u00b7 ");
+  meta.textContent = compact
+    ? titleSuggestionTime(record)
+    : `${identity} \u00b7 ${record.automatic ? "Automatic" : "Manual"} \u00b7 ${titleSuggestionTime(record)}`;
+  copy.append(suggestion, meta);
+
+  const status = document.createElement("span");
+  status.className = "title-suggestion-history-status";
+  status.dataset.tone = outcome.tone;
+  status.textContent = outcome.label;
+  row.append(copy, status);
+  if (terminal) {
+    row.title = `Use "${record.suggestion}" for ${terminal.titleInput.value || "this terminal"}`;
+    row.addEventListener("click", () => applyTitleSuggestionHistoryRecord(terminal, record));
+  }
+  return row;
+}
+
+function applyTitleSuggestionHistoryRecord(terminal, record) {
+  if (!terminal || !record || state.terminals.get(terminal.id) !== terminal) return;
+  if (terminal.titleSuggestionHistoryId === record.id && terminal.titleSuggestion) {
+    acceptTerminalTitleSuggestion(terminal);
+  } else {
+    commitTerminalTitle(terminal, record.suggestion);
+    terminal.term.focus();
+  }
+  closeTitleSuggestionFlyout();
+}
+
+function renderTitleSuggestionFlyout() {
+  const terminal = state.terminals.get(titleSuggestionFlyoutId);
+  if (!terminal) {
+    closeTitleSuggestionFlyout();
+    return;
+  }
+  const records = titleSuggestionHistoryForTerminal(terminal).slice(0, 5);
+  elements.titleSuggestionFlyoutSubtitle.textContent = `${terminal.titleInput.value || "Terminal"} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : "process starting"}`;
+  elements.titleSuggestionFlyoutList.textContent = "";
+  for (const record of records) {
+    elements.titleSuggestionFlyoutList.append(titleSuggestionHistoryOption(record, terminal, { compact: true }));
+  }
+  elements.titleSuggestionFlyoutEmpty.hidden = records.length > 0;
+}
+
+function positionTitleSuggestionFlyout(anchor) {
+  const flyout = elements.titleSuggestionFlyout;
+  const anchorRect = anchor.getBoundingClientRect();
+  flyout.classList.add("is-positioning");
+  flyout.hidden = false;
+  flyout.style.left = "0px";
+  flyout.style.top = "0px";
+  const rect = flyout.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - rect.width - 8));
+  const below = anchorRect.bottom + 6;
+  const top = below + rect.height <= window.innerHeight - 8
+    ? below
+    : Math.max(8, anchorRect.top - rect.height - 6);
+  flyout.style.left = `${left}px`;
+  flyout.style.top = `${top}px`;
+  flyout.classList.remove("is-positioning");
+}
+
+function openTitleSuggestionFlyout(terminal, anchor, { focus = false } = {}) {
+  if (!terminal || !anchor) return;
+  closeTitleSuggestionFlyout();
+  closeHeaderActionScopeFlyout();
+  closeTerminalNotificationFlyout();
+  closeTerminalNotesFlyout();
+  closeHeaderBackgroundFlyout();
+  hideContextMenu();
+  titleSuggestionFlyoutId = terminal.id;
+  titleSuggestionFlyoutAnchor = anchor;
+  if (anchor.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "true");
+  renderTitleSuggestionFlyout();
+  refreshIcons(elements.titleSuggestionFlyout);
+  positionTitleSuggestionFlyout(anchor);
+  // The flyout lives at the end of the document, so a keyboard request has to be
+  // handed the first option or it is unreachable from the title field.
+  if (focus) {
+    const first = elements.titleSuggestionFlyout.querySelector(".title-suggestion-flyout-option")
+      || elements.titleSuggestionFlyoutAll;
+    first?.focus({ preventScroll: true });
+  }
+}
+
+function closeTitleSuggestionFlyout({ restoreFocus = false } = {}) {
+  const anchor = titleSuggestionFlyoutAnchor;
+  elements.titleSuggestionFlyout.hidden = true;
+  titleSuggestionFlyoutId = null;
+  titleSuggestionFlyoutAnchor = null;
+  if (anchor?.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
+}
+
+function titleSuggestionHistoryMatches(record, query) {
+  const needle = String(query || "").trim().toLocaleLowerCase();
+  if (!needle) return true;
+  const outcome = titleSuggestionOutcome(record).label;
+  return [record.suggestion, record.terminalTitle, record.pid ? `pid ${record.pid}` : "", outcome,
+    record.automatic ? "automatic" : "manual", titleSuggestionTime(record)]
+    .some((value) => String(value).toLocaleLowerCase().includes(needle));
+}
+
+function scopedTitleSuggestionHistory() {
+  const scope = state.titleSuggestionHistoryHub.scope;
+  if (!scope) return state.titleSuggestionHistory;
+  return state.titleSuggestionHistory.filter((record) =>
+    record.terminalId === scope.terminalId
+    || (scope.pid != null && record.pid === scope.pid)
+    || record.terminalTitle.toLocaleLowerCase() === scope.title
+    || (record.accepted === true && record.suggestion.toLocaleLowerCase() === scope.title)
+  );
+}
+
+function renderTitleSuggestionHistory() {
+  const records = scopedTitleSuggestionHistory()
+    .filter((record) => titleSuggestionHistoryMatches(record, elements.titleSuggestionHistoryFilter.value));
+  elements.titleSuggestionHistoryList.textContent = "";
+  for (const record of records) elements.titleSuggestionHistoryList.append(titleSuggestionHistoryOption(record, null));
+  elements.titleSuggestionHistoryEmpty.hidden = records.length > 0;
+  elements.titleSuggestionHistorySummary.textContent = `${records.length} suggestion${records.length === 1 ? "" : "s"}`;
+}
+
+function openTitleSuggestionHistory(terminal = null) {
+  closeTitleSuggestionFlyout();
+  closePalette();
+  hideContextMenu();
+  state.titleSuggestionHistoryHub.returnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null;
+  state.titleSuggestionHistoryHub.scope = terminal ? {
+    terminalId: terminal.id,
+    pid: Number.isInteger(Number(terminal.pid)) && Number(terminal.pid) > 0 ? Number(terminal.pid) : null,
+    title: String(terminal.titleInput?.value || "").trim().toLocaleLowerCase()
+  } : null;
+  elements.titleSuggestionHistorySubtitle.textContent = terminal
+    ? `${terminal.titleInput.value || "Terminal"} \u00b7 ${terminal.pid ? `PID ${terminal.pid}` : "process starting"}`
+    : "Suggestions retained across terminal names and process IDs.";
+  elements.titleSuggestionHistoryFilter.value = "";
+  renderTitleSuggestionHistory();
+  elements.titleSuggestionHistoryOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.titleSuggestionHistoryOverlay.classList.add("is-open"));
+  elements.titleSuggestionHistoryFilter.focus({ preventScroll: true });
+  refreshIcons(elements.titleSuggestionHistoryOverlay);
+}
+
+function closeTitleSuggestionHistory() {
+  const returnFocus = state.titleSuggestionHistoryHub.returnFocus;
+  state.titleSuggestionHistoryHub.returnFocus = null;
+  state.titleSuggestionHistoryHub.scope = null;
+  elements.titleSuggestionHistoryOverlay.classList.remove("is-open");
+  window.setTimeout(() => {
+    elements.titleSuggestionHistoryOverlay.hidden = true;
+    if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  }, 150);
+}
+
+function refreshTitleSuggestionHistoryViews() {
+  if (!elements.titleSuggestionHistoryOverlay?.hidden) renderTitleSuggestionHistory();
+  if (!elements.titleSuggestionFlyout?.hidden) renderTitleSuggestionFlyout();
+}
+
+function titleSuggestionHistoryMenuItems(terminal) {
+  const records = titleSuggestionHistoryForTerminal(terminal).slice(0, 5);
+  const items = records.map((record) => {
+    const outcome = titleSuggestionOutcome(record);
+    return {
+      label: `${record.suggestion} (${outcome.label}, ${titleSuggestionTime(record)})`,
+      hint: `${outcome.label} \u00b7 ${titleSuggestionTime(record)}`,
+      icon: outcome.tone === "accepted" ? "check" : outcome.tone === "rejected" ? "x" : "clock-3",
+      title: `${record.terminalTitle}${record.pid ? ` \u00b7 PID ${record.pid}` : ""} \u00b7 ${titleSuggestionTime(record)}`,
+      run: () => applyTitleSuggestionHistoryRecord(terminal, record)
+    };
+  });
+  if (items.length === 0) items.push({ info: true, icon: "history", label: "No suggestions for this title or PID" });
+  items.push({ separator: true });
+  items.push({ label: "View all history\u2026", icon: "list", run: () => openTitleSuggestionHistory(terminal) });
+  return items;
+}
+
+function bindTitleSuggestionHistory() {
+  elements.titleSuggestionHistoryClose.addEventListener("click", closeTitleSuggestionHistory);
+  elements.titleSuggestionHistoryFilter.addEventListener("input", renderTitleSuggestionHistory);
+  elements.titleSuggestionHistoryOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.titleSuggestionHistoryOverlay) closeTitleSuggestionHistory();
+  });
+  elements.titleSuggestionHistoryOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeTitleSuggestionHistory();
+    }
+  });
+  elements.titleSuggestionFlyoutAll.addEventListener("click", () => {
+    const terminal = state.terminals.get(titleSuggestionFlyoutId);
+    if (terminal) openTitleSuggestionHistory(terminal);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (elements.titleSuggestionFlyout.hidden) return;
+    if (elements.titleSuggestionFlyout.contains(event.target) || titleSuggestionFlyoutAnchor?.contains(event.target)) return;
+    closeTitleSuggestionFlyout();
+  }, true);
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || elements.titleSuggestionFlyout.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeTitleSuggestionFlyout({ restoreFocus: true });
+  }, true);
+  window.addEventListener("resize", () => {
+    if (!elements.titleSuggestionFlyout.hidden && titleSuggestionFlyoutAnchor?.isConnected) {
+      positionTitleSuggestionFlyout(titleSuggestionFlyoutAnchor);
+    }
+  });
+}
+
+function clearTerminalTitleSuggestion(terminal, restoreOriginal = false, { accepted = false } = {}) {
   if (!terminal) return;
+  if (terminal.titleSuggestion) settleTerminalTitleSuggestion(terminal, accepted);
   terminal.titleGenerationToken += 1;
   terminal.titleGenerate.disabled = false;
   terminal.titleGenerate.classList.remove("is-loading");
@@ -4919,7 +5300,9 @@ function clearTerminalTitleSuggestion(terminal, restoreOriginal = false) {
 // must not take focus from whatever the user is doing, and it must not overwrite
 // a rename in progress -- that case waits as a badge on the suggest button.
 function showTerminalTitleSuggestion(terminal, title, { auto = false } = {}) {
+  if (terminal.titleSuggestion) clearTerminalTitleSuggestion(terminal, true);
   terminal.titleSuggestion = title;
+  recordTerminalTitleSuggestion(terminal, title, { auto });
   if (auto && document.activeElement === terminal.titleInput) {
     updateTerminalTitleGenerateButton(terminal);
     return;
@@ -4945,7 +5328,7 @@ function revealTerminalTitleSuggestion(terminal, { focus = true } = {}) {
 function acceptTerminalTitleSuggestion(terminal) {
   const title = terminal?.titleSuggestion;
   if (!title) return;
-  clearTerminalTitleSuggestion(terminal);
+  clearTerminalTitleSuggestion(terminal, false, { accepted: true });
   commitTerminalTitle(terminal, title);
   terminal.term.focus();
 }
@@ -9774,6 +10157,7 @@ function getCommands() {
     { label: "Broadcast command…", hint: primaryGlobalShortcutLabel("terminal.broadcast"), run: () => toggleBroadcast(true) },
     { label: "Dequeue next command", hint: primaryGlobalShortcutLabel("terminal.dequeue"), run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
     { label: "Terminal notes & command queue…", run: () => openTerminalArtifacts(state.activeId) },
+    { label: "Title suggestion history\u2026", run: () => openTitleSuggestionHistory() },
     { label: "Send to terminal…", run: () => openTerminalMessages(state.activeId) },
     { label: "Automations…", run: () => openAutomationStudio() },
     { label: "Automation run history…", run: () => openAutomationStudio("activity") },
@@ -17249,6 +17633,7 @@ function openHeaderBackgroundFlyout(terminal, anchor) {
   closeHeaderActionScopeFlyout();
   closeTerminalNotificationFlyout();
   closeTerminalNotesFlyout();
+  closeTitleSuggestionFlyout();
   hideContextMenu();
   if (headerBackgroundFlyoutAnchor && headerBackgroundFlyoutAnchor !== anchor) {
     headerBackgroundFlyoutAnchor.setAttribute("aria-expanded", "false");
@@ -17911,6 +18296,7 @@ function openTerminalNotesFlyout(terminal, anchor) {
   closeHeaderActionScopeFlyout();
   closeTerminalNotificationFlyout();
   closeHeaderBackgroundFlyout();
+  closeTitleSuggestionFlyout();
   hideContextMenu();
   if (terminalNotesFlyoutAnchor && terminalNotesFlyoutAnchor !== anchor) {
     if (terminalNotesFlyoutAnchor.getAttribute("aria-haspopup") === "dialog") {
@@ -23103,11 +23489,25 @@ function buildPaneOverflowMenu(terminal) {
     });
   }
 
-  renderContextMenu(items.length > 0 ? items : [{
-    info: true,
-    label: "Drag a header button here",
-    icon: "grip-vertical"
-  }]);
+  // The menu is also the drop target for header buttons, so it has to say so
+  // while it holds nothing that was moved here.
+  const hasHeaderActionRows = items.length > 0;
+
+  items.unshift({
+    label: "Title suggestion history",
+    icon: "history",
+    submenu: titleSuggestionHistoryMenuItems(terminal)
+  });
+
+  if (!hasHeaderActionRows) {
+    items.push({ separator: true }, {
+      info: true,
+      label: "Drag a header button here",
+      icon: "grip-vertical"
+    });
+  }
+
+  renderContextMenu(items);
 }
 
 const CONTEXT_MENU_LAYOUT_STORAGE_KEY = "multiterm.contextMenuLayout";

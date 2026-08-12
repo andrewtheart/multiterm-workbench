@@ -7446,6 +7446,271 @@ button.shortcut-binding.is-capturing {
   width: 100%;
 }
 
+.title-suggestion-flyout {
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--elev-4);
+  color: var(--text);
+  padding: 14px;
+  position: fixed;
+  width: min(390px, calc(100vw - 16px));
+  z-index: 147;
+}
+
+.title-suggestion-flyout[hidden],
+.title-suggestion-flyout-empty[hidden] {
+  display: none;
+}
+
+.title-suggestion-flyout.is-positioning {
+  visibility: hidden;
+}
+
+.title-suggestion-flyout-head,
+.title-suggestion-history-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+}
+
+.title-suggestion-flyout-head > svg,
+.title-suggestion-history-head > svg {
+  color: var(--primary);
+  flex: 0 0 auto;
+  height: 19px;
+  margin-top: 2px;
+  width: 19px;
+}
+
+.title-suggestion-flyout-head > div,
+.title-suggestion-history-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.title-suggestion-flyout-head h2,
+.title-suggestion-history-head h2 {
+  font-size: 14px;
+  letter-spacing: 0;
+  margin: 0;
+}
+
+.title-suggestion-flyout-head p,
+.title-suggestion-history-head p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-suggestion-flyout-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 11px;
+}
+
+.title-suggestion-flyout-option,
+.title-suggestion-history-row {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--text);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 44px;
+  padding: 7px 9px;
+  text-align: left;
+  width: 100%;
+}
+
+.title-suggestion-flyout-option:hover,
+.title-suggestion-flyout-option:focus-visible {
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+
+.title-suggestion-history-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.title-suggestion-history-copy strong {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-suggestion-history-meta {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.title-suggestion-history-status {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 3px 5px;
+  white-space: nowrap;
+}
+
+.title-suggestion-history-status[data-tone="accepted"] {
+  border-color: color-mix(in srgb, #59d889 55%, var(--border));
+  color: #59d889;
+}
+
+.title-suggestion-history-status[data-tone="rejected"] {
+  border-color: color-mix(in srgb, #ff746c 50%, var(--border));
+  color: #ff746c;
+}
+
+.title-suggestion-history-status[data-tone="pending"] {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+  color: var(--warning);
+}
+
+.title-suggestion-flyout-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 12px 0 2px;
+  text-align: center;
+}
+
+.title-suggestion-flyout-footer {
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.title-suggestion-flyout-footer button {
+  align-items: center;
+  display: inline-flex;
+  font-size: 11.5px;
+  gap: 7px;
+  justify-content: center;
+  min-height: 32px;
+  width: 100%;
+}
+
+.title-suggestion-flyout-footer svg {
+  height: 14px;
+  width: 14px;
+}
+
+.palette.title-suggestion-history {
+  display: flex;
+  flex-direction: column;
+  max-height: min(780px, 90vh);
+  padding: 20px 22px;
+  width: min(760px, 95vw);
+}
+
+.title-suggestion-history-head > svg {
+  height: 24px;
+  width: 24px;
+}
+
+.title-suggestion-history-head h2 {
+  font-size: 17px;
+}
+
+.title-suggestion-history-search {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-top: 16px;
+  padding: 0 10px;
+}
+
+.title-suggestion-history-search:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.title-suggestion-history-search svg {
+  color: var(--muted);
+  height: 15px;
+  width: 15px;
+}
+
+.title-suggestion-history-search input,
+.title-suggestion-history-search input:hover,
+.title-suggestion-history-search input:focus,
+.title-suggestion-history-search input:focus-visible {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  min-width: 0;
+  outline: 0;
+  padding-left: 0;
+  width: 100%;
+}
+
+.title-suggestion-history-summary {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 9px 1px 7px;
+}
+
+.title-suggestion-history-list {
+  display: grid;
+  gap: 5px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.title-suggestion-history-row {
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.16));
+  border-color: var(--border);
+  cursor: default;
+  padding: 10px 12px;
+}
+
+.title-suggestion-history-empty {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 36px 12px;
+  text-align: center;
+}
+
+.title-suggestion-history-empty[hidden] {
+  display: none;
+}
+
+.title-suggestion-history-empty svg {
+  height: 24px;
+  width: 24px;
+}
+
+.title-suggestion-history-empty p {
+  margin: 0;
+}
+
+@media (max-width: 520px) {
+  .title-suggestion-history-head p {
+    white-space: normal;
+  }
+}
+
 .header-background-flyout {
   background: var(--surface-high);
   border: 1px solid var(--border-strong);
@@ -11502,6 +11767,7 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
   .action-cluster {
     gap: 4px;
   }
+
 }
 
 /* Keep the primary New terminal action reachable in medium-width desktop

@@ -481,6 +481,10 @@
               <span title="Minutes before each automatic suggestion, in order. The gaps widen so a long-lived terminal does not keep making AI requests; the last value repeats.">Suggestion delays (minutes)</span>
               <input id="autoTitleSchedule" type="text" spellcheck="false" autocomplete="off" placeholder="5, 60, 120, 240">
             </label>
+            <label class="control-row">
+              <span title="Maximum title suggestions retained across terminal names and process IDs.">History entries</span>
+              <input id="titleSuggestionHistoryLimit" type="number" min="25" max="10000" step="25" inputmode="numeric">
+            </label>
             <div id="autoTitleSuppressionRow" class="auto-title-suppressions" hidden>
               <div class="auto-title-suppressions-head">
                 <span title="Terminals, process ids and titles that automatic suggestions skip. Add them by right-clicking the suggest-title icon on a pane.">Automatic titles paused for</span>
@@ -2032,6 +2036,31 @@
       </div>
     </div>
 
+    <div id="titleSuggestionHistoryOverlay" class="palette-overlay" hidden>
+      <div class="palette title-suggestion-history" role="dialog" aria-modal="true" aria-labelledby="titleSuggestionHistoryTitle" aria-describedby="titleSuggestionHistorySubtitle" tabindex="-1">
+        <header class="title-suggestion-history-head">
+          <i data-lucide="tags" aria-hidden="true"></i>
+          <div>
+            <h2 id="titleSuggestionHistoryTitle">Title suggestion history</h2>
+            <p id="titleSuggestionHistorySubtitle">Suggestions retained across terminal names and process IDs.</p>
+          </div>
+          <button id="titleSuggestionHistoryClose" class="icon-button" type="button" title="Close" aria-label="Close title suggestion history">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+        <label class="title-suggestion-history-search">
+          <i data-lucide="search" aria-hidden="true"></i>
+          <input id="titleSuggestionHistoryFilter" type="search" placeholder="Filter by title, suggestion, PID, or outcome" autocomplete="off" spellcheck="false" aria-label="Filter title suggestion history">
+        </label>
+        <p id="titleSuggestionHistorySummary" class="title-suggestion-history-summary" role="status"></p>
+        <div id="titleSuggestionHistoryList" class="title-suggestion-history-list" role="list"></div>
+        <div id="titleSuggestionHistoryEmpty" class="title-suggestion-history-empty" hidden>
+          <i data-lucide="tag"></i>
+          <p>No title suggestions match this view.</p>
+        </div>
+      </div>
+    </div>
+
     <div id="headerBackgroundOverlay" class="palette-overlay header-background-overlay" hidden>
       <div class="palette header-background-dialog" role="dialog" aria-modal="true" aria-labelledby="headerBackgroundTitle" aria-describedby="headerBackgroundSubtitle" tabindex="-1">
         <header class="header-background-head">
@@ -2301,6 +2330,24 @@
       </footer>
     </div>
 
+    <div id="titleSuggestionFlyout" class="title-suggestion-flyout" role="dialog" aria-modal="false" aria-labelledby="titleSuggestionFlyoutTitle" hidden>
+      <div class="title-suggestion-flyout-head">
+        <i data-lucide="history"></i>
+        <div>
+          <h2 id="titleSuggestionFlyoutTitle">Recent title suggestions</h2>
+          <p id="titleSuggestionFlyoutSubtitle">Suggestions for this terminal</p>
+        </div>
+      </div>
+      <div id="titleSuggestionFlyoutList" class="title-suggestion-flyout-list" role="list"></div>
+      <p id="titleSuggestionFlyoutEmpty" class="title-suggestion-flyout-empty" hidden>No suggestions for this title or PID yet.</p>
+      <footer class="title-suggestion-flyout-footer">
+        <button id="titleSuggestionFlyoutAll" type="button" class="secondary-action">
+          <i data-lucide="list"></i>
+          <span>View all history</span>
+        </button>
+      </footer>
+    </div>
+
     <div id="headerBackgroundFlyout" class="header-background-flyout" role="dialog" aria-modal="false" aria-labelledby="headerBackgroundFlyoutTitle" hidden>
       <div class="header-background-flyout-head">
         <i data-lucide="palette"></i>
@@ -2358,7 +2405,7 @@
               <i data-lucide="bell"></i>
             </button>
             <span class="pane-title-region">
-              <input class="pane-title" type="text" spellcheck="false" autocomplete="off">
+              <input class="pane-title" type="text" spellcheck="false" autocomplete="off" aria-haspopup="dialog" aria-expanded="false" aria-controls="titleSuggestionFlyout">
               <span class="pane-title-display" aria-hidden="true"></span>
             </span>
             <button type="button" class="pane-title-generate" title="Suggest a title with AI. Right-click to pause automatic titles." aria-label="Suggest a terminal title with AI">

@@ -926,6 +926,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(menu).toBeVisible();
     // Every header action advertises its own remappable shortcut here.
     await expect(menu.locator(".ctx-item")).toHaveText([
+      "Title suggestion history",
       "Notifications\u2026",
       "Header background\u2026Ctrl+Alt+Shift+B",
       "MinimizeCtrl+Alt+Shift+M",
@@ -988,6 +989,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await firstPane.locator('[data-action="more"]').click();
     const menu = page.locator("#contextMenu");
     await expect(menu.locator(".ctx-item")).toHaveText([
+      "Title suggestion history",
       "Move leftCtrl+Alt+Shift+Left",
       "Move rightCtrl+Alt+Shift+Right",
       "Find\u2026Ctrl+Alt+Shift+F",
@@ -999,6 +1001,43 @@ test.describe("MultiTerm Workbench UI", () => {
     ]);
     await page.keyboard.press("Escape");
     await expect(menu).toBeHidden();
+  });
+
+  test("keeps the hamburger labeled as a drop target when it contains no pane actions", async () => {
+    const result = await page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      const savedMenuActions = state.settings.headerActionsInMenu;
+      const savedOverrides = terminal.headerActionOverrides;
+      const wasNarrow = terminal.pane.classList.contains("is-narrow");
+      const wasCompact = elements.host.classList.contains("compact");
+      const savedOverflow = [...terminal.pane.querySelectorAll('.pane-actions button[data-action]')]
+        .map((button) => [button, button.dataset.autoOverflow]);
+      try {
+        state.settings.headerActionsInMenu = [];
+        terminal.headerActionOverrides = {};
+        terminal.pane.classList.remove("is-narrow");
+        elements.host.classList.remove("compact");
+        for (const [button] of savedOverflow) button.dataset.autoOverflow = "false";
+        buildPaneOverflowMenu(terminal);
+        return {
+          rows: [...elements.contextMenu.querySelectorAll(".ctx-item")].map((row) => row.textContent.trim()),
+          info: elements.contextMenu.querySelector(".ctx-info")?.textContent.trim()
+        };
+      } finally {
+        hideContextMenu();
+        state.settings.headerActionsInMenu = savedMenuActions;
+        terminal.headerActionOverrides = savedOverrides;
+        terminal.pane.classList.toggle("is-narrow", wasNarrow);
+        elements.host.classList.toggle("compact", wasCompact);
+        for (const [button, value] of savedOverflow) {
+          if (value === undefined) delete button.dataset.autoOverflow;
+          else button.dataset.autoOverflow = value;
+        }
+      }
+    });
+
+    expect(result.rows).toContain("Title suggestion history");
+    expect(result.info).toBe("Drag a header button here");
   });
 
   test("customizes terminal header actions by drag scope and remembers the choice", async () => {
