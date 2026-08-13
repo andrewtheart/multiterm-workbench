@@ -112,7 +112,7 @@ describe("PowerShell bridge control dashboard", () => {
     expect(rendererScript).toMatch(/function startMinChipRename[\s\S]*commitTerminalTitle\(terminal, name\)/);
     expect(bridgeScript).toContain('else if (type == "title")');
     expect(bridgeScript).toContain('session.Rename(title);');
-    expect(bridgeScript).toContain('this.Broadcast("{\\"type\\":\\"title\\"');
+    expect(bridgeScript).toContain('this.SendSessionFrame(session, "{\\"type\\":\\"title\\"');
     expect(bridgeScript).toContain('public void Rename(string title)');
   });
 

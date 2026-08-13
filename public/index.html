@@ -597,6 +597,10 @@
               <span title="Total metadata and transcript context available to one AI search across the complete local Copilot session catalog.">AI session search context (KB)</span>
               <input id="copilotSessionSearchContextKb" type="number" min="64" max="16384" step="64" inputmode="numeric">
             </label>
+            <label class="control-row">
+              <span title="How long a private resumed Copilot session may take to report its previous working directory before MultiTerm closes the probe.">Session CWD query timeout (s)</span>
+              <input id="copilotCwdQueryTimeoutSeconds" type="number" min="30" max="900" step="15" inputmode="numeric">
+            </label>
             <label class="toggle-row">
               <input id="bellNotify" type="checkbox">
               <span>Bell notifications</span>
@@ -1033,6 +1037,10 @@
           <div class="cwd-change-current">
             <span id="cwdChangeSource">Last known terminal path</span>
             <code id="cwdChangeCurrent">Unknown</code>
+            <button id="cwdChangeAskSession" class="secondary-action cwd-change-ask-session" type="button" hidden>
+              <i data-lucide="message-circle-question"></i>
+              <span>Ask session</span>
+            </button>
           </div>
           <label class="cwd-change-field">
             <span>Working directory</span>
@@ -2496,6 +2504,8 @@
 
     <div id="contextMenu" class="context-menu" role="menu" tabindex="-1" hidden></div>
     <div id="contextSubmenu" class="context-menu context-submenu" role="menu" hidden></div>
+    <div id="transientTerminalHost" class="transient-terminal-host" hidden aria-hidden="true"></div>
+
     <template id="paneTemplate">
       <article class="terminal-pane">
         <header class="pane-bar">

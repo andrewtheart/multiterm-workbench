@@ -499,6 +499,10 @@ namespace MultiTerm.PowerShellBridge
         public string Branch;
         public string CreatedAt;
         public string UpdatedAt;
+        public string WorktreePath = String.Empty;
+        public string WorktreeBranch = String.Empty;
+        public string WorktreeParentBranch = String.Empty;
+        public string WorktreeRepositoryRoot = String.Empty;
         public DateTime UpdatedUtc;
         public string FilePath;
 
@@ -511,6 +515,10 @@ namespace MultiTerm.PowerShellBridge
                 + ",\"cwd\":" + Json.Quote(this.Cwd)
                 + ",\"repository\":" + Json.Quote(this.Repository)
                 + ",\"branch\":" + Json.Quote(this.Branch)
+                + ",\"worktreePath\":" + Json.Quote(this.WorktreePath)
+                + ",\"worktreeBranch\":" + Json.Quote(this.WorktreeBranch)
+                + ",\"worktreeParentBranch\":" + Json.Quote(this.WorktreeParentBranch)
+                + ",\"worktreeRepositoryRoot\":" + Json.Quote(this.WorktreeRepositoryRoot)
                 + ",\"createdAt\":" + Json.Quote(this.CreatedAt)
                 + ",\"updatedAt\":" + Json.Quote(this.UpdatedAt) + "}";
         }
@@ -2821,12 +2829,68 @@ namespace MultiTerm.PowerShellBridge
 
         private const int MaxGitDiffBytes = 2 * 1024 * 1024;
 
+        private static GitResult WorktreeDiffIncludingPending(string repositoryRoot, string baseRef, string headRef, string worktreePath)
+        {
+            GitResult root = RunGit(new string[] { "rev-parse", "--show-toplevel" }, worktreePath, 30000);
+            GitResult branch = RunGit(new string[] { "rev-parse", "--abbrev-ref", "HEAD" }, worktreePath, 30000);
+            string expectedPath = Path.GetFullPath(worktreePath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string actualPath = root.Ok
+                ? Path.GetFullPath(root.StandardOutput.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                : String.Empty;
+            if (!root.Ok || !String.Equals(actualPath, expectedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                root.Ok = false;
+                root.StandardError = "The worktree path is not a Git worktree root.";
+                return root;
+            }
+            if (!branch.Ok || !String.Equals(branch.StandardOutput.Trim(), headRef, StringComparison.Ordinal))
+            {
+                branch.Ok = false;
+                branch.StandardError = "The worktree no longer has the expected branch checked out.";
+                return branch;
+            }
+
+            GitResult mergeBase = RunGit(new string[] { "merge-base", baseRef, headRef }, repositoryRoot, 30000);
+            if (!mergeBase.Ok || mergeBase.StandardOutput.Trim().Length == 0) return mergeBase;
+            GitResult indexPath = RunGit(new string[] { "rev-parse", "--git-path", "index" }, worktreePath, 30000);
+            if (!indexPath.Ok || indexPath.StandardOutput.Trim().Length == 0) return indexPath;
+
+            string temporaryDirectory = Path.Combine(Path.GetTempPath(), "multiterm-worktree-diff-" + Guid.NewGuid().ToString("N"));
+            string temporaryIndex = Path.Combine(temporaryDirectory, "index");
+            string reportedIndex = indexPath.StandardOutput.Trim();
+            string sourceIndex = Path.IsPathRooted(reportedIndex) ? reportedIndex : Path.GetFullPath(Path.Combine(worktreePath, reportedIndex));
+            Dictionary<string, string> environment = new Dictionary<string, string>() { { "GIT_INDEX_FILE", temporaryIndex } };
+            Directory.CreateDirectory(temporaryDirectory);
+            try
+            {
+                File.Copy(sourceIndex, temporaryIndex, true);
+                GitResult untracked = RunGit(new string[] { "ls-files", "--others", "--exclude-standard", "-z" }, worktreePath, 30000);
+                if (!untracked.Ok) return untracked;
+                string[] paths = untracked.StandardOutput.Split(new char[] { '\0' }, StringSplitOptions.RemoveEmptyEntries);
+                for (int offset = 0; offset < paths.Length; offset += 200)
+                {
+                    List<string> addArguments = new List<string>() { "add", "--intent-to-add", "--" };
+                    for (int index = offset; index < Math.Min(paths.Length, offset + 200); index++) addArguments.Add(paths[index]);
+                    GitResult added = RunGit(addArguments.ToArray(), worktreePath, 30000, environment);
+                    if (!added.Ok) return added;
+                }
+                return RunGit(new string[] {
+                    "diff", "--no-color", "--binary", "--ita-visible-in-index", mergeBase.StandardOutput.Trim(), "--"
+                }, worktreePath, 60000, environment);
+            }
+            finally
+            {
+                try { Directory.Delete(temporaryDirectory, true); } catch { }
+            }
+        }
+
         private void SendGitDiff(BridgeClient client, Dictionary<string, string> message)
         {
             string requestId = Json.Get(message, "requestId");
             string repositoryRoot = (Json.Get(message, "repositoryRoot") ?? String.Empty).Trim();
             string baseRef = (Json.Get(message, "base") ?? String.Empty).Trim();
             string headRef = (Json.Get(message, "head") ?? String.Empty).Trim();
+            string worktreePath = (Json.Get(message, "worktreePath") ?? String.Empty).Trim();
             bool ok = false;
             bool truncated = false;
             string diffText = String.Empty;
@@ -2835,7 +2899,9 @@ namespace MultiTerm.PowerShellBridge
             if (repositoryRoot.Length > 0 && baseRef.Length > 0 && headRef.Length > 0
                 && !baseRef.StartsWith("-", StringComparison.Ordinal) && !headRef.StartsWith("-", StringComparison.Ordinal))
             {
-                GitResult diff = RunGit(new string[] { "diff", "--no-color", baseRef + "..." + headRef }, repositoryRoot, 60000);
+                GitResult diff = worktreePath.Length > 0
+                    ? WorktreeDiffIncludingPending(repositoryRoot, baseRef, headRef, worktreePath)
+                    : RunGit(new string[] { "diff", "--no-color", baseRef + "..." + headRef }, repositoryRoot, 60000);
                 if (diff.Ok)
                 {
                     ok = true;
@@ -3872,7 +3938,7 @@ namespace MultiTerm.PowerShellBridge
                     int rendererClients = this.RendererClientCount();
                     string body = "{\"ok\":true,\"app\":\"MultiTerm Workbench\",\"pid\":"
                         + Process.GetCurrentProcess().Id + ",\"port\":" + this.port
-                        + ",\"sessions\":" + this.sessions.Count
+                        + ",\"sessions\":" + this.PublicSessionCount()
                         + ",\"rendererClients\":" + rendererClients
                         + ",\"watchdogSuppressed\":" + (this.watchdogSuppressed ? "true" : "false")
                         + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + "}";
@@ -4998,6 +5064,7 @@ namespace MultiTerm.PowerShellBridge
                 BridgeClient removed;
                 this.clients.TryRemove(client.Id, out removed);
                 this.ReleaseAutomationLease(client.Id);
+                this.CloseEphemeralSessions(client.Id);
                 client.Close();
                 this.Log("info", "Client disconnected: " + client.Id + "; " + this.clients.Count + " active");
             }
@@ -5071,10 +5138,14 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.CreateSession(client, message);
             }
+            else if (type == "promoteSession")
+            {
+                this.PromoteSession(client, message);
+            }
             else if (type == "input")
             {
                 TerminalSession session;
-                if (this.sessions.TryGetValue(Json.Get(message, "id"), out session))
+                if (this.sessions.TryGetValue(Json.Get(message, "id"), out session) && this.CanAccessSession(client, session))
                 {
                     session.Write(Json.Get(message, "data"));
                 }
@@ -5082,7 +5153,7 @@ namespace MultiTerm.PowerShellBridge
             else if (type == "resize")
             {
                 TerminalSession session;
-                if (this.sessions.TryGetValue(Json.Get(message, "id"), out session))
+                if (this.sessions.TryGetValue(Json.Get(message, "id"), out session) && this.CanAccessSession(client, session))
                 {
                     int cols = Json.GetInt(message, "cols", session.Cols);
                     int rows = Json.GetInt(message, "rows", session.Rows);
@@ -5093,33 +5164,39 @@ namespace MultiTerm.PowerShellBridge
             {
                 TerminalSession session;
                 string title = Json.Get(message, "title").Trim();
-                if (title.Length > 0 && this.sessions.TryGetValue(Json.Get(message, "id"), out session))
+                if (title.Length > 0 && this.sessions.TryGetValue(Json.Get(message, "id"), out session) && this.CanAccessSession(client, session))
                 {
                     session.Rename(title);
-                    this.Broadcast("{\"type\":\"title\",\"id\":" + Json.Quote(session.Id)
+                    this.SendSessionFrame(session, "{\"type\":\"title\",\"id\":" + Json.Quote(session.Id)
                         + ",\"title\":" + Json.Quote(session.Title) + "}");
                 }
             }
             else if (type == "kill")
             {
-                this.Log("info", "Kill requested for session " + Json.Get(message, "id"));
-                this.KillSession(Json.Get(message, "id"));
+                TerminalSession session;
+                if (this.sessions.TryGetValue(Json.Get(message, "id"), out session) && this.CanAccessSession(client, session))
+                {
+                    this.Log("info", "Kill requested for session " + session.Id);
+                    session.RequestExit();
+                }
             }
             else if (type == "killAll")
             {
                 this.Log("info", "Kill-all requested (" + this.sessions.Count + " sessions)");
                 foreach (TerminalSession session in this.sessions.Values)
                 {
-                    session.RequestExit();
+                    if (this.CanAccessSession(client, session)) session.RequestExit();
                 }
             }
             else if (type == "logStart")
             {
-                this.StartLog(client, Json.Get(message, "id"));
+                TerminalSession session;
+                if (this.sessions.TryGetValue(Json.Get(message, "id"), out session) && this.CanAccessSession(client, session)) this.StartLog(client, session.Id);
             }
             else if (type == "logStop")
             {
-                this.StopLog(client, Json.Get(message, "id"));
+                TerminalSession session;
+                if (this.sessions.TryGetValue(Json.Get(message, "id"), out session) && this.CanAccessSession(client, session)) this.StopLog(client, session.Id);
             }
             else if (type == "reveal")
             {
@@ -5652,8 +5729,8 @@ namespace MultiTerm.PowerShellBridge
                 this.SendMessageError(client, requestId, "Durable terminal messages are not enabled yet.");
                 return;
             }
-            if (!this.sessions.TryGetValue(sourceId, out source) || !source.IsAvailable
-                || !this.sessions.TryGetValue(targetId, out target) || !target.IsAvailable)
+            if (!this.sessions.TryGetValue(sourceId, out source) || !source.IsAvailable || source.Ephemeral
+                || !this.sessions.TryGetValue(targetId, out target) || !target.IsAvailable || target.Ephemeral)
             {
                 this.SendMessageError(client, requestId, "Both message terminals must be live.");
                 return;
@@ -5667,8 +5744,8 @@ namespace MultiTerm.PowerShellBridge
             TerminalMessage terminalMessage;
             lock (this.terminalMessageLock)
             {
-                if (!this.sessions.TryGetValue(sourceId, out source) || !source.IsAvailable
-                    || !this.sessions.TryGetValue(targetId, out target) || !target.IsAvailable)
+                if (!this.sessions.TryGetValue(sourceId, out source) || !source.IsAvailable || source.Ephemeral
+                    || !this.sessions.TryGetValue(targetId, out target) || !target.IsAvailable || target.Ephemeral)
                 {
                     this.SendMessageError(client, requestId, "Both message terminals must be live.");
                     return;
@@ -5887,12 +5964,13 @@ namespace MultiTerm.PowerShellBridge
             int cols = Math.Max(20, Json.GetInt(options, "cols", 120));
             int rows = Math.Max(5, Json.GetInt(options, "rows", 30));
             string title = Json.Get(options, "title");
+            bool ephemeral = String.Equals(Json.Get(options, "ephemeral"), "true", StringComparison.OrdinalIgnoreCase);
             if (String.IsNullOrWhiteSpace(title))
             {
                 title = shell.Label;
             }
 
-            TerminalSession session = new TerminalSession(id, title.Trim(), shell, cwd, cols, rows);
+            TerminalSession session = new TerminalSession(id, title.Trim(), shell, cwd, cols, rows, ephemeral, ephemeral ? client.Id : String.Empty);
             session.Output += delegate(string data)
             {
                 this.QueueSessionOutput(id, data);
@@ -5905,7 +5983,7 @@ namespace MultiTerm.PowerShellBridge
                 TerminalSession removed;
                 this.sessions.TryRemove(id, out removed);
                 this.Log("info", "Session exited: " + id + " (code " + exitCode + ")");
-                this.Broadcast("{\"type\":\"exited\",\"id\":" + Json.Quote(id) + ",\"code\":" + exitCode + "}");
+                this.SendSessionFrame(session, "{\"type\":\"exited\",\"id\":" + Json.Quote(id) + ",\"code\":" + exitCode + "}");
             };
 
             try
@@ -5937,11 +6015,40 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
+        private bool CanAccessSession(BridgeClient client, TerminalSession session)
+        {
+            return session != null && (!session.Ephemeral || String.Equals(session.OwnerClientId, client.Id, StringComparison.Ordinal));
+        }
+
+        private void PromoteSession(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string id = Json.Get(message, "id");
+            TerminalSession session;
+            bool ok = this.sessions.TryGetValue(id, out session) && session.PromoteEphemeral(client.Id);
+            client.Send("{\"type\":\"sessionPromoted\",\"requestId\":" + Json.Quote(requestId)
+                + ",\"id\":" + Json.Quote(id) + ",\"ok\":" + (ok ? "true" : "false")
+                + ",\"reason\":" + Json.Quote(ok ? String.Empty : "Session is unavailable.") + "}");
+            if (ok) this.Broadcast("{\"type\":\"created\"," + session.SummaryJson().Substring(1), client.Id);
+        }
+
+        private void CloseEphemeralSessions(string ownerClientId)
+        {
+            foreach (TerminalSession session in this.sessions.Values)
+            {
+                if (session.Ephemeral && String.Equals(session.OwnerClientId, ownerClientId, StringComparison.Ordinal))
+                {
+                    session.RequestExit();
+                }
+            }
+        }
+
         private List<DashboardSessionInfo> DashboardSessions()
         {
             List<DashboardSessionInfo> result = new List<DashboardSessionInfo>();
             foreach (TerminalSession session in this.sessions.Values)
             {
+                if (session.Ephemeral) continue;
                 result.Add(new DashboardSessionInfo
                 {
                     Id = session.Id,
@@ -5960,6 +6067,13 @@ namespace MultiTerm.PowerShellBridge
                 });
             }
             return result;
+        }
+
+        private int PublicSessionCount()
+        {
+            int count = 0;
+            foreach (TerminalSession session in this.sessions.Values) if (!session.Ephemeral) count++;
+            return count;
         }
 
         private int RendererClientCount()
@@ -7048,6 +7162,53 @@ namespace MultiTerm.PowerShellBridge
             };
         }
 
+        private static string LinkedWorktreeRoot(string directory)
+        {
+            if (String.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return String.Empty;
+            DirectoryInfo current = new DirectoryInfo(Path.GetFullPath(directory));
+            while (current != null)
+            {
+                string marker = Path.Combine(current.FullName, ".git");
+                if (File.Exists(marker)) return current.FullName;
+                if (Directory.Exists(marker)) return String.Empty;
+                current = current.Parent;
+            }
+            return String.Empty;
+        }
+
+        private static void AttachManagedWorktreeMetadata(List<CopilotSessionMetadata> sessions)
+        {
+            Dictionary<string, string[]> discovered = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (CopilotSessionMetadata session in sessions)
+            {
+                string worktreePath = LinkedWorktreeRoot(session.Cwd);
+                if (worktreePath.Length == 0) continue;
+                string[] metadata;
+                if (!discovered.TryGetValue(worktreePath, out metadata))
+                {
+                    GitResult branch = RunGit(new string[] { "rev-parse", "--abbrev-ref", "HEAD" }, worktreePath, 15000);
+                    string worktreeBranch = branch.Ok ? branch.StandardOutput.Trim() : String.Empty;
+                    string parentBranch = String.Empty;
+                    if (worktreeBranch.Length > 0 && worktreeBranch != "HEAD" && !worktreeBranch.StartsWith("-", StringComparison.Ordinal))
+                    {
+                        GitResult parent = RunGit(new string[] {
+                            "config", "--local", "--get", "multiterm.worktree." + worktreeBranch + ".parent"
+                        }, worktreePath, 15000);
+                        if (parent.Ok) parentBranch = parent.StandardOutput.Trim();
+                    }
+                    metadata = parentBranch.Length > 0
+                        ? new string[] { worktreeBranch, parentBranch }
+                        : new string[0];
+                    discovered[worktreePath] = metadata;
+                }
+                if (metadata.Length == 0) continue;
+                session.WorktreePath = worktreePath;
+                session.WorktreeBranch = metadata[0];
+                session.WorktreeParentBranch = metadata[1];
+                session.WorktreeRepositoryRoot = worktreePath;
+            }
+        }
+
         private static List<CopilotSessionMetadata> ReadCopilotSessions()
         {
             List<CopilotSessionMetadata> sessions = new List<CopilotSessionMetadata>();
@@ -7072,6 +7233,7 @@ namespace MultiTerm.PowerShellBridge
                     // One incomplete session directory must not hide the other resumable sessions.
                 }
             }
+            AttachManagedWorktreeMetadata(sessions);
             sessions.Sort(delegate(CopilotSessionMetadata left, CopilotSessionMetadata right)
             {
                 return right.UpdatedUtc.CompareTo(left.UpdatedUtc);
@@ -7125,6 +7287,7 @@ namespace MultiTerm.PowerShellBridge
                     // One malformed Claude transcript must not hide the remaining histories.
                 }
             }
+            AttachManagedWorktreeMetadata(sessions);
             sessions.Sort(delegate(CopilotSessionMetadata left, CopilotSessionMetadata right)
             {
                 return right.UpdatedUtc.CompareTo(left.UpdatedUtc);
@@ -8967,14 +9130,17 @@ namespace MultiTerm.PowerShellBridge
             if (!String.IsNullOrEmpty(requestedId))
             {
                 TerminalSession one;
-                if (this.sessions.TryGetValue(requestedId, out one))
+                if (this.sessions.TryGetValue(requestedId, out one) && !one.Ephemeral)
                 {
                     selected.Add(one);
                 }
             }
             else
             {
-                selected.AddRange(this.sessions.Values);
+                foreach (TerminalSession session in this.sessions.Values)
+                {
+                    if (!session.Ephemeral) selected.Add(session);
+                }
             }
 
             Task.Run(delegate
@@ -9225,7 +9391,7 @@ namespace MultiTerm.PowerShellBridge
             roots.Add(Process.GetCurrentProcess().Id);
             foreach (TerminalSession session in this.sessions.Values)
             {
-                if (session.Pid > 0)
+                if (!session.Ephemeral && session.Pid > 0)
                 {
                     roots.Add(session.Pid);
                 }
@@ -9360,6 +9526,7 @@ namespace MultiTerm.PowerShellBridge
             bool first = true;
             foreach (TerminalSession session in this.sessions.Values)
             {
+                if (session.Ephemeral) continue;
                 if (!first)
                 {
                     builder.Append(",");
@@ -9376,6 +9543,14 @@ namespace MultiTerm.PowerShellBridge
             foreach (BridgeClient client in this.clients.Values)
             {
                 client.Send(message);
+            }
+        }
+
+        private void Broadcast(string message, string excludedClientId)
+        {
+            foreach (BridgeClient client in this.clients.Values)
+            {
+                if (!String.Equals(client.Id, excludedClientId, StringComparison.Ordinal)) client.Send(message);
             }
         }
 
@@ -9429,7 +9604,20 @@ namespace MultiTerm.PowerShellBridge
 
         private void BroadcastOutput(string id, string data)
         {
-            this.Broadcast("{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data) + "}");
+            TerminalSession session;
+            string message = "{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data) + "}";
+            if (this.sessions.TryGetValue(id, out session)) this.SendSessionFrame(session, message);
+        }
+
+        private void SendSessionFrame(TerminalSession session, string message)
+        {
+            if (!session.Ephemeral)
+            {
+                this.Broadcast(message);
+                return;
+            }
+            BridgeClient owner;
+            if (this.clients.TryGetValue(session.OwnerClientId, out owner)) owner.Send(message);
         }
 
         private void RemoveSessionOutputBatch(string id)
@@ -9945,7 +10133,7 @@ namespace MultiTerm.PowerShellBridge
         private long keystrokesIn;
         private long keystrokesOut;
 
-        public TerminalSession(string id, string title, ShellInfo shell, string cwd, int cols, int rows)
+        public TerminalSession(string id, string title, ShellInfo shell, string cwd, int cols, int rows, bool ephemeral = false, string ownerClientId = "")
         {
             this.Id = id;
             this.Title = title;
@@ -9953,6 +10141,8 @@ namespace MultiTerm.PowerShellBridge
             this.Cwd = cwd;
             this.Cols = cols;
             this.Rows = rows;
+            this.Ephemeral = ephemeral;
+            this.OwnerClientId = ownerClientId ?? String.Empty;
             this.StartedAt = DateTime.UtcNow.ToString("o");
         }
 
@@ -9975,6 +10165,22 @@ namespace MultiTerm.PowerShellBridge
         public int Pid { get; private set; }
 
         public string StartedAt { get; private set; }
+
+        public bool Ephemeral { get; private set; }
+
+        public string OwnerClientId { get; private set; }
+
+        public string PromotedByClientId { get; private set; }
+
+        public bool PromoteEphemeral(string ownerClientId)
+        {
+            if (!this.Ephemeral) return String.Equals(this.PromotedByClientId, ownerClientId, StringComparison.Ordinal);
+            if (!this.Ephemeral || !String.Equals(this.OwnerClientId, ownerClientId, StringComparison.Ordinal)) return false;
+            this.Ephemeral = false;
+            this.OwnerClientId = String.Empty;
+            this.PromotedByClientId = ownerClientId;
+            return true;
+        }
 
         public void Rename(string title)
         {

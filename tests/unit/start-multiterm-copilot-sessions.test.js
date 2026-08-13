@@ -34,6 +34,10 @@ describe("installed bridge Copilot session protocol", () => {
     expect(source).toContain("Guid.TryParse(id, out parsedId)");
     expect(source).toContain("ThreadPool.QueueUserWorkItem");
     expect(source).toContain("copilotSessions");
+    expect(source).toContain("private static void AttachManagedWorktreeMetadata(");
+    expect(source).toContain('"multiterm.worktree." + worktreeBranch + ".parent"');
+    expect(source).toContain('+ ",\\"worktreePath\\":" + Json.Quote(this.WorktreePath)');
+    expect(source).toContain('+ ",\\"worktreeParentBranch\\":" + Json.Quote(this.WorktreeParentBranch)');
   });
 
   it("provides folder picking and host or WSL directory validation", () => {

@@ -795,7 +795,15 @@ function queueSessionOutput(session, data) {
     session.pendingOutput.push(data);
     scheduleOutputFlush(session);
   } else {
-    broadcast({ type: "output", id: session.id, stream: "pty", data });
+    sendSessionFrame(session, { type: "output", id: session.id, stream: "pty", data });
+  }
+}
+
+function sendSessionFrame(session, message) {
+  if (session.ephemeral) {
+    session.ownerClient?.send(message);
+  } else {
+    broadcast(message);
   }
 }
 
@@ -816,7 +824,7 @@ function flushSessionOutput(session) {
   if (hasPendingOutput(session)) {
     const data = session.pendingOutput.join("");
     session.pendingOutput = [];
-    broadcast({ type: "output", id: session.id, stream: "pty", data });
+    sendSessionFrame(session, { type: "output", id: session.id, stream: "pty", data });
   } else {
     // Timer raced a flush that already drained the buffer; nothing to send.
   }
@@ -977,7 +985,7 @@ const server = http.createServer((request, response) => {
       ok: true,
       pid: process.pid,
       port: server.address()?.port || port,
-      sessions: sessions.size,
+      sessions: [...sessions.values()].filter((session) => !session.ephemeral).length,
       rendererClients: countRendererClients(),
       watchdogSuppressed,
       cwd: process.cwd()
@@ -1266,7 +1274,7 @@ server.on("upgrade", (request, socket) => {
     copilotSetupScript,
     cwd: process.cwd(),
     currentUser: os.userInfo().username,
-    sessions: [...sessions.values()].map(toSessionSummary),
+    sessions: [...sessions.values()].filter((session) => !session.ephemeral).map(toSessionSummary),
     // Electron owns its own window and profile, so it never borrows the user's browser.
     sharedBrowserProfile: false,
     openFolders: pendingOpenFolders.splice(0),
@@ -1302,6 +1310,9 @@ server.on("upgrade", (request, socket) => {
   const removeClient = () => {
     clients.delete(client);
     releaseAutomationLease(client);
+    for (const session of sessions.values()) {
+      if (session.ephemeral && session.ownerClient === client) killSession(session.id);
+    }
   };
   socket.on("close", removeClient);
   socket.on("error", removeClient);
@@ -1688,6 +1699,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     case "create":
       createSession(client, message, dependencies);
       break;
+    case "promoteSession":
+      promoteSession(client, message);
+      break;
     case "listTmux":
       listWslTmuxSessions(client, message.requestId);
       break;
@@ -1773,25 +1787,25 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       sendPromptLibraryResponse(client, message, dependencies.promptLibraryRequest || requestPromptLibraryHost);
       break;
     case "input":
-      writeSession(message.id, message.data);
+      if (canAccessSession(client, sessions.get(message.id))) writeSession(message.id, message.data);
       break;
     case "resize":
-      rememberSize(message.id, message.cols, message.rows);
+      if (canAccessSession(client, sessions.get(message.id))) rememberSize(message.id, message.cols, message.rows);
       break;
     case "title":
-      renameSession(message.id, message.title);
+      if (canAccessSession(client, sessions.get(message.id))) renameSession(message.id, message.title);
       break;
     case "kill":
-      killSession(message.id);
+      if (canAccessSession(client, sessions.get(message.id))) killSession(message.id);
       break;
     case "killAll":
-      killAllSessions();
+      killAccessibleSessions(client);
       break;
     case "logStart":
-      startLog(client, message.id);
+      if (canAccessSession(client, sessions.get(message.id))) startLog(client, message.id);
       break;
     case "logStop":
-      stopLog(client, message.id);
+      if (canAccessSession(client, sessions.get(message.id))) stopLog(client, message.id);
       break;
     case "reveal":
       revealPath(client, message);
@@ -1827,7 +1841,7 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       launchElevatedTerminal(client, message);
       break;
     case "list":
-      client.send({ type: "sessions", sessions: [...sessions.values()].map(toSessionSummary) });
+      client.send({ type: "sessions", sessions: accessibleSessions(client).map(toSessionSummary) });
       break;
     case "memstats":
       requestMemStats(client);
@@ -1947,7 +1961,8 @@ function sendTerminalMessage(client, request) {
 
   const source = sessions.get(normalized.value.sourceId);
   const target = sessions.get(normalized.value.targetId);
-  if (!isSessionRunning(source) || source.closing || !isSessionRunning(target) || target.closing) {
+  if (!isSessionRunning(source) || source.closing || source.ephemeral
+      || !isSessionRunning(target) || target.closing || target.ephemeral) {
     client.send({ type: "messageError", requestId, message: "Both message terminals must be live." });
     return;
   } else { void 0; }
@@ -2176,6 +2191,7 @@ function createSession(client, options, dependencies = defaultSessionDependencie
     bytesOut: 0,
     cols,
     cwd,
+    ephemeral: options.ephemeral === true,
     exited: false,
     id,
     keystrokesIn: 0,
@@ -2186,6 +2202,8 @@ function createSession(client, options, dependencies = defaultSessionDependencie
     logPath: null,
     pendingOutput: [],
     outputTimer: null,
+    ownerClient: options.ephemeral === true ? client : null,
+    promotedByClient: null,
     rows,
     shell: tmux ? "wsl" : shell.label,
     startedAt: new Date().toISOString(),
@@ -2217,7 +2235,7 @@ function createSession(client, options, dependencies = defaultSessionDependencie
     closeLog(session);
     expireTerminalMessagesForSession(id);
     sessions.delete(id);
-    broadcast({ type: "exited", id, code: exitCode, signal });
+    sendSessionFrame(session, { type: "exited", id, code: exitCode, signal });
     scheduleMemStats(1500);
   });
 
@@ -2225,8 +2243,37 @@ function createSession(client, options, dependencies = defaultSessionDependencie
   client.send(created);
   // External automation clients (for example Yagu's visible update downloader) create sessions over
   // their own WebSocket. Notify every other client so the new terminal appears in the open workbench UI.
-  broadcast(created, client);
+  if (!session.ephemeral) broadcast(created, client);
   scheduleMemStats(2000);
+}
+
+function canAccessSession(client, session) {
+  return Boolean(session) && (!session.ephemeral || session.ownerClient === client);
+}
+
+function accessibleSessions(client) {
+  return [...sessions.values()].filter((session) => canAccessSession(client, session));
+}
+
+function promoteSession(client, message) {
+  const session = sessions.get(message.id);
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  if (!session || (!session.ephemeral && session.promotedByClient !== client)
+      || (session.ephemeral && session.ownerClient !== client)) {
+    client.send({ type: "sessionPromoted", requestId, id: message.id || "", ok: false, reason: "Session is unavailable." });
+    return false;
+  }
+  if (!session.ephemeral) {
+    client.send({ type: "sessionPromoted", requestId, id: session.id, ok: true, reason: "" });
+    return true;
+  }
+  session.ephemeral = false;
+  session.ownerClient = null;
+  session.promotedByClient = client;
+  const summary = toSessionSummary(session);
+  client.send({ type: "sessionPromoted", requestId, id: session.id, ok: true, reason: "" });
+  broadcast({ type: "created", ...summary }, client);
+  return true;
 }
 
 function writeSession(id, data) {
@@ -2254,7 +2301,7 @@ function renameSession(id, value) {
     return false;
   } else {
     session.title = title;
-    broadcast({ type: "title", id, title });
+    sendSessionFrame(session, { type: "title", id, title });
     return true;
   }
 }
@@ -2352,6 +2399,10 @@ function killAllSessions() {
   for (const session of [...sessions.values()]) {
     killSession(session.id);
   }
+}
+
+function killAccessibleSessions(client) {
+  for (const session of accessibleSessions(client)) killSession(session.id);
 }
 
 function closeSessions(graceful) {
@@ -2775,11 +2826,53 @@ async function sendGitWorktreeCreate(client, message) {
 
 const maxGitDiffBytes = 2 * 1024 * 1024;
 
+async function worktreeDiffIncludingPending(repositoryRoot, base, head, worktreePath) {
+  const inspection = await inspectGitRepository(worktreePath);
+  if (!inspection.isRepository || path.resolve(inspection.repositoryRoot) !== path.resolve(worktreePath)) {
+    return { ok: false, stdout: "", stderr: "The worktree path is not a Git worktree root." };
+  } else { void 0; }
+  if (inspection.currentBranch !== head) {
+    return { ok: false, stdout: "", stderr: "The worktree no longer has the expected branch checked out." };
+  } else { void 0; }
+
+  const mergeBase = await runGit(["merge-base", base, head], repositoryRoot, 30000);
+  if (!mergeBase.ok || !mergeBase.stdout.trim()) return mergeBase; else { void 0; }
+
+  const indexPath = await runGit(["rev-parse", "--git-path", "index"], worktreePath, 30000);
+  if (!indexPath.ok || !indexPath.stdout.trim()) return indexPath; else { void 0; }
+
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-worktree-diff-"));
+  const temporaryIndex = path.join(temporaryDirectory, "index");
+  const sourceIndex = path.resolve(worktreePath, indexPath.stdout.trim());
+  const environment = { GIT_INDEX_FILE: temporaryIndex };
+  try {
+    fs.copyFileSync(sourceIndex, temporaryIndex);
+    const untracked = await runGit(["ls-files", "--others", "--exclude-standard", "-z"], worktreePath, 30000);
+    if (!untracked.ok) return untracked; else { void 0; }
+    const untrackedPaths = untracked.stdout.split("\0").filter(Boolean);
+    for (let offset = 0; offset < untrackedPaths.length; offset += 200) {
+      const added = await runGit(
+        ["add", "--intent-to-add", "--", ...untrackedPaths.slice(offset, offset + 200)],
+        worktreePath,
+        30000,
+        { env: environment }
+      );
+      if (!added.ok) return added; else { void 0; }
+    }
+    return await runGit([
+      "diff", "--no-color", "--binary", "--ita-visible-in-index", mergeBase.stdout.trim(), "--"
+    ], worktreePath, 60000, { env: environment });
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
 async function sendGitDiff(client, message) {
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
   const repositoryRoot = String(message.repositoryRoot || "").trim();
   const base = String(message.base || "").trim();
   const head = String(message.head || "").trim();
+  const worktreePath = String(message.worktreePath || "").trim();
   const answer = (ok, diff, reason, truncated = false) =>
     client.send({ type: "gitDiffResult", requestId, ok, diff, reason, truncated });
 
@@ -2788,8 +2881,12 @@ async function sendGitDiff(client, message) {
     answer(false, "", "A repository and two revisions are required.");
     return;
   } else { void 0; }
-  // Three dots so the review shows only what this worktree added.
-  const diff = await runGit(["diff", "--no-color", `${base}...${head}`], repositoryRoot, 60000);
+  // Three dots shows only committed branch work for legacy callers. A known
+  // worktree path also compares its live filesystem and exposes untracked files
+  // through a temporary index, leaving the user's real index unchanged.
+  const diff = worktreePath
+    ? await worktreeDiffIncludingPending(repositoryRoot, base, head, worktreePath)
+    : await runGit(["diff", "--no-color", `${base}...${head}`], repositoryRoot, 60000);
   if (!diff.ok) {
     answer(false, "", (diff.stderr || diff.stdout).trim() || "git could not produce that diff.");
     return;
@@ -4650,9 +4747,11 @@ function collectProcessTreeMetrics(rootPid, processRows) {
   return { cpu, memory };
 }
 
-function buildStatisticsFrame(message, processRows, processError = null) {
+function buildStatisticsFrame(message, processRows, processError = null, client = null) {
   const requestedId = typeof message.id === "string" && message.id ? message.id : null;
-  const selected = requestedId ? [sessions.get(requestedId)].filter(Boolean) : [...sessions.values()];
+  const selected = requestedId
+    ? [sessions.get(requestedId)].filter((session) => canAccessSession(client, session))
+    : accessibleSessions(client);
   const logicalProcessors = Math.max(1, os.cpus().length);
   const processSupported = processRows !== null;
   const entries = selected.map((session) => {
@@ -4700,7 +4799,7 @@ function buildStatisticsFrame(message, processRows, processError = null) {
 
 function requestStatistics(client, message) {
   collectProcessStatistics((processRows, processError) => {
-    client.send(buildStatisticsFrame(message, processRows, processError));
+    client.send(buildStatisticsFrame(message, processRows, processError, client));
   });
 }
 
@@ -5161,7 +5260,56 @@ async function findVisualStudioCopilotSessionFiles(executable = process.env.MULT
 
 async function listCliCopilotSessions(cliRoot = path.join(os.homedir(), ".copilot", "session-state")) {
   const sessions = await listCopilotSessions(cliRoot);
-  return sessions.map((session) => ({ ...session, key: `cli:${session.id}`, source: "cli" }));
+  const normalized = sessions.map((session) => ({ ...session, key: `cli:${session.id}`, source: "cli" }));
+  await attachManagedWorktreeMetadata(normalized);
+  return normalized;
+}
+
+function linkedWorktreeRoot(directory) {
+  const target = String(directory || "").trim();
+  if (!target) return ""; else { void 0; }
+  let current = path.resolve(target);
+  if (!fs.existsSync(current)) return ""; else { void 0; }
+  while (true) {
+    const marker = path.join(current, ".git");
+    try {
+      const details = fs.statSync(marker);
+      if (details.isFile()) return current; else { void 0; }
+      if (details.isDirectory()) return ""; else { void 0; }
+    } catch (error) {
+      if (!error || error.code !== "ENOENT") return ""; else { void 0; }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return ""; else { void 0; }
+    current = parent;
+  }
+}
+
+async function attachManagedWorktreeMetadata(sessions) {
+  const discovered = new Map();
+  await Promise.all(sessions.map(async (session) => {
+    const worktreePath = linkedWorktreeRoot(session.cwd);
+    if (!worktreePath) return; else { void 0; }
+    let pending = discovered.get(worktreePath);
+    if (!pending) {
+      pending = (async () => {
+        const branch = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], worktreePath, 15000);
+        const worktreeBranch = branch.ok ? branch.stdout.trim() : "";
+        if (!worktreeBranch || worktreeBranch === "HEAD" || worktreeBranch.startsWith("-")) return null; else { void 0; }
+        const parent = await runGit([
+          "config", "--local", "--get", `multiterm.worktree.${worktreeBranch}.parent`
+        ], worktreePath, 15000);
+        const parentBranch = parent.ok ? parent.stdout.trim() : "";
+        return parentBranch
+          ? { worktreePath, worktreeBranch, worktreeParentBranch: parentBranch, worktreeRepositoryRoot: worktreePath }
+          : null;
+      })();
+      discovered.set(worktreePath, pending);
+    }
+    const metadata = await pending;
+    if (metadata) Object.assign(session, metadata); else { void 0; }
+  }));
+  return sessions;
 }
 
 async function listAllCopilotSessions({
@@ -5326,7 +5474,7 @@ async function sendRemoteCopilotSessions(client, message, dependencies = {}) {
 
 async function listClaudeSessions(loadSdk = loadClaudeSdk) {  const sdk = await loadSdk();
   const sessions = await sdk.listSessions({ includeProgrammatic: false });
-  return (Array.isArray(sessions) ? sessions : []).map((session) => {
+  const normalized = (Array.isArray(sessions) ? sessions : []).map((session) => {
     const id = String(session?.sessionId || "").toLowerCase();
     if (!copilotSessionIdPattern.test(id)) return null; else { void 0; }
     const createdAt = Number.isFinite(Number(session.createdAt))
@@ -5347,6 +5495,8 @@ async function listClaudeSessions(loadSdk = loadClaudeSdk) {  const sdk = await 
       updatedAt
     };
   }).filter(Boolean);
+  await attachManagedWorktreeMetadata(normalized);
+  return normalized;
 }
 
 /* v8 ignore next */

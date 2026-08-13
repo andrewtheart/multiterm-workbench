@@ -326,6 +326,44 @@ describe("Copilot CLI session discovery", () => {
     expect(cliOnly.send.mock.calls[0][0].sessions).toEqual([expect.objectContaining({ id, source: "cli" })]);
   });
 
+  it("associates a native CLI session with its MultiTerm-created linked worktree", async () => {
+    const repository = path.join(temporaryRoot, "repository");
+    const worktree = path.join(temporaryRoot, "repository-worktree");
+    fs.mkdirSync(repository);
+    const git = (args, cwd = repository) => childProcess.execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    git(["init", "-b", "main"]);
+    git(["config", "user.email", "sessions@example.com"]);
+    git(["config", "user.name", "Session Test"]);
+    fs.writeFileSync(path.join(repository, "tracked.txt"), "base\n");
+    git(["add", "."]);
+    git(["commit", "-m", "base"]);
+    git(["worktree", "add", "-b", "agent-session", worktree]);
+    git(["config", "--local", "multiterm.worktree.agent-session.parent", "main"]);
+    const nested = path.join(worktree, "src");
+    fs.mkdirSync(nested);
+    const id = "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373";
+    addSession(id, [`cwd: ${nested}`, "branch: agent-session", "name: Worktree session"].join("\n"));
+    const client = { send: vi.fn() };
+
+    await server.sendAllCopilotSessions(client, "worktree-session", { cliRoot: temporaryRoot }, "cli");
+
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "copilotSessions",
+      requestId: "worktree-session",
+      sessions: [expect.objectContaining({
+        id,
+        worktreePath: worktree,
+        worktreeBranch: "agent-session",
+        worktreeParentBranch: "main",
+        worktreeRepositoryRoot: worktree
+      })]
+    }));
+  });
+
   it("dispatches a cli-only request without touching editor histories", async () => {
     const client = { send: vi.fn() };
     const vscodeRoot = path.join(process.env.APPDATA || "", "Code", "User", "workspaceStorage");

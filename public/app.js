@@ -56,6 +56,7 @@ const defaultSettings = {
   copilotLogViewerEnabled: false,
   copilotRemoteKeepAlive: "off",
   copilotRemoteSessions: false,
+  copilotCwdQueryTimeoutSeconds: 180,
   copilotSessionSearchContextKb: 1024,
   copilotTitleContext: "default",
   copilotTitleContextKb: 16,
@@ -160,6 +161,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotLogInitialTailKb: "diagnostics logs github copilot cli initial tail kilobytes existing content zero follow new lines",
   copilotLogViewerEnabled: "diagnostics logs github copilot cli viewer include opt in launch directory",
   copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
+  copilotCwdQueryTimeoutSeconds: "ai assistant resume working directory cwd query ask session timeout seconds hidden terminal",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
   fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
@@ -608,6 +610,7 @@ const elements = {
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
+  copilotCwdQueryTimeoutSeconds: document.querySelector("#copilotCwdQueryTimeoutSeconds"),
   copilotRemoteKeepAlive: document.querySelector("#copilotRemoteKeepAlive"),
   copilotRemoteSessions: document.querySelector("#copilotRemoteSessions"),
   copilotRemoteStatus: document.querySelector("#copilotRemoteStatus"),
@@ -703,6 +706,7 @@ const elements = {
   copilotResumeTabRemote: document.querySelector("#copilotResumeTabRemote"),
   copilotResumeTabs: document.querySelector("#copilotResumeTabs"),
   copilotSessionsToggle: document.querySelector("#copilotSessionsToggle"),
+  cwdChangeAskSession: document.querySelector("#cwdChangeAskSession"),
   cwdChangeBrowse: document.querySelector("#cwdChangeBrowse"),
   cwdChangeCancel: document.querySelector("#cwdChangeCancel"),
   cwdChangeClose: document.querySelector("#cwdChangeClose"),
@@ -713,6 +717,7 @@ const elements = {
   cwdChangeSource: document.querySelector("#cwdChangeSource"),
   cwdChangeStatus: document.querySelector("#cwdChangeStatus"),
   cwdChangeTarget: document.querySelector("#cwdChangeTarget"),
+  transientTerminalHost: document.querySelector("#transientTerminalHost"),
   folderPickerOverlay: document.querySelector("#folderPickerOverlay"),
   folderPickerTitle: document.querySelector("#folderPickerTitle"),
   folderPickerClose: document.querySelector("#folderPickerClose"),
@@ -1531,6 +1536,10 @@ function bindControls() {
     state.settings.copilotSessionSearchContextKb,
     elements.copilotSessionSearchContextKb
   );
+  state.settings.copilotCwdQueryTimeoutSeconds = clampCopilotCwdQueryTimeoutSeconds(
+    state.settings.copilotCwdQueryTimeoutSeconds,
+    elements.copilotCwdQueryTimeoutSeconds
+  );
   state.settings.copilotRemoteKeepAlive = normalizeCopilotKeepAlive(state.settings.copilotRemoteKeepAlive);
   elements.copilotRemoteSessions.checked = Boolean(state.settings.copilotRemoteSessions);
   elements.copilotRemoteKeepAlive.value = state.settings.copilotRemoteKeepAlive;
@@ -1624,6 +1633,7 @@ function bindControls() {
   });
   elements.cwdChangeClose.addEventListener("click", closeCwdChange);
   elements.cwdChangeCancel.addEventListener("click", closeCwdChange);
+  elements.cwdChangeAskSession.addEventListener("click", () => startCwdSessionQuery({ retry: true }));
   elements.cwdChangeBrowse.addEventListener("click", browseCwdChange);
   elements.cwdChangeSend.addEventListener("click", submitCwdChange);
   elements.cwdChangeInput.addEventListener("input", scheduleCwdValidation);
@@ -1754,6 +1764,7 @@ function bindControls() {
   bindSetting(elements.ctrlVPaste, "ctrlVPaste", "change", (_, element) => element.checked);
   bindSetting(elements.cleanCopilotClipboard, "cleanCopilotClipboard", "change", (_, element) => element.checked);
   bindSetting(elements.copilotImportContextKb, "copilotImportContextKb", "change", clampCopilotImportContextKb);
+  bindSetting(elements.copilotCwdQueryTimeoutSeconds, "copilotCwdQueryTimeoutSeconds", "change", clampCopilotCwdQueryTimeoutSeconds);
   bindSetting(elements.copilotSessionSearchContextKb, "copilotSessionSearchContextKb", "change", clampCopilotSessionSearchContextKb);
   bindSetting(elements.aiSessionProvider, "aiSessionProvider", "change", normalizeAiProviderId);
   bindSetting(elements.aiSessionModel, "aiSessionModel", "change", normalizeAiSessionModel);
@@ -1976,6 +1987,7 @@ const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
 const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 };
 const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
 const COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS = { min: 64, max: 16384, fallback: 1024 };
+const COPILOT_CWD_QUERY_TIMEOUT_SECONDS_BOUNDS = { min: 30, max: 900, fallback: 180 };
 const COPILOT_TITLE_CONTEXT_KB_BOUNDS = { min: 4, max: 24, fallback: 16 };
 const COPILOT_TITLE_WORD_BOUNDS = { min: 1, max: 20 };
 const TITLE_SUGGESTION_HISTORY_BOUNDS = { min: 25, max: TITLE_SUGGESTION_HISTORY_MAX_LIMIT, fallback: 500 };
@@ -2097,6 +2109,10 @@ function clampCopilotImportContextKb(value, element) {
 
 function clampCopilotSessionSearchContextKb(value, element = elements.copilotSessionSearchContextKb) {
   return clampSettingNumber(value, element, COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS);
+}
+
+function clampCopilotCwdQueryTimeoutSeconds(value, element = elements.copilotCwdQueryTimeoutSeconds) {
+  return clampSettingNumber(value, element, COPILOT_CWD_QUERY_TIMEOUT_SECONDS_BOUNDS);
 }
 
 // "off" means MultiTerm stays out of the way; every other value is passed to
@@ -2647,6 +2663,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "sessionPromoted") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
   if (message.type === "gitInspection" || message.type === "gitWorktreeList"
     || message.type === "gitWorktreeRemoved" || message.type === "gitWorktreeRecorded"
     || message.type === "gitWorktreeCreated"
@@ -2701,6 +2722,11 @@ function handleBridgeMessage(message) {
       // exited while we were disconnected.
       for (const terminal of state.terminals.values()) {
         if (terminal.remoteRequested && !known.has(terminal.id)) {
+          if (terminal.transient && terminal.cwdSessionProbe) {
+            failCwdSessionQuery(terminal, "The private working-directory query ended when MultiTerm reconnected.");
+            disposeTerminal(terminal);
+            continue;
+          }
           markSessionLostWhileOffline(terminal);
         }
       }
@@ -2762,24 +2788,28 @@ function handleBridgeMessage(message) {
     // an older bridge omits it — accurate to the round-trip, and better than
     // showing nothing.
     terminal.startedAt = message.startedAt || new Date().toISOString();
-    ensureTerminalAnalyticsRecord(terminal).startedAt = terminal.startedAt;
+    if (!terminal.transient) ensureTerminalAnalyticsRecord(terminal).startedAt = terminal.startedAt;
     terminal.remoteRequested = true;
     terminal.status = "live";
     if (message.title !== terminal.titleInput.value) {
       sendBridge({ type: "title", id: terminal.id, title: terminal.titleInput.value });
     }
-    syncTerminalArtifacts(terminal);
+    if (!terminal.transient) syncTerminalArtifacts(terminal);
     if (message.elevated) {
       terminal.elevated = true;
       terminal.pane.classList.add("is-admin");
     }
     setTerminalStatus(terminal, `pid ${message.pid}`, "live");
     // The PID only exists now, so a pause keyed to it can only take effect here.
-    scheduleAutoTitle(terminal);
-    updateTerminalTitleGenerateButton(terminal);
+    if (!terminal.transient) {
+      scheduleAutoTitle(terminal);
+      updateTerminalTitleGenerateButton(terminal);
+    }
     log.info("session", `Session live: ${terminal.titleInput.value}`, { id: message.id, pid: message.pid });
-    updateTerminalSearchVisibility(terminal);
-    scheduleFit(terminal);
+    if (!terminal.transient) {
+      updateTerminalSearchVisibility(terminal);
+      scheduleFit(terminal);
+    }
 
     // The startup command runs unattended in every new shell, which makes it the
     // most valuable thing in settings for an attacker to tamper with; filter it
@@ -2959,6 +2989,11 @@ function handleBridgeMessage(message) {
   if (message.type === "exited") {
     const terminal = state.terminals.get(message.id);
     if (!terminal) return;
+    if (terminal.transient && terminal.cwdSessionProbe) {
+      failCwdSessionQuery(terminal, "The resumed Copilot session exited before it reported a working directory.");
+      disposeTerminal(terminal);
+      return;
+    }
     terminal.status = "exited";
     failAutomationWorkflowTasksForTerminal(terminal, "Terminal exited before the automation step completed");
     terminal.logging = false;
@@ -2976,6 +3011,11 @@ function handleBridgeMessage(message) {
   if (message.type === "createFailed" || message.type === "error") {
     const terminal = state.terminals.get(message.id);
     if (terminal) {
+      if (terminal.transient && terminal.cwdSessionProbe) {
+        failCwdSessionQuery(terminal, message.message || "The working-directory query could not start.");
+        disposeTerminal(terminal);
+        return;
+      }
       log.error("session", `Session error: ${message.message || "unknown"}`, { id: message.id });
       writelnTerminal(terminal, `\x1b[31m${message.message}\x1b[0m`);
       setTerminalStatus(terminal, "error", "dead");
@@ -3062,6 +3102,7 @@ function openExternalTerminal(value) {
 // a terminal we already hold as live again so it resumes streaming output and
 // its status reflects reality instead of the stale "offline" from the drop.
 function reattachExistingSession(terminal, session) {
+  if (terminal.transient) promoteTransientTerminal(terminal, { focus: false });
   terminal.remoteRequested = true;
   terminal.status = "live";
   if (session.cwd) terminal.cwd = session.cwd;
@@ -3123,6 +3164,10 @@ function nextTerminalTitle(shell) {
 
 const TERMINAL_SCROLLBAR_GUTTER_PX = 10;
 
+function userTerminals() {
+  return [...state.terminals.values()].filter((terminal) => !terminal.transient);
+}
+
 function reserveTerminalScrollbarGutter(term) {
   const element = term?.element;
   const viewport = element?.querySelector(".xterm-viewport");
@@ -3147,6 +3192,7 @@ function addTerminal(options = {}) {
 
   const session = options.session || {};
   const savedMeta = options.savedMeta || null;
+  const transient = options.transient === true;
   const id = session.id || createId();
   const shell = options.shell || session.shell || elements.shellSelect.value;
   const title = savedMeta?.title || session.title || options.title || nextTerminalTitle(shell);
@@ -3195,7 +3241,7 @@ function addTerminal(options = {}) {
     const headerIcon = pane.querySelector(".pane-title-wrap i[data-lucide]");
     if (headerIcon) headerIcon.dataset.lucide = "shield";
   }
-  elements.host.append(pane);
+  (transient ? elements.transientTerminalHost : elements.host).append(pane);
   term.open(screen);
   reserveTerminalScrollbarGutter(term);
 
@@ -3213,6 +3259,9 @@ function addTerminal(options = {}) {
     createdAt: performance.now(),
     cwd: session.cwd || options.cwd || elements.cwdInput.value,
     cwdQuery: null,
+    cwdSessionProbe: options.cwdSessionProbe && typeof options.cwdSessionProbe === "object"
+      ? { ...options.cwdSessionProbe, output: "" }
+      : null,
     awaitingInput: false,
     awaitingInputCategory: "",
     awaitingQuestion: false,
@@ -3305,6 +3354,7 @@ function addTerminal(options = {}) {
     titleReview,
     titleSuggestion: "",
     titleSuggestionHistoryId: "",
+    transient,
     autoTitleStep: 0,
     autoTitleTimer: 0,
     autoTitleRevision: 0,
@@ -3318,16 +3368,18 @@ function addTerminal(options = {}) {
     scheduleTerminalConnections();
   });
   state.terminals.set(id, terminal);
-  ensureTerminalAnalyticsRecord(terminal);
-  syncTerminalArtifacts(terminal);
-  updateTerminalActions();
+  if (!transient) {
+    ensureTerminalAnalyticsRecord(terminal);
+    syncTerminalArtifacts(terminal);
+    updateTerminalActions();
+  }
   terminal.observer.observe(screen);
   terminal.observer.observe(pane);
   bindPaneControls(terminal);
   applyHeaderActionPlacement(terminal);
   updateTerminalNotificationButton(terminal);
   bindPaneDrag(terminal);
-  scheduleAutoTitle(terminal);
+  if (!transient) scheduleAutoTitle(terminal);
   updateTerminalTitleGenerateButton(terminal);
   bindPaneResize(terminal);
   bindPaneQuickQueue(terminal);
@@ -3336,16 +3388,18 @@ function addTerminal(options = {}) {
   applyPaneColor(terminal);
   applyTerminalHeaderBackground(terminal);
   if (terminal.elevated) pane.classList.add("is-admin");
-  applyManualLayout(terminal, ensureManualLayout(id));
+  if (!transient) applyManualLayout(terminal, ensureManualLayout(id));
   // Panes for other pages are hidden immediately so a reattached session never
   // flashes onto the page you are looking at.
   pane.classList.toggle("is-page-hidden", terminal.pageId !== state.activePageId);
   rebalanceWebglRenderers();
-  renderPager();
-  saveTerminalPages();
-  if (isOnActivePage(terminal)) setActiveTerminal(id);
+  if (!transient) {
+    renderPager();
+    saveTerminalPages();
+    if (isOnActivePage(terminal)) setActiveTerminal(id);
+  }
   refreshIcons(pane);
-  refreshGlobalShortcutHints();
+  if (!transient) refreshGlobalShortcutHints();
   bindTerminalKeyHandling(terminal);
   bindTerminalFontZoom(terminal);
   bindTerminalSelectionHandling(terminal);
@@ -3366,7 +3420,7 @@ function addTerminal(options = {}) {
     const targets = terminal.targetedPaste
       ? [id]
       : state.settings.syncInput
-        ? [...state.terminals.keys()]
+        ? userTerminals().map((candidate) => candidate.id)
         : [id];
     let sentToAllTargets = true;
     for (const targetId of targets) {
@@ -3462,13 +3516,45 @@ function addTerminal(options = {}) {
     log.info("terminal", `Terminal added: ${terminal.titleInput.value}`, { id, shell: terminal.shell || elements.shellSelect.value });
   }
 
-  refreshTerminalSearchText(terminal);
-  applySettings();
-  revealTerminal(terminal);
-  scheduleFit(terminal);
+  if (!transient) {
+    refreshTerminalSearchText(terminal);
+    applySettings();
+    revealTerminal(terminal);
+    scheduleFit(terminal);
+  }
   if (terminal.status === "live") scheduleAutomaticQueueCheck(terminal, 150);
   saveSessionSnapshot();
   return terminal;
+}
+
+function promoteTransientTerminal(terminal, { focus = true } = {}) {
+  if (!terminal?.transient || terminal.status === "exited") return false;
+  terminal.transient = false;
+  elements.host.append(terminal.pane);
+  ensureTerminalAnalyticsRecord(terminal);
+  syncTerminalArtifacts(terminal);
+  applyManualLayout(terminal, ensureManualLayout(terminal.id));
+  renderPager();
+  saveTerminalPages();
+  if (focus) setActiveTerminal(terminal.id);
+  refreshTerminalSearchText(terminal);
+  updateTerminalActions();
+  refreshGlobalShortcutHints();
+  applySettings();
+  if (focus) revealTerminal(terminal);
+  scheduleFit(terminal);
+  saveSessionSnapshot();
+  return true;
+}
+
+function discardTransientTerminal(terminal) {
+  if (!terminal?.transient) return false;
+  sendBridge({ type: "kill", id: terminal.id });
+  disposeTerminal(terminal);
+  renderPager();
+  updateTerminalActions();
+  saveSessionSnapshot();
+  return true;
 }
 
 const RAPID_CTRL_C_INTERVAL_MS = 700;
@@ -5238,7 +5324,7 @@ const assistantSessionRecord = { timer: 0, lost: [], returnFocus: null };
 
 function assistantSessionRows() {
   const rows = [];
-  for (const terminal of state.terminals.values()) {
+  for (const terminal of userTerminals()) {
     const provider = terminal.aiAssistantTuiProvider;
     if (!provider || terminal.status !== "live") continue;
     rows.push({
@@ -6375,6 +6461,7 @@ function requestSession(terminal) {
     rows: terminal.term.rows,
     shell: terminal.shell || elements.shellSelect.value,
     title: terminal.titleInput.value,
+    ephemeral: terminal.transient,
     elevated: Boolean(terminal.elevated),
     tmux: terminal.tmux
   });
@@ -6855,7 +6942,8 @@ function liveWebglRendererCount() {
 }
 
 function isWebglVisibleCandidate(terminal) {
-  const hidden = terminal.minimized
+  const hidden = terminal.transient
+    || terminal.minimized
     || terminal.pane.classList.contains("is-search-hidden")
     || (!isOnActivePage(terminal) && !terminal.pane.classList.contains("is-search-gathered"));
   if (hidden) return false;
@@ -6864,7 +6952,7 @@ function isWebglVisibleCandidate(terminal) {
 }
 
 function preferredWebglTerminals() {
-  const terminals = [...state.terminals.values()];
+  const terminals = [...state.terminals.values()].filter((terminal) => !terminal.transient);
   terminals.sort((left, right) => {
     const leftVisible = isWebglVisibleCandidate(left);
     const rightVisible = isWebglVisibleCandidate(right);
@@ -7050,8 +7138,10 @@ function flushAllTerminalOutput() {
 // frame via flushTerminalOutput; status/banner lines (writelnTerminal) call it too.
 function writeTerminal(terminal, data) {
   consumeAutomationWorkflowOutput(terminal, data);
+  consumeCwdSessionProbeOutput(terminal, data);
   terminal.term.write(data);
   terminal.outputRevision += 1;
+  if (terminal.transient) return;
   if (terminal.cwdQuery) {
     terminal.cwdQuery.output = `${terminal.cwdQuery.output}${stripTerminalControlCodes(data)}`.slice(-16384);
   }
@@ -8130,7 +8220,7 @@ function newAdminTerminal(options = {}) {
 }
 
 function updateTerminalActions() {
-  const hasTerminals = state.terminals.size > 0;
+  const hasTerminals = userTerminals().length > 0;
   const canCloseAll = hasTerminals && state.socketReady;
   const label = hasTerminals
     ? state.socketReady ? "Close all terminal sessions" : "Bridge disconnected; cannot close all sessions"
@@ -8352,7 +8442,7 @@ function toggleAppTheme() {
 }
 
 function updateStatusBar() {
-  const count = state.terminals.size;
+  const count = userTerminals().length;
   elements.statusSessions.textContent = `${count} ${count === 1 ? "session" : "sessions"}`;
   const active = state.activeId ? state.terminals.get(state.activeId) : null;
   const shellValue = active?.shell || elements.shellSelect.value;
@@ -10388,7 +10478,7 @@ async function savePreparedFile() {
 
 function renderPrepareTerminalFlyout() {
   const query = elements.prepareTerminalSearch.value.trim().toLocaleLowerCase();
-  const terminals = [...state.terminals.values()].filter((terminal) => {
+  const terminals = userTerminals().filter((terminal) => {
     if (terminal.status !== "live") return false;
     if (!query) return true;
     const searchable = [
@@ -11281,8 +11371,23 @@ function normalizeCopilotSession(candidate) {  if (!candidate || !COPILOT_RESUME
     cwd: String(candidate.cwd || "").trim(),
     repository: String(candidate.repository || "").trim(),
     branch: String(candidate.branch || "").trim(),
+    worktreePath: String(candidate.worktreePath || "").trim(),
+    worktreeBranch: String(candidate.worktreeBranch || "").trim(),
+    worktreeParentBranch: String(candidate.worktreeParentBranch || "").trim(),
+    worktreeRepositoryRoot: String(candidate.worktreeRepositoryRoot || "").trim(),
     createdAt: String(candidate.createdAt || ""),
     updatedAt: String(candidate.updatedAt || "")
+  };
+}
+
+function copilotSessionWorktree(session) {
+  if (!session.worktreePath || !session.worktreeBranch || !session.worktreeParentBranch || !session.worktreeRepositoryRoot) return null;
+  return {
+    path: session.worktreePath,
+    branch: session.worktreeBranch,
+    parentBranch: session.worktreeParentBranch,
+    repositoryRoot: session.worktreeRepositoryRoot,
+    createdByMultiTerm: true
   };
 }
 
@@ -11321,7 +11426,7 @@ async function refreshCopilotSessions() {
       : { type: remote ? "listRemoteCopilotSessions" : provider === "claude" ? "listClaudeSessions" : "listCopilotSessions" },
     { timeout: remote ? 30000 : 20000 }
   );
-  if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
+  if (generation !== copilotResume.generation || (elements.copilotResumeOverlay.hidden && !copilotResume.suspended)) return;
 
   copilotResume.silent = !first;
   applyResponse(first, false);
@@ -11349,7 +11454,7 @@ async function refreshCopilotSessions() {
   // A cold scan of every editor transcript is slow but no longer blocks the list,
   // so it gets the room it needs instead of being cut off.
   const full = await requestBridge({ type: "listCopilotSessions" }, { timeout: 180000 });
-  if (generation !== copilotResume.generation || elements.copilotResumeOverlay.hidden) return;
+  if (generation !== copilotResume.generation || (elements.copilotResumeOverlay.hidden && !copilotResume.suspended)) return;
   elements.copilotResumeRefresh.disabled = false;
   copilotResume.silent = copilotResume.silent && !full;
   if (applyResponse(full, true)) renderCopilotSessions();
@@ -11450,10 +11555,12 @@ function renderCopilotSessions() {
 
   for (const session of shown) {
     const blocked = session.source === "remote" ? remoteSessionBlockReason(session) : "";
+    const entry = document.createElement("div");
+    entry.className = "copilot-session-entry";
+    entry.setAttribute("role", "listitem");
     const button = document.createElement("button");
     button.type = "button";
     button.className = "copilot-session-card";
-    button.setAttribute("role", "listitem");
     button.setAttribute("aria-label", session.source === "remote"
       ? `Connect to ${copilotSessionTitle(session)}`
       : `Resume ${copilotSessionTitle(session)}`);
@@ -11524,7 +11631,32 @@ function renderCopilotSessions() {
       if (session.source === "remote") connectToRemoteCopilotSession(session);
       else resumeCopilotSession(session);
     });
-    elements.copilotResumeList.append(button);
+    entry.append(button);
+    const worktree = copilotSessionWorktree(session);
+    if (worktree) {
+      entry.classList.add("has-worktree-actions");
+      const actions = document.createElement("div");
+      actions.className = "copilot-session-worktree-actions";
+      const review = document.createElement("button");
+      review.type = "button";
+      review.className = "secondary-action";
+      review.textContent = "Review";
+      review.addEventListener("click", () => {
+        suspendCopilotResume();
+        openWorktreeReview(worktree, { repositoryRoot: worktree.repositoryRoot, onClose: restoreCopilotResume });
+      });
+      const merge = document.createElement("button");
+      merge.type = "button";
+      merge.className = "primary-action";
+      merge.textContent = "Bring changes back";
+      merge.addEventListener("click", () => {
+        suspendCopilotResume();
+        openWorktreeMerge(worktree, { repositoryRoot: worktree.repositoryRoot, onClose: restoreCopilotResume });
+      });
+      actions.append(review, merge);
+      entry.append(actions);
+    }
+    elements.copilotResumeList.append(entry);
   }
 
   if (shown.length < filtered.length) {
@@ -11792,7 +11924,7 @@ function quickSwitchKeyFor(index) {
 // switcher can cross pages, which is the main reason it exists.
 function quickSwitchCandidates(rawQuery) {
   const query = normalizeSearchText(rawQuery || "");
-  const rows = [...state.terminals.values()].map((terminal) => ({
+  const rows = userTerminals().map((terminal) => ({
     id: terminal.id,
     title: terminal.titleInput.value,
     pageId: terminal.pageId,
@@ -11807,7 +11939,7 @@ function quickSwitchCandidates(rawQuery) {
 }
 
 function openQuickSwitch() {
-  if (state.terminals.size === 0) {
+  if (quickSwitchCandidates("").length === 0) {
     toast("No terminals open", "info", 1600);
     return;
   }
@@ -13132,9 +13264,9 @@ function broadcastTargetIds() {
     const active = state.activeId ? state.terminals.get(state.activeId) : null;
     if (!active) return [];
     const color = active.color || null;
-    return [...state.terminals.values()].filter((terminal) => (terminal.color || null) === color).map((terminal) => terminal.id);
+    return userTerminals().filter((terminal) => (terminal.color || null) === color).map((terminal) => terminal.id);
   }
-  return [...state.terminals.keys()];
+  return userTerminals().map((terminal) => terminal.id);
 }
 
 function sendBroadcast() {
@@ -13145,7 +13277,7 @@ function sendBroadcast() {
   if (!command) return;
 
   // No terminals at all: open one and run the command there once it is live.
-  if (state.terminals.size === 0) {
+  if (userTerminals().length === 0) {
     addTerminal({
       reveal: true,
       runStartup: true,
@@ -13403,6 +13535,12 @@ function revealTerminalCwd(terminal) {
 const cwdChange = {
   closeTimer: 0,
   mode: "terminal",
+  queryAttempted: false,
+  queryBusy: false,
+  queryGeneration: 0,
+  queryReportedPath: "",
+  queryTerminalId: null,
+  queryTimer: 0,
   readinessTimer: 0,
   returnFocus: null,
   resumeSession: null,
@@ -14282,6 +14420,8 @@ const worktreeMerge = {
   busy: false,
   closeTimer: 0,
   done: false,
+  onClose: null,
+  repositoryRoot: "",
   returnFocus: null,
   sessionId: "",
   worktree: null
@@ -14344,9 +14484,14 @@ function updateWorktreeMergeMode() {
   }
 }
 
-function openWorktreeMerge(worktree) {
+function openWorktreeMerge(worktree, {
+  repositoryRoot = worktree?.repositoryRoot || worktreeManager.repositoryRoot,
+  onClose = null
+} = {}) {
   worktreeMerge.returnFocus = document.activeElement;
   worktreeMerge.worktree = worktree;
+  worktreeMerge.repositoryRoot = repositoryRoot;
+  worktreeMerge.onClose = onClose;
   worktreeMerge.sessionId = "";
   worktreeMerge.done = false;
   window.clearTimeout(worktreeMerge.closeTimer);
@@ -14376,10 +14521,14 @@ function closeWorktreeMerge() {
     elements.worktreeMergeOverlay.hidden = true;
   }, 150);
   const returnFocus = worktreeMerge.returnFocus;
+  const onClose = worktreeMerge.onClose;
   worktreeMerge.returnFocus = null;
+  worktreeMerge.onClose = null;
+  worktreeMerge.repositoryRoot = "";
   worktreeMerge.worktree = null;
   worktreeMerge.done = false;
-  if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+  if (typeof onClose === "function") onClose();
+  else if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
 }
 
 async function cancelWorktreeMerge() {
@@ -14463,7 +14612,7 @@ async function runWorktreeMerge() {
   setWorktreeMergeStatus("Checking both worktrees and preparing the merge...", "waiting");
   const response = await requestBridge({
     type: "gitMergeStart",
-    repositoryRoot: worktreeManager.repositoryRoot,
+    repositoryRoot: worktreeMerge.repositoryRoot,
     parentBranch: worktreeMerge.worktree.parentBranch,
     worktreeBranch: worktreeMerge.worktree.branch,
     strategy: mode
@@ -14855,9 +15004,13 @@ async function refreshWorktreeManager() {
   const inspection = await requestBridge({ type: "gitInspect", path: folder }, { timeout: 30000 });
   if (generation !== worktreeManager.generation) return;
   worktreeManager.repositoryRoot = inspection?.repositoryRoot || "";
-  renderWorktreeRows(listed.worktrees || []);
-  const managed = (listed.worktrees || []).filter((worktree) => worktree.createdByMultiTerm).length;
-  elements.worktreeManagerStatus.textContent = `${listed.worktrees.length} worktree(s), ${managed} created by MultiTerm.`;
+  const worktrees = (listed.worktrees || []).map((worktree) => ({
+    ...worktree,
+    repositoryRoot: worktreeManager.repositoryRoot
+  }));
+  renderWorktreeRows(worktrees);
+  const managed = worktrees.filter((worktree) => worktree.createdByMultiTerm).length;
+  elements.worktreeManagerStatus.textContent = `${worktrees.length} worktree(s), ${managed} created by MultiTerm.`;
   delete elements.worktreeManagerStatus.dataset.tone;
 }
 
@@ -14904,10 +15057,14 @@ function closeWorktreeManager() {
   if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
 }
 
-const worktreeReview = { closeTimer: 0, generation: 0, returnFocus: null };
+const worktreeReview = { closeTimer: 0, generation: 0, onClose: null, returnFocus: null };
 
-async function openWorktreeReview(worktree) {
+async function openWorktreeReview(worktree, {
+  repositoryRoot = worktree?.repositoryRoot || worktreeManager.repositoryRoot,
+  onClose = null
+} = {}) {
   worktreeReview.returnFocus = document.activeElement;
+  worktreeReview.onClose = onClose;
   window.clearTimeout(worktreeReview.closeTimer);
   const generation = ++worktreeReview.generation;
   elements.worktreeReviewSubtitle.textContent = `${worktree.branch} compared with ${worktree.parentBranch}`;
@@ -14923,9 +15080,10 @@ async function openWorktreeReview(worktree) {
 
   const response = await requestBridge({
     type: "gitDiff",
-    repositoryRoot: worktreeManager.repositoryRoot,
+    repositoryRoot,
     base: worktree.parentBranch,
-    head: worktree.branch
+    head: worktree.branch,
+    worktreePath: worktree.path
   }, { timeout: 90000 });
   if (generation !== worktreeReview.generation) return;
 
@@ -14935,7 +15093,7 @@ async function openWorktreeReview(worktree) {
     return;
   }
   if (!response.diff.trim()) {
-    elements.worktreeReviewStatus.textContent = "This worktree has no committed changes yet.";
+    elements.worktreeReviewStatus.textContent = "This worktree has no committed or pending changes yet.";
     delete elements.worktreeReviewStatus.dataset.tone;
     return;
   }
@@ -14965,8 +15123,11 @@ function closeWorktreeReview() {
     elements.worktreeReviewDiff.textContent = "";
   }, 150);
   const returnFocus = worktreeReview.returnFocus;
+  const onClose = worktreeReview.onClose;
   worktreeReview.returnFocus = null;
-  if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+  worktreeReview.onClose = null;
+  if (typeof onClose === "function") onClose();
+  else if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
 }
 
 function bindWorktreeReview() {
@@ -15113,6 +15274,186 @@ function setCwdChangeStatus(text, tone = "") {
   else delete elements.cwdChangeStatus.dataset.tone;
 }
 
+function cwdSessionQueryEligible(session = cwdChange.resumeSession) {
+  return cwdChange.mode === "resume"
+    && copilotResume.provider === "copilot"
+    && session?.source === "cli"
+    && COPILOT_RESUME_ID_PATTERN.test(String(session.id || ""))
+    && aiProviderAvailableFor(aiProviderById("copilot"), "session");
+}
+
+function cwdSessionQueryTerminal() {
+  const terminal = state.terminals.get(cwdChange.queryTerminalId);
+  return terminal?.transient && terminal.cwdSessionProbe ? terminal : null;
+}
+
+function syncCwdSessionQueryButton() {
+  const visible = cwdSessionQueryEligible();
+  elements.cwdChangeAskSession.hidden = !visible;
+  elements.cwdChangeAskSession.disabled = !visible || cwdChange.queryBusy;
+  elements.cwdChangeAskSession.classList.toggle("is-loading", cwdChange.queryBusy);
+  const label = elements.cwdChangeAskSession.querySelector("span");
+  if (label) label.textContent = cwdChange.queryBusy
+    ? "Asking session..."
+    : cwdChange.queryAttempted
+      ? "Ask again"
+      : "Ask session";
+}
+
+function cwdSessionQueryPrompt(token) {
+  return [
+    "Use only the resumed conversation's memory to identify the absolute local filesystem working directory this session was last using.",
+    "Do not inspect or report the current process directory, and do not call tools.",
+    `Reply with only this identifier ${token}, immediately followed by two colons, the absolute path, two colons, and the same identifier.`,
+    "If the prior directory cannot be determined, put UNKNOWN where the path would be."
+  ].join(" ");
+}
+
+function discardCwdSessionQuery() {
+  cwdChange.queryGeneration += 1;
+  window.clearTimeout(cwdChange.queryTimer);
+  cwdChange.queryTimer = 0;
+  const terminal = cwdSessionQueryTerminal();
+  cwdChange.queryTerminalId = null;
+  cwdChange.queryBusy = false;
+  if (terminal) discardTransientTerminal(terminal);
+  syncCwdSessionQueryButton();
+}
+
+function failCwdSessionQuery(terminal, reason) {
+  if (cwdChange.queryTerminalId !== terminal?.id) return;
+  cwdChange.queryGeneration += 1;
+  window.clearTimeout(cwdChange.queryTimer);
+  cwdChange.queryTimer = 0;
+  cwdChange.queryTerminalId = null;
+  cwdChange.queryBusy = false;
+  syncCwdSessionQueryButton();
+  if (!elements.cwdChangeOverlay.hidden && cwdChange.mode === "resume") {
+    setCwdChangeStatus(reason, "error");
+  }
+}
+
+async function acceptCwdSessionQuery(terminal, rawPath) {
+  if (cwdChange.queryTerminalId !== terminal.id || elements.cwdChangeOverlay.hidden) return false;
+  const generation = cwdChange.queryGeneration;
+  const reportedPath = String(rawPath || "").trim().replace(/^[`"']|[`"']$/g, "");
+  terminal.cwdSessionProbe.resolved = true;
+  window.clearTimeout(cwdChange.queryTimer);
+  cwdChange.queryTimer = 0;
+  cwdChange.validPath = "";
+  elements.cwdChangeSend.disabled = true;
+  cwdChange.queryReportedPath = reportedPath === "UNKNOWN" ? "" : reportedPath;
+  if (!cwdChange.queryReportedPath) {
+    cwdChange.queryBusy = false;
+    syncCwdSessionQueryButton();
+    setCwdChangeStatus("The resumed session could not determine its previous working directory.", "error");
+    return false;
+  }
+  elements.cwdChangeSource.textContent = "Reported by resumed session";
+  elements.cwdChangeCurrent.textContent = cwdChange.queryReportedPath;
+  elements.cwdChangeInput.value = cwdChange.queryReportedPath;
+  setCwdChangeStatus("Checking the directory reported by the resumed session...", "waiting");
+  const validationGeneration = ++cwdChange.validationGeneration;
+  window.clearTimeout(cwdChange.validationTimer);
+  const response = await requestBridge({
+    type: "validateDirectory",
+    path: cwdChange.queryReportedPath,
+    shell: "powershell",
+    distro: ""
+  }, { timeout: 20000 });
+  if (generation !== cwdChange.queryGeneration
+      || validationGeneration !== cwdChange.validationGeneration
+      || elements.cwdChangeOverlay.hidden
+      || elements.cwdChangeInput.value.trim() !== cwdChange.queryReportedPath) return false;
+  if (!response?.valid || !response.path) {
+    cwdChange.validPath = "";
+    cwdChange.queryBusy = false;
+    elements.cwdChangeSend.disabled = true;
+    syncCwdSessionQueryButton();
+    setCwdChangeStatus(
+      response?.error || "The session reported a directory that is no longer available on this machine.",
+      "error"
+    );
+    return false;
+  }
+  cwdChange.validPath = response.path;
+  cwdChange.queryReportedPath = response.path;
+  cwdChange.queryBusy = false;
+  elements.cwdChangeInput.value = response.path;
+  elements.cwdChangeCurrent.textContent = response.path;
+  syncCwdSessionQueryButton();
+  updateCwdChangeReadyState();
+  return true;
+}
+
+function consumeCwdSessionProbeOutput(terminal, data) {
+  const probe = terminal?.cwdSessionProbe;
+  if (!probe || probe.resolved || !probe.token) return;
+  probe.output = `${probe.output}${stripTerminalControlCodes(data)}`.slice(-65536);
+  const escaped = probe.token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const framed = new RegExp(`^${escaped}::([^\\r\\n]*)::${escaped}$`);
+  for (const line of probe.output.split(/\r?\n/)) {
+    const semanticLine = line
+      .replace(/^[\s│┃┆┊╎╏>❯●•-]+/u, "")
+      .replace(/[\s│┃┆┊╎╏]+$/u, "");
+    const match = framed.exec(semanticLine);
+    if (match) {
+      void acceptCwdSessionQuery(terminal, match[1]);
+      break;
+    }
+  }
+}
+
+function startCwdSessionQuery({ retry = false } = {}) {
+  const session = cwdChange.resumeSession;
+  if (!cwdSessionQueryEligible(session) || cwdChange.queryBusy) return false;
+  if (retry) discardCwdSessionQuery();
+  if (!buildAiAssistantCommand({ provider: "copilot", resumeId: session.id })) {
+    setCwdChangeStatus("GitHub Copilot is not installed and signed in.", "error");
+    return false;
+  }
+  const token = `MULTITERM_CWD_${createAiSessionId().replace(/-/g, "").toUpperCase()}`;
+  const generation = ++cwdChange.queryGeneration;
+  cwdChange.validationGeneration += 1;
+  window.clearTimeout(cwdChange.validationTimer);
+  cwdChange.validPath = "";
+  cwdChange.queryAttempted = true;
+  cwdChange.queryBusy = true;
+  cwdChange.queryReportedPath = "";
+  elements.cwdChangeSend.disabled = true;
+  setCwdChangeStatus("Resuming the session privately to ask for its previous working directory...", "waiting");
+  syncCwdSessionQueryButton();
+  const terminal = addTerminal({
+    transient: true,
+    runStartup: false,
+    shell: "pwsh",
+    cwd: state.cwd || elements.cwdInput.value || undefined,
+    title: `CWD query · ${copilotSessionTitle(session)}`,
+    pendingCommand: buildAiAssistantCommand({
+      provider: "copilot",
+      resumeId: session.id,
+      initialPrompt: cwdSessionQueryPrompt(token),
+      tools: false
+    }),
+    cwdSessionProbe: { generation, sessionId: session.id, token, resolved: false }
+  });
+  if (!terminal) {
+    cwdChange.queryBusy = false;
+    syncCwdSessionQueryButton();
+    setCwdChangeStatus("The working-directory query terminal could not be started.", "error");
+    return false;
+  }
+  cwdChange.queryTerminalId = terminal.id;
+  const timeoutSeconds = clampCopilotCwdQueryTimeoutSeconds(state.settings.copilotCwdQueryTimeoutSeconds);
+  cwdChange.queryTimer = window.setTimeout(() => {
+    if (cwdChange.queryGeneration !== generation || cwdChange.queryTerminalId !== terminal.id) return;
+    failCwdSessionQuery(terminal, `The resumed session did not report a working directory within ${timeoutSeconds} seconds.`);
+    discardTransientTerminal(terminal);
+  }, timeoutSeconds * 1000);
+  claimAiSessionId(terminal, session.id);
+  return true;
+}
+
 function updateCwdChangeReadyState() {
   window.clearTimeout(cwdChange.readinessTimer);
   if (elements.cwdChangeOverlay.hidden) return;
@@ -15121,7 +15462,7 @@ function updateCwdChangeReadyState() {
     const changed = Boolean(session && cwdChange.validPath && !sameHostDirectory(session.cwd, cwdChange.validPath));
     const capability = changed ? cwdProviderCapability(copilotResume.provider) : { available: true, status: "" };
     const missingClaudeProject = copilotResume.provider === "claude" && !session?.cwd;
-    elements.cwdChangeSend.disabled = !cwdChange.validPath || !capability.available || missingClaudeProject;
+    elements.cwdChangeSend.disabled = cwdChange.queryBusy || !cwdChange.validPath || !capability.available || missingClaudeProject;
     if (missingClaudeProject) {
       setCwdChangeStatus("Claude cannot resume because its saved project folder is unavailable.", "error");
     } else if (!capability.available) {
@@ -15161,7 +15502,10 @@ function openCwdChange(terminalOrId, returnFocus = document.activeElement) {
     toast("Select a terminal first", "info", 1800);
     return false;
   }
+  discardCwdSessionQuery();
   cwdChange.mode = "terminal";
+  cwdChange.queryAttempted = false;
+  cwdChange.queryReportedPath = "";
   cwdChange.resumeSession = null;
   cwdChange.terminalId = terminal.id;
   cwdChange.returnFocus = returnFocus;
@@ -15185,6 +15529,7 @@ function openCwdChange(terminalOrId, returnFocus = document.activeElement) {
   scheduleCwdValidation();
   updateCwdChangeReadyState();
   queryLiveCwdForDialog(terminal, terminal.cwd || "");
+  syncCwdSessionQueryButton();
   refreshIcons(elements.cwdChangeOverlay);
   return true;
 }
@@ -15192,8 +15537,11 @@ function openCwdChange(terminalOrId, returnFocus = document.activeElement) {
 function openResumeCwdChange(session) {
   if (!session || !copilotResume.newTerminal) return false;
   suspendCopilotResume();
+  discardCwdSessionQuery();
   cwdChange.mode = "resume";
   cwdChange.resumeSession = session;
+  cwdChange.queryAttempted = false;
+  cwdChange.queryReportedPath = "";
   cwdChange.terminalId = null;
   cwdChange.returnFocus = elements.copilotResumeSearch;
   cwdChange.validPath = "";
@@ -15212,11 +15560,15 @@ function openResumeCwdChange(session) {
     elements.cwdChangeInput.select();
   });
   scheduleCwdValidation();
+  syncCwdSessionQueryButton();
+  if (!session.cwd && cwdSessionQueryEligible(session)) {
+    window.requestAnimationFrame(() => startCwdSessionQuery());
+  }
   refreshIcons(elements.cwdChangeOverlay);
   return true;
 }
 
-function closeCwdChange({ restoreResume = cwdChange.mode === "resume" } = {}) {
+function closeCwdChange({ restoreResume = cwdChange.mode === "resume", keepQueryTerminal = false } = {}) {
   const shouldRestoreResume = restoreResume;
   cwdChange.validationGeneration += 1;
   cwdChange.validPath = "";
@@ -15228,9 +15580,12 @@ function closeCwdChange({ restoreResume = cwdChange.mode === "resume" } = {}) {
   }, 150);
   const terminal = state.terminals.get(cwdChange.terminalId);
   if (terminal) terminal.cwdQuery = null;
+  if (!keepQueryTerminal) discardCwdSessionQuery();
   const returnFocus = cwdChange.returnFocus;
   cwdChange.terminalId = null;
   cwdChange.mode = "terminal";
+  cwdChange.queryAttempted = false;
+  cwdChange.queryReportedPath = "";
   cwdChange.resumeSession = null;
   cwdChange.returnFocus = null;
   if (shouldRestoreResume) restoreCopilotResume();
@@ -15243,6 +15598,7 @@ function scheduleCwdValidation() {
   elements.cwdChangeSend.disabled = true;
   window.clearTimeout(cwdChange.validationTimer);
   const value = elements.cwdChangeInput.value.trim();
+  if (cwdChange.queryBusy && value !== cwdChange.queryReportedPath) discardCwdSessionQuery();
   if (!value) {
     setCwdChangeStatus("Enter a directory to continue.");
     return;
@@ -15270,6 +15626,7 @@ async function validateCwdChange() {
     // about the directory -- blaming the path there sends people off checking a
     // folder that was fine all along.
     setCwdChangeStatus(response?.error || bridgeSilenceReason("checked"), "error");
+    if (cwdSessionQueryEligible() && !cwdChange.queryAttempted) startCwdSessionQuery();
     return;
   }
   cwdChange.validPath = response.path;
@@ -15309,11 +15666,46 @@ function buildCwdChangeCommand(terminal, terminalPath) {
   return `Set-Location -LiteralPath ${quotePowerShellPath(terminalPath)}`;
 }
 
-function submitCwdChange() {
+async function submitCwdChange() {
   if (cwdChange.mode === "resume") {
     const session = cwdChange.resumeSession;
     const confirmedCwd = cwdChange.validPath;
     if (!session || !confirmedCwd || elements.cwdChangeSend.disabled) return false;
+    const queryTerminal = cwdSessionQueryTerminal();
+    if (queryTerminal
+        && queryTerminal.cwdSessionProbe?.sessionId === session.id
+        && queryTerminal.cwdSessionProbe.resolved === true
+        && cwdChange.validPath === confirmedCwd
+        && elements.cwdChangeInput.value.trim() === confirmedCwd) {
+      elements.cwdChangeSend.disabled = true;
+      elements.cwdChangeAskSession.disabled = true;
+      setCwdChangeStatus("Opening the already-resumed session...", "waiting");
+      const promoted = await requestBridge({ type: "promoteSession", id: queryTerminal.id }, { timeout: 20000 });
+      if (!promoted?.ok || promoted.id !== queryTerminal.id || elements.cwdChangeOverlay.hidden) {
+        updateCwdChangeReadyState();
+        syncCwdSessionQueryButton();
+        setCwdChangeStatus(promoted?.reason || "The bridge did not promote the resumed session.", "error");
+        return false;
+      }
+      closeCwdChange({ restoreResume: false, keepQueryTerminal: true });
+      queryTerminal.cwdSessionProbe = null;
+      cwdChange.queryTerminalId = null;
+      window.clearTimeout(cwdChange.queryTimer);
+      cwdChange.queryTimer = 0;
+      if (!promoteTransientTerminal(queryTerminal)) {
+        discardTransientTerminal(queryTerminal);
+        return resumeCopilotSession(session, { confirmedCwd });
+      }
+      queryTerminal.aiAssistantTuiProvider = "copilot";
+      registerCopilotLogTerminal(session.id, queryTerminal);
+      queryTerminal.pendingCwdChange = sameHostDirectory(queryTerminal.cwd, confirmedCwd)
+        ? null
+        : { path: confirmedCwd, provider: "copilot" };
+      if (queryTerminal.pendingCwdChange) schedulePendingCwdChange(queryTerminal);
+      else queryTerminal.cwd = confirmedCwd;
+      window.requestAnimationFrame(() => queryTerminal.term.focus());
+      return true;
+    }
     closeCwdChange({ restoreResume: false });
     resumeCopilotSession(session, { confirmedCwd });
     return true;
@@ -15785,7 +16177,7 @@ function requestAppClose(source = "window") {
 
 function openCloseConfirm() {
   if (!elements.closeConfirmOverlay) return;
-  const count = state.terminals.size;
+  const count = userTerminals().length;
   const sessionLabel = `${count} terminal session${count === 1 ? "" : "s"}`;
   const fromTray = state.closeRequestSource === "tray";
   elements.closeConfirmTitle.textContent = fromTray ? "Quit MultiTerm?" : "Close MultiTerm?";
@@ -15953,7 +16345,7 @@ function savePages() {
 function saveTerminalPages() {
   if (deferDuringBatch("saveTerminalPages")) return;
   const map = { ...state.terminalPages };
-  for (const terminal of state.terminals.values()) {
+  for (const terminal of userTerminals()) {
     map[terminal.id] = terminal.pageId;
   }
   state.terminalPages = map;
@@ -15989,7 +16381,7 @@ function resolvePageId(candidate, terminalId) {
 }
 
 function terminalsOnPage(pageId) {
-  return [...state.terminals.values()].filter((terminal) => terminal.pageId === pageId);
+  return userTerminals().filter((terminal) => terminal.pageId === pageId);
 }
 
 function terminalsNotOnPage(pageId) {
@@ -16474,7 +16866,7 @@ function updatePageGroupButton() {
   const button = elements.pagerGroup;
   const ready = pageGroupingAvailable();
   if (button) {
-    const live = [...state.terminals.values()].filter((terminal) => terminal.status !== "exited");
+    const live = userTerminals().filter((terminal) => terminal.status !== "exited");
     button.disabled = pageGrouping.active || live.length < 2 || !ready;
     button.title = !ready
       ? "GitHub Copilot is not signed in, so terminals cannot be grouped."
@@ -16498,7 +16890,7 @@ function updatePageGroupButton() {
 // Each terminal gets a fair share of the configured title-context budget so a
 // busy workspace cannot silently blow past the limit the user set.
 function buildTerminalGroupCatalog() {
-  const terminals = [...state.terminals.values()].filter((terminal) => terminal.status !== "exited");
+  const terminals = userTerminals().filter((terminal) => terminal.status !== "exited");
   const budget = clampCopilotTitleContextKb(state.settings.copilotTitleContextKb) * 1024;
   const perTerminal = terminals.length > 0 ? Math.max(512, Math.floor(budget / terminals.length)) : 0;
   const catalog = terminals.map((terminal) => ({
@@ -16708,10 +17100,10 @@ async function groupPageBandsWithAi() {
 // A proposal names its members by id, so it is only valid while exactly those
 // terminals are still live.
 function pageGroupProposalIsCurrent(terminalIds) {
-  const live = [...state.terminals.values()]
+  const live = userTerminals()
     .filter((terminal) => terminal.status !== "exited")
     .map((terminal) => terminal.id);
-  return live.length === terminalIds.length && terminalIds.every((id) => state.terminals.has(id));
+  return live.length === terminalIds.length && terminalIds.every((id) => live.includes(id));
 }
 
 function pageGroupPagesProposalIsCurrent(pageIds) {
@@ -17598,7 +17990,7 @@ function saveWorkspace(rawName) {
     pages: state.pages.map((page) => ({ id: page.id, name: page.name, groupId: page.groupId })),
     pageGroups: state.pageGroups.map((group) => ({ ...group })),
     activePageId: state.activePageId,
-    terminals: [...state.terminals.values()].map((terminal) => ({
+    terminals: userTerminals().map((terminal) => ({
       title: terminal.titleInput.value,
       shell: terminal.shell,
       cwd: terminal.cwd,
@@ -17749,6 +18141,10 @@ function syncControlsFromSettings() {
   state.settings.copilotSessionSearchContextKb = clampCopilotSessionSearchContextKb(
     state.settings.copilotSessionSearchContextKb,
     elements.copilotSessionSearchContextKb
+  );
+  state.settings.copilotCwdQueryTimeoutSeconds = clampCopilotCwdQueryTimeoutSeconds(
+    state.settings.copilotCwdQueryTimeoutSeconds,
+    elements.copilotCwdQueryTimeoutSeconds
   );
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
@@ -18556,7 +18952,8 @@ function handleBell(terminal) {
 
 function saveSessionSnapshot() {
   if (deferDuringBatch("saveSessionSnapshot")) return;
-  const snapshot = [...state.terminals.values()].map((terminal) => ({
+  const persistent = [...state.terminals.values()].filter((terminal) => !terminal.transient);
+  const snapshot = persistent.map((terminal) => ({
     id: terminal.id,
     title: terminal.titleInput.value,
     shell: terminal.shell,
@@ -18580,7 +18977,7 @@ function saveSessionSnapshot() {
   // The snapshot carries no ids, so it cannot restore an arrangement when the
   // bridge still has the sessions alive and we reattach instead of recreating.
   // Keep the id order alongside it for that path.
-  localStorage.setItem("multiterm.paneOrder", JSON.stringify([...state.terminals.keys()]));
+  localStorage.setItem("multiterm.paneOrder", JSON.stringify(persistent.map((terminal) => terminal.id)));
 }
 
 function loadPaneOrder() {
@@ -18954,11 +19351,11 @@ function recoverStaleTerminalArtifacts(liveSessionIds) {
 }
 
 function artifactTerminalIsAvailable(terminal) {
-  return Boolean(terminal) && terminal.status !== "exited" && terminal.status !== "error";
+  return Boolean(terminal) && !terminal.transient && terminal.status !== "exited" && terminal.status !== "error";
 }
 
 function liveArtifactTerminals() {
-  return [...state.terminals.values()].filter(artifactTerminalIsAvailable);
+  return userTerminals().filter(artifactTerminalIsAvailable);
 }
 
 function updateTerminalArtifactIndicators() {
@@ -19925,7 +20322,7 @@ function updateAutomationBadge() {
 }
 
 function automationLiveTerminals() {
-  return [...state.terminals.values()].filter((terminal) => terminal.status === "live");
+  return userTerminals().filter((terminal) => terminal.status === "live");
 }
 
 function selectedAutomationType() {
@@ -20714,7 +21111,7 @@ function automationDueAt(rule) {
 }
 
 function resolveAutomationTerminal(action) {
-  const available = [...state.terminals.values()].filter((terminal) => (
+  const available = userTerminals().filter((terminal) => (
     terminal.status !== "exited" && terminal.status !== "error"
   ));
   if (action.targetMode === "pid") {
@@ -22054,7 +22451,7 @@ function bindTerminalConnectionGeometry() {
 }
 
 function liveMessageTerminals() {
-  return [...state.terminals.values()].filter((terminal) => terminal.status === "live");
+  return userTerminals().filter((terminal) => terminal.status === "live");
 }
 
 function messageTerminalLabel(terminal) {
@@ -24324,6 +24721,7 @@ function buildAiAssistantCommand({
   logKey = "",
   shell = "pwsh",
   initialPrompt = "",
+  tools = true,
   remote = provider === "copilot" && state.settings.copilotRemoteSessions,
   model = state.settings.aiSessionModel,
   effort = state.settings.aiSessionEffort,
@@ -24363,6 +24761,7 @@ function buildAiAssistantCommand({
     parts.push("--context", context);
   }
   if (provider === "copilot" && initialPrompt) parts.push("-i", powerShellLiteral(initialPrompt));
+  if (provider === "copilot" && !tools) parts.push("--available-tools=");
   return parts.filter(Boolean).join(" ");
 }
 

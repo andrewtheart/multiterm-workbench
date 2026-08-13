@@ -2554,6 +2554,33 @@ body.header-hidden .status-hint kbd,
   padding: 4px 12px 14px;
 }
 
+.copilot-session-entry {
+  align-items: stretch;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 601px) {
+  .copilot-session-entry.has-worktree-actions {
+    grid-template-columns: minmax(0, 1fr) 138px;
+  }
+}
+
+.copilot-session-worktree-actions {
+  align-content: center;
+  display: grid;
+  gap: 6px;
+}
+
+.copilot-session-worktree-actions button {
+  font-size: 11px;
+  line-height: 1.25;
+  min-height: 34px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
 .copilot-session-card {
   background: var(--surface-raised);
   border: 1px solid var(--border);
@@ -4122,6 +4149,19 @@ body.header-hidden .status-hint kbd,
   white-space: nowrap;
 }
 
+.cwd-change-ask-session {
+  justify-self: start;
+  margin-top: 2px;
+}
+
+.cwd-change-ask-session.is-loading svg {
+  animation: title-ai-spin 900ms linear infinite;
+}
+
+.cwd-change-ask-session[hidden] {
+  display: none;
+}
+
 .cwd-change-field {
   display: grid;
   gap: 6px;
@@ -4158,6 +4198,11 @@ body.header-hidden .status-hint kbd,
   padding: 12px 20px 18px;
 }
 
+.transient-terminal-host,
+.transient-terminal-host[hidden] {
+  display: none !important;
+}
+
 @media (max-width: 520px) {
   .cwd-change-head,
   .cwd-change-body,
@@ -4181,6 +4226,14 @@ body.header-hidden .status-hint kbd,
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .copilot-session-entry {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .copilot-session-worktree-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .copilot-session-aside {

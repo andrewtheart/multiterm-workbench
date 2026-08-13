@@ -17,7 +17,11 @@ const CLI_SESSION = {
   key: "cli:3818ca4d-66ba-49ef-9a68-56192d4c04ce",
   source: "cli",
   name: "Native CLI history",
-  cwd: "D:\\multiTerm",
+  cwd: "D:\\multiTerm.worktrees\\resume-controls",
+  worktreePath: "D:\\multiTerm.worktrees\\resume-controls",
+  worktreeBranch: "resume-controls",
+  worktreeParentBranch: "main",
+  worktreeRepositoryRoot: "D:\\multiTerm.worktrees\\resume-controls",
   updatedAt: "2026-08-09T20:07:27.844Z"
 };
 const EDITOR_SESSION = {
@@ -39,6 +43,9 @@ test.describe("Copilot resume listing", () => {
     await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      if (!elements.assistantRestoreOverlay.hidden) closeAssistantRestoreDialog({ forget: false });
+    });
     await page.evaluate(() => closeAllTerminals());
     await page.evaluate(() => addTerminal());
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
@@ -58,7 +65,9 @@ test.describe("Copilot resume listing", () => {
   test.afterAll(async () => {
     await page.evaluate(() => {
       if (window.__originalSend) state.socket.send = window.__originalSend;
+      if (window.__originalRequestBridge) requestBridge = window.__originalRequestBridge;
       delete window.__originalSend;
+      delete window.__originalRequestBridge;
       closeCopilotResume();
     });
     await stopRendererCoverage(page);
@@ -95,14 +104,47 @@ test.describe("Copilot resume listing", () => {
     // The resumable session is on screen while the aggregate request is still open.
     await expect(page.locator(".copilot-session-card")).toHaveCount(1);
     await expect(page.locator(".copilot-session-card")).toContainText("Native CLI history");
+    const worktreeActions = page.locator(".copilot-session-worktree-actions");
+    await expect(worktreeActions.getByRole("button", { name: "Review", exact: true })).toBeVisible();
+    await expect(worktreeActions.getByRole("button", { name: "Bring changes back", exact: true })).toBeVisible();
     await expect(page.locator("#copilotResumeStatus")).toContainText("Adding VS Code and Visual Studio history");
     expect(await page.evaluate(() => typeof window.__releaseFull === "function")).toBe(true);
 
+    await page.evaluate(() => {
+      window.__originalRequestBridge = requestBridge;
+      requestBridge = async (message, options) => message.type === "gitDiff"
+        ? { ok: true, diff: "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n", truncated: false }
+        : window.__originalRequestBridge(message, options);
+    });
+    await worktreeActions.getByRole("button", { name: "Review", exact: true }).click();
+    await expect(page.locator("#worktreeReviewOverlay")).toBeVisible();
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+    await page.evaluate(() => window.__releaseFull());
+    await page.locator("#worktreeReviewDone").click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
+    const rowWidths = await page.locator(".copilot-session-entry").evaluateAll((entries) => entries.map((entry) => ({
+      card: entry.querySelector(".copilot-session-card").getBoundingClientRect().width,
+      entry: entry.getBoundingClientRect().width,
+      hasActions: entry.classList.contains("has-worktree-actions")
+    })));
+    expect(rowWidths[0].hasActions).toBe(true);
+    expect(rowWidths[0].entry - rowWidths[0].card).toBeGreaterThan(100);
+    expect(rowWidths[1].hasActions).toBe(false);
+    expect(Math.abs(rowWidths[1].entry - rowWidths[1].card)).toBeLessThan(1);
+
+    await worktreeActions.getByRole("button", { name: "Bring changes back", exact: true }).click();
+    await expect(page.locator("#worktreeMergeOverlay")).toBeVisible();
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+    await page.locator("#worktreeMergeCancel").click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await page.evaluate(() => {
+      requestBridge = window.__originalRequestBridge;
+      delete window.__originalRequestBridge;
+    });
     const requested = await page.evaluate(() => window.__frames.map((frame) => frame.source || "all"));
     expect(requested).toEqual(["cli", "all"]);
 
-    await page.evaluate(() => window.__releaseFull());
-    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
     await expect(page.locator(".copilot-session-card").nth(1)).toContainText("Editor history");
 
     await page.evaluate(() => {

@@ -12,6 +12,10 @@ const readText = (filePath) => fs.readFileSync(filePath, "utf8").replace(/\r\n/g
 test.beforeAll(() => {
   const output = execFileSync("node", [path.join(__dirname, "..", "support", "worktree-fixture.js")], { encoding: "utf8" });
   fixture = JSON.parse(output.trim().split("\n").pop());
+  fs.writeFileSync(path.join(fixture.worktreePath, "greeting.txt"), "hello\nagent world with pending edits\n");
+  fs.writeFileSync(path.join(fixture.worktreePath, "staged-review.txt"), "staged review work\n");
+  git(["add", "staged-review.txt"], fixture.worktreePath);
+  fs.writeFileSync(path.join(fixture.worktreePath, "untracked-review.txt"), "untracked review work\n");
 });
 
 test.describe("Worktree review", () => {
@@ -30,7 +34,7 @@ test.describe("Worktree review", () => {
     await expect(managed.locator(".worktree-row-actions button")).toHaveCount(4);
   });
 
-  test("renders the real diff for the worktree", async ({ page }) => {
+  test("renders committed and pending changes for the worktree", async ({ page }) => {
     await openManager(page);
     await page.locator('.worktree-row[data-managed="true"] button', { hasText: "Review" }).click();
     await expect(page.locator("#worktreeReviewOverlay")).toBeVisible();
@@ -42,7 +46,11 @@ test.describe("Worktree review", () => {
     await expect(diff).toContainText("added.txt");
     // keep.txt was never touched, so it must not appear.
     await expect(diff).not.toContainText("keep.txt");
-    await expect(diff).toContainText("agent world");
+    await expect(diff).toContainText("agent world with pending edits");
+    await expect(diff).toContainText("staged-review.txt");
+    await expect(diff).toContainText("staged review work");
+    await expect(diff).toContainText("untracked-review.txt");
+    await expect(diff).toContainText("untracked review work");
   });
 
   test("closes the review and returns to the manager", async ({ page }) => {

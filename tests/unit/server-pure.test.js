@@ -1191,6 +1191,28 @@ describe("output coalescing", () => {
     expect(session.pendingOutput).toEqual([]);
   });
 
+  it("sends ephemeral output only to the renderer that owns the session", () => {
+    const owner = fakeClient();
+    const other = fakeClient();
+    server.clients.add(owner);
+    server.clients.add(other);
+    server.setOutputCoalesceMs(0);
+    const session = {
+      ephemeral: true,
+      id: "private-probe",
+      ownerClient: owner,
+      pendingOutput: [],
+      outputTimer: null
+    };
+
+    server.queueSessionOutput(session, "private cwd response");
+
+    expect(owner.send).toHaveBeenCalledWith({
+      type: "output", id: "private-probe", stream: "pty", data: "private cwd response"
+    });
+    expect(other.send).not.toHaveBeenCalled();
+  });
+
   it("joins buffered chunks into a single frame on the flush timer", () => {
     vi.useFakeTimers();
     const client = fakeClient();

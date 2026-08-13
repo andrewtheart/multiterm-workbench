@@ -1216,6 +1216,14 @@ test.describe("Settings panel verification", () => {
     expect(await page.locator("#copilotSessionSearchContextKb").inputValue()).toBe("16384");
     await set("#copilotSessionSearchContextKb", "1024", "change");
 
+    await set("#copilotCwdQueryTimeoutSeconds", "240", "change");
+    expect(await setting("copilotCwdQueryTimeoutSeconds")).toBe(240);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).copilotCwdQueryTimeoutSeconds)).toBe(240);
+    await set("#copilotCwdQueryTimeoutSeconds", "99999", "change");
+    expect(await setting("copilotCwdQueryTimeoutSeconds")).toBe(900);
+    expect(await page.locator("#copilotCwdQueryTimeoutSeconds").inputValue()).toBe("900");
+    await set("#copilotCwdQueryTimeoutSeconds", "180", "change");
+
     await page.evaluate(() => {
       window.__settingsOriginalUpdateRequest = requestLatestRelease;
       // eslint-disable-next-line no-global-assign

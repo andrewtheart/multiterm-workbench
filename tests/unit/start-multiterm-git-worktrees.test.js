@@ -47,4 +47,15 @@ describe("installed bridge Git worktree execution", () => {
     expect(source).toContain('"gitMergeFinish", "verifying-result"');
     expect(source).toContain("stopwatch.ElapsedMilliseconds.ToString()");
   });
+
+  test("reviews committed and pending worktree content through an isolated index", () => {
+    expect(source).toContain("private static GitResult WorktreeDiffIncludingPending(");
+    expect(source).toContain('"GIT_INDEX_FILE", temporaryIndex');
+    expect(source).toContain('"ls-files", "--others", "--exclude-standard", "-z"');
+    expect(source).toContain('"add", "--intent-to-add", "--"');
+    expect(source).toContain('"--ita-visible-in-index"');
+    expect(source).toContain("Directory.Delete(temporaryDirectory, true)");
+    expect(source).toContain('Json.Get(message, "worktreePath")');
+    expect(source).toMatch(/worktreePath\.Length > 0\s*\? WorktreeDiffIncludingPending/);
+  });
 });

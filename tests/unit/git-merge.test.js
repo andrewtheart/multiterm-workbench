@@ -362,6 +362,38 @@ describe("git repository and worktree bridge", () => {
     })), { timeout: 10000 });
     expect(client.send.mock.calls.at(-1)[0].diff).toHaveLength(2 * 1024 * 1024);
   });
+
+  test("reviews committed and pending worktree changes without altering its index", async () => {
+    const { repo, worktree } = makeRepo("review-pending");
+    fs.writeFileSync(path.join(worktree, "shared.txt"), "one\nAGENT WITH UNSTAGED WORK\nthree\n");
+    fs.writeFileSync(path.join(worktree, "staged.txt"), "staged work\n");
+    execFileSync("git", ["add", "staged.txt"], { cwd: worktree });
+    fs.writeFileSync(path.join(worktree, "untracked.txt"), "untracked work\n");
+    const statusBefore = execFileSync("git", ["status", "--porcelain=v1"], { cwd: worktree, encoding: "utf8" });
+    const client = { send: vi.fn() };
+
+    handleClientMessage(client, JSON.stringify({
+      type: "gitDiff",
+      requestId: "pending",
+      repositoryRoot: repo,
+      base: "main",
+      head: "agent",
+      worktreePath: worktree
+    }));
+
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitDiffResult",
+      requestId: "pending",
+      ok: true,
+      diff: expect.stringContaining("AGENT WITH UNSTAGED WORK")
+    })));
+    const diff = client.send.mock.calls.at(-1)[0].diff;
+    expect(diff).toContain("staged.txt");
+    expect(diff).toContain("staged work");
+    expect(diff).toContain("untracked.txt");
+    expect(diff).toContain("untracked work");
+    expect(execFileSync("git", ["status", "--porcelain=v1"], { cwd: worktree, encoding: "utf8" })).toBe(statusBefore);
+  });
 });
 
 describe("worktree merge-back", () => {
