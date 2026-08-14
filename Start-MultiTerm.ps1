@@ -7249,7 +7249,6 @@ namespace MultiTerm.PowerShellBridge
                     // One incomplete session directory must not hide the other resumable sessions.
                 }
             }
-            AttachManagedWorktreeMetadata(sessions);
             sessions.Sort(delegate(CopilotSessionMetadata left, CopilotSessionMetadata right)
             {
                 return right.UpdatedUtc.CompareTo(left.UpdatedUtc);
@@ -7531,6 +7530,7 @@ namespace MultiTerm.PowerShellBridge
         private List<CopilotSessionMetadata> ReadAllCopilotSessions()
         {
             List<CopilotSessionMetadata> sessions = ReadCopilotSessions();
+            AttachManagedWorktreeMetadata(sessions);
             sessions.AddRange(ReadVsCodeCopilotSessions());
             sessions.AddRange(ReadVisualStudioCopilotSessions());
             sessions.Sort(delegate(CopilotSessionMetadata left, CopilotSessionMetadata right)

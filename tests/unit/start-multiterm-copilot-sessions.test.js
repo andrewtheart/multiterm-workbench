@@ -29,6 +29,8 @@ describe("installed bridge Copilot session protocol", () => {
     expect(source).toContain('MULTITERM_ES_PATH');
     expect(source).toContain('String.Equals(Json.Get(message, "source"), "cli"');
     expect(source).toMatch(/cliOnly\s*\? ReadCopilotSessions\(\)/);
+    expect(source).toMatch(/List<CopilotSessionMetadata> sessions = ReadCopilotSessions\(\);\s*AttachManagedWorktreeMetadata\(sessions\);\s*sessions\.AddRange\(ReadVsCodeCopilotSessions\(\)\)/);
+    expect(source).not.toMatch(/private static List<CopilotSessionMetadata> ReadCopilotSessions\(\)[\s\S]*?AttachManagedWorktreeMetadata\(sessions\);[\s\S]*?private static List<CopilotSessionMetadata> ReadClaudeSessions\(\)/);
     expect(source).toContain("private void PrepareCopilotSessionContext(BridgeClient client");
     expect(source).toContain('Path.Combine(Path.GetTempPath(), "MultiTerm", "CopilotContexts")');
     expect(source).toContain("Guid.TryParse(id, out parsedId)");

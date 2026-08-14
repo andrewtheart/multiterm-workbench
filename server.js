@@ -5276,10 +5276,13 @@ async function findVisualStudioCopilotSessionFiles(executable = process.env.MULT
   }
 }
 
-async function listCliCopilotSessions(cliRoot = path.join(os.homedir(), ".copilot", "session-state")) {
+async function listCliCopilotSessions(
+  cliRoot = path.join(os.homedir(), ".copilot", "session-state"),
+  { includeWorktrees = true } = {}
+) {
   const sessions = await listCopilotSessions(cliRoot);
   const normalized = sessions.map((session) => ({ ...session, key: `cli:${session.id}`, source: "cli" }));
-  await attachManagedWorktreeMetadata(normalized);
+  if (includeWorktrees) await attachManagedWorktreeMetadata(normalized); else { void 0; }
   return normalized;
 }
 
@@ -5356,10 +5359,11 @@ async function sendAllCopilotSessions(client, requestId, roots, source) {
   try {
     // Only native CLI sessions can be handed to `copilot --resume`, so a CLI-only
     // request skips editor discovery entirely: an unreadable VS Code history or a
-    // slow Everything scan must not fail or stall assistant restore. It also
-    // leaves the search catalog alone, which only the full listing owns.
+    // slow Everything scan, saved worktree path, or Git command must not fail or
+    // stall assistant restore. It also leaves the search catalog alone, which
+    // only the full listing owns.
     const discovered = source === "cli"
-      ? await listCliCopilotSessions(roots?.cliRoot)
+      ? await listCliCopilotSessions(roots?.cliRoot, { includeWorktrees: false })
       : await listAllCopilotSessions(roots);
     const message = discovered.length === 0
       ? "No Copilot CLI, VS Code, or Visual Studio sessions were found in this Windows account."

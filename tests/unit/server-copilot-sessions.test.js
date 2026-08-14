@@ -406,7 +406,7 @@ describe("Copilot CLI session discovery", () => {
     expect(cliOnly.send.mock.calls[0][0].sessions).toEqual([expect.objectContaining({ id, source: "cli" })]);
   });
 
-  it("associates a native CLI session with its MultiTerm-created linked worktree", async () => {
+  it("defers native CLI worktree enrichment until the aggregate pass", async () => {
     const repository = path.join(temporaryRoot, "repository");
     const worktree = path.join(temporaryRoot, "repository-worktree");
     fs.mkdirSync(repository);
@@ -427,11 +427,22 @@ describe("Copilot CLI session discovery", () => {
     fs.mkdirSync(nested);
     const id = "bdfb990d-4ee9-4b72-a41c-fcbf0c79a373";
     addSession(id, [`cwd: ${nested}`, "branch: agent-session", "name: Worktree session"].join("\n"));
-    const client = { send: vi.fn() };
+    const cliOnly = { send: vi.fn() };
+    await server.sendAllCopilotSessions(cliOnly, "cli-session", { cliRoot: temporaryRoot }, "cli");
+    expect(cliOnly.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "copilotSessions",
+      requestId: "cli-session",
+      sessions: [expect.not.objectContaining({ worktreePath: expect.anything() })]
+    }));
 
-    await server.sendAllCopilotSessions(client, "worktree-session", { cliRoot: temporaryRoot }, "cli");
+    const aggregate = { send: vi.fn() };
+    await server.sendAllCopilotSessions(aggregate, "worktree-session", {
+      cliRoot: temporaryRoot,
+      vscodeRoot: path.join(temporaryRoot, "missing-vscode"),
+      visualStudioFiles: []
+    });
 
-    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+    expect(aggregate.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "copilotSessions",
       requestId: "worktree-session",
       sessions: [expect.objectContaining({
