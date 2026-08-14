@@ -223,6 +223,44 @@ test.describe("Settings panel verification", () => {
     await set("#outputBacklogKb", "1024", "change");
     expect(await page.evaluate(() => outputBacklogLimitBytes())).toBe(1024 * 1024);
 
+    await set("#automationOutputCaptureKb", "256", "change");
+    expect(await setting("automationOutputCaptureKb")).toBe(256);
+    expect(await page.evaluate(() => automationOutputCaptureLimitBytes())).toBe(256 * 1024);
+
+    await set("#automationOutputCaptureKb", "1", "change");
+    expect(await setting("automationOutputCaptureKb")).toBe(16);
+    expect(await page.locator("#automationOutputCaptureKb").inputValue()).toBe("16");
+
+    await set("#automationOutputCaptureKb", "128", "change");
+
+    await set("#automationStepTimeoutMinutes", "45", "change");
+    expect(await setting("automationStepTimeoutMinutes")).toBe(45);
+    expect(await page.evaluate(() => automationStepTimeoutMs())).toBe(45 * 60 * 1000);
+
+    await set("#automationStepTimeoutMinutes", "0", "change");
+    expect(await setting("automationStepTimeoutMinutes")).toBe(1);
+    expect(await page.locator("#automationStepTimeoutMinutes").inputValue()).toBe("1");
+
+    await set("#automationStepTimeoutMinutes", "30", "change");
+
+    await set("#bridgeHeartbeatTimeoutSeconds", "45", "change");
+    expect(await setting("bridgeHeartbeatTimeoutSeconds")).toBe(45);
+    expect(await page.evaluate(() => bridgeHeartbeatTimeoutMs())).toBe(45_000);
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "config",
+      bridgeHeartbeatTimeoutSeconds: 45
+    }));
+
+    await set("#bridgeHeartbeatTimeoutSeconds", "1", "change");
+    expect(await setting("bridgeHeartbeatTimeoutSeconds")).toBe(10);
+    expect(await page.locator("#bridgeHeartbeatTimeoutSeconds").inputValue()).toBe("10");
+
+    await set("#bridgeHeartbeatTimeoutSeconds", "400", "change");
+    expect(await setting("bridgeHeartbeatTimeoutSeconds")).toBe(300);
+    expect(await page.locator("#bridgeHeartbeatTimeoutSeconds").inputValue()).toBe("300");
+
+    await set("#bridgeHeartbeatTimeoutSeconds", "30", "change");
+
     await set("#diagnosticRetentionDays", "30", "change");
     await set("#diagnosticRotationMb", "20", "change");
     await set("#diagnosticViewerEntries", "7500", "change");

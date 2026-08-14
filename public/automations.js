@@ -15,9 +15,14 @@
   const HANDOFF_MARKER = /^\s*\*\*HAND OFF\*\*(?:\s+(.+?))?\s*$/i;
   const COPILOT_FOOTER = /(?:^\s*|[·•]\s*)\/\s*commands\s*[·•]\s*\?\s*help\b/i;
   const MAX_COMMAND_LENGTH = 8192;
+  const MAX_OUTPUT_MATCH_LENGTH = 4096;
 
   function text(value, limit = 8192) {
     return typeof value === "string" ? value.trim().slice(0, limit) : "";
+  }
+
+  function matchText(value, limit = MAX_OUTPUT_MATCH_LENGTH) {
+    return typeof value === "string" ? value.slice(0, limit) : "";
   }
 
   function identifier(value) {
@@ -77,13 +82,17 @@
     if (!dependsOn.length && index > 0 && previousIds.length) dependsOn.push(previousIds[previousIds.length - 1]);
     return {
       command,
-      condition: ["always", "failure"].includes(source.condition) ? source.condition : "success",
+      condition: ["always", "failure", "output-match", "output-not-match"].includes(source.condition) ? source.condition : "success",
       conditionOperator: source.conditionOperator === "any" ? "any" : "all",
       cwd: text(source.cwd, 1024),
       dependsOn,
       fallbackToNew: targetMode === "new" ? false : source.fallbackToNew !== false,
       id: identifier(source.id) || `action-${index + 1}`,
       inputType: ["powershell", "script"].includes(source.inputType) ? source.inputType : "shell",
+      outputMatchAcrossLines: source.outputMatchAcrossLines === true,
+      outputMatchCaseSensitive: source.outputMatchCaseSensitive === true,
+      outputMatchType: ["exact", "regex"].includes(source.outputMatchType) ? source.outputMatchType : "contains",
+      outputMatchValue: matchText(source.outputMatchValue),
       pageMode,
       pageName: pageMode === "existing" ? text(source.pageName, 160) : "",
       submit: source.submit !== false,

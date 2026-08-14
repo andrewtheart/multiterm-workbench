@@ -40,6 +40,22 @@ describe("installed bridge Copilot session protocol", () => {
     expect(source).toContain('+ ",\\"worktreeParentBranch\\":" + Json.Quote(this.WorktreeParentBranch)');
   });
 
+  it("reads bounded post-cursor Copilot automation output from the session event log", () => {
+    expect(source).toContain('else if (type == "copilotAutomationOutput")');
+    expect(source).toContain("private void ReadCopilotAutomationOutput(BridgeClient client");
+    expect(source).toContain('Path.Combine(root, sessionId, "events.jsonl")');
+    expect(source).toContain("FileShare.ReadWrite | FileShare.Delete");
+    expect(source).toContain("Math.Min(512, Math.Max(16, requestedKb)) * 1024");
+    expect(source).toContain('eventType == "assistant.message"');
+    expect(source).toContain('eventType == "assistant.turn_end"');
+    expect(source).toContain('eventType == "user.message" || eventType == "assistant.turn_start"');
+    expect(source).toContain('eventType == "assistant.turn_end" && turnStarted');
+    expect(source).toContain('Json.Get(message, "turnStarted")');
+    expect(source).toContain('+ ",\\"turnStarted\\":" + (turnStarted ? "true" : "false")');
+    expect(source).toContain("long consumedCursor = start + lastBreak + 1;");
+    expect(source).toContain('throw new InvalidOperationException("A valid Copilot session ID is required.")');
+  });
+
   it("provides folder picking and host or WSL directory validation", () => {
     expect(source).toContain('else if (type == "pickFolder")');
     expect(source).toContain('else if (type == "validateDirectory")');

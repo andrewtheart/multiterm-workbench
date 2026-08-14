@@ -425,7 +425,8 @@ test.describe("Copilot session notes", () => {
       aiSessionId: "",
       queue: []
     });
-    expect(result.normalized.version).toBe(2);
+    expect(result.normalized.version).toBe(3);
+    expect(result.normalized.recoveredTitles).toEqual([]);
     expect(result.normalized.recoveredNotes).toHaveLength(2);
     expect(result.normalized.recoveredNotes[0]).toMatchObject({ notes: "legacy", pid: 9, aiSessionId: LINKED });
     expect(result.normalized.recoveredNotes[0].id).toMatch(/^recovered-/);

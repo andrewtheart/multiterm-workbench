@@ -499,7 +499,7 @@
               <input id="autoTitleRepeatMinutes" type="number" min="1" max="43200" step="1" inputmode="numeric">
             </label>
             <label class="control-row">
-              <span title="Maximum title suggestions retained across terminal names and process IDs.">History entries</span>
+              <span title="Maximum AI title suggestions and user-entered terminal titles retained across assistant sessions, terminal names, and process IDs.">History entries</span>
               <input id="titleSuggestionHistoryLimit" type="number" min="25" max="10000" step="25" inputmode="numeric">
             </label>
             <div id="autoTitleSuppressionRow" class="auto-title-suppressions" hidden>
@@ -531,6 +531,21 @@
             <label class="control-row">
               <span title="How much output a pane may hold before it is written to the terminal immediately instead of waiting for the next frame. Lower keeps memory down; higher smooths very bursty output.">Output buffer (KB)</span>
               <input id="outputBacklogKb" type="number" min="64" max="65536" step="64" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Newest output retained for each completed automation step and available to output-match conditions. This also bounds Copilot events.jsonl reads.">Automation output capture (KB)</span>
+              <input id="automationOutputCaptureKb" type="number" min="16" max="512" step="16" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Maximum time a command or Copilot automation step may wait to start and finish before it fails and dependent failure gates are evaluated.">Automation step timeout (minutes)</span>
+              <input id="automationStepTimeoutMinutes" type="number" min="1" max="1440" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How long MultiTerm waits without any bridge response before replacing a stale connection and reconnecting. Increase this only for heavily loaded systems.">Bridge response timeout (seconds)</span>
+              <input id="bridgeHeartbeatTimeoutSeconds" type="number" min="10" max="300" step="5" inputmode="numeric">
             </label>
 
             <label class="control-row">
@@ -2451,6 +2466,17 @@
           <span>Open full notes</span>
         </button>
       </footer>
+    </div>
+
+    <div id="copilotSessionTitlesFlyout" class="copilot-session-titles-flyout" role="tooltip" hidden>
+      <div class="copilot-session-titles-head">
+        <i data-lucide="tags"></i>
+        <div>
+          <strong>Associated terminal titles</strong>
+          <span id="copilotSessionTitlesSubtitle">Copilot session</span>
+        </div>
+      </div>
+      <div id="copilotSessionTitlesList" class="copilot-session-titles-list" role="list"></div>
     </div>
 
     <div id="titleSuggestionFlyout" class="title-suggestion-flyout" role="dialog" aria-modal="false" aria-labelledby="titleSuggestionFlyoutTitle" hidden>

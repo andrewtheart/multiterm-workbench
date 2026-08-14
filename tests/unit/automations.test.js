@@ -83,6 +83,39 @@ describe("automations model", () => {
     });
   });
 
+  it("normalizes output match conditions without weakening existing gates", () => {
+    const outputMatch = automations.normalizeAction({
+      command: "publish",
+      condition: "output-not-match",
+      id: "action-output12",
+      outputMatchAcrossLines: true,
+      outputMatchCaseSensitive: true,
+      outputMatchType: "regex",
+      outputMatchValue: "Build\\s+failed",
+      targetName: "Tests"
+    });
+    expect(outputMatch).toMatchObject({
+      condition: "output-not-match",
+      outputMatchAcrossLines: true,
+      outputMatchCaseSensitive: true,
+      outputMatchType: "regex",
+      outputMatchValue: "Build\\s+failed"
+    });
+
+    expect(automations.normalizeAction({
+      command: "publish",
+      condition: "unknown",
+      outputMatchType: "unknown",
+      targetName: "Tests"
+    })).toMatchObject({
+      condition: "success",
+      outputMatchAcrossLines: false,
+      outputMatchCaseSensitive: false,
+      outputMatchType: "contains",
+      outputMatchValue: ""
+    });
+  });
+
   it("preserves Copilot automation type and repairs unsafe conditional references", () => {
     const normalized = automations.normalizeRule(rule({
       machineState: "locked",

@@ -224,10 +224,11 @@ test.describe("Copilot remote control", () => {
       const terminal = [...state.terminals.values()][0];
       const url = `https://github.com/copilot/agents/sessions/${"80f9b2ee-4618-4e71-b8a0-ae5fb172b62b"}`;
       setTerminalRemoteSession(terminal, url);
-      return { url: terminal.remoteSessionUrl, id: terminal.remoteSessionId, at: Boolean(terminal.remoteEnabledAt) };
+      return { url: terminal.remoteSessionUrl, id: terminal.remoteSessionId, key: terminal.assistantSessionKey, at: Boolean(terminal.remoteEnabledAt) };
     });
     expect(captured.url).toContain("https://github.com/copilot/");
     expect(captured.id).toBe("80f9b2ee-4618-4e71-b8a0-ae5fb172b62b");
+    expect(captured.key).toBe("remote:80f9b2ee-4618-4e71-b8a0-ae5fb172b62b");
     expect(captured.at).toBe(true);
 
     expect(await page.evaluate(() => {

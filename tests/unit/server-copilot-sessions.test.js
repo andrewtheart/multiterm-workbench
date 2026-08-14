@@ -35,6 +35,86 @@ function addSession(id, workspace, { transcript = "{\"type\":\"user.message\"}" 
   return directory;
 }
 
+describe("Copilot automation output", () => {
+  it("reads only appended assistant messages and detects turn completion", () => {
+    const id = "12345678-1234-4234-8234-123456789abc";
+    const directory = addSession(id, "cwd: D:\\repo\n", {
+      transcript: `${JSON.stringify({ type: "assistant.message", data: { content: "old response" } })}\n`
+    });
+    const eventsPath = path.join(directory, "events.jsonl");
+    const snapshot = server.readCopilotAutomationOutput({ sessionId: id, snapshot: true }, temporaryRoot);
+    fs.appendFileSync(eventsPath, [
+      JSON.stringify({ type: "user.message", data: { content: "private prompt" } }),
+      JSON.stringify({ type: "assistant.message", data: { content: "Build passed\nArtifacts ready" } }),
+      JSON.stringify({ type: "assistant.turn_end", data: { turnId: "1" } }),
+      ""
+    ].join("\n"), "utf8");
+
+    expect(server.readCopilotAutomationOutput({
+      cursor: snapshot.cursor,
+      maxKb: 16,
+      sessionId: id
+    }, temporaryRoot)).toEqual({
+      complete: true,
+      cursor: fs.statSync(eventsPath).size,
+      output: "Build passed\nArtifacts ready",
+      truncated: false,
+      turnStarted: true
+    });
+    expect(() => server.readCopilotAutomationOutput({ sessionId: "../escape" }, temporaryRoot))
+      .toThrow("A valid Copilot session ID is required.");
+  });
+
+  it("returns an empty cursor until a new Copilot session creates its event log", () => {
+    expect(server.readCopilotAutomationOutput({
+      sessionId: "12345678-1234-4234-8234-123456789abc",
+      snapshot: true
+    }, temporaryRoot)).toEqual({ complete: false, cursor: 0, output: "", truncated: false, turnStarted: false });
+  });
+
+  it("retries a Copilot event that was only partially written", () => {
+    const id = "12345678-1234-4234-8234-123456789abc";
+    const directory = addSession(id, "cwd: D:\\repo\n", { transcript: "" });
+    const eventsPath = path.join(directory, "events.jsonl");
+    const record = JSON.stringify({ type: "assistant.message", data: { content: "complete later" } });
+    fs.writeFileSync(eventsPath, [
+      JSON.stringify({ type: "user.message", data: { content: "new" } }),
+      JSON.stringify({ type: "assistant.turn_start", data: { turnId: "1" } }),
+      record.slice(0, -2)
+    ].join("\n"), "utf8");
+    const first = server.readCopilotAutomationOutput({ cursor: 0, maxKb: 16, sessionId: id }, temporaryRoot);
+    expect(first).toMatchObject({ complete: false, output: "", truncated: false, turnStarted: true });
+
+    fs.appendFileSync(eventsPath, `${record.slice(-2)}\n${JSON.stringify({ type: "assistant.turn_end", data: {} })}\n`, "utf8");
+    expect(server.readCopilotAutomationOutput({
+      cursor: first.cursor,
+      maxKb: 16,
+      sessionId: id,
+      turnStarted: first.turnStarted
+    }, temporaryRoot))
+      .toMatchObject({ complete: true, output: "complete later" });
+  });
+
+  it("does not complete from a late previous-turn flush", () => {
+    const id = "12345678-1234-4234-8234-123456789abc";
+    const directory = addSession(id, "cwd: D:\\repo\n", {
+      transcript: `${JSON.stringify({ type: "assistant.turn_end", data: { turnId: "old" } })}\n`
+    });
+    const eventsPath = path.join(directory, "events.jsonl");
+    const first = server.readCopilotAutomationOutput({ cursor: 0, maxKb: 16, sessionId: id }, temporaryRoot);
+    expect(first).toMatchObject({ complete: false, output: "" });
+
+    fs.appendFileSync(eventsPath, [
+      JSON.stringify({ type: "user.message", data: { content: "new" } }),
+      JSON.stringify({ type: "assistant.message", data: { content: "new response" } }),
+      JSON.stringify({ type: "assistant.turn_end", data: { turnId: "new" } }),
+      ""
+    ].join("\n"), "utf8");
+    expect(server.readCopilotAutomationOutput({ cursor: first.cursor, maxKb: 16, sessionId: id }, temporaryRoot))
+      .toMatchObject({ complete: true, output: "new response" });
+  });
+});
+
 function packString(value) {
   const content = Buffer.from(value, "utf8");
   if (content.length < 32) return Buffer.concat([Buffer.from([0xa0 | content.length]), content]);

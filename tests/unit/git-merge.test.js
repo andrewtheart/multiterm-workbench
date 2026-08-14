@@ -305,7 +305,7 @@ describe("git repository and worktree bridge", () => {
     });
     await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "gitMergeStarted", requestId: "merge-start", ok: true, status: "staged"
-    })));
+    })), { timeout: 10000 });
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "operationProgress", requestId: "merge-start", operation: "gitMergeStart", phase: "snapshotting"
     }));

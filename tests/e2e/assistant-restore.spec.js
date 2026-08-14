@@ -145,6 +145,46 @@ test.describe("Assistant session restore", () => {
     expect(result.source).toBe("cli");
   });
 
+  test("restores the exact recorded session before considering another session in the same folder", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(async () => {
+      closeAllTerminals();
+      const exactId = "12345678-1234-4123-8123-123456789abc";
+      const newerId = "22345678-1234-4123-8123-123456789abc";
+      const originalRequestBridge = requestBridge;
+      const originalSendBridge = sendBridge;
+      let sentCommand = "";
+      requestBridge = (message, options) => message.type === "listCopilotSessions"
+        ? Promise.resolve({ sessions: [
+          { id: newerId, key: `cli:${newerId}`, cwd: "D:\\multiTerm", updatedAt: "2026-08-13T12:00:00Z" },
+          { id: exactId, key: `cli:${exactId}`, cwd: "D:\\multiTerm", updatedAt: "2026-08-12T12:00:00Z" }
+        ] })
+        : originalRequestBridge(message, options);
+      sendBridge = (message) => {
+        if (message.type === "input" && String(message.data || "").includes("--resume")) sentCommand = message.data;
+        return originalSendBridge(message);
+      };
+      try {
+        await restoreAssistantSessions([{
+          id: "gone-exact",
+          title: "exact task",
+          cwd: "D:\\multiTerm",
+          provider: "copilot",
+          shell: "pwsh",
+          aiSessionId: exactId,
+          assistantSessionKey: `cli:${exactId}`
+        }]);
+        const terminal = userTerminals()[0];
+        return { command: terminal?.pendingCommand || sentCommand, key: terminal?.assistantSessionKey, id: terminal?.aiSessionId };
+      } finally {
+        requestBridge = originalRequestBridge;
+        sendBridge = originalSendBridge;
+      }
+    });
+    expect(result.command).toContain("--resume \"12345678-1234-4123-8123-123456789abc\"");
+    expect(result).toMatchObject({ key: "cli:12345678-1234-4123-8123-123456789abc", id: "12345678-1234-4123-8123-123456789abc" });
+  });
+
   test("never opens the dialog when the setting is off", async ({ page }) => {
     await ready(page);
     const opened = await page.evaluate(async () => {

@@ -71,8 +71,11 @@ test.describe("Title suggestion history", () => {
       expect(result.normalized).toEqual([
         {
           id: "sanitized",
+          assistantSessionKey: "",
+          aiSessionId: "",
           terminalId: "",
           terminalTitle: "build lane",
+          terminalStartedAt: "",
           pid: 4096,
           suggestion: "ship release",
           suggestedAt: "2026-08-11T10:00:00.000Z",
@@ -82,8 +85,11 @@ test.describe("Title suggestion history", () => {
         },
         {
           id: "optional-fallbacks",
+          assistantSessionKey: "",
+          aiSessionId: "",
           terminalId: "terminal-old",
           terminalTitle: "test lane",
+          terminalStartedAt: "",
           pid: null,
           suggestion: "run tests",
           suggestedAt: "2026-08-11T10:02:00.000Z",

@@ -2645,6 +2645,32 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(after.activeId).toBe(info.bId);
     expect(after.focusPaneId).toBe(info.bId);
     expect(after.isTerminalTextarea).toBe(true);
+
+    // If xterm's first focus attempt is lost, the post-pointer verification
+    // retries once after the native event sequence has settled.
+    await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      const focus = terminal.term.focus.bind(terminal.term);
+      terminal.term.textarea.blur();
+      terminal.__focusRecoveryTest = { calls: 0, focus };
+      terminal.term.focus = () => {
+        terminal.__focusRecoveryTest.calls += 1;
+        if (terminal.__focusRecoveryTest.calls > 1) focus();
+      };
+    }, info.bId);
+    await page.mouse.click(info.cx, info.cy);
+    await expect.poll(() => page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      return {
+        calls: terminal.__focusRecoveryTest.calls,
+        focused: terminal.term.element.contains(document.activeElement)
+      };
+    }, info.bId)).toEqual({ calls: 2, focused: true });
+    await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      terminal.term.focus = terminal.__focusRecoveryTest.focus;
+      delete terminal.__focusRecoveryTest;
+    }, info.bId);
   });
 
   test("recovers only when terminal focus is genuinely stranded", async () => {

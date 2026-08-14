@@ -109,7 +109,8 @@ test.describe("Terminal notes and command queue", () => {
       createdAt: "2026-08-10T12:30:00.000Z",
       updatedAt: "2026-08-10T12:30:00.000Z"
     });
-    expect(migrated.persisted.version).toBe(2);
+    expect(migrated.persisted.version).toBe(3);
+    expect(migrated.persisted.recoveredTitles).toEqual([]);
     expect(migrated.persisted.terminals[Object.keys(migrated.persisted.terminals)[0]].notes).toHaveLength(1);
   });
 

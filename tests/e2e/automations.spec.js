@@ -86,6 +86,38 @@ test.describe("Automation Studio", () => {
     await expect(page.locator(".automation-rule-state")).toHaveText("Off");
   });
 
+  test("persists output match controls on dependent steps", async ({ page }) => {
+    await page.locator("#automationsToggle").click();
+    await page.locator("#automationNew").click();
+    await page.locator("#automationName").fill("Publish after passing build");
+    await page.locator(".automation-action-command").fill("npm test");
+    await page.locator("#automationActionAdd").click();
+    const step = page.locator(".automation-action-row").nth(1);
+    await step.locator(".automation-action-command").fill("npm run publish");
+    await step.locator(".automation-action-condition").selectOption("output-match");
+    await expect(step.locator(".automation-output-match-fields")).toBeVisible();
+    await expect(step.locator(".automation-action-output-value")).toHaveAttribute("required", "");
+    await step.locator(".automation-action-output-type").selectOption("regex");
+    await step.locator(".automation-action-output-case").selectOption("sensitive");
+    await step.locator(".automation-action-output-across-lines").check();
+    await step.locator(".automation-action-output-value").fill("[");
+    expect(await step.locator(".automation-action-output-value").evaluate((input) => ({
+      message: input.validationMessage,
+      valid: input.checkValidity()
+    }))).toEqual({ message: "Enter a valid regular expression.", valid: false });
+    await step.locator(".automation-action-output-value").fill("Build\\s+passed");
+    await page.locator("#automationSave").click();
+
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.automations")).rules[0].actions[1]);
+    expect(stored).toMatchObject({
+      condition: "output-match",
+      outputMatchAcrossLines: true,
+      outputMatchCaseSensitive: true,
+      outputMatchType: "regex",
+      outputMatchValue: "Build\\s+passed"
+    });
+  });
+
   test("keeps the Studio inside desktop and mobile viewports", async ({ page }) => {
     try {
       for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 720 }]) {
@@ -588,24 +620,217 @@ test.describe("Automation Studio", () => {
     expect(result.remainingRuns).toBe(0);
   });
 
-  test("queues a Copilot prompt and requested CWD in a selected terminal", async ({ page }) => {
-    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0]?.status)).toBe("live");
+  test("captures command output and opens output-match branches", async ({ page }) => {
     const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const rule = automationApi.normalizeRule({
+        actions: [
+          { command: "build", id: "action-output01", targetName: "Tests" },
+          {
+            command: "publish",
+            condition: "output-match",
+            dependsOn: ["action-output01"],
+            id: "action-output02",
+            outputMatchAcrossLines: true,
+            outputMatchCaseSensitive: false,
+            outputMatchType: "regex",
+            outputMatchValue: "build\\s+passed",
+            targetName: "Tests"
+          },
+          {
+            command: "notify",
+            condition: "output-not-match",
+            dependsOn: ["action-output01"],
+            id: "action-output03",
+            outputMatchCaseSensitive: false,
+            outputMatchType: "exact",
+            outputMatchValue: "failed",
+            targetName: "Tests"
+          }
+        ],
+        enabled: true,
+        id: "automation-output1",
+        name: "Output branch",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      runAutomationRule(rule);
+      const run = [...state.automationRuntime.runs.values()].find((candidate) => candidate.rule.id === rule.id);
+      const firstTask = terminal.automationWorkflowTasks[0];
+      terminal.automationWorkflowActive = firstTask.token;
+      terminal.automationWorkflowBuffer = "";
+      consumeAutomationWorkflowOutput(terminal, `noise before marker\x1b]777;multiterm-automation;${firstTask.token};sta`);
+      consumeAutomationWorkflowOutput(terminal, `rt\x07Build\nPASSED\x1b]777;multiterm-automation;${firstTask.token};0\x07`);
+      const states = Object.fromEntries(run.states);
+      const captured = run.outputs.get("action-output01");
+      for (const task of [...terminal.automationWorkflowTasks]) finishAutomationWorkflowTask(task.token, 0);
+      window.clearTimeout(terminal.automationWorkflowTimer);
+      terminal.automationWorkflowTimer = 0;
+      return {
+        captured,
+        states,
+        matcherCases: {
+          containsInsensitive: automationOutputMatches({ outputMatchType: "contains", outputMatchValue: "passed" }, "PASSED"),
+          containsSensitive: automationOutputMatches({ outputMatchCaseSensitive: true, outputMatchType: "contains", outputMatchValue: "passed" }, "PASSED"),
+          exactLine: automationOutputMatches({ outputMatchType: "exact", outputMatchValue: "second" }, "first\nsecond"),
+          exactAcross: automationOutputMatches({ outputMatchAcrossLines: true, outputMatchType: "exact", outputMatchValue: "first\nsecond" }, "first\nsecond"),
+          regexLine: automationOutputMatches({ outputMatchType: "regex", outputMatchValue: "first.*second" }, "first\nsecond"),
+          regexAcross: automationOutputMatches({ outputMatchAcrossLines: true, outputMatchType: "regex", outputMatchValue: "first.*second" }, "first\nsecond"),
+          regexAcrossLineAnchor: automationOutputMatches({ outputMatchAcrossLines: true, outputMatchType: "regex", outputMatchValue: "^second$" }, "first\nsecond"),
+          invalidRegex: automationOutputMatches({ outputMatchType: "regex", outputMatchValue: "[" }, "anything"),
+          emptyNotMatchDecision: automationGateDecision({
+            outputAvailable: new Set(["dependency"]),
+            outputs: new Map([["dependency", "anything"]]),
+            states: new Map([["dependency", "succeeded"]])
+          }, {
+            condition: "output-not-match",
+            conditionOperator: "all",
+            dependsOn: ["dependency"],
+            outputMatchType: "contains",
+            outputMatchValue: ""
+          }),
+          invalidNotMatchDecision: automationGateDecision({
+            outputAvailable: new Set(["dependency"]),
+            outputs: new Map([["dependency", "anything"]]),
+            states: new Map([["dependency", "succeeded"]])
+          }, {
+            condition: "output-not-match",
+            conditionOperator: "all",
+            dependsOn: ["dependency"],
+            outputMatchType: "regex",
+            outputMatchValue: "["
+          }),
+          stagedOutputDecision: automationGateDecision({
+            outputAvailable: new Set(),
+            outputs: new Map([["dependency", ""]]),
+            states: new Map([["dependency", "succeeded"]])
+          }, {
+            condition: "output-not-match",
+            conditionOperator: "all",
+            dependsOn: ["dependency"],
+            outputMatchType: "contains",
+            outputMatchValue: "failure"
+          })
+        }
+      };
+    });
+
+    expect(result.captured).toBe("Build\nPASSED");
+    expect(result.states).toMatchObject({
+      "action-output01": "succeeded",
+      "action-output02": "running",
+      "action-output03": "running"
+    });
+    expect(result.matcherCases).toEqual({
+      containsInsensitive: true,
+      containsSensitive: false,
+      exactLine: true,
+      exactAcross: true,
+      regexLine: false,
+      regexAcross: true,
+      regexAcrossLineAnchor: true,
+      invalidRegex: false,
+      emptyNotMatchDecision: "skip",
+      invalidNotMatchDecision: "skip",
+      stagedOutputDecision: "skip"
+    });
+  });
+
+  test("fails a timed-out step and opens its failure branch", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const priorTimeout = state.settings.automationStepTimeoutMinutes;
+      state.settings.automationStepTimeoutMinutes = 1;
+      const rule = automationApi.normalizeRule({
+        actions: [
+          { command: "hang", id: "action-timeout1", targetName: "Tests" },
+          { command: "recover", condition: "failure", dependsOn: ["action-timeout1"], id: "action-timeout2", targetName: "Tests" }
+        ],
+        enabled: true,
+        id: "automation-timeout1",
+        name: "Timeout branch",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      runAutomationRule(rule);
+      const run = [...state.automationRuntime.runs.values()].find((candidate) => candidate.rule.id === rule.id);
+      const task = terminal.automationWorkflowTasks[0];
+      const expired = expireAutomationTask(task);
+      const states = Object.fromEntries(run.states);
+      const detail = state.automations.history.find((entry) => entry.title.endsWith("Step 1") && entry.status === "failed")?.detail || "";
+      for (const pending of [...terminal.automationWorkflowTasks]) finishAutomationWorkflowTask(pending.token, 0);
+      state.settings.automationStepTimeoutMinutes = priorTimeout;
+      return { detail, expired, states };
+    });
+    expect(result).toMatchObject({
+      detail: "Timed out after 1 minute",
+      expired: true,
+      states: {
+        "action-timeout1": "failed",
+        "action-timeout2": "running"
+      }
+    });
+  });
+
+  test("records synchronous workflow completion only once", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const rule = automationApi.normalizeRule({
+        actions: [
+          { command: "first", id: "action-sync001", submit: false, targetName: terminal.titleInput.value },
+          { command: "second", dependsOn: ["action-sync001"], id: "action-sync002", submit: false, targetName: terminal.titleInput.value }
+        ],
+        enabled: true,
+        id: "automation-sync1",
+        name: "Synchronous stages",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      runAutomationRule(rule);
+      return state.automations.history.filter((entry) => entry.automationId === rule.id && entry.title === rule.name && entry.status === "completed").length;
+    });
+    expect(result).toBe(1);
+  });
+
+  test("completes a Copilot step from its event log and opens an output-match branch", async ({ page }) => {
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0]?.status)).toBe("live");
+    const result = await page.evaluate(async () => {
       const terminal = [...state.terminals.values()][0];
       const savedQueue = queueAutomaticTerminalCommand;
       const savedReadiness = terminalExecutionReadiness;
+      const savedRequest = requestBridge;
       const queued = [];
-      queueAutomaticTerminalCommand = (_terminal, command) => { queued.push(command); return true; };
+      const requests = [];
+      queueAutomaticTerminalCommand = (_terminal, command, options = {}) => {
+        queued.push({ command, occurrenceKey: options.occurrenceKey || "" });
+        return true;
+      };
       terminalExecutionReadiness = () => ({ mode: "copilot", ready: true });
+      requestBridge = async (message) => {
+        requests.push(message);
+        return message.snapshot
+          ? { complete: false, cursor: 120, output: "", truncated: false }
+          : { complete: true, cursor: 240, output: "Review APPROVED\nReady to ship", truncated: false };
+      };
       try {
         const rule = automationApi.normalizeRule({
-          actions: [{
-            command: "Review the pending changes",
-            cwd: "D:\\multiTerm",
-            id: "action-copilot1",
-            targetMode: "title",
-            targetName: "Tests"
-          }],
+          actions: [
+            {
+              command: "Review the pending changes",
+              cwd: "D:\multiTerm",
+              id: "action-copilot1",
+              targetMode: "title",
+              targetName: "Tests"
+            },
+            {
+              command: "Prepare the release",
+              condition: "output-match",
+              dependsOn: ["action-copilot1"],
+              id: "action-copilot2",
+              outputMatchCaseSensitive: false,
+              outputMatchType: "contains",
+              outputMatchValue: "approved",
+              targetMode: "title",
+              targetName: "Tests"
+            }
+          ],
           enabled: true,
           id: "automation-copilot1",
           name: "Scheduled review",
@@ -613,14 +838,38 @@ test.describe("Automation Studio", () => {
           trigger: { intervalMinutes: 60, mode: "interval" }
         });
         const started = runAutomationRule(rule, { manual: true });
-        return { queued, started };
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const run = [...state.automationRuntime.runs.values()].find((candidate) => candidate.rule.id === rule.id);
+        const firstTask = [...state.automationRuntime.steps.values()].find((task) => task.actionId === "action-copilot1");
+        prepareAutomationCopilotPromptCursor(terminal, { id: "test-prompt", occurrenceKey: firstTask.occurrenceKey });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        markAutomationCopilotPromptSent(terminal, firstTask.occurrenceKey);
+        terminal.outputRevision = firstTask.responseStartRevision + 1;
+        await pollAutomationCopilotSteps(terminal);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const states = Object.fromEntries(run.states);
+        const output = run.outputs.get("action-copilot1");
+        for (const task of [...state.automationRuntime.steps.values()]) {
+          if (task.kind === "copilot") finishCopilotAutomationTask(task.token, false, "test cleanup");
+        }
+        window.clearTimeout(terminal.automationCopilotTimer);
+        terminal.automationCopilotTimer = 0;
+        return { output, queued, requests, started, states };
       } finally {
         queueAutomaticTerminalCommand = savedQueue;
         terminalExecutionReadiness = savedReadiness;
+        requestBridge = savedRequest;
       }
     });
     expect(result.started).toBe(1);
-    expect(result.queued).toEqual(["/cwd D:\\multiTerm", "Review the pending changes"]);
+    expect(result.queued.map((entry) => entry.command)).toEqual(["/cwd D:\multiTerm", "Review the pending changes", "Prepare the release"]);
+    expect(result.requests[0]).toMatchObject({ sessionId: expect.any(String), snapshot: true, type: "copilotAutomationOutput" });
+    expect(result.requests[1]).toMatchObject({ cursor: 120, sessionId: result.requests[0].sessionId, type: "copilotAutomationOutput" });
+    expect(result.output).toBe("Review APPROVED\nReady to ship");
+    expect(result.states).toMatchObject({
+      "action-copilot1": "succeeded",
+      "action-copilot2": "running"
+    });
   });
 
   test("offers Copilot staging and inserts only when the TUI is ready without Enter", async ({ page }) => {
@@ -685,8 +934,9 @@ test.describe("Automation Studio", () => {
   });
 
   test("launches Copilot from the requested CWD in each shell", async ({ page }) => {
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       const terminal = [...state.terminals.values()][0];
+      const savedRequest = requestBridge;
       const saved = {
         cwd: terminal.cwd,
         pendingExternalAssistant: terminal.pendingExternalAssistant,
@@ -709,6 +959,7 @@ test.describe("Automation Studio", () => {
         trigger: { intervalMinutes: 60, mode: "interval" }
       });
       try {
+        requestBridge = async () => ({ complete: false, cursor: 0, output: "", truncated: false });
         const commands = {
           cmd: automationCopilotLaunchCommand({ shell: "cmd" }, "C:\\100% & safe"),
           powershell: automationCopilotLaunchCommand({ shell: "pwsh" }, "D:\\repo name"),
@@ -717,8 +968,17 @@ test.describe("Automation Studio", () => {
         terminal.shell = "cmd";
         terminal.status = "starting";
         const started = runAutomationRule(rule, { manual: true });
-        return { commands, pending: terminal.pendingExternalAssistant, started };
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const pending = terminal.pendingExternalAssistant ? { ...terminal.pendingExternalAssistant } : null;
+        for (const [token, task] of state.automationRuntime.steps) {
+          if (task.runId && state.automationRuntime.runs.get(task.runId)?.rule.id === rule.id) state.automationRuntime.steps.delete(token);
+        }
+        for (const [runId, run] of state.automationRuntime.runs) {
+          if (run.rule.id === rule.id) state.automationRuntime.runs.delete(runId);
+        }
+        return { commands, pending, sessionId: terminal.aiSessionId, sessionKey: terminal.assistantSessionKey, started };
       } finally {
+        requestBridge = savedRequest;
         terminal.cwd = saved.cwd;
         terminal.pendingExternalAssistant = saved.pendingExternalAssistant;
         terminal.shell = saved.shell;
@@ -727,16 +987,16 @@ test.describe("Automation Studio", () => {
     });
 
     expect(result.started).toBe(1);
-    expect(result.commands).toEqual({
-      cmd: 'cd /d "C:\\100^% & safe" & copilot --yolo --context default',
-      powershell: "Set-Location -LiteralPath 'D:\\repo name'; copilot --yolo --context default",
-      wsl: "cd -- '/mnt/c/repo name'; copilot --yolo --context default"
-    });
+    expect(result.commands.cmd).toMatch(/^cd \/d "C:\\100\^% & safe" & copilot --yolo --session-id=[0-9a-f-]{36} --context default$/i);
+    expect(result.commands.powershell).toMatch(/^Set-Location -LiteralPath 'D:\\repo name'; copilot --yolo --session-id=[0-9a-f-]{36} --context default$/i);
+    expect(result.commands.wsl).toMatch(/^cd -- '\/mnt\/c\/repo name'; copilot --yolo --session-id=[0-9a-f-]{36} --context default$/i);
     expect(result.pending).toMatchObject({
-      command: 'cd /d "D:\\repo name" & copilot --yolo --context default',
       followup: "Review this worktree",
       provider: "copilot"
     });
+    expect(result.pending.command).toContain(`--session-id=${result.sessionId}`);
+    expect(result.sessionId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(result.sessionKey).toBe(`cli:${result.sessionId}`);
   });
 
   test("pauses, snoozes, and deletes an automation from its right-click menu", async ({ page }) => {
@@ -885,8 +1145,8 @@ test.describe("Automation Studio", () => {
 
     expect(result.changed).toBe(true);
     expect(result.pendingTitles).toEqual(["Due first-rule", "Due second-rule"]);
-    expect(result.historyTitles.filter((title) => title === "Due first-rule")).toHaveLength(2);
-    expect(result.historyTitles.filter((title) => title === "Due second-rule")).toHaveLength(2);
+    expect(result.historyTitles.filter((title) => title === "Due first-rule")).toHaveLength(1);
+    expect(result.historyTitles.filter((title) => title === "Due second-rule")).toHaveLength(1);
     expect(result.historyTitles.filter((title) => title.endsWith("· Step 1"))).toHaveLength(2);
     expect(result.rules).toHaveLength(2);
     expect(result.rules.every((rule) => Boolean(rule.lastRunAt)), JSON.stringify(result.rules)).toBe(true);

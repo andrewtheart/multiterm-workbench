@@ -53,6 +53,72 @@ test.describe("Per-page layout and zoom", () => {
     expect(result.restored).toBe("grid");
   });
 
+  test("does not carry overrides into a reused page id", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(() => {
+      state.settings.layout = "auto";
+      state.settings.workspaceZoom = 100;
+      applySettings();
+      const originalPageId = state.activePageId;
+      const overriddenPageId = addPage();
+      setPageLayoutOverride("vertical");
+      setPageZoomOverride(150);
+      setActivePage(originalPageId);
+      removePage(overriddenPageId);
+      const reusedPageId = addPage();
+      return {
+        overriddenPageId,
+        reusedPageId,
+        layout: effectivePageLayout(),
+        zoom: effectivePageZoom(),
+        hasLayoutOverride: pageLayoutOverrides.has(reusedPageId),
+        hasZoomOverride: pageZoomOverrides.has(reusedPageId)
+      };
+    });
+    expect(result.reusedPageId).toBe(result.overriddenPageId);
+    expect(result).toMatchObject({
+      layout: "auto",
+      zoom: 100,
+      hasLayoutOverride: false,
+      hasZoomOverride: false
+    });
+  });
+
+  test("clears overrides for pages removed in bulk", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(() => {
+      state.settings.layout = "auto";
+      state.settings.workspaceZoom = 100;
+      applySettings();
+      const keepPageId = state.activePageId;
+      setPageLayoutOverride("horizontal");
+      const removedPageId = addPage();
+      setPageLayoutOverride("vertical");
+      setPageZoomOverride(150);
+      closeOtherPages(keepPageId, { terminalAction: "move" });
+      const afterCloseOthers = {
+        keptLayout: pageLayoutOverrides.get(keepPageId),
+        removedLayout: pageLayoutOverrides.has(removedPageId),
+        removedZoom: pageZoomOverrides.has(removedPageId)
+      };
+      resetAllPages("move");
+      return {
+        afterCloseOthers,
+        resetLayout: pageLayoutOverrides.has(keepPageId),
+        resetZoom: pageZoomOverrides.has(keepPageId)
+      };
+    });
+    expect(result).toEqual({
+      afterCloseOthers: {
+        keptLayout: "horizontal",
+        removedLayout: false,
+        removedZoom: false
+      },
+      resetLayout: false,
+      resetZoom: false
+    });
+  });
+
   test("overrides the workspace zoom for the active page only", async ({ page }) => {
     await ready(page);
     const result = await page.evaluate(() => {

@@ -109,7 +109,7 @@ describe("PowerShell bridge control dashboard", () => {
     expect(rendererScript).toContain('sendBridge({ type: "title", id: terminal.id, title });');
     expect(rendererScript).toContain('if (message.type === "title")');
     expect(rendererScript).toContain('commitTerminalTitle(terminal, message.title, false)');
-    expect(rendererScript).toMatch(/function startMinChipRename[\s\S]*commitTerminalTitle\(terminal, name\)/);
+    expect(rendererScript).toMatch(/function startMinChipRename[\s\S]*commitTerminalTitle\(terminal, name, true, "manual"\)/);
     expect(bridgeScript).toContain('else if (type == "title")');
     expect(bridgeScript).toContain('session.Rename(title);');
     expect(bridgeScript).toContain('this.SendSessionFrame(session, "{\\"type\\":\\"title\\"');

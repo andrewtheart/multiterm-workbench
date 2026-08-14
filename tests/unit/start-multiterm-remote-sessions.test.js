@@ -51,7 +51,10 @@ describe("installed bridge remote Copilot sessions", () => {
     expect(installedBridge).toContain("private string RemoteCopilotFallbackJson()");
     expect(installedBridge).toContain('ExtractJsonBool(record, "remote")');
     expect(installedBridge).toContain('ExtractJsonString(record, "provider"), "copilot"');
+    expect(installedBridge).toContain('Json.Quote("remote:" + id)');
+    expect(installedBridge).toContain('ExtractJsonString(record, "aiSessionId").ToLowerInvariant()');
     expect(nodeBridge).toContain('.filter((entry) => entry.provider === "copilot" && entry.remote)');
+    expect(nodeBridge).toContain('`remote:${entry.remoteSessionId.toLowerCase()}`');
   });
 
   it("agrees with the Node bridge on the endpoint contract", () => {

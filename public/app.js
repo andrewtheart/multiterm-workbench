@@ -29,6 +29,7 @@ const defaultSettings = {
   aiTitleProvider: "copilot",
   allowBridgeTerminalFocus: false,
   appTheme: "dark",
+  bridgeHeartbeatTimeoutSeconds: 30,
   autoTitleSuggestions: true,
   titleSuggestionHistoryLimit: 500,
   // Opt-in: hiding Focus/Maximize until hover is a real trade against
@@ -42,6 +43,8 @@ const defaultSettings = {
   // from the pane's own suggest-title menu, never from the settings panel.
   autoTitleSuppressions: [],
   automationHistoryLimit: 200,
+  automationOutputCaptureKb: 128,
+  automationStepTimeoutMinutes: 30,
   bellNotify: false,
   // Custom header background picks, newest first, so the quick picker can offer
   // them again instead of only remembering the most recent one.
@@ -163,6 +166,8 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
   copilotCwdQueryTimeoutSeconds: "ai assistant resume working directory cwd query ask session timeout seconds hidden terminal",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
+  automationOutputCaptureKb: "automation workflow step output capture condition match regex exact multiline kilobytes limit",
+  automationStepTimeoutMinutes: "automation workflow step timeout hang stuck copilot command minutes deadline",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
   fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
   titleFontScale: "terminal pane title header label text font size scale percentage larger smaller",
@@ -218,6 +223,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   updateCheckIntervalHours: "update frequency cadence schedule interval timer hours polling check updater",
   bellNotify: "bell beep ding sound terminal notification notifications alert alerts audible",
   allowBridgeTerminalFocus: "bridge terminal focus window automation ui automation bring to front show bridge",
+  bridgeHeartbeatTimeoutSeconds: "bridge connection heartbeat health response timeout recovery reconnect frozen hung unresponsive seconds",
   worktreeSharedRoot: "worktree worktrees git clone shared location folder repository repo agent isolated parallel branch",
   copyOnSelect: "selection selected highlight mouse clipboard copy automatically auto",
   highlightInputPrompts: "awaiting input prompt prompts question questions badge glow attention detect detection interactive highlight",
@@ -315,6 +321,7 @@ const APP_VERSION = "0.1.93";
 const AUTOMATIONS_STORAGE_KEY = "multiterm.automations";
 const TERMINAL_ARTIFACTS_STORAGE_KEY = "multiterm.terminalArtifacts";
 const TITLE_SUGGESTION_HISTORY_STORAGE_KEY = "multiterm.titleSuggestionHistory";
+const SESSION_MANUAL_TITLE_HISTORY_STORAGE_KEY = "multiterm.sessionManualTitleHistory";
 const TITLE_SUGGESTION_HISTORY_PAGE_SIZE = 5;
 const TITLE_SUGGESTION_HISTORY_MAX_LIMIT = 10000;
 const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
@@ -706,6 +713,9 @@ const elements = {
   copilotResumeTabRemote: document.querySelector("#copilotResumeTabRemote"),
   copilotResumeTabs: document.querySelector("#copilotResumeTabs"),
   copilotSessionsToggle: document.querySelector("#copilotSessionsToggle"),
+  copilotSessionTitlesFlyout: document.querySelector("#copilotSessionTitlesFlyout"),
+  copilotSessionTitlesList: document.querySelector("#copilotSessionTitlesList"),
+  copilotSessionTitlesSubtitle: document.querySelector("#copilotSessionTitlesSubtitle"),
   cwdChangeAskSession: document.querySelector("#cwdChangeAskSession"),
   cwdChangeBrowse: document.querySelector("#cwdChangeBrowse"),
   cwdChangeCancel: document.querySelector("#cwdChangeCancel"),
@@ -836,6 +846,9 @@ const elements = {
   notifySilence: document.querySelector("#notifySilence"),
   outputBacklogKb: document.querySelector("#outputBacklogKb"),
   outputCoalesceMs: document.querySelector("#outputCoalesceMs"),
+  automationOutputCaptureKb: document.querySelector("#automationOutputCaptureKb"),
+  automationStepTimeoutMinutes: document.querySelector("#automationStepTimeoutMinutes"),
+  bridgeHeartbeatTimeoutSeconds: document.querySelector("#bridgeHeartbeatTimeoutSeconds"),
   pagerPlacement: document.querySelector("#pagerPlacement"),
   sidecarWidth: document.querySelector("#sidecarWidth"),
   sidecarWidthValue: document.querySelector("#sidecarWidthValue"),
@@ -1090,6 +1103,9 @@ let terminalNotesFlyoutAnchor = null;
 let terminalNotesFlyoutEditingId = null;
 let titleSuggestionFlyoutId = null;
 let titleSuggestionFlyoutAnchor = null;
+let copilotSessionTitlesAnchor = null;
+let copilotSessionTitlesCloseTimer = 0;
+let copilotSessionTitlesHoverTimer = 0;
 
 const COPILOT_CWD_HISTORY_STORAGE_KEY = "multiterm.copilotCwdHistory";
 const COPILOT_CWD_HISTORY_LIMIT = 10;
@@ -1143,7 +1159,10 @@ function normalizeTitleSuggestionHistory(value) {
     ids.add(id);
     history.push({
       id,
+      assistantSessionKey: text(raw.assistantSessionKey, 256),
+      aiSessionId: COPILOT_RESUME_ID_PATTERN.test(String(raw.aiSessionId || "")) ? String(raw.aiSessionId).toLowerCase() : "",
       terminalId: text(raw.terminalId, 160),
+      terminalStartedAt: typeof raw.terminalStartedAt === "string" ? raw.terminalStartedAt : "",
       terminalTitle,
       pid: Number.isInteger(Number(raw.pid)) && Number(raw.pid) > 0 ? Number(raw.pid) : null,
       suggestion,
@@ -1161,6 +1180,46 @@ function normalizeTitleSuggestionHistory(value) {
 function loadTitleSuggestionHistory() {
   try {
     return normalizeTitleSuggestionHistory(JSON.parse(localStorage.getItem(TITLE_SUGGESTION_HISTORY_STORAGE_KEY) || "[]"));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeSessionManualTitleHistory(value) {
+  if (!Array.isArray(value)) return [];
+  const history = [];
+  const ids = new Set();
+  const text = (candidate, maximum) => typeof candidate === "string"
+    ? candidate.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum)
+    : "";
+  for (const raw of value.slice(0, TITLE_SUGGESTION_HISTORY_MAX_LIMIT)) {
+    if (!raw || typeof raw !== "object") continue;
+    const id = text(raw.id, 160);
+    const title = text(raw.title, 320);
+    const committedAt = typeof raw.committedAt === "string" && !Number.isNaN(new Date(raw.committedAt).getTime())
+      ? raw.committedAt
+      : "";
+    if (!id || ids.has(id) || !title || !committedAt) continue;
+    ids.add(id);
+    history.push({
+      id,
+      assistantSessionKey: text(raw.assistantSessionKey, 256),
+      aiSessionId: COPILOT_RESUME_ID_PATTERN.test(String(raw.aiSessionId || "")) ? String(raw.aiSessionId).toLowerCase() : "",
+      terminalId: text(raw.terminalId, 160),
+      terminalStartedAt: typeof raw.terminalStartedAt === "string" ? raw.terminalStartedAt : "",
+      terminalTitle: text(raw.terminalTitle, 320) || title,
+      previousTitle: text(raw.previousTitle, 320),
+      title,
+      pid: Number.isInteger(Number(raw.pid)) && Number(raw.pid) > 0 ? Number(raw.pid) : null,
+      committedAt
+    });
+  }
+  return history;
+}
+
+function loadSessionManualTitleHistory() {
+  try {
+    return normalizeSessionManualTitleHistory(JSON.parse(localStorage.getItem(SESSION_MANUAL_TITLE_HISTORY_STORAGE_KEY) || "[]"));
   } catch {
     return [];
   }
@@ -1195,6 +1254,11 @@ const state = {
   pages: loadPages(),
   pageGroups: [],
   primaryId: null,
+  bridgeHeartbeatNonce: "",
+  bridgeHeartbeatCheckedAt: 0,
+  bridgeHeartbeatSentAt: 0,
+  bridgeHeartbeatTimer: 0,
+  bridgeLastMessageAt: 0,
   reconnectAttempts: 0,
   reconnectTimer: null,
   settings: initialSettings,
@@ -1213,6 +1277,7 @@ const state = {
   terminalArtifactsHub: { draftText: null, noteTerminalId: null, returnFocus: null, savedTimer: 0, selectedNoteId: null },
   autoTitleNotice: { promise: null, resolve: null },
   titleSuggestionHistory: loadTitleSuggestionHistory(),
+  sessionManualTitleHistory: loadSessionManualTitleHistory(),
   titleSuggestionHistoryHub: { returnFocus: null, scope: null, visibleCount: TITLE_SUGGESTION_HISTORY_PAGE_SIZE },
   terminalMessages: new Map(),
   terminalMessagesHub: { returnFocus: null },
@@ -1243,9 +1308,9 @@ const logStore = {
 
 const pendingDiagnosticRecords = [];
 const DURABLE_DIAGNOSTIC_DETAIL_FIELDS = [
-  "clean", "code", "elapsedMs", "error", "operation", "outcome", "pendingRequests",
+  "activeElement", "clean", "code", "elapsedMs", "error", "id", "operation", "outcome", "pendingRequests",
   "phase", "readyState", "reason", "requestId", "requestType", "responseType",
-  "socketReady", "timeoutMs"
+  "socketReady", "timeoutMs", "timeoutSeconds"
 ];
 
 function logEvent(level, source, message, detail, options = {}) {
@@ -1388,6 +1453,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindTerminalNotificationFlyout();
   bindTerminalNotesFlyout();
   bindTitleSuggestionHistory();
+  bindCopilotSessionTitlesFlyout();
   bindHeaderBackgroundFlyout();
   applyVersion();
   applySettings();
@@ -1440,6 +1506,9 @@ window.addEventListener("DOMContentLoaded", () => {
     flushAllTerminalOutput();
     announceRendererPresence();
     if (document.visibilityState === "visible") {
+      state.bridgeLastMessageAt = Date.now();
+      state.bridgeHeartbeatCheckedAt = state.bridgeLastMessageAt;
+      sendBridgeHeartbeat();
       scheduleStrandedTerminalFocusRecovery("document-visible");
     }
   });
@@ -1466,6 +1535,7 @@ window.addEventListener("beforeunload", () => {
   shutdownTerminalAnalytics();
   stopAutomationRunner();
   state.bridgeClosingDown = true;
+  stopBridgeHeartbeat();
   stopAutomaticUpdateChecks();
   window.clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
@@ -1558,6 +1628,18 @@ function bindControls() {
   elements.searchAcrossPages.checked = state.settings.searchAcrossPages;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  state.settings.automationOutputCaptureKb = clampAutomationOutputCaptureKb(
+    state.settings.automationOutputCaptureKb,
+    elements.automationOutputCaptureKb
+  );
+  state.settings.automationStepTimeoutMinutes = clampAutomationStepTimeoutMinutes(
+    state.settings.automationStepTimeoutMinutes,
+    elements.automationStepTimeoutMinutes
+  );
+  state.settings.bridgeHeartbeatTimeoutSeconds = clampBridgeHeartbeatTimeoutSeconds(
+    state.settings.bridgeHeartbeatTimeoutSeconds,
+    elements.bridgeHeartbeatTimeoutSeconds
+  );
   elements.pageCloseAction.value = normalizePageCloseAction(state.settings.pageCloseAction);
   elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
   elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
@@ -1628,9 +1710,15 @@ function bindControls() {
   elements.copilotResumeOverlay.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
+      if (!elements.copilotSessionTitlesFlyout.hidden) {
+        event.stopPropagation();
+        closeCopilotSessionTitlesFlyout();
+        return;
+      }
       closeCopilotResume();
     }
   });
+  elements.copilotResumeList.addEventListener("scroll", closeCopilotSessionTitlesFlyout, { passive: true });
   elements.cwdChangeClose.addEventListener("click", closeCwdChange);
   elements.cwdChangeCancel.addEventListener("click", closeCwdChange);
   elements.cwdChangeAskSession.addEventListener("click", () => startCwdSessionQuery({ retry: true }));
@@ -1784,7 +1872,10 @@ function bindControls() {
   bindSetting(elements.autoTitleSchedule, "autoTitleSchedule", "change", normalizeAutoTitleSchedule);
   bindSetting(elements.autoTitleRepeatMinutes, "autoTitleRepeatMinutes", "change", clampAutoTitleRepeatMinutes);
   bindSetting(elements.titleSuggestionHistoryLimit, "titleSuggestionHistoryLimit", "change", clampTitleSuggestionHistoryLimit);
-  elements.titleSuggestionHistoryLimit.addEventListener("change", saveTitleSuggestionHistory);
+  elements.titleSuggestionHistoryLimit.addEventListener("change", () => {
+    saveTitleSuggestionHistory();
+    saveSessionManualTitleHistory();
+  });
   elements.autoTitleSuppressionsClear?.addEventListener("click", clearAutoTitleSuppressions);
   bindSetting(elements.resumeAssistantSessions, "resumeAssistantSessions", "change", normalizeResumeAssistantSessions);
   bindSetting(elements.headerActionsRevealOnHover, "headerActionsRevealOnHover", "change", (_, element) => element.checked);
@@ -1798,6 +1889,9 @@ function bindControls() {
   bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
   bindSetting(elements.outputCoalesceMs, "outputCoalesceMs", "change", clampOutputCoalesceMs);
   bindSetting(elements.outputBacklogKb, "outputBacklogKb", "change", clampOutputBacklogKb);
+  bindSetting(elements.automationOutputCaptureKb, "automationOutputCaptureKb", "change", clampAutomationOutputCaptureKb);
+  bindSetting(elements.automationStepTimeoutMinutes, "automationStepTimeoutMinutes", "change", clampAutomationStepTimeoutMinutes);
+  bindSetting(elements.bridgeHeartbeatTimeoutSeconds, "bridgeHeartbeatTimeoutSeconds", "change", clampBridgeHeartbeatTimeoutSeconds);
   bindSetting(elements.copilotLogViewerEnabled, "copilotLogViewerEnabled", "change", (_, element) => element.checked);
   bindSetting(elements.copilotLogInitialTailKb, "copilotLogInitialTailKb", "change", (value, element) => (
     normalizeDiagnosticSetting(value, element, defaultSettings.copilotLogInitialTailKb)
@@ -1923,7 +2017,7 @@ function bindSetting(element, key, eventName, transform) {
     if (key === "layout") {
       clearSnapLayout(false);
     }
-    if (key === "outputCoalesceMs" || key === "copilotLogViewerEnabled"
+    if (key === "outputCoalesceMs" || key === "bridgeHeartbeatTimeoutSeconds" || key === "copilotLogViewerEnabled"
       || key === "copilotLogInitialTailKb" || key === "diagnosticRetentionDays"
         || key === "diagnosticRotationMb" || key === "diagnosticViewerEntries") {
       if (key === "diagnosticViewerEntries") {
@@ -1959,6 +2053,7 @@ function sendBridgeConfig() {
   sendBridge({
     type: "config",
     outputCoalesceMs: Number(state.settings.outputCoalesceMs),
+    bridgeHeartbeatTimeoutSeconds: Number(state.settings.bridgeHeartbeatTimeoutSeconds),
     diagnosticRetentionDays: diagnostics.retentionDays,
     diagnosticRotationMb: diagnostics.rotationMb,
     diagnosticViewerEntries: diagnostics.viewerEntries,
@@ -1983,6 +2078,9 @@ function sendCommunicationConfig() {
 // the value in force.
 const OUTPUT_COALESCE_MS_BOUNDS = { min: 0, max: 100, fallback: 8 };
 const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
+const AUTOMATION_OUTPUT_CAPTURE_KB_BOUNDS = { min: 16, max: 512, fallback: 128 };
+const AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS = { min: 1, max: 1440, fallback: 30 };
+const BRIDGE_HEARTBEAT_TIMEOUT_SECONDS_BOUNDS = { min: 10, max: 300, fallback: 30 };
 const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
 const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 };
 const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
@@ -2093,6 +2191,18 @@ function clampOutputCoalesceMs(value, element) {
 
 function clampOutputBacklogKb(value, element) {
   return clampSettingNumber(value, element, OUTPUT_BACKLOG_KB_BOUNDS);
+}
+
+function clampAutomationOutputCaptureKb(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_OUTPUT_CAPTURE_KB_BOUNDS);
+}
+
+function clampAutomationStepTimeoutMinutes(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS);
+}
+
+function clampBridgeHeartbeatTimeoutSeconds(value, element) {
+  return clampSettingNumber(value, element, BRIDGE_HEARTBEAT_TIMEOUT_SECONDS_BOUNDS);
 }
 
 function clampTerminalMessageMaxKb(value, element) {
@@ -2435,6 +2545,97 @@ function normalizeInstallerSizeMb(value, element) {
   return next;
 }
 
+function bridgeHeartbeatTimeoutMs() {
+  const seconds = Number(state.settings.bridgeHeartbeatTimeoutSeconds);
+  const bounds = BRIDGE_HEARTBEAT_TIMEOUT_SECONDS_BOUNDS;
+  const clamped = Number.isFinite(seconds)
+    ? Math.min(bounds.max, Math.max(bounds.min, Math.round(seconds)))
+    : bounds.fallback;
+  return clamped * 1000;
+}
+
+function stopBridgeHeartbeat() {
+  if (state.bridgeHeartbeatTimer) window.clearInterval(state.bridgeHeartbeatTimer);
+  state.bridgeHeartbeatTimer = 0;
+  state.bridgeHeartbeatCheckedAt = 0;
+  state.bridgeHeartbeatNonce = "";
+  state.bridgeHeartbeatSentAt = 0;
+}
+
+function sendBridgeHeartbeat(now = Date.now()) {
+  if (!state.socketReady || document.visibilityState !== "visible") return false;
+  const nonce = createId();
+  state.bridgeHeartbeatNonce = nonce;
+  state.bridgeHeartbeatSentAt = now;
+  return sendBridge({ type: "heartbeat", nonce });
+}
+
+function startBridgeHeartbeat() {
+  stopBridgeHeartbeat();
+  state.bridgeHeartbeatCheckedAt = Date.now();
+  state.bridgeHeartbeatTimer = window.setInterval(() => checkBridgeHeartbeat(), 1000);
+  sendBridgeHeartbeat();
+}
+
+function transitionBridgeDisconnected(socket, detail, message = "WebSocket closed") {
+  if (state.socket !== socket) return false;
+  state.socket = null;
+  state.socketReady = false;
+  state.bridgeLastMessageAt = 0;
+  stopBridgeHeartbeat();
+  log.warn("bridge", message, detail);
+  settlePendingBridgeRequests("disconnected", detail);
+  for (const terminal of state.terminals.values()) {
+    setTerminalStatus(terminal, "offline", "dead");
+  }
+  updateTerminalActions();
+  scheduleReconnect();
+  return true;
+}
+
+function expireUnresponsiveBridge(elapsedMs) {
+  const socket = state.socket;
+  if (!socket) return false;
+  const detail = {
+    elapsedMs: Math.max(0, Math.round(elapsedMs)),
+    pendingRequests: pendingBridgeRequests.size,
+    timeoutSeconds: state.settings.bridgeHeartbeatTimeoutSeconds
+  };
+  if (!transitionBridgeDisconnected(socket, detail, "Bridge heartbeat timed out")) return false;
+  try {
+    socket.close(4000, "Bridge heartbeat timed out");
+  } catch {
+    // The stale connection is already detached from renderer state.
+  }
+  return true;
+}
+
+function checkBridgeHeartbeat(now = Date.now()) {
+  if (state.bridgeClosingDown || document.visibilityState !== "visible") return false;
+  if (!state.socketReady || !state.socket || state.socket.readyState !== WebSocket.OPEN) return false;
+  const timeoutMs = bridgeHeartbeatTimeoutMs();
+  const checkGapMs = state.bridgeHeartbeatCheckedAt ? now - state.bridgeHeartbeatCheckedAt : 0;
+  state.bridgeHeartbeatCheckedAt = now;
+  if (checkGapMs >= timeoutMs) {
+    state.bridgeLastMessageAt = now;
+    sendBridgeHeartbeat(now);
+    log.warn("bridge", "Heartbeat check resumed after renderer scheduling delay", {
+      elapsedMs: Math.max(0, Math.round(checkGapMs)),
+      timeoutSeconds: state.settings.bridgeHeartbeatTimeoutSeconds
+    });
+    return false;
+  }
+  const elapsedMs = now - state.bridgeLastMessageAt;
+  if (state.bridgeLastMessageAt && elapsedMs >= timeoutMs) {
+    return expireUnresponsiveBridge(elapsedMs);
+  }
+  const probeIntervalMs = Math.max(1000, Math.min(5000, Math.floor(timeoutMs / 3)));
+  if (!state.bridgeHeartbeatSentAt || now - state.bridgeHeartbeatSentAt >= probeIntervalMs) {
+    sendBridgeHeartbeat(now);
+  }
+  return false;
+}
+
 function connectBridge(locationProtocol = window.location.protocol) {
   if (locationProtocol === "file:") {
     setBridgeStatus("Open via bridge", "offline");
@@ -2449,16 +2650,23 @@ function connectBridge(locationProtocol = window.location.protocol) {
   const url = `${protocol}//${window.location.host}/ws`;
   const reconnecting = state.reconnectAttempts > 0;
   log.info("bridge", `${reconnecting ? "Reconnecting" : "Connecting"} to ${url}`);
-  state.socket = new WebSocket(url);
+  const socket = new WebSocket(url);
+  state.socket = socket;
 
-  state.socket.addEventListener("open", () => {
+  socket.addEventListener("open", () => {
+    if (state.socket !== socket) {
+      socket.close();
+      return;
+    }
     const wasReconnecting = state.reconnectAttempts > 0;
     state.socketReady = true;
+    state.bridgeLastMessageAt = Date.now();
     state.reconnectAttempts = 0;
     setBridgeStatus("Bridge connected", "online");
     log.info("bridge", wasReconnecting ? "WebSocket reconnected" : "WebSocket connected");
     announceRendererPresence();
     sendBridgeConfig();
+    startBridgeHeartbeat();
     for (const terminal of state.terminals.values()) {
       for (const logKey of terminal.copilotLogKeys || []) registerCopilotLogTerminal(logKey, terminal);
     }
@@ -2479,7 +2687,9 @@ function connectBridge(locationProtocol = window.location.protocol) {
     }
   });
 
-  state.socket.addEventListener("message", (event) => {
+  socket.addEventListener("message", (event) => {
+    if (state.socket !== socket) return;
+    state.bridgeLastMessageAt = Date.now();
     let message;
     try {
       message = JSON.parse(event.data);
@@ -2490,31 +2700,27 @@ function connectBridge(locationProtocol = window.location.protocol) {
     handleBridgeMessage(message);
   });
 
-  state.socket.addEventListener("close", (event) => {
-    state.socketReady = false;
+  socket.addEventListener("close", (event) => {
     const closeDetail = {
       clean: event.wasClean,
       code: event.code,
       pendingRequests: pendingBridgeRequests.size,
       reason: event.reason || ""
     };
-    log.warn("bridge", "WebSocket closed", closeDetail);
-    settlePendingBridgeRequests("disconnected", closeDetail);
-    for (const terminal of state.terminals.values()) {
-      setTerminalStatus(terminal, "offline", "dead");
-    }
-    updateTerminalActions();
-    scheduleReconnect();
+    transitionBridgeDisconnected(socket, closeDetail);
   });
 
-  state.socket.addEventListener("error", () => {
-    state.socketReady = false;
-    log.error("bridge", "WebSocket error", {
+  socket.addEventListener("error", () => {
+    const errorDetail = {
       pendingRequests: pendingBridgeRequests.size,
-      readyState: state.socket?.readyState
-    });
-    updateTerminalActions();
-    // The browser fires "close" after "error"; reconnection is scheduled there.
+      readyState: socket.readyState
+    };
+    if (!transitionBridgeDisconnected(socket, errorDetail, "WebSocket error")) return;
+    try {
+      socket.close();
+    } catch {
+      // The failed socket is already detached from renderer state.
+    }
   });
 }
 
@@ -2537,6 +2743,11 @@ function scheduleReconnect() {
 }
 
 function handleBridgeMessage(message) {
+  if (message.type === "heartbeat") {
+    if (message.nonce === state.bridgeHeartbeatNonce) state.bridgeHeartbeatNonce = "";
+    return;
+  }
+
   if (message.type === "operationProgress") {
     notifyBridgeRequestProgress(message);
     return;
@@ -2644,6 +2855,11 @@ function handleBridgeMessage(message) {
   }
 
   if (message.type === "copilotSessionSearch") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "copilotAutomationOutput") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -2788,6 +3004,7 @@ function handleBridgeMessage(message) {
     // an older bridge omits it — accurate to the round-trip, and better than
     // showing nothing.
     terminal.startedAt = message.startedAt || new Date().toISOString();
+    backfillTerminalTitleHistoryIdentity(terminal);
     if (!terminal.transient) ensureTerminalAnalyticsRecord(terminal).startedAt = terminal.startedAt;
     terminal.remoteRequested = true;
     terminal.status = "live";
@@ -2867,7 +3084,7 @@ function handleBridgeMessage(message) {
         liveTerminal.autoQueueRequiredAssistant = pending.provider;
         liveTerminal.autoQueueRequiredRevision = liveTerminal.outputRevision + 1;
         queueAutomaticTerminalCommand(liveTerminal, pending.followup, {
-          occurrenceKey: `external-launch:${terminal.id}`
+          occurrenceKey: pending.followupOccurrenceKey || `external-launch:${terminal.id}`
         });
       }, 500);
     }
@@ -2969,6 +3186,11 @@ function handleBridgeMessage(message) {
   // sending one frame per pty chunk, which still works.
   if (message.type === "error" && /Unsupported message type:\s*config/i.test(message.message || "")) {
     log.debug("bridge", "Bridge does not support output batching; using per-chunk delivery");
+    return;
+  }
+
+  if (message.type === "error" && /Unsupported message type:\s*heartbeat/i.test(message.message || "")) {
+    log.debug("bridge", "Bridge does not support heartbeat acknowledgements; using transport activity");
     return;
   }
 
@@ -3275,10 +3497,12 @@ function addTerminal(options = {}) {
     autoQueueTimer: 0,
     automationWorkflowActive: "",
     automationWorkflowBuffer: "",
+    automationCopilotTimer: 0,
     automationWorkflowTasks: [],
     automationWorkflowTimer: 0,
     aiAssistantTuiProvider: "",
-    aiSessionId: "",
+    aiSessionId: savedMeta?.aiSessionId || options.aiSessionId || "",
+    assistantSessionKey: savedMeta?.assistantSessionKey || options.assistantSessionKey || "",
     keepAliveTimer: 0,
     pendingKeepAlive: "",
     remoteEnabledAt: savedMeta?.remoteEnabledAt || "",
@@ -3487,6 +3711,7 @@ function addTerminal(options = {}) {
     // keyboard-active pane; the explicit Focus action owns primary-pane promotion.
     if (event.target.closest("button, select, input, a, [contenteditable]")) return;
     setActiveTerminal(id);
+    if (event.button === 0) scheduleTerminalPointerFocusRecovery(terminal);
   });
   pane.addEventListener("pointerup", () => syncManualLayout(terminal));
 
@@ -3532,7 +3757,8 @@ function promoteTransientTerminal(terminal, { focus = true } = {}) {
   terminal.transient = false;
   elements.host.append(terminal.pane);
   ensureTerminalAnalyticsRecord(terminal);
-  syncTerminalArtifacts(terminal);
+  if (terminalAssistantSessionKey(terminal)) ensureTerminalArtifact(terminal);
+  else syncTerminalArtifacts(terminal);
   applyManualLayout(terminal, ensureManualLayout(terminal.id));
   renderPager();
   saveTerminalPages();
@@ -3686,6 +3912,11 @@ function layoutModeLabel(value) {
 // state.pages wholesale, so anything stored on a page would outlive the session.
 const pageLayoutOverrides = new Map();
 const pageZoomOverrides = new Map();
+
+function clearPageOverrides(pageId) {
+  pageLayoutOverrides.delete(pageId);
+  pageZoomOverrides.delete(pageId);
+}
 
 function effectivePageLayout() {
   return pageLayoutOverrides.get(state.activePageId) || state.settings.layout;
@@ -4638,7 +4869,7 @@ function runHeaderAction(terminal, action, anchor = null) {
 
 function bindPaneControls(terminal) {
   terminal.titleInput.addEventListener("change", () => {
-    commitTerminalTitle(terminal, terminal.titleInput.value);
+    commitTerminalTitle(terminal, terminal.titleInput.value, true, "manual");
   });
 
   terminal.titleInput.addEventListener("keydown", (event) => {
@@ -4776,13 +5007,15 @@ function bindPaneControls(terminal) {
   });
 }
 
-function commitTerminalTitle(terminal, rawTitle, notifyBridge = true) {
+function commitTerminalTitle(terminal, rawTitle, notifyBridge = true, source = "programmatic") {
   if (!terminal) return;
+  const previousTitle = String(terminal.titleDisplay?.textContent || terminal.titleInput?.value || "").trim();
   const wasSuppressed = autoTitleSuppressed(terminal);
   clearTerminalTitleSuggestion(terminal);
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle.trim() : terminalShellTitle(terminal.shell);
   terminal.titleInput.value = title;
   setTerminalTitleDisplay(terminal, title);
+  if (source === "manual" && title !== previousTitle) recordSessionManualTitle(terminal, previousTitle, title);
   const analytics = state.analytics.terminals[terminal.id];
   if (analytics) {
     analytics.title = title;
@@ -5333,6 +5566,11 @@ function assistantSessionRows() {
       cwd: terminal.cwd || "",
       provider,
       shell: terminal.shell || "",
+      aiSessionId: terminal.aiSessionId || "",
+      assistantSessionKey: terminal.assistantSessionKey || "",
+      remote: Boolean(terminal.remoteSessionId || terminal.remoteSessionUrl),
+      remoteSessionId: terminal.remoteSessionId || "",
+      remoteUrl: terminal.remoteSessionUrl || "",
       recordedAt: new Date().toISOString()
     });
   }
@@ -5357,6 +5595,14 @@ function normalizeAssistantSessionRows(value) {
   return value
     .filter((row) => row && typeof row.id === "string" && typeof row.cwd === "string"
       && (row.provider === "copilot" || row.provider === "claude"))
+    .map((row) => ({
+      ...row,
+      aiSessionId: COPILOT_RESUME_ID_PATTERN.test(String(row.aiSessionId || "")) ? String(row.aiSessionId).toLowerCase() : "",
+      assistantSessionKey: typeof row.assistantSessionKey === "string" ? row.assistantSessionKey.slice(0, 256) : "",
+      remote: row.remote === true,
+      remoteSessionId: COPILOT_RESUME_ID_PATTERN.test(String(row.remoteSessionId || "")) ? String(row.remoteSessionId).toLowerCase() : "",
+      remoteUrl: typeof row.remoteUrl === "string" ? row.remoteUrl.slice(0, 2048) : ""
+    }))
     .slice(0, ASSISTANT_SESSION_LIMIT);
 }
 
@@ -5424,9 +5670,16 @@ async function restoreAssistantSessions(rows) {
   let restored = 0;
   await Promise.all(launches.map(async ({ catalogPromise, row, terminal }) => {
     const catalog = await catalogPromise;
-    const match = catalog
-      .filter((session) => session?.id && sameHostDirectory(session.cwd || "", row.cwd))
-      .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+    const exact = row.assistantSessionKey
+      ? catalog.find((session) => session?.key === row.assistantSessionKey)
+      : row.aiSessionId
+        ? catalog.find((session) => String(session?.id || "").toLowerCase() === row.aiSessionId)
+        : null;
+    const match = exact || (!row.assistantSessionKey && !row.aiSessionId
+      ? catalog
+        .filter((session) => session?.id && sameHostDirectory(session.cwd || "", row.cwd))
+        .sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0]
+      : null);
     const copilotLogKey = row.provider === "copilot" ? match?.id || createAiSessionId() : "";
     const command = safeTerminalCommand(buildAiAssistantCommand({
       provider: row.provider,
@@ -5437,7 +5690,7 @@ async function restoreAssistantSessions(rows) {
     }));
     if (!command || state.terminals.get(terminal.id) !== terminal) return;
     if (copilotLogKey) {
-      claimAiSessionId(terminal, copilotLogKey);
+      assignAssistantSessionIdentity(terminal, copilotLogKey, match?.key || `cli:${copilotLogKey}`);
       registerCopilotLogTerminal(copilotLogKey, terminal);
     }
     if (terminal.status === "live") {
@@ -5542,12 +5795,113 @@ function saveTitleSuggestionHistory() {
   refreshTitleSuggestionHistoryViews();
 }
 
+function saveSessionManualTitleHistory() {
+  state.sessionManualTitleHistory = normalizeSessionManualTitleHistory(state.sessionManualTitleHistory)
+    .slice(0, titleSuggestionHistoryLimit());
+  localStorage.setItem(SESSION_MANUAL_TITLE_HISTORY_STORAGE_KEY, JSON.stringify(state.sessionManualTitleHistory));
+}
+
+function terminalAssistantSessionKey(terminal) {
+  if (terminal?.assistantSessionKey) return terminal.assistantSessionKey;
+  return COPILOT_RESUME_ID_PATTERN.test(String(terminal?.aiSessionId || "")) ? `cli:${terminal.aiSessionId.toLowerCase()}` : "";
+}
+
+function titleHistoryIdentity(terminal) {
+  return {
+    assistantSessionKey: terminalAssistantSessionKey(terminal),
+    aiSessionId: COPILOT_RESUME_ID_PATTERN.test(String(terminal?.aiSessionId || "")) ? terminal.aiSessionId.toLowerCase() : "",
+    terminalId: terminal?.id || "",
+    terminalStartedAt: terminal?.startedAt || "",
+    pid: Number.isInteger(Number(terminal?.pid)) && Number(terminal.pid) > 0 ? Number(terminal.pid) : null
+  };
+}
+
+function recordSessionManualTitle(terminal, previousTitle, title) {
+  if (!terminal || !String(title || "").trim()) return null;
+  const identity = titleHistoryIdentity(terminal);
+  const normalizedTitle = String(title).trim();
+  const sameIdentity = (record) => (identity.assistantSessionKey && record.assistantSessionKey === identity.assistantSessionKey)
+    || (identity.aiSessionId && record.aiSessionId === identity.aiSessionId)
+    || ((!record.assistantSessionKey && !record.aiSessionId)
+      && record.terminalId === identity.terminalId
+      && (!record.terminalStartedAt || !identity.terminalStartedAt || record.terminalStartedAt === identity.terminalStartedAt));
+  const latest = state.sessionManualTitleHistory.find(sameIdentity);
+  if (latest?.title === normalizedTitle) return latest;
+  const record = {
+    id: createId(),
+    ...identity,
+    terminalTitle: normalizedTitle,
+    previousTitle: String(previousTitle || "").trim(),
+    title: normalizedTitle,
+    committedAt: new Date().toISOString()
+  };
+  state.sessionManualTitleHistory.unshift(record);
+  saveSessionManualTitleHistory();
+  return record;
+}
+
+function backfillTerminalTitleHistoryIdentity(terminal) {
+  if (!terminal) return false;
+  const identity = titleHistoryIdentity(terminal);
+  let suggestionsChanged = false;
+  let manualChanged = false;
+  const lifecycleCompatible = (record) => !record.terminalStartedAt
+    || !identity.terminalStartedAt
+    || record.terminalStartedAt === identity.terminalStartedAt;
+  const matches = (record) => lifecycleCompatible(record) && (record.terminalId === terminal.id
+    || (identity.pid != null && record.pid === identity.pid));
+  const compatible = (record) => (!record.assistantSessionKey && !record.aiSessionId)
+    || (identity.assistantSessionKey && record.assistantSessionKey === identity.assistantSessionKey)
+    || (identity.aiSessionId && record.aiSessionId === identity.aiSessionId);
+  for (const record of state.titleSuggestionHistory) {
+    if (!matches(record) || !compatible(record)) continue;
+    if (!record.assistantSessionKey && identity.assistantSessionKey) {
+      record.assistantSessionKey = identity.assistantSessionKey;
+      suggestionsChanged = true;
+    }
+    if (!record.aiSessionId && identity.aiSessionId) {
+      record.aiSessionId = identity.aiSessionId;
+      suggestionsChanged = true;
+    }
+    if (record.pid == null && identity.pid != null) {
+      record.pid = identity.pid;
+      suggestionsChanged = true;
+    }
+    if (!record.terminalStartedAt && identity.terminalStartedAt) {
+      record.terminalStartedAt = identity.terminalStartedAt;
+      suggestionsChanged = true;
+    }
+  }
+  for (const record of state.sessionManualTitleHistory) {
+    if (!matches(record) || !compatible(record)) continue;
+    if (!record.assistantSessionKey && identity.assistantSessionKey) {
+      record.assistantSessionKey = identity.assistantSessionKey;
+      manualChanged = true;
+    }
+    if (!record.aiSessionId && identity.aiSessionId) {
+      record.aiSessionId = identity.aiSessionId;
+      manualChanged = true;
+    }
+    if (record.pid == null && identity.pid != null) {
+      record.pid = identity.pid;
+      manualChanged = true;
+    }
+    if (!record.terminalStartedAt && identity.terminalStartedAt) {
+      record.terminalStartedAt = identity.terminalStartedAt;
+      manualChanged = true;
+    }
+  }
+  if (suggestionsChanged) saveTitleSuggestionHistory();
+  if (manualChanged) saveSessionManualTitleHistory();
+  return suggestionsChanged || manualChanged;
+}
+
 function recordTerminalTitleSuggestion(terminal, suggestion, { auto = false } = {}) {
   const terminalTitle = terminal?.titleInput?.value?.trim();
   if (!terminal || !terminalTitle || !String(suggestion || "").trim()) return null;
   const record = {
     id: createId(),
-    terminalId: terminal.id,
+    ...titleHistoryIdentity(terminal),
     terminalTitle,
     pid: Number.isInteger(Number(terminal.pid)) && Number(terminal.pid) > 0 ? Number(terminal.pid) : null,
     suggestion: String(suggestion).trim(),
@@ -6535,6 +6889,7 @@ function closeAllTerminals() {
 
 function disposeTerminal(terminal) {
   const { id } = terminal;
+  failAutomationWorkflowTasksForTerminal(terminal, "Terminal closed before the automation step completed");
   if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
   if (terminalNotesFlyoutId === id) closeTerminalNotesFlyout();
   if (headerBackgroundFlyoutId === id) closeHeaderBackgroundFlyout();
@@ -6554,6 +6909,8 @@ function disposeTerminal(terminal) {
   cancelAutoTitle(terminal);
   window.clearTimeout(terminal.autoQueueTimer);
   terminal.autoQueueTimer = 0;
+  window.clearTimeout(terminal.automationCopilotTimer);
+  terminal.automationCopilotTimer = 0;
   window.clearTimeout(terminal.copilotSetupLoginTimer);
   terminal.copilotSetupLoginTimer = 0;
   window.clearTimeout(terminal.remoteSessionTimer);
@@ -6796,7 +7153,7 @@ function startMinChipRename(chip, terminal) {
     // progress" guard doesn't skip its own commit re-render.
     input.remove();
     if (commit) {
-      commitTerminalTitle(terminal, name);
+      commitTerminalTitle(terminal, name, true, "manual");
     }
     updateMinimizedDock();
   };
@@ -7155,6 +7512,7 @@ function writeTerminal(terminal, data) {
   scheduleInputPromptCheck(terminal);
   scheduleAutomaticQueueCheck(terminal);
   scheduleAutomationWorkflowCheck(terminal);
+  scheduleAutomationCopilotCheck(terminal);
   scheduleCopilotSetupLogin(terminal);
   schedulePendingKeepAlive(terminal);
   schedulePendingCwdChange(terminal);
@@ -7441,6 +7799,7 @@ function dispatchAutomaticQueueItem(terminal) {
     return false;
   }
   if (!state.socketReady) return false;
+  if (prepareAutomationCopilotPromptCursor(terminal, item)) return false;
 
   terminal.autoQueueDispatching = true;
   terminal.autoQueueRequiredRevision = terminal.outputRevision + 1;
@@ -7471,6 +7830,7 @@ function dispatchAutomaticQueueItem(terminal) {
       if (index >= 0) liveRecord.queue.splice(index, 1);
       saveTerminalArtifacts();
       log.info("queue", `Executed queued command in ${terminal.titleInput.value || "terminal"}`, { id: terminal.id });
+      markAutomationCopilotPromptSent(terminal, item.occurrenceKey);
     }
   });
   return true;
@@ -7610,7 +7970,8 @@ function setTerminalRemoteSession(terminal, url) {
   terminal.remoteSessionUrl = value;
   terminal.remoteSessionId = (/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.exec(value) || [""])[0].toLowerCase();
   terminal.remoteEnabledAt = new Date().toISOString();
-  saveSessionSnapshot();
+  if (terminal.remoteSessionId) assignAssistantSessionIdentity(terminal, terminal.aiSessionId || "", `remote:${terminal.remoteSessionId}`);
+  else saveSessionSnapshot();
   log.info("ai", `Remote control link captured for ${terminal.titleInput.value || "terminal"}`, { url: value });
   toast("Remote control is on for this terminal", "success", 2600);
   return true;
@@ -11272,6 +11633,7 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
 }
 
 function closeCopilotResume() {
+  closeCopilotSessionTitlesFlyout();
   copilotResume.generation += 1;
   copilotResume.suspended = false;
   window.clearTimeout(copilotResume.closeTimer);
@@ -11285,6 +11647,7 @@ function closeCopilotResume() {
 }
 
 function suspendCopilotResume() {
+  closeCopilotSessionTitlesFlyout();
   window.clearTimeout(copilotResume.closeTimer);
   copilotResume.suspended = true;
   elements.copilotResumeOverlay.classList.remove("is-open");
@@ -11389,6 +11752,270 @@ function copilotSessionWorktree(session) {
     repositoryRoot: session.worktreeRepositoryRoot,
     createdByMultiTerm: true
   };
+}
+
+function copilotSessionIdentity(session) {
+  const key = String(session?.key || "");
+  const ids = new Set();
+  for (const candidate of [session?.id, session?.localId]) {
+    if (COPILOT_RESUME_ID_PATTERN.test(String(candidate || ""))) ids.add(String(candidate).toLowerCase());
+  }
+  return { key, ids };
+}
+
+function copilotSessionTitleAssociations(session) {
+  const identity = copilotSessionIdentity(session);
+  if (!identity.key && identity.ids.size === 0) return [];
+  const terminalLifecycles = new Map();
+  const pidLifecycles = new Map();
+  const current = [];
+  const matchesExact = (record) => (identity.key && record.assistantSessionKey === identity.key)
+    || (record.aiSessionId && identity.ids.has(String(record.aiSessionId).toLowerCase()));
+  const rememberIdentity = (entry) => {
+    const lifecycle = entry.terminalStartedAt || entry.startedAt || "";
+    if (entry.terminalId) terminalLifecycles.set(entry.terminalId, lifecycle);
+    if (Number(entry.pid) > 0) pidLifecycles.set(Number(entry.pid), lifecycle);
+  };
+
+  for (const terminal of userTerminals()) {
+    const candidate = {
+      assistantSessionKey: terminalAssistantSessionKey(terminal),
+      aiSessionId: terminal.aiSessionId || "",
+      terminalId: terminal.id,
+      terminalStartedAt: terminal.startedAt || "",
+      pid: terminal.pid
+    };
+    if (!matchesExact(candidate)) continue;
+    rememberIdentity(candidate);
+    current.push({
+      id: `current:${terminal.id}`,
+      kind: "current",
+      outcome: "current",
+      title: terminal.titleInput?.value || "Terminal",
+      terminalTitle: terminal.titleInput?.value || "Terminal",
+      terminalId: terminal.id,
+      pid: normalizeArtifactPid(terminal.pid),
+      timestamp: terminal.startedAt || null,
+      detail: terminal.status === "live" ? "Live terminal" : "Last known terminal"
+    });
+  }
+  for (const record of Object.values(state.terminalArtifacts.terminals)) {
+    if (!matchesExact(record)) continue;
+    rememberIdentity({ ...record, terminalStartedAt: record.startedAt || "" });
+    if (current.some((entry) => entry.terminalId === record.terminalId)) continue;
+    current.push({
+      id: `artifact:${record.terminalId}`,
+      kind: "current",
+      outcome: "current",
+      title: record.title || "Terminal",
+      terminalTitle: record.title || "Terminal",
+      terminalId: record.terminalId || "",
+      pid: normalizeArtifactPid(record.pid),
+      timestamp: record.startedAt || null,
+      detail: "Last recorded terminal"
+    });
+  }
+  for (const record of state.terminalArtifacts.recoveredTitles || []) {
+    if (!matchesExact(record)) continue;
+    rememberIdentity({ terminalId: record.sourceTerminalId, pid: record.pid, terminalStartedAt: record.startedAt || "" });
+    if (current.some((entry) => entry.terminalId === record.sourceTerminalId)) continue;
+    current.push({
+      id: `recovered:${record.id}`,
+      kind: "current",
+      outcome: "current",
+      title: record.title || "Terminal",
+      terminalTitle: record.title || "Terminal",
+      terminalId: record.sourceTerminalId || "",
+      pid: normalizeArtifactPid(record.pid),
+      timestamp: record.recoveredAt || record.startedAt || null,
+      detail: "Last recorded terminal"
+    });
+  }
+
+  const lifecycleMatches = (record, lifecycle) => Boolean(record.terminalStartedAt)
+    && Boolean(lifecycle)
+    && record.terminalStartedAt === lifecycle;
+  const linked = (record) => matchesExact(record)
+    || ((!record.assistantSessionKey && !record.aiSessionId)
+      && ((record.terminalId && lifecycleMatches(record, terminalLifecycles.get(record.terminalId)))
+        || (Number(record.pid) > 0 && lifecycleMatches(record, pidLifecycles.get(Number(record.pid))))));
+  const suggestions = state.titleSuggestionHistory.filter(linked).map((record) => ({
+    id: `suggestion:${record.id}`,
+    kind: "suggestion",
+    outcome: record.accepted === true ? "accepted" : record.accepted === false ? "rejected" : "pending",
+    title: record.suggestion,
+    terminalTitle: record.terminalTitle,
+    terminalId: record.terminalId,
+    pid: record.pid,
+    timestamp: record.decidedAt || record.suggestedAt,
+    detail: record.automatic ? "Automatic suggestion" : "Manual suggestion"
+  }));
+  const manual = state.sessionManualTitleHistory.filter(linked).map((record) => ({
+    id: `manual:${record.id}`,
+    kind: "manual",
+    outcome: "manual",
+    title: record.title,
+    terminalTitle: record.terminalTitle || record.title,
+    terminalId: record.terminalId,
+    pid: record.pid,
+    timestamp: record.committedAt,
+    detail: record.previousTitle ? `Renamed from ${record.previousTitle}` : "Entered by user"
+  }));
+  const history = [...manual, ...suggestions].sort((left, right) =>
+    Date.parse(right.timestamp || 0) - Date.parse(left.timestamp || 0)
+  );
+  return [...current, ...history];
+}
+
+function copilotSessionAssociationLabel(entry) {
+  if (entry.outcome === "accepted") return "Accepted";
+  if (entry.outcome === "rejected") return "Not accepted";
+  if (entry.outcome === "pending") return "Awaiting decision";
+  if (entry.outcome === "manual") return "Manual title";
+  return entry.detail || "Current title";
+}
+
+function copilotSessionAssociationIcon(entry) {
+  if (entry.outcome === "accepted") return "check";
+  if (entry.outcome === "rejected") return "x";
+  if (entry.outcome === "pending") return "clock-3";
+  if (entry.outcome === "manual") return "pencil";
+  return "square-terminal";
+}
+
+function renderCopilotSessionTitlesFlyout(session, associations) {
+  elements.copilotSessionTitlesSubtitle.textContent = copilotSessionTitle(session);
+  elements.copilotSessionTitlesList.textContent = "";
+  for (const association of associations) {
+    const row = document.createElement("article");
+    row.className = "copilot-session-title-association";
+    row.dataset.outcome = association.outcome;
+    row.setAttribute("role", "listitem");
+    const icon = document.createElement("i");
+    icon.dataset.lucide = copilotSessionAssociationIcon(association);
+    const copy = document.createElement("span");
+    const title = document.createElement("strong");
+    title.textContent = association.title;
+    const meta = document.createElement("small");
+    meta.textContent = [
+      copilotSessionAssociationLabel(association),
+      association.terminalTitle ? `Terminal: ${association.terminalTitle}` : "",
+      association.pid ? `PID ${association.pid}` : "PID unavailable",
+      artifactTimeLabel(association.timestamp)
+    ].filter(Boolean).join(" · ");
+    copy.append(title, meta);
+    row.append(icon, copy);
+    elements.copilotSessionTitlesList.append(row);
+  }
+  refreshIcons(elements.copilotSessionTitlesFlyout);
+}
+
+function positionCopilotSessionTitlesFlyout(anchor) {
+  const flyout = elements.copilotSessionTitlesFlyout;
+  if (!anchor?.isConnected || flyout.hidden) return;
+  const entry = anchor.closest(".copilot-session-entry") || anchor;
+  const anchorRect = entry.getBoundingClientRect();
+  const list = elements.copilotSessionTitlesList;
+  flyout.style.maxHeight = "";
+  list.style.maxHeight = "";
+  let rect = flyout.getBoundingClientRect();
+  const right = anchorRect.right + 8;
+  const leftSide = anchorRect.left - rect.width - 8;
+  let left;
+  let top;
+  if (right + rect.width <= window.innerWidth - 8) {
+    left = right;
+    top = Math.max(8, Math.min(anchorRect.top, window.innerHeight - rect.height - 8));
+  } else if (leftSide >= 8) {
+    left = leftSide;
+    top = Math.max(8, Math.min(anchorRect.top, window.innerHeight - rect.height - 8));
+  } else {
+    left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - rect.width - 8));
+    const belowSpace = Math.max(0, window.innerHeight - anchorRect.bottom - 16);
+    const aboveSpace = Math.max(0, anchorRect.top - 16);
+    const placeBelow = belowSpace >= aboveSpace;
+    const available = Math.max(80, placeBelow ? belowSpace : aboveSpace);
+    const headHeight = flyout.querySelector(".copilot-session-titles-head")?.getBoundingClientRect().height || 48;
+    flyout.style.maxHeight = `${available}px`;
+    list.style.maxHeight = `${Math.max(36, available - headHeight - 2)}px`;
+    rect = flyout.getBoundingClientRect();
+    top = placeBelow
+      ? anchorRect.bottom + 8
+      : Math.max(8, anchorRect.top - rect.height - 8);
+  }
+  flyout.style.left = `${left}px`;
+  flyout.style.top = `${top}px`;
+}
+
+function openCopilotSessionTitlesFlyout(session, anchor) {
+  const associations = copilotSessionTitleAssociations(session);
+  if (!anchor || associations.length === 0) return false;
+  window.clearTimeout(copilotSessionTitlesCloseTimer);
+  copilotSessionTitlesAnchor = anchor;
+  renderCopilotSessionTitlesFlyout(session, associations);
+  elements.copilotSessionTitlesFlyout.hidden = false;
+  anchor.setAttribute("aria-describedby", "copilotSessionTitlesFlyout");
+  positionCopilotSessionTitlesFlyout(anchor);
+  return true;
+}
+
+function closeCopilotSessionTitlesFlyout() {
+  window.clearTimeout(copilotSessionTitlesHoverTimer);
+  window.clearTimeout(copilotSessionTitlesCloseTimer);
+  copilotSessionTitlesAnchor?.removeAttribute("aria-describedby");
+  copilotSessionTitlesAnchor = null;
+  elements.copilotSessionTitlesFlyout.hidden = true;
+}
+
+function scheduleCopilotSessionTitlesClose() {
+  window.clearTimeout(copilotSessionTitlesCloseTimer);
+  copilotSessionTitlesCloseTimer = window.setTimeout(closeCopilotSessionTitlesFlyout, 140);
+}
+
+function bindCopilotSessionTitlesFlyout() {
+  elements.copilotSessionTitlesFlyout.addEventListener("pointerenter", () => window.clearTimeout(copilotSessionTitlesCloseTimer));
+  elements.copilotSessionTitlesFlyout.addEventListener("pointerleave", scheduleCopilotSessionTitlesClose);
+  window.addEventListener("resize", closeCopilotSessionTitlesFlyout);
+}
+
+function showCopilotSessionContextMenu(event, session, card) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeCopilotSessionTitlesFlyout();
+  const associations = copilotSessionTitleAssociations(session);
+  const items = [{ info: true, icon: "history", label: copilotSessionTitle(session), title: `${copilotSourceLabel(session.source)} · ${session.id}` },
+    { separator: true },
+    { info: true, icon: "type", label: associations.length ? "Associated terminal titles" : "No recorded terminal titles" }];
+  for (const association of associations) {
+    items.push({
+      info: true,
+      icon: copilotSessionAssociationIcon(association),
+      label: `${association.title} — ${copilotSessionAssociationLabel(association)} · ${association.terminalTitle || "Terminal"} · ${association.pid ? `PID ${association.pid}` : "PID unavailable"}`,
+      title: [copilotSessionAssociationLabel(association), association.terminalTitle, association.pid ? `PID ${association.pid}` : "PID unavailable", artifactTimeLabel(association.timestamp)].filter(Boolean).join(" · ")
+    });
+  }
+  items.push({ separator: true });
+  const blocked = session.source === "remote" ? remoteSessionBlockReason(session) : "";
+  items.push({
+    label: session.source === "remote" ? "Connect to session" : "Resume session",
+    icon: session.source === "remote" ? "plug" : "play",
+    disabled: Boolean(blocked),
+    title: blocked,
+    run: () => session.source === "remote" ? connectToRemoteCopilotSession(session) : resumeCopilotSession(session)
+  });
+  const worktree = copilotSessionWorktree(session);
+  if (worktree) {
+    items.push({ label: "Review worktree", icon: "file-diff", run: () => {
+      suspendCopilotResume();
+      openWorktreeReview(worktree, { repositoryRoot: worktree.repositoryRoot, onClose: restoreCopilotResume });
+    } });
+    items.push({ label: "Bring changes back", icon: "git-merge", run: () => {
+      suspendCopilotResume();
+      openWorktreeMerge(worktree, { repositoryRoot: worktree.repositoryRoot, onClose: restoreCopilotResume });
+    } });
+  }
+  renderContextMenu(items);
+  showBuiltContextMenu(event.clientX, event.clientY, { returnFocus: card });
 }
 
 async function refreshCopilotSessions() {
@@ -11514,6 +12141,7 @@ function remoteSessionBlockReason(session) {
 }
 
 function renderCopilotSessions() {
+  closeCopilotSessionTitlesFlyout();
   const query = normalizeSearchText(elements.copilotResumeSearch.value);
   const queryTokens = query.split(/\s+/).filter(Boolean);
   const filtered = copilotResume.aiKeys
@@ -11565,7 +12193,7 @@ function renderCopilotSessions() {
       ? `Connect to ${copilotSessionTitle(session)}`
       : `Resume ${copilotSessionTitle(session)}`);
     if (blocked) {
-      button.disabled = true;
+      button.setAttribute("aria-disabled", "true");
       button.title = blocked;
       button.classList.add("is-unavailable");
     }
@@ -11628,9 +12256,25 @@ function renderCopilotSessions() {
         renderCopilotSessions();
         return;
       }
+      if (blocked) {
+        event.preventDefault();
+        return;
+      }
       if (session.source === "remote") connectToRemoteCopilotSession(session);
       else resumeCopilotSession(session);
     });
+    entry.addEventListener("pointerenter", () => {
+      window.clearTimeout(copilotSessionTitlesCloseTimer);
+      window.clearTimeout(copilotSessionTitlesHoverTimer);
+      copilotSessionTitlesHoverTimer = window.setTimeout(() => openCopilotSessionTitlesFlyout(session, button), 350);
+    });
+    entry.addEventListener("pointerleave", () => {
+      window.clearTimeout(copilotSessionTitlesHoverTimer);
+      scheduleCopilotSessionTitlesClose();
+    });
+    button.addEventListener("focus", () => openCopilotSessionTitlesFlyout(session, button));
+    button.addEventListener("blur", scheduleCopilotSessionTitlesClose);
+    entry.addEventListener("contextmenu", (event) => showCopilotSessionContextMenu(event, session, button));
     entry.append(button);
     const worktree = copilotSessionWorktree(session);
     if (worktree) {
@@ -11739,6 +12383,8 @@ function openCopilotSessionTerminal(session, command, cwd = session.cwd, provide
     runStartup: true,
     shell: "pwsh",
     cwd: cwd || undefined,
+    aiSessionId,
+    assistantSessionKey: session.key || (aiSessionId ? `cli:${aiSessionId}` : ""),
     pendingCwdChange,
     title: `${aiAssistantName(provider)} \u00b7 ${copilotSessionTitle(session)}`,
     pendingCommand: command
@@ -11746,7 +12392,7 @@ function openCopilotSessionTerminal(session, command, cwd = session.cwd, provide
   // reveal:true makes the new pane active, which is the only handle the caller
   // gets back on it.
   const terminal = state.terminals.get(state.activeId);
-  if (terminal && aiSessionId) claimAiSessionId(terminal, aiSessionId);
+  if (terminal && (aiSessionId || session.key)) assignAssistantSessionIdentity(terminal, aiSessionId, session.key || (aiSessionId ? `cli:${aiSessionId}` : ""));
   if (terminal && provider === "copilot" && aiSessionId) registerCopilotLogTerminal(aiSessionId, terminal);
   return created;
 }
@@ -11783,9 +12429,12 @@ function connectToRemoteCopilotSession(session) {
     reveal: true,
     runStartup: true,
     shell: "pwsh",
+    aiSessionId: session.localId || "",
+    assistantSessionKey: session.key || `remote:${id}`,
     title: `Remote \u00b7 ${copilotSessionTitle(session)}`,
     pendingCommand: command
   });
+  assignAssistantSessionIdentity(terminal, session.localId || "", session.key || `remote:${id}`);
   registerCopilotLogTerminal(id, terminal);
   return true;
 }
@@ -11898,7 +12547,7 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
   }
   closeCopilotResume();
   setAwaitingInput(terminal, false);
-  claimAiSessionId(terminal, id);
+  assignAssistantSessionIdentity(terminal, id, session.key || `${session.source}:${id}`);
   registerCopilotLogTerminal(id, terminal);
   sendBridge({
     type: "input",
@@ -15428,6 +16077,8 @@ function startCwdSessionQuery({ retry = false } = {}) {
     runStartup: false,
     shell: "pwsh",
     cwd: state.cwd || elements.cwdInput.value || undefined,
+    aiSessionId: session.id,
+    assistantSessionKey: session.key || `cli:${session.id}`,
     title: `CWD query · ${copilotSessionTitle(session)}`,
     pendingCommand: buildAiAssistantCommand({
       provider: "copilot",
@@ -15450,7 +16101,7 @@ function startCwdSessionQuery({ retry = false } = {}) {
     failCwdSessionQuery(terminal, `The resumed session did not report a working directory within ${timeoutSeconds} seconds.`);
     discardTransientTerminal(terminal);
   }, timeoutSeconds * 1000);
-  claimAiSessionId(terminal, session.id);
+  assignAssistantSessionIdentity(terminal, session.id, session.key || `cli:${session.id}`);
   return true;
 }
 
@@ -16014,6 +16665,30 @@ function visibleFocusSurface() {
     .some((element) => element.isConnected && !element.closest("[hidden]") && element.getClientRects().length > 0);
 }
 
+function focusElementLabel(element) {
+  if (!(element instanceof Element)) return String(element?.nodeName || "none").toLowerCase();
+  const id = element.id ? `#${element.id}` : "";
+  const classes = [...element.classList].slice(0, 4).map((name) => `.${name}`).join("");
+  return `${element.tagName.toLowerCase()}${id}${classes}`;
+}
+
+function scheduleTerminalPointerFocusRecovery(terminal) {
+  window.requestAnimationFrame(() => {
+    if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+    if (!terminal?.pane?.isConnected || terminal.minimized || !isOnActivePage(terminal)) return;
+    if (terminal.term.element?.contains(document.activeElement) || visibleFocusSurface()) return;
+    const obstructingFocus = focusElementLabel(document.activeElement);
+    terminal.term.focus();
+    const recovered = Boolean(terminal.term.element?.contains(document.activeElement));
+    log[recovered ? "warn" : "error"]("focus", recovered
+      ? "Recovered terminal focus after pointer press"
+      : "Terminal focus did not recover after pointer press", {
+      activeElement: obstructingFocus,
+      id: terminal.id
+    });
+  });
+}
+
 function recoverStrandedTerminalFocus(reason = "unknown") {
   if (document.visibilityState !== "visible" || !document.hasFocus()) return false;
   if (document.activeElement && document.activeElement !== document.body && document.activeElement !== document.documentElement) {
@@ -16450,6 +17125,9 @@ function uniquePageId() {
 
 function addPage(options = {}) {
   const id = uniquePageId();
+  // Page ids intentionally reuse gaps. A removed page's session-only overrides
+  // must never follow that id into a newly-created page.
+  clearPageOverrides(id);
   const name = String(options.name || "").trim() || `Page ${state.pages.length + 1}`;
   const groupId = options.groupId && pageGroupById(options.groupId) ? options.groupId : null;
   state.pages.push({ id, name, groupId });
@@ -16576,12 +17254,14 @@ function bindPageCloseConfirm() {
 
 function resetAllPages(terminalAction) {
   const nextPage = defaultPages()[0];
+  const removedPageIds = state.pages.map((page) => page.id);
   if (terminalAction === "close") {
     if (!closeAllTerminals()) return false;
   } else {
     for (const terminal of state.terminals.values()) terminal.pageId = nextPage.id;
   }
   state.pages = [nextPage];
+  for (const pageId of removedPageIds) clearPageOverrides(pageId);
   pruneEmptyPageGroups();
   state.activePageId = nextPage.id;
   applyPageVisibility();
@@ -16616,7 +17296,9 @@ function closeOtherPages(keepId, options = {}) {
     for (const terminal of affected) terminal.pageId = keepId;
   }
 
+  const removedPageIds = state.pages.filter((page) => page.id !== keepId).map((page) => page.id);
   state.pages = [keep];
+  for (const pageId of removedPageIds) clearPageOverrides(pageId);
   keep.groupId = null;
   pruneEmptyPageGroups();
   state.activePageId = keepId;
@@ -16668,6 +17350,7 @@ function removePage(id, options = {}) {
     for (const terminal of affected) terminal.pageId = fallback.id;
   }
   state.pages.splice(index, 1);
+  clearPageOverrides(id);
   pruneEmptyPageGroups();
 
   if (state.activePageId === id) {
@@ -17151,7 +17834,11 @@ function applyTerminalPageGroups(groups, terminalIds) {
         if (terminal) terminal.pageId = page.id;
       }
     }
+    const removedPageIds = state.pages
+      .filter((page) => !keep.has(page.id) && terminalsOnPage(page.id).length === 0)
+      .map((page) => page.id);
     state.pages = state.pages.filter((page) => keep.has(page.id) || terminalsOnPage(page.id).length > 0);
+    for (const pageId of removedPageIds) clearPageOverrides(pageId);
     if (state.pages.length === 0) state.pages = defaultPages();
     pruneEmptyPageGroups();
     orderPagesByGroup();
@@ -18159,6 +18846,18 @@ function syncControlsFromSettings() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  state.settings.automationOutputCaptureKb = clampAutomationOutputCaptureKb(
+    state.settings.automationOutputCaptureKb,
+    elements.automationOutputCaptureKb
+  );
+  state.settings.automationStepTimeoutMinutes = clampAutomationStepTimeoutMinutes(
+    state.settings.automationStepTimeoutMinutes,
+    elements.automationStepTimeoutMinutes
+  );
+  state.settings.bridgeHeartbeatTimeoutSeconds = clampBridgeHeartbeatTimeoutSeconds(
+    state.settings.bridgeHeartbeatTimeoutSeconds,
+    elements.bridgeHeartbeatTimeoutSeconds
+  );
   elements.pageCloseAction.value = normalizePageCloseAction(state.settings.pageCloseAction);
   elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
   elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
@@ -18971,6 +19670,8 @@ function saveSessionSnapshot() {
     remoteEnabledAt: terminal.remoteEnabledAt,
     remoteSessionId: terminal.remoteSessionId,
     remoteSessionUrl: terminal.remoteSessionUrl,
+    aiSessionId: terminal.aiSessionId || "",
+    assistantSessionKey: terminal.assistantSessionKey || "",
     tmux: terminal.tmux
   }));
   localStorage.setItem("multiterm.lastSession", JSON.stringify(snapshot));
@@ -19019,8 +19720,9 @@ const UNPARENTED_QUEUE_VALUE = "__unparented__";
 
 function emptyTerminalArtifacts() {
   return {
-    version: 2,
+    version: 3,
     terminals: {},
+    recoveredTitles: [],
     recoveredNotes: [],
     unparentedQueue: []
   };
@@ -19101,6 +19803,7 @@ function loadTerminalArtifacts() {
         cwd: typeof raw.cwd === "string" ? raw.cwd : "",
         notes: normalizeArtifactNotes(raw.notes, raw.notesUpdatedAt, `note-${id}`),
         aiSessionId: typeof raw.aiSessionId === "string" ? raw.aiSessionId : "",
+        assistantSessionKey: typeof raw.assistantSessionKey === "string" ? raw.assistantSessionKey : "",
         queue: (Array.isArray(raw.queue) ? raw.queue : [])
           .map((item, index) => normalizeQueueItem(item, index, `queue-${id}`))
           .filter(Boolean)
@@ -19108,8 +19811,18 @@ function loadTerminalArtifacts() {
     }
 
     return {
-      version: 2,
+      version: 3,
       terminals,
+      recoveredTitles: (Array.isArray(parsed.recoveredTitles) ? parsed.recoveredTitles : [])
+        .filter((entry) => entry && typeof entry === "object" && typeof entry.title === "string")
+        .map((entry, index) => ({
+          ...entry,
+          id: typeof entry.id === "string" && entry.id ? entry.id : `recovered-title-${index}-${Date.now()}`,
+          aiSessionId: typeof entry.aiSessionId === "string" ? entry.aiSessionId : "",
+          assistantSessionKey: typeof entry.assistantSessionKey === "string" ? entry.assistantSessionKey : "",
+          pid: normalizeArtifactPid(entry.pid)
+        }))
+        .slice(0, TITLE_SUGGESTION_HISTORY_MAX_LIMIT),
       recoveredNotes: (Array.isArray(parsed.recoveredNotes) ? parsed.recoveredNotes : [])
         .filter((entry) => entry && typeof entry === "object" && typeof entry.notes === "string")
         .map((entry, index) => ({
@@ -19141,7 +19854,8 @@ function terminalArtifactMetadata(terminal) {
     title: terminal.titleInput.value || "Terminal",
     shell: terminal.shell || "",
     cwd: terminal.cwd || "",
-    aiSessionId: terminal.aiSessionId || ""
+    aiSessionId: terminal.aiSessionId || "",
+    assistantSessionKey: terminal.assistantSessionKey || ""
   };
 }
 
@@ -19260,10 +19974,17 @@ function archiveArtifactRecord(record, reason) {
     shell: record.shell || "",
     cwd: record.cwd || "",
     aiSessionId: record.aiSessionId || "",
+    assistantSessionKey: record.assistantSessionKey || "",
     recoveredAt,
     reason
   };
   let changed = false;
+
+  if (source.assistantSessionKey || source.aiSessionId) {
+    state.terminalArtifacts.recoveredTitles.unshift({ id: createId(), ...source });
+    state.terminalArtifacts.recoveredTitles = state.terminalArtifacts.recoveredTitles.slice(0, titleSuggestionHistoryLimit());
+    changed = true;
+  }
 
   const notes = artifactNotes(record);
   if (notes.length > 0) {
@@ -20345,6 +21066,10 @@ function readAutomationActionRows() {
       fallbackToNew: row.querySelector(".automation-action-fallback input")?.checked !== false,
       id: row.dataset.actionId,
       inputType: row.querySelector(".automation-action-input-type")?.value || "shell",
+      outputMatchAcrossLines: row.querySelector(".automation-action-output-across-lines")?.checked === true,
+      outputMatchCaseSensitive: row.querySelector(".automation-action-output-case")?.value === "sensitive",
+      outputMatchType: row.querySelector(".automation-action-output-type")?.value || "contains",
+      outputMatchValue: row.querySelector(".automation-action-output-value")?.value || "",
       pageMode,
       pageName: pageMode === "existing" ? row.querySelector(".automation-action-page-name").value : "",
       submit: row.querySelector(".automation-action-delivery")?.value !== "stage",
@@ -20362,6 +21087,27 @@ function updateAutomationActionTarget(row) {
   row.querySelector(".automation-action-target-pid-field").hidden = mode !== "pid";
   row.querySelector(".automation-action-fallback").hidden = mode === "new";
   row.querySelector(".automation-action-page-name-field").hidden = pageMode !== "existing";
+}
+
+function updateAutomationActionGate(row) {
+  const condition = row.querySelector(".automation-action-condition")?.value || "success";
+  const fields = row.querySelector(".automation-output-match-fields");
+  if (!fields) return;
+  const enabled = ["output-match", "output-not-match"].includes(condition);
+  fields.hidden = !enabled;
+  const pattern = row.querySelector(".automation-action-output-value");
+  pattern.required = enabled;
+  let error = "";
+  if (enabled && pattern.value && row.querySelector(".automation-action-output-type")?.value === "regex") {
+    try {
+      const caseSensitive = row.querySelector(".automation-action-output-case")?.value === "sensitive";
+      const acrossLines = row.querySelector(".automation-action-output-across-lines")?.checked === true;
+      new RegExp(pattern.value, `${caseSensitive ? "" : "i"}${acrossLines ? "ms" : ""}`);
+    } catch {
+      error = "Enter a valid regular expression.";
+    }
+  }
+  pattern.setCustomValidity(error);
 }
 
 function renderAutomationActionRows(actions = null) {
@@ -20567,9 +21313,14 @@ function createAutomationActionRow(action = {}, index = elements.automationActio
   gate.className = "automation-step-gate";
   gate.hidden = index === 0;
   if (index > 0) {
-    gate.innerHTML = '<i data-lucide="git-branch" aria-hidden="true"></i><div class="automation-step-gate-copy"><strong>Conditional gate</strong><span>Run this step when <select class="automation-action-operator" aria-label="Dependency operator"><option value="all">all</option><option value="any">any</option></select> selected steps <select class="automation-action-condition" aria-label="Dependency outcome"><option value="success">succeed</option><option value="failure">fail</option><option value="always">finish</option></select>.</span><div class="automation-dependency-chips"></div></div>';
+    gate.innerHTML = '<i data-lucide="git-branch" aria-hidden="true"></i><div class="automation-step-gate-copy"><strong>Conditional gate</strong><span>Run this step when <select class="automation-action-operator" aria-label="Dependency operator"><option value="all">all</option><option value="any">any</option></select> selected steps <select class="automation-action-condition" aria-label="Dependency outcome"><option value="success">succeed</option><option value="failure">fail</option><option value="always">finish</option><option value="output-match">output matches</option><option value="output-not-match">output does not match</option></select>.</span><div class="automation-output-match-fields" aria-label="Output match options"><label><span>Match type</span><select class="automation-action-output-type"><option value="contains">Contains</option><option value="exact">Exact line or output</option><option value="regex">Regular expression</option></select></label><label><span>Letter case</span><select class="automation-action-output-case"><option value="insensitive">Insensitive</option><option value="sensitive">Sensitive</option></select></label><label class="automation-output-across automation-check"><input class="automation-action-output-across-lines" type="checkbox"><span>Match across lines</span></label><label class="automation-output-pattern"><span>Pattern</span><textarea class="automation-action-output-value" rows="2" maxlength="4096" spellcheck="false" placeholder="Text or regular expression"></textarea></label></div><div class="automation-dependency-chips"></div></div>';
     gate.querySelector(".automation-action-operator").value = action.conditionOperator === "any" ? "any" : "all";
-    gate.querySelector(".automation-action-condition").value = ["failure", "always"].includes(action.condition) ? action.condition : "success";
+    gate.querySelector(".automation-action-condition").value = ["failure", "always", "output-match", "output-not-match"].includes(action.condition) ? action.condition : "success";
+    gate.querySelector(".automation-action-output-type").value = ["exact", "regex"].includes(action.outputMatchType) ? action.outputMatchType : "contains";
+    gate.querySelector(".automation-action-output-case").value = action.outputMatchCaseSensitive ? "sensitive" : "insensitive";
+    gate.querySelector(".automation-action-output-across-lines").checked = action.outputMatchAcrossLines === true;
+    gate.querySelector(".automation-action-output-value").value = action.outputMatchValue || "";
+    updateAutomationActionGate(row);
     const dependencies = new Set(Array.isArray(action.dependsOn) && action.dependsOn.length
       ? action.dependsOn
       : [actions[index - 1]?.id]);
@@ -20586,6 +21337,7 @@ function createAutomationActionRow(action = {}, index = elements.automationActio
       });
       chips.append(chip);
     });
+    gate.querySelector(".automation-action-condition").addEventListener("change", () => updateAutomationActionGate(row));
   }
 
   targetMode.addEventListener("change", () => {
@@ -20596,8 +21348,14 @@ function createAutomationActionRow(action = {}, index = elements.automationActio
     updateAutomationActionTarget(row);
     updateAutomationPreview();
   });
-  row.addEventListener("input", updateAutomationPreview);
-  row.addEventListener("change", updateAutomationPreview);
+  row.addEventListener("input", () => {
+    updateAutomationActionGate(row);
+    updateAutomationPreview();
+  });
+  row.addEventListener("change", () => {
+    updateAutomationActionGate(row);
+    updateAutomationPreview();
+  });
   row.append(connector, head, body, gate);
   elements.automationActionList.append(row);
   updateAutomationActionTarget(row);
@@ -21191,8 +21949,88 @@ function automationWrappedCommand(rule, action, terminal, token) {
   const execute = differentUser
     ? `$mtCredential=Get-Credential -UserName ${powerShellLiteral(requestedUser)} -Message ${powerShellLiteral(`Credentials for ${rule.name}`)}; if ($null -eq $mtCredential) { $mtCode=1 } else { $mtProcess=Start-Process powershell.exe -Credential $mtCredential -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',${powerShellLiteral(encodePowerShellCommand(`${innerBody}; exit $mtCode`))}) -Wait -PassThru; $mtCode=$mtProcess.ExitCode }`
     : innerBody;
-  const marker = `[Console]::Write(([char]27)+']777;multiterm-automation;${token};'+$mtCode+([char]7))`;
-  return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${encodePowerShellCommand(`${execute}; ${marker}`)}`;
+  const startMarker = `[Console]::Write(([char]27)+']777;multiterm-automation;${token};start'+([char]7))`;
+  const endMarker = `[Console]::Write(([char]27)+']777;multiterm-automation;${token};'+$mtCode+([char]7))`;
+  return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${encodePowerShellCommand(`${startMarker}; ${execute}; ${endMarker}`)}`;
+}
+
+function automationOutputCaptureLimitBytes() {
+  const kb = Number(state.settings.automationOutputCaptureKb);
+  const bounds = AUTOMATION_OUTPUT_CAPTURE_KB_BOUNDS;
+  const clamped = Number.isFinite(kb) ? Math.min(bounds.max, Math.max(bounds.min, Math.round(kb))) : bounds.fallback;
+  return clamped * 1024;
+}
+
+function automationStepTimeoutMs() {
+  const minutes = Number(state.settings.automationStepTimeoutMinutes);
+  const bounds = AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS;
+  const clamped = Number.isFinite(minutes) ? Math.min(bounds.max, Math.max(bounds.min, Math.round(minutes))) : bounds.fallback;
+  return clamped * 60 * 1000;
+}
+
+function scheduleAutomationTaskTimeout(task) {
+  window.clearTimeout(task?.timeoutTimer);
+  if (!task) return;
+  task.timeoutTimer = window.setTimeout(() => expireAutomationTask(task), automationStepTimeoutMs());
+}
+
+function expireAutomationTask(task) {
+  if (!task || !state.automationRuntime.steps.has(task.token)) return false;
+  const detail = `Timed out after ${state.settings.automationStepTimeoutMinutes} minute${Number(state.settings.automationStepTimeoutMinutes) === 1 ? "" : "s"}`;
+  return task.kind === "copilot"
+    ? finishCopilotAutomationTask(task.token, false, detail, task.output)
+    : finishAutomationWorkflowTask(task.token, 1, detail);
+}
+
+function boundedAutomationOutput(value) {
+  const text = String(value || "");
+  const bytes = new TextEncoder().encode(text);
+  const maximumBytes = automationOutputCaptureLimitBytes();
+  if (bytes.length <= maximumBytes) return text;
+  return new TextDecoder().decode(bytes.subarray(bytes.length - maximumBytes)).replace(/^\uFFFD+/, "");
+}
+
+function appendAutomationStepOutput(task, value) {
+  if (!task || !value) return;
+  const text = stripTerminalControlCodes(value);
+  task.output = boundedAutomationOutput(`${task.output || ""}${text}`);
+}
+
+function automationOutputMatches(action, value) {
+  const pattern = String(action?.outputMatchValue || "");
+  if (!pattern) return false;
+  const output = String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const acrossLines = action.outputMatchAcrossLines === true;
+  const candidates = acrossLines ? [output] : output.split("\n");
+  const expected = pattern.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (action.outputMatchType === "regex") {
+    try {
+      const flags = `${action.outputMatchCaseSensitive ? "" : "i"}${acrossLines ? "ms" : ""}`;
+      const expression = new RegExp(pattern, flags);
+      return candidates.some((candidate) => expression.test(candidate));
+    } catch {
+      return false;
+    }
+  }
+  const normalizedExpected = action.outputMatchCaseSensitive ? expected : expected.toLowerCase();
+  return candidates.some((candidate) => {
+    const normalizedCandidate = action.outputMatchCaseSensitive ? candidate : candidate.toLowerCase();
+    return action.outputMatchType === "exact"
+      ? normalizedCandidate === normalizedExpected
+      : normalizedCandidate.includes(normalizedExpected);
+  });
+}
+
+function automationOutputMatcherIsValid(action) {
+  if (!String(action?.outputMatchValue || "")) return false;
+  if (action.outputMatchType !== "regex") return true;
+  try {
+    const flags = `${action.outputMatchCaseSensitive ? "" : "i"}${action.outputMatchAcrossLines ? "ms" : ""}`;
+    new RegExp(action.outputMatchValue, flags);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function automationGateDecision(run, action) {
@@ -21204,8 +22042,18 @@ function automationGateDecision(run, action) {
       ? ["succeeded", "failed", "skipped"].includes(status)
       : action.condition === "failure"
         ? status === "failed"
-        : status === "succeeded"
+        : action.condition === "output-match" || action.condition === "output-not-match"
+          ? false
+          : status === "succeeded"
   ));
+  if (action.condition === "output-match" || action.condition === "output-not-match") {
+    action.dependsOn.forEach((id, index) => {
+      if (!final[index]) return;
+      if (!run.outputAvailable.has(id) || !automationOutputMatcherIsValid(action)) return;
+      const matched = automationOutputMatches(action, run.outputs.get(id) || "");
+      matches[index] = action.condition === "output-not-match" ? !matched : matched;
+    });
+  }
   if (action.conditionOperator === "any" && matches.some(Boolean)) return "run";
   if (action.conditionOperator === "all" && final.every(Boolean) && matches.every(Boolean)) return "run";
   if (final.every(Boolean)) return "skip";
@@ -21213,6 +22061,7 @@ function automationGateDecision(run, action) {
 }
 
 function finishAutomationRunIfComplete(run) {
+  if (!state.automationRuntime.runs.has(run.id)) return false;
   const complete = run.rule.actions.every((action) => ["succeeded", "failed", "skipped"].includes(run.states.get(action.id)));
   if (!complete) return false;
   state.automationRuntime.runs.delete(run.id);
@@ -21226,31 +22075,158 @@ function finishAutomationRunIfComplete(run) {
   return true;
 }
 
-function completeAutomationStep(run, action, succeeded, detail = "") {
+function completeAutomationStep(run, action, succeeded, detail = "", output = "", outputAvailable = false) {
   if (!run || !action || run.states.get(action.id) !== "running") return false;
   run.states.set(action.id, succeeded ? "succeeded" : "failed");
+  run.outputs.set(action.id, boundedAutomationOutput(output));
+  if (outputAvailable) run.outputAvailable.add(action.id);
   addAutomationHistory(succeeded ? "completed" : "failed", `${run.rule.name} · Step ${run.rule.actions.indexOf(action) + 1}`, detail, run.rule.id);
   advanceAutomationRun(run);
   return true;
 }
 
-function automationCopilotLaunchCommand(terminal, cwd = "") {
-  const logKey = /^[a-z0-9-]{1,128}$/i.test(terminal?.id || "") ? terminal.id : createAiSessionId();
-  registerCopilotLogTerminal(logKey, terminal);
-  const launch = buildAiAssistantCommand({ provider: "copilot", logKey, shell: cwdTerminalShell(terminal) });
+function automationCopilotLaunchCommand(terminal, cwd = "", requestedSessionId = "") {
+  const sessionId = claimAiSessionId(terminal, requestedSessionId);
+  registerCopilotLogTerminal(sessionId, terminal);
+  const launch = buildAiAssistantCommand({ provider: "copilot", sessionId, logKey: sessionId, shell: cwdTerminalShell(terminal) });
   if (!cwd) return launch;
   const separator = cwdTerminalShell(terminal) === "cmd" ? " & " : "; ";
   return `${buildCwdChangeCommand(terminal, cwd)}${separator}${launch}`;
 }
 
-function queueCopilotAutomationStep(run, action, resolution) {
+function finishCopilotAutomationTask(token, succeeded, detail, output = "", outputAvailable = false) {
+  const task = state.automationRuntime.steps.get(token);
+  if (!task || task.kind !== "copilot") return false;
+  window.clearTimeout(task.timeoutTimer);
+  state.automationRuntime.steps.delete(token);
+  const run = state.automationRuntime.runs.get(task.runId);
+  const action = run?.rule.actions.find((item) => item.id === task.actionId);
+  const terminal = state.terminals.get(task.terminalId);
+  const record = terminal ? state.terminalArtifacts.terminals[terminal.id] : null;
+  if (record && task.occurrenceKey) {
+    const retained = record.queue.filter((item) => item.occurrenceKey !== task.occurrenceKey);
+    if (retained.length !== record.queue.length) {
+      record.queue = retained;
+      saveTerminalArtifacts();
+    }
+  }
+  if (terminal && ![...state.automationRuntime.steps.values()].some((item) => item.kind === "copilot" && item.terminalId === terminal.id)) {
+    window.clearTimeout(terminal.automationCopilotTimer);
+    terminal.automationCopilotTimer = 0;
+  }
+  if (!run || !action) return false;
+  return completeAutomationStep(run, action, succeeded, detail, output, outputAvailable);
+}
+
+function scheduleAutomationCopilotCheck(terminal, delay = AUTO_QUEUE_SETTLE_MS) {
+  window.clearTimeout(terminal?.automationCopilotTimer);
+  const pending = terminal && [...state.automationRuntime.steps.values()].some((task) => (
+    task.kind === "copilot" && task.terminalId === terminal.id && task.promptSent
+  ));
+  if (!terminal || terminal.status !== "live" || !pending) return;
+  terminal.automationCopilotTimer = window.setTimeout(() => {
+    terminal.automationCopilotTimer = 0;
+    void pollAutomationCopilotSteps(terminal);
+  }, delay);
+}
+
+async function pollAutomationCopilotSteps(terminal) {
+  const tasks = [...state.automationRuntime.steps.values()].filter((task) => (
+    task.kind === "copilot" && task.terminalId === terminal?.id && task.promptSent
+  ));
+  if (!terminal || terminal.status !== "live" || !tasks.length) return false;
+  const readiness = terminalExecutionReadiness(terminal);
+  if (!readiness.ready || readiness.mode !== "copilot") {
+    scheduleAutomationCopilotCheck(terminal);
+    return false;
+  }
+  for (const task of tasks) {
+    if (task.reading || terminal.outputRevision <= task.responseStartRevision) continue;
+    task.reading = true;
+    const response = await requestBridge({
+      type: "copilotAutomationOutput",
+      cursor: task.cursor,
+      maxKb: state.settings.automationOutputCaptureKb,
+      sessionId: task.sessionId,
+      turnStarted: task.turnStarted
+    }, { timeout: 30000 });
+    task.reading = false;
+    if (!state.automationRuntime.steps.has(task.token)) continue;
+    if (!response) {
+      finishCopilotAutomationTask(task.token, false, "The bridge did not answer while reading Copilot output");
+      continue;
+    }
+    if (response.error) {
+      finishCopilotAutomationTask(task.token, false, response.error);
+      continue;
+    }
+    task.cursor = Math.max(task.cursor, Number(response.cursor) || 0);
+    task.output = boundedAutomationOutput(`${task.output}${String(response.output || "")}`);
+    task.truncated = task.truncated || response.truncated === true;
+    task.turnStarted = task.turnStarted || response.turnStarted === true;
+    if (response.complete) {
+      const detail = task.truncated ? "Copilot response completed; captured output was truncated" : "Copilot response completed";
+      finishCopilotAutomationTask(task.token, true, detail, task.output, true);
+    }
+  }
+  scheduleAutomationCopilotCheck(terminal);
+  return true;
+}
+
+function markAutomationCopilotPromptSent(terminal, occurrenceKey) {
+  const task = [...state.automationRuntime.steps.values()].find((candidate) => (
+    candidate.kind === "copilot" && candidate.occurrenceKey === occurrenceKey && candidate.terminalId === terminal?.id
+  ));
+  if (!task) return false;
+  task.promptSent = true;
+  task.responseStartRevision = terminal.outputRevision;
+  scheduleAutomationCopilotCheck(terminal);
+  return true;
+}
+
+function automationCopilotTaskForOccurrence(terminal, occurrenceKey) {
+  return [...state.automationRuntime.steps.values()].find((candidate) => (
+    candidate.kind === "copilot" && candidate.occurrenceKey === occurrenceKey && candidate.terminalId === terminal?.id
+  )) || null;
+}
+
+function prepareAutomationCopilotPromptCursor(terminal, item) {
+  const task = automationCopilotTaskForOccurrence(terminal, item?.occurrenceKey);
+  if (!task || task.cursorReady) return false;
+  if (task.cursorLoading) return true;
+  task.cursorLoading = true;
+  void requestBridge({
+    type: "copilotAutomationOutput",
+    maxKb: state.settings.automationOutputCaptureKb,
+    sessionId: task.sessionId,
+    snapshot: true
+  }, { timeout: 30000 }).then((snapshot) => {
+    task.cursorLoading = false;
+    if (!state.automationRuntime.steps.has(task.token)) return;
+    if (!snapshot || snapshot.error) {
+      const record = state.terminalArtifacts.terminals[terminal.id];
+      const index = record?.queue.findIndex((candidate) => candidate.id === item.id) ?? -1;
+      if (index >= 0) record.queue.splice(index, 1);
+      saveTerminalArtifacts();
+      finishCopilotAutomationTask(task.token, false, snapshot?.error || "The bridge did not answer while preparing Copilot output capture");
+      return;
+    }
+    task.cursor = Math.max(0, Number(snapshot.cursor) || 0);
+    task.cursorReady = true;
+    scheduleAutomaticQueueCheck(terminal, 0);
+  });
+  return true;
+}
+
+function dispatchCopilotAutomationStep(run, action, resolution, task) {
   const terminal = resolution.terminal;
   const cwdCommand = action.cwd ? buildCwdChangeCommand({ ...terminal, aiAssistantTuiProvider: "copilot" }, action.cwd) : "";
-  const launchCommand = automationCopilotLaunchCommand(terminal, action.cwd);
+  const launchCommand = automationCopilotLaunchCommand(terminal, action.cwd, task.sessionId);
   if (terminal.status === "starting") {
     terminal.pendingExternalAssistant = {
       command: launchCommand,
-      followup: action.submit ? action.command : "",
+      followup: action.command,
+      followupOccurrenceKey: task.occurrenceKey,
       provider: "copilot"
     };
     terminal.cwd = action.cwd || terminal.cwd;
@@ -21263,31 +22239,67 @@ function queueCopilotAutomationStep(run, action, resolution) {
     } else if (cwdCommand) {
       queueAutomaticTerminalCommand(terminal, cwdCommand, { occurrenceKey: `${run.id}:${action.id}:cwd` });
     }
-    if (action.submit) {
-      queueAutomaticTerminalCommand(terminal, action.command, { occurrenceKey: `${run.id}:${action.id}:prompt` });
-    }
+    queueAutomaticTerminalCommand(terminal, action.command, { occurrenceKey: task.occurrenceKey });
   }
+  addAutomationHistory("queued", `${run.rule.name} · Step ${run.rule.actions.indexOf(action) + 1}`, `Copilot prompt queued in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`, run.rule.id);
+}
+
+function queueCopilotAutomationStep(run, action, resolution) {
+  const terminal = resolution.terminal;
   if (!action.submit) {
-    queueAutomationStage(terminal, action.command, run.rule, {
+    const staged = queueAutomationStage(terminal, action.command, run.rule, {
       occurrenceKey: `${run.id}:${action.id}:stage`,
       requiredMode: "copilot"
     });
+    completeAutomationStep(run, action, staged, staged
+      ? `Copilot prompt staged without Enter in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`
+      : "Could not stage Copilot prompt");
+    return;
   }
-  completeAutomationStep(
-    run,
-    action,
-    true,
-    `Copilot prompt ${action.submit ? "queued" : "staged without Enter"} in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`
-  );
+  const sessionId = claimAiSessionId(terminal);
+  const token = createId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const task = {
+    actionId: action.id,
+    cursor: 0,
+    cursorLoading: false,
+    cursorReady: false,
+    kind: "copilot",
+    occurrenceKey: `${run.id}:${action.id}:prompt`,
+    output: "",
+    promptSent: false,
+    reading: false,
+    responseStartRevision: 0,
+    runId: run.id,
+    sessionId,
+    terminalId: terminal.id,
+    timeoutTimer: 0,
+    token,
+    truncated: false,
+    turnStarted: false
+  };
+  state.automationRuntime.steps.set(token, task);
+  scheduleAutomationTaskTimeout(task);
+  dispatchCopilotAutomationStep(run, action, resolution, task);
 }
 
 function queueAutomationWorkflowStep(run, action, resolution) {
   const terminal = resolution.terminal;
   const token = createId().replace(/[^a-zA-Z0-9_-]/g, "");
   const command = automationWrappedCommand(run.rule, action, terminal, token);
-  const task = { actionId: action.id, command, runId: run.id, token };
+  const task = {
+    actionId: action.id,
+    captureStarted: false,
+    command,
+    kind: "command",
+    output: "",
+    runId: run.id,
+    terminalId: terminal.id,
+    timeoutTimer: 0,
+    token
+  };
   terminal.automationWorkflowTasks.push(task);
   state.automationRuntime.steps.set(token, task);
+  scheduleAutomationTaskTimeout(task);
   scheduleAutomationWorkflowCheck(terminal, 0);
   addAutomationHistory("queued", `${run.rule.name} · Step ${run.rule.actions.indexOf(action) + 1}`, `Run in ${resolution.launched ? "new terminal " : ""}${terminal.titleInput.value}`, run.rule.id);
 }
@@ -21351,6 +22363,8 @@ function runAutomationRule(rule, options = {}) {
   const run = {
     id: createId(),
     occurrenceAt: options.occurrenceAt || new Date().toISOString(),
+    outputAvailable: new Set(),
+    outputs: new Map(),
     rule: normalized,
     states: new Map(normalized.actions.map((action) => [action.id, "pending"]))
   };
@@ -21387,17 +22401,42 @@ function dispatchAutomationWorkflowStep(terminal) {
 
 function consumeAutomationWorkflowOutput(terminal, data) {
   if (!terminal?.automationWorkflowActive) return;
-  terminal.automationWorkflowBuffer = `${terminal.automationWorkflowBuffer}${data}`.slice(-8192);
-  const marker = /\x1b\]777;multiterm-automation;([a-zA-Z0-9_-]+);(-?\d+)\x07/g;
-  let match;
-  while ((match = marker.exec(terminal.automationWorkflowBuffer))) {
-    finishAutomationWorkflowTask(match[1], Number(match[2]));
+  const task = state.automationRuntime.steps.get(terminal.automationWorkflowActive);
+  if (!task) return;
+  terminal.automationWorkflowBuffer = `${terminal.automationWorkflowBuffer}${data}`;
+  const startMarker = `\x1b]777;multiterm-automation;${task.token};start\x07`;
+  const endPrefix = `\x1b]777;multiterm-automation;${task.token};`;
+  if (!task.captureStarted) {
+    const start = terminal.automationWorkflowBuffer.indexOf(startMarker);
+    if (start < 0) {
+      terminal.automationWorkflowBuffer = terminal.automationWorkflowBuffer.slice(-startMarker.length);
+      return;
+    }
+    task.captureStarted = true;
+    terminal.automationWorkflowBuffer = terminal.automationWorkflowBuffer.slice(start + startMarker.length);
+  }
+  const endStart = terminal.automationWorkflowBuffer.indexOf(endPrefix);
+  if (endStart >= 0) {
+    const end = terminal.automationWorkflowBuffer.indexOf("\x07", endStart + endPrefix.length);
+    if (end >= 0) {
+      appendAutomationStepOutput(task, terminal.automationWorkflowBuffer.slice(0, endStart));
+      const exitCode = Number(terminal.automationWorkflowBuffer.slice(endStart + endPrefix.length, end));
+      terminal.automationWorkflowBuffer = terminal.automationWorkflowBuffer.slice(end + 1);
+      finishAutomationWorkflowTask(task.token, Number.isFinite(exitCode) ? exitCode : 1);
+      return;
+    }
+  }
+  const markerReserve = endPrefix.length + 16;
+  if (terminal.automationWorkflowBuffer.length > markerReserve) {
+    appendAutomationStepOutput(task, terminal.automationWorkflowBuffer.slice(0, -markerReserve));
+    terminal.automationWorkflowBuffer = terminal.automationWorkflowBuffer.slice(-markerReserve);
   }
 }
 
 function finishAutomationWorkflowTask(token, exitCode, overrideDetail = "") {
   const task = state.automationRuntime.steps.get(token);
   if (!task) return false;
+  window.clearTimeout(task.timeoutTimer);
   state.automationRuntime.steps.delete(token);
   const run = state.automationRuntime.runs.get(task.runId);
   const action = run?.rule.actions.find((item) => item.id === task.actionId);
@@ -21414,12 +22453,19 @@ function finishAutomationWorkflowTask(token, exitCode, overrideDetail = "") {
     scheduleAutomationWorkflowCheck(terminal, 150);
   }
   if (!run || !action) return false;
-  return completeAutomationStep(run, action, exitCode === 0, overrideDetail || `Exited with code ${exitCode}`);
+  return completeAutomationStep(run, action, exitCode === 0, overrideDetail || `Exited with code ${exitCode}`, task.output, true);
 }
 
 function failAutomationWorkflowTasksForTerminal(terminal, reason) {
-  const tokens = terminal?.automationWorkflowTasks?.map((task) => task.token) || [];
-  for (const token of tokens) finishAutomationWorkflowTask(token, 1, reason);
+  const tokens = new Set(terminal?.automationWorkflowTasks?.map((task) => task.token) || []);
+  for (const task of state.automationRuntime.steps.values()) {
+    if (task.terminalId === terminal?.id) tokens.add(task.token);
+  }
+  for (const token of tokens) {
+    const task = state.automationRuntime.steps.get(token);
+    if (task?.kind === "copilot") finishCopilotAutomationTask(token, false, reason, task.output);
+    else finishAutomationWorkflowTask(token, 1, reason);
+  }
 }
 
 function pendingAutomationStage(terminal) {
@@ -24673,16 +25719,32 @@ function createAiSessionId() {
   });
 }
 
+function assignAssistantSessionIdentity(terminal, aiSessionId = "", assistantSessionKey = "") {
+  if (!terminal) return "";
+  const id = COPILOT_RESUME_ID_PATTERN.test(String(aiSessionId || "")) ? String(aiSessionId).toLowerCase() : "";
+  terminal.aiSessionId = id;
+  terminal.assistantSessionKey = String(assistantSessionKey || (id ? `cli:${id}` : ""));
+  backfillTerminalTitleHistoryIdentity(terminal);
+  const persistentTerminal = state.terminals.get(terminal.id) === terminal && terminal.titleInput;
+  const record = terminal.transient
+    ? null
+    : persistentTerminal
+      ? ensureTerminalArtifact(terminal)
+      : state.terminalArtifacts.terminals[terminal.id] || null;
+  if (record && persistentTerminal) Object.assign(record, terminalArtifactMetadata(terminal));
+  else if (record) {
+    record.aiSessionId = id;
+    record.assistantSessionKey = terminal.assistantSessionKey;
+  }
+  if (record) saveTerminalArtifacts();
+  if (persistentTerminal) saveSessionSnapshot();
+  return id;
+}
+
 function claimAiSessionId(terminal, existingId = "") {
   const id = COPILOT_RESUME_ID_PATTERN.test(existingId) ? existingId : createAiSessionId();
   if (!terminal) return id;
-  terminal.aiSessionId = id;
-  const record = state.terminalArtifacts.terminals[terminal.id];
-  if (record) {
-    record.aiSessionId = id;
-    saveTerminalArtifacts();
-  }
-  return id;
+  return assignAssistantSessionIdentity(terminal, id, `cli:${id}`);
 }
 
 function copilotLogDirectoryForShell(directory, shell) {

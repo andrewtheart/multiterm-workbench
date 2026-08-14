@@ -562,6 +562,12 @@ describe("watchdog bridge control", () => {
     expect(JSON.parse(resumed.body).watchdogSuppressed).toBe(false);
   });
 
+  it("acknowledges renderer heartbeats", () => {
+    const client = fakeClient();
+    server.handleClientMessage(client, JSON.stringify({ type: "heartbeat", nonce: "renderer-42" }));
+    expect(client.send).toHaveBeenCalledWith({ type: "heartbeat", nonce: "renderer-42" });
+  });
+
   it("returns the bridge-terminal focus limitation through the protocol", () => {
     const client = fakeClient();
     server.handleClientMessage(client, JSON.stringify({ type: "focusBridgeTerminal", requestId: "focus" }));
@@ -1178,6 +1184,14 @@ describe("output coalescing", () => {
     expect(server.getOutputCoalesceMs()).toBe(server.OUTPUT_COALESCE_DEFAULT_MS);
   });
 
+  it("clamps bridge heartbeat timeouts to the visible settings range", () => {
+    expect(server.normalizeBridgeHeartbeatTimeoutSeconds(45)).toBe(45);
+    expect(server.normalizeBridgeHeartbeatTimeoutSeconds(10.4)).toBe(10);
+    expect(server.normalizeBridgeHeartbeatTimeoutSeconds(1)).toBe(server.BRIDGE_HEARTBEAT_TIMEOUT_MIN_SECONDS);
+    expect(server.normalizeBridgeHeartbeatTimeoutSeconds(9999)).toBe(server.BRIDGE_HEARTBEAT_TIMEOUT_MAX_SECONDS);
+    expect(server.normalizeBridgeHeartbeatTimeoutSeconds("nope")).toBe(server.BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS);
+  });
+
   it("sends straight through when batching is switched off", () => {
     const client = fakeClient();
     server.clients.add(client);
@@ -1241,18 +1255,31 @@ describe("output coalescing", () => {
 
   it("applies a client's requested window and acknowledges it", () => {
     const client = fakeClient();
-    server.applyClientConfig(client, { type: "config", outputCoalesceMs: 250 });
+    server.applyClientConfig(client, {
+      type: "config",
+      outputCoalesceMs: 250,
+      bridgeHeartbeatTimeoutSeconds: 9999
+    });
     expect(server.getOutputCoalesceMs()).toBe(server.OUTPUT_COALESCE_MAX_MS);
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "config",
-      outputCoalesceMs: server.OUTPUT_COALESCE_MAX_MS
+      outputCoalesceMs: server.OUTPUT_COALESCE_MAX_MS,
+      bridgeHeartbeatTimeoutSeconds: server.BRIDGE_HEARTBEAT_TIMEOUT_MAX_SECONDS
     }));
   });
 
   it("is reachable over the wire as a config message", () => {
     const client = fakeClient();
-    server.handleClientMessage(client, JSON.stringify({ type: "config", outputCoalesceMs: 12 }));
+    server.handleClientMessage(client, JSON.stringify({
+      type: "config",
+      outputCoalesceMs: 12,
+      bridgeHeartbeatTimeoutSeconds: 45
+    }));
     expect(server.getOutputCoalesceMs()).toBe(12);
-    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "config", outputCoalesceMs: 12 }));
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "config",
+      outputCoalesceMs: 12,
+      bridgeHeartbeatTimeoutSeconds: 45
+    }));
   });
 });

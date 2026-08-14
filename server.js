@@ -559,6 +559,9 @@ const SHUTDOWN_POLL_MS = 100;
 // about what the user sees changes.
 const OUTPUT_COALESCE_MAX_MS = 100;
 const OUTPUT_COALESCE_DEFAULT_MS = 8;
+const BRIDGE_HEARTBEAT_TIMEOUT_MIN_SECONDS = 10;
+const BRIDGE_HEARTBEAT_TIMEOUT_MAX_SECONDS = 300;
+const BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS = 30;
 let outputCoalesceMs = OUTPUT_COALESCE_DEFAULT_MS;
 
 function isOutputCoalesced() {
@@ -582,6 +585,13 @@ function getOutputCoalesceMs() {
   return outputCoalesceMs;
 }
 
+function normalizeBridgeHeartbeatTimeoutSeconds(value) {
+  const requested = Number(value);
+  return Number.isFinite(requested)
+    ? Math.min(BRIDGE_HEARTBEAT_TIMEOUT_MAX_SECONDS, Math.max(BRIDGE_HEARTBEAT_TIMEOUT_MIN_SECONDS, Math.round(requested)))
+    : BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS;
+}
+
 function applyClientConfig(
   client,
   message,
@@ -589,6 +599,7 @@ function applyClientConfig(
   copilotLogs = copilotLogAggregator
 ) {
   const applied = setOutputCoalesceMs(message.outputCoalesceMs);
+  const bridgeHeartbeatTimeoutSeconds = normalizeBridgeHeartbeatTimeoutSeconds(message.bridgeHeartbeatTimeoutSeconds);
   const diagnosticConfig = diagnostics.configure({
     retentionDays: message.diagnosticRetentionDays,
     rotationMb: message.diagnosticRotationMb,
@@ -602,6 +613,7 @@ function applyClientConfig(
   client.send({
     type: "config",
     outputCoalesceMs: applied,
+    bridgeHeartbeatTimeoutSeconds,
     diagnosticRetentionDays: diagnosticConfig.retentionDays,
     diagnosticRotationMb: diagnosticConfig.rotationMb,
     diagnosticViewerEntries: diagnosticConfig.viewerEntries,
@@ -1690,6 +1702,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       client.rendererVisible = message.visible !== false;
       watchdogSuppressed = false;
       break;
+    case "heartbeat":
+      client.send({ type: "heartbeat", nonce: String(message.nonce || "").slice(0, 64) });
+      break;
     case "aiProviderBootstrapConsumed":
       consumeAiProviderBootstrap();
       break;
@@ -1717,6 +1732,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "prepareCopilotSessionContext":
       sendCopilotSessionContext(client, message);
+      break;
+    case "copilotAutomationOutput":
+      sendCopilotAutomationOutput(client, message);
       break;
     case "searchCopilotSessions":
       /* v8 ignore next */
@@ -5422,9 +5440,9 @@ function remoteCopilotFallbackSessions() {
     .filter((entry) => entry.provider === "copilot" && entry.remote)
     .map((entry) => ({
       id: copilotSessionIdPattern.test(entry.remoteSessionId) ? entry.remoteSessionId : "",
-      key: `fallback:${entry.id}`,
+      key: copilotSessionIdPattern.test(entry.remoteSessionId) ? `remote:${entry.remoteSessionId.toLowerCase()}` : `fallback:${entry.id}`,
       source: "remote",
-      localId: "",
+      localId: copilotSessionIdPattern.test(entry.aiSessionId) ? entry.aiSessionId.toLowerCase() : "",
       name: entry.title,
       state: "",
       steerable: false,
@@ -6050,6 +6068,101 @@ async function sendCopilotSessionContext(client, message) {
     client.send({ type: "copilotSessionContext", requestId: message.requestId, ...result });
   } catch (error) {
     client.send({ type: "copilotSessionContext", requestId: message.requestId, error: error.message || "Could not import that Copilot session." });
+  }
+}
+
+const automationOutputCaptureKbBounds = { min: 16, max: 512, fallback: 128 };
+
+function clampAutomationOutputCaptureKb(value) {
+  const requested = Math.round(Number(value));
+  return Number.isFinite(requested)
+    ? Math.min(automationOutputCaptureKbBounds.max, Math.max(automationOutputCaptureKbBounds.min, requested))
+    : automationOutputCaptureKbBounds.fallback;
+}
+
+function readCopilotAutomationOutput(message, sessionRoot = path.join(os.homedir(), ".copilot", "session-state")) {
+  const sessionId = String(message?.sessionId || "").toLowerCase();
+  if (!copilotSessionIdPattern.test(sessionId)) throw new Error("A valid Copilot session ID is required.");
+  const eventsPath = path.join(sessionRoot, sessionId, "events.jsonl");
+  let size = 0;
+  try {
+    size = fs.statSync(eventsPath).size;
+  } catch (error) {
+    if (error?.code === "ENOENT") return { complete: false, cursor: 0, output: "", truncated: false, turnStarted: false };
+    throw error;
+  }
+  if (message.snapshot === true) return { complete: false, cursor: size, output: "", truncated: false, turnStarted: false };
+
+  const requestedCursor = Math.max(0, Math.floor(Number(message.cursor) || 0));
+  const cursor = Math.min(requestedCursor, size);
+  const maximumBytes = clampAutomationOutputCaptureKb(message.maxKb) * 1024;
+  const start = Math.max(cursor, size - maximumBytes);
+  const truncated = start > cursor;
+  if (start === size) return { complete: false, cursor: size, output: "", truncated, turnStarted: message.turnStarted === true };
+
+  const descriptor = fs.openSync(eventsPath, "r");
+  let buffer;
+  let bytesRead = 0;
+  let discardPartial = false;
+  try {
+    if (start > 0) {
+      const previous = Buffer.alloc(1);
+      fs.readSync(descriptor, previous, 0, 1, start - 1);
+      discardPartial = previous[0] !== 0x0a;
+    }
+    buffer = Buffer.alloc(size - start);
+    while (bytesRead < buffer.length) {
+      const read = fs.readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, start + bytesRead);
+      if (read <= 0) break;
+      bytesRead += read;
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+
+  buffer = buffer.subarray(0, bytesRead);
+  const lastBreak = buffer.lastIndexOf(0x0a);
+  if (lastBreak < 0) {
+    return { complete: false, cursor: truncated ? size : cursor, output: "", truncated, turnStarted: message.turnStarted === true };
+  }
+  const consumedCursor = start + lastBreak + 1;
+  let text = buffer.subarray(0, lastBreak + 1).toString("utf8");
+  if (discardPartial) {
+    const firstBreak = text.indexOf("\n");
+    text = firstBreak >= 0 ? text.slice(firstBreak + 1) : "";
+  }
+  const output = [];
+  let complete = false;
+  let turnStarted = message.turnStarted === true;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event?.type === "user.message" || event?.type === "assistant.turn_start") turnStarted = true;
+      if (event?.type === "assistant.message" && typeof event.data?.content === "string") output.push(event.data.content);
+      if (event?.type === "assistant.turn_end" && turnStarted) complete = true;
+    } catch {
+      // Malformed complete records are ignored without hiding valid neighboring events.
+    }
+  }
+  return { complete, cursor: consumedCursor, output: output.join("\n"), truncated, turnStarted };
+}
+
+function sendCopilotAutomationOutput(client, message) {
+  const requestId = typeof message?.requestId === "string" ? message.requestId : "";
+  try {
+    client.send({ type: "copilotAutomationOutput", requestId, ...readCopilotAutomationOutput(message) });
+  } catch (error) {
+    client.send({
+      type: "copilotAutomationOutput",
+      requestId,
+      complete: false,
+      cursor: 0,
+      output: "",
+      truncated: false,
+      turnStarted: false,
+      error: error?.message || "Could not read Copilot automation output."
+    });
   }
 }
 
@@ -6775,6 +6888,7 @@ module.exports = {
     isOutputCoalesced,
     setOutputCoalesceMs,
     getOutputCoalesceMs,
+    normalizeBridgeHeartbeatTimeoutSeconds,
     applyClientConfig,
     diagnosticRecordFromMessage,
     recordRuntimeDiagnostic,
@@ -6790,6 +6904,9 @@ module.exports = {
     flushSessionOutput,
     OUTPUT_COALESCE_DEFAULT_MS,
     OUTPUT_COALESCE_MAX_MS,
+    BRIDGE_HEARTBEAT_TIMEOUT_MIN_SECONDS,
+    BRIDGE_HEARTBEAT_TIMEOUT_MAX_SECONDS,
+    BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS,
     killAllSessions,
     closeSessions,
     endSessionInput,
@@ -6832,6 +6949,7 @@ module.exports = {
     sessionSearchContentText,
     sessionSearchExcerpt,
     buildCopilotSessionSearchCatalog,
+    clampAutomationOutputCaptureKb,
     copilotSessionSearchPrompt,
     parseCopilotSessionSearchKeys,
     searchCopilotSessions,
@@ -6856,6 +6974,7 @@ module.exports = {
     visualStudioExchanges,
     boundedCopilotContext,
     prepareCopilotSessionContext,
+    readCopilotAutomationOutput,
     sendCopilotSessionContext,
     boundedUtf8Tail,
     normalizeTerminalTitleRequest,

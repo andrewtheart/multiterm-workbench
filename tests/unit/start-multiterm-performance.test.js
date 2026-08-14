@@ -17,6 +17,15 @@ describe("PowerShell bridge output performance", () => {
     expect(bridgeScript).toContain('client.Send("{\\"type\\":\\"config\\",\\"outputCoalesceMs\\":"');
   });
 
+  it("bounds client sends with the visible bridge response timeout", () => {
+    expect(bridgeScript).toContain('Json.GetInt(message, "bridgeHeartbeatTimeoutSeconds", 30)');
+    expect(bridgeScript).toContain("client.SendTimeoutMilliseconds = Math.Min(300, Math.Max(10, requestedHeartbeatTimeout)) * 1000;");
+    expect(bridgeScript).toContain("this.SendTimeoutMilliseconds = 30000;");
+    expect(bridgeScript).toContain("public int SendTimeoutMilliseconds { get; set; }");
+    expect(bridgeScript).toContain("new CancellationTokenSource(this.SendTimeoutMilliseconds)");
+    expect(bridgeScript).toContain("timeout.Token).GetAwaiter().GetResult()");
+  });
+
   it("queues output once and flushes it before every exit broadcast", () => {
     expect(bridgeScript.match(/this\.QueueSessionOutput\(id, data\);/g)).toHaveLength(2);
     expect(bridgeScript.match(/this\.FlushSessionOutput\(id\);[\s\S]{0,500}this\.(?:Broadcast|SendSessionFrame)\(/g)).toHaveLength(2);

@@ -5126,6 +5126,15 @@ namespace MultiTerm.PowerShellBridge
                 client.RendererVisible = Json.Get(message, "visible") != "false";
                 this.watchdogSuppressed = false;
             }
+            else if (type == "heartbeat")
+            {
+                string nonce = Json.Get(message, "nonce");
+                if (nonce.Length > 64)
+                {
+                    nonce = nonce.Substring(0, 64);
+                }
+                client.Send("{\"type\":\"heartbeat\",\"nonce\":" + Json.Quote(nonce) + "}");
+            }
             else if (type == "aiProviderBootstrapConsumed")
             {
                 ConsumeAiProviderBootstrap();
@@ -5254,6 +5263,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.PrepareCopilotSessionContext(client, message);
             }
+            else if (type == "copilotAutomationOutput")
+            {
+                this.ReadCopilotAutomationOutput(client, message);
+            }
             else if (type == "searchCopilotSessions")
             {
                 this.SearchCopilotSessions(client, message);
@@ -5350,9 +5363,12 @@ namespace MultiTerm.PowerShellBridge
             {
                 int requested = Json.GetInt(message, "outputCoalesceMs", 8);
                 this.outputCoalesceMs = Math.Min(100, Math.Max(0, requested));
+                int requestedHeartbeatTimeout = Json.GetInt(message, "bridgeHeartbeatTimeoutSeconds", 30);
+                client.SendTimeoutMilliseconds = Math.Min(300, Math.Max(10, requestedHeartbeatTimeout)) * 1000;
                 this.runtimeDiagnostics.Configure(message);
                 this.copilotLogs.Configure(message);
                 client.Send("{\"type\":\"config\",\"outputCoalesceMs\":" + this.outputCoalesceMs
+                    + ",\"bridgeHeartbeatTimeoutSeconds\":" + (client.SendTimeoutMilliseconds / 1000).ToString(CultureInfo.InvariantCulture)
                     + ",\"diagnosticRetentionDays\":" + this.runtimeDiagnostics.RetentionDays.ToString(CultureInfo.InvariantCulture)
                     + ",\"diagnosticRotationMb\":" + this.runtimeDiagnostics.RotationMb.ToString(CultureInfo.InvariantCulture)
                     + ",\"diagnosticViewerEntries\":" + this.runtimeDiagnostics.ViewerEntries.ToString(CultureInfo.InvariantCulture)
@@ -7559,6 +7575,124 @@ namespace MultiTerm.PowerShellBridge
             });
         }
 
+        private void ReadCopilotAutomationOutput(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            string sessionId = Json.Get(message, "sessionId").ToLowerInvariant();
+            bool snapshot = String.Equals(Json.Get(message, "snapshot"), "true", StringComparison.OrdinalIgnoreCase);
+            bool priorTurnStarted = String.Equals(Json.Get(message, "turnStarted"), "true", StringComparison.OrdinalIgnoreCase);
+            long requestedCursor = Math.Max(0, Json.GetLong(message, "cursor"));
+            int requestedKb = Json.GetInt(message, "maxKb", 128);
+            int maximumBytes = Math.Min(512, Math.Max(16, requestedKb)) * 1024;
+            ThreadPool.QueueUserWorkItem(delegate(object ignored)
+            {
+                try
+                {
+                    Guid parsed;
+                    if (!Guid.TryParse(sessionId, out parsed) || !String.Equals(parsed.ToString(), sessionId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("A valid Copilot session ID is required.");
+                    }
+                    string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "session-state");
+                    string eventsPath = Path.Combine(root, sessionId, "events.jsonl");
+                    if (!File.Exists(eventsPath))
+                    {
+                        client.Send("{\"type\":\"copilotAutomationOutput\",\"requestId\":" + Json.Quote(requestId)
+                            + ",\"complete\":false,\"cursor\":0,\"output\":\"\",\"truncated\":false,\"turnStarted\":false}");
+                        return;
+                    }
+                    using (FileStream stream = new FileStream(eventsPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    {
+                        long size = stream.Length;
+                        if (snapshot)
+                        {
+                            client.Send("{\"type\":\"copilotAutomationOutput\",\"requestId\":" + Json.Quote(requestId)
+                                + ",\"complete\":false,\"cursor\":" + size.ToString(CultureInfo.InvariantCulture)
+                                + ",\"output\":\"\",\"truncated\":false,\"turnStarted\":false}");
+                            return;
+                        }
+                        long cursor = Math.Min(requestedCursor, size);
+                        long start = Math.Max(cursor, size - maximumBytes);
+                        bool truncated = start > cursor;
+                        bool discardPartial = false;
+                        if (start > 0)
+                        {
+                            stream.Position = start - 1;
+                            discardPartial = stream.ReadByte() != 10;
+                        }
+                        stream.Position = start;
+                        byte[] bytes = new byte[(int)(size - start)];
+                        int offset = 0;
+                        while (offset < bytes.Length)
+                        {
+                            int read = stream.Read(bytes, offset, bytes.Length - offset);
+                            if (read <= 0) break;
+                            offset += read;
+                        }
+                        int lastBreak = -1;
+                        for (int index = offset - 1; index >= 0; index--)
+                        {
+                            if (bytes[index] == 10)
+                            {
+                                lastBreak = index;
+                                break;
+                            }
+                        }
+                        if (lastBreak < 0)
+                        {
+                            long retryCursor = truncated ? size : cursor;
+                            client.Send("{\"type\":\"copilotAutomationOutput\",\"requestId\":" + Json.Quote(requestId)
+                                + ",\"complete\":false,\"cursor\":" + retryCursor.ToString(CultureInfo.InvariantCulture)
+                                + ",\"output\":\"\",\"truncated\":" + (truncated ? "true" : "false")
+                                + ",\"turnStarted\":" + (priorTurnStarted ? "true" : "false") + "}");
+                            return;
+                        }
+                        long consumedCursor = start + lastBreak + 1;
+                        string text = Encoding.UTF8.GetString(bytes, 0, lastBreak + 1);
+                        if (discardPartial)
+                        {
+                            int firstBreak = text.IndexOf('\n');
+                            text = firstBreak >= 0 ? text.Substring(firstBreak + 1) : String.Empty;
+                        }
+                        JavaScriptSerializer serializer = ProviderJsonSerializer();
+                        List<string> output = new List<string>();
+                        bool complete = false;
+                        bool turnStarted = priorTurnStarted;
+                        foreach (string line in text.Split(new char[] { '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            try
+                            {
+                                IDictionary<string, object> entry = JsonDictionary(serializer.DeserializeObject(line.TrimEnd('\r')));
+                                string eventType = JsonText(entry, "type");
+                                if (eventType == "user.message" || eventType == "assistant.turn_start") turnStarted = true;
+                                if (eventType == "assistant.message")
+                                {
+                                    string content = JsonText(JsonDictionary(JsonValue(entry, "data")), "content");
+                                    if (!String.IsNullOrEmpty(content)) output.Add(content);
+                                }
+                                if (eventType == "assistant.turn_end" && turnStarted) complete = true;
+                            }
+                            catch
+                            {
+                                // Malformed complete records are ignored without hiding valid neighboring events.
+                            }
+                        }
+                        client.Send("{\"type\":\"copilotAutomationOutput\",\"requestId\":" + Json.Quote(requestId)
+                            + ",\"complete\":" + (complete ? "true" : "false")
+                            + ",\"cursor\":" + consumedCursor.ToString(CultureInfo.InvariantCulture)
+                            + ",\"output\":" + Json.Quote(String.Join("\n", output.ToArray()))
+                            + ",\"truncated\":" + (truncated ? "true" : "false")
+                            + ",\"turnStarted\":" + (turnStarted ? "true" : "false") + "}");
+                    }
+                }
+                catch (Exception error)
+                {
+                    client.Send("{\"type\":\"copilotAutomationOutput\",\"requestId\":" + Json.Quote(requestId)
+                        + ",\"complete\":false,\"cursor\":0,\"output\":\"\",\"truncated\":false,\"turnStarted\":false,\"error\":" + Json.Quote(error.Message) + "}");
+                }
+            });
+        }
+
         // GitHub publishes no documented API for the agent session list, so this
         // reads the host the CLI itself reports and falls back to the sessions
         // MultiTerm recorded whenever the call or the payload shape fails.
@@ -7732,8 +7866,8 @@ namespace MultiTerm.PowerShellBridge
                 if (!Regex.IsMatch(id, "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) continue;
                 if (count > 0) payload.Append(',');
                 payload.Append("{\"id\":").Append(Json.Quote(id))
-                    .Append(",\"key\":").Append(Json.Quote("fallback:" + ExtractJsonString(record, "id")))
-                    .Append(",\"source\":\"remote\",\"localId\":\"\"")
+                    .Append(",\"key\":").Append(Json.Quote("remote:" + id))
+                    .Append(",\"source\":\"remote\",\"localId\":").Append(Json.Quote(ExtractJsonString(record, "aiSessionId").ToLowerInvariant()))
                     .Append(",\"name\":").Append(Json.Quote(Truncate(ExtractJsonString(record, "title"), 200)))
                     .Append(",\"state\":\"\",\"steerable\":false,\"repository\":\"\"")
                     .Append(",\"cwd\":").Append(Json.Quote(Truncate(ExtractJsonString(record, "cwd"), 1024)))
@@ -9901,6 +10035,7 @@ namespace MultiTerm.PowerShellBridge
         {
             this.Id = id;
             this.Socket = socket;
+            this.SendTimeoutMilliseconds = 30000;
         }
 
         public string Id { get; private set; }
@@ -9912,6 +10047,8 @@ namespace MultiTerm.PowerShellBridge
         public long RendererActiveAt { get; set; }
 
         public bool RendererVisible { get; set; }
+
+        public int SendTimeoutMilliseconds { get; set; }
 
         public bool Send(string message)
         {
@@ -9929,7 +10066,10 @@ namespace MultiTerm.PowerShellBridge
                 }
                 try
                 {
-                    this.Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None).Wait();
+                    using (CancellationTokenSource timeout = new CancellationTokenSource(this.SendTimeoutMilliseconds))
+                    {
+                        this.Socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, timeout.Token).GetAwaiter().GetResult();
+                    }
                     return true;
                 }
                 catch
