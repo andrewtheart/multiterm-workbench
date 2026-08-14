@@ -71,6 +71,8 @@ test.describe("Scroll to bottom control with a live Copilot TUI", () => {
       const originalSendBridge = window.sendBridge;
       const frames = [];
       let position = 0;
+      let pendingPosition = 0;
+      let renderTimer = 0;
       try {
         button.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
         const scrolledUpBefore = button.classList.contains("is-scrolled-up");
@@ -78,7 +80,15 @@ test.describe("Scroll to bottom control with a live Copilot TUI", () => {
         window.sendBridge = (message) => {
           if (message.id === terminalId && message.data === "\u001b[<65;1;1M") {
             frames.push(message);
-            if (position < 3) position += 1;
+            if (pendingPosition < 3) pendingPosition += 1;
+            if (!renderTimer && position !== pendingPosition) {
+              // A busy TUI can process input before xterm receives its repaint.
+              // The quick sample must not mistake that lag for the bottom.
+              renderTimer = window.setTimeout(() => {
+                position = pendingPosition;
+                renderTimer = 0;
+              }, 80);
+            }
           }
           return true;
         };
@@ -90,22 +100,29 @@ test.describe("Scroll to bottom control with a live Copilot TUI", () => {
           busy: button.hasAttribute("aria-busy"),
           frames,
           scrolledUpBefore,
-          scrolledUp: button.classList.contains("is-scrolled-up")
+          scrolledUp: button.classList.contains("is-scrolled-up"),
+          timing: {
+            batchSteps: TUI_SCROLL_TO_BOTTOM_BATCH_STEPS,
+            settleMs: TUI_SCROLL_TO_BOTTOM_SETTLE_MS,
+            confirmMs: TUI_SCROLL_TO_BOTTOM_CONFIRM_MS
+          }
         };
       } finally {
+        window.clearTimeout(renderTimer);
         terminalVisibleText = originalVisibleText;
         window.sendBridge = originalSendBridge;
       }
     }, id);
     expect(tuiScroll).toEqual({
       busy: false,
-      frames: Array.from({ length: 5 }, () => ({
+      frames: Array.from({ length: 8 }, () => ({
         type: "input",
         id,
         data: "\u001b[<65;1;1M"
       })),
       scrolledUpBefore: true,
-      scrolledUp: false
+      scrolledUp: false,
+      timing: { batchSteps: 4, settleMs: 45, confirmMs: 120 }
     });
 
     await page.evaluate((terminalId) => {

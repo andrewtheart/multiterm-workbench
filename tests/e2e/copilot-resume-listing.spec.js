@@ -94,7 +94,14 @@ test.describe("Copilot resume listing", () => {
         });
         // The CLI pass answers at once; the aggregate pass is held open to stand
         // in for the cold editor-history scan that used to time the request out.
-        if (frame.source === "cli") window.setTimeout(() => reply([cli]), 0);
+        if (frame.source === "cli") {
+          const fastCli = { ...cli };
+          delete fastCli.worktreePath;
+          delete fastCli.worktreeBranch;
+          delete fastCli.worktreeParentBranch;
+          delete fastCli.worktreeRepositoryRoot;
+          window.setTimeout(() => reply([fastCli]), 0);
+        }
         else window.__releaseFull = () => reply([cli, editor]);
       };
       openCopilotResume([...state.terminals.values()][0]);
@@ -105,10 +112,13 @@ test.describe("Copilot resume listing", () => {
     await expect(page.locator(".copilot-session-card")).toHaveCount(1);
     await expect(page.locator(".copilot-session-card")).toContainText("Native CLI history");
     const worktreeActions = page.locator(".copilot-session-worktree-actions");
-    await expect(worktreeActions.getByRole("button", { name: "Review", exact: true })).toBeVisible();
-    await expect(worktreeActions.getByRole("button", { name: "Bring changes back", exact: true })).toBeVisible();
+    await expect(worktreeActions).toHaveCount(0);
     await expect(page.locator("#copilotResumeStatus")).toContainText("Adding VS Code and Visual Studio history");
     expect(await page.evaluate(() => typeof window.__releaseFull === "function")).toBe(true);
+    await page.evaluate(() => window.__releaseFull());
+    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
+    await expect(worktreeActions.getByRole("button", { name: "Review", exact: true })).toBeVisible();
+    await expect(worktreeActions.getByRole("button", { name: "Bring changes back", exact: true })).toBeVisible();
 
     await page.evaluate(() => {
       window.__originalRequestBridge = requestBridge;
@@ -119,10 +129,8 @@ test.describe("Copilot resume listing", () => {
     await worktreeActions.getByRole("button", { name: "Review", exact: true }).click();
     await expect(page.locator("#worktreeReviewOverlay")).toBeVisible();
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
-    await page.evaluate(() => window.__releaseFull());
     await page.locator("#worktreeReviewDone").click();
     await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
-    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
     const rowWidths = await page.locator(".copilot-session-entry").evaluateAll((entries) => entries.map((entry) => ({
       card: entry.querySelector(".copilot-session-card").getBoundingClientRect().width,
       entry: entry.getBoundingClientRect().width,
@@ -160,11 +168,15 @@ test.describe("Copilot resume listing", () => {
   test("says the bridge went quiet instead of claiming there are no sessions", async () => {
     await page.evaluate(() => {
       window.__originalSend = state.socket.send;
+      window.__silentSessionRequests = [];
       // A throwing send makes sendBridge report failure, which is the same null
       // result requestBridge produces when a request times out.
       state.socket.send = function (payload) {
         const frame = JSON.parse(payload);
-        if (frame.type === "listCopilotSessions") throw new Error("bridge unreachable");
+        if (frame.type === "listCopilotSessions") {
+          window.__silentSessionRequests.push(frame.source || "all");
+          throw new Error("bridge unreachable");
+        }
         window.__originalSend.call(this, payload);
       };
       openCopilotResume([...state.terminals.values()][0]);
@@ -175,6 +187,7 @@ test.describe("Copilot resume listing", () => {
     await expect(page.locator(".copilot-resume-empty")).not.toContainText("No resumable");
     await expect(page.locator("#copilotResumeStatus")).toContainText("did not answer in time");
     await expect(page.locator("#copilotResumeRefresh")).toBeEnabled();
+    expect(await page.evaluate(() => window.__silentSessionRequests)).toEqual(["cli"]);
 
     await page.evaluate((session) => {
       state.socket.send = function (payload) {
@@ -198,6 +211,7 @@ test.describe("Copilot resume listing", () => {
     await page.evaluate(() => {
       state.socket.send = window.__originalSend;
       delete window.__originalSend;
+      delete window.__silentSessionRequests;
       closeCopilotResume();
     });
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();

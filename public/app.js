@@ -8246,7 +8246,9 @@ function terminalHistoryMatches(terminal, query) {
 
 const TUI_JUMP_MAX_STEPS = 80;
 const TUI_SCROLL_SETTLE_MS = 90;
-const TUI_SCROLL_STABLE_STEPS = 2;
+const TUI_SCROLL_TO_BOTTOM_BATCH_STEPS = 4;
+const TUI_SCROLL_TO_BOTTOM_SETTLE_MS = 45;
+const TUI_SCROLL_TO_BOTTOM_CONFIRM_MS = 120;
 
 function tuiHistoryMatchLines(terminal, query) {
   const needle = normalizeSearchText(query);
@@ -8289,20 +8291,22 @@ async function scrollTuiToBottom(terminal) {
   if (!terminal) return { ok: false, reason: "That terminal is no longer available." };
   terminal.term.focus();
   let previous = terminalVisibleText(terminal);
-  let stableSteps = 0;
   let movedSteps = 0;
-  for (let step = 1; step <= TUI_JUMP_MAX_STEPS; step += 1) {
-    tuiScrollStep(terminal, "down");
-    await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_SETTLE_MS); });
-    const current = terminalVisibleText(terminal);
+  for (let sentSteps = 0; sentSteps < TUI_JUMP_MAX_STEPS;) {
+    const batchSteps = Math.min(TUI_SCROLL_TO_BOTTOM_BATCH_STEPS, TUI_JUMP_MAX_STEPS - sentSteps);
+    for (let index = 0; index < batchSteps; index += 1) tuiScrollStep(terminal, "down");
+    sentSteps += batchSteps;
+    await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_TO_BOTTOM_SETTLE_MS); });
+    let current = terminalVisibleText(terminal);
     if (current === previous) {
-      stableSteps += 1;
-      if (stableSteps >= TUI_SCROLL_STABLE_STEPS) return { ok: true, steps: movedSteps };
-    } else {
-      previous = current;
-      stableSteps = 0;
-      movedSteps = step;
+      // A busy TUI may repaint after the quick sample. Confirm passively instead
+      // of sending another burst and mistaking delayed output for the bottom.
+      await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_TO_BOTTOM_CONFIRM_MS); });
+      current = terminalVisibleText(terminal);
+      if (current === previous) return { ok: true, steps: movedSteps };
     }
+    previous = current;
+    movedSteps = sentSteps;
   }
   return { ok: true, steps: movedSteps };
 }
@@ -12085,6 +12089,12 @@ async function refreshCopilotSessions() {
     syncCopilotResumeScope();
   }
   renderCopilotSessions();
+
+  if (staged && !first) {
+    reportCopilotSessionStatus(first, remote, name);
+    refreshIcons(elements.copilotResumeOverlay);
+    return;
+  }
 
   if (!staged) {
     reportCopilotSessionStatus(first, remote, name);
