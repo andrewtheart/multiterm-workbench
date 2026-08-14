@@ -60,6 +60,7 @@ const defaultSettings = {
   copilotRemoteKeepAlive: "off",
   copilotRemoteSessions: false,
   copilotCwdQueryTimeoutSeconds: 180,
+  copilotSessionListTimeoutSeconds: 20,
   copilotSessionSearchContextKb: 1024,
   copilotTitleContext: "default",
   copilotTitleContextKb: 16,
@@ -163,6 +164,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotRemoteKeepAlive: "ai assistant copilot remote keep alive caffeinate sleep awake machine standby idle",
   copilotLogInitialTailKb: "diagnostics logs github copilot cli initial tail kilobytes existing content zero follow new lines",
   copilotLogViewerEnabled: "diagnostics logs github copilot cli viewer include opt in launch directory",
+  copilotSessionListTimeoutSeconds: "ai assistant resume session list listing source bridge timeout seconds copilot claude",
   copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
   copilotCwdQueryTimeoutSeconds: "ai assistant resume working directory cwd query ask session timeout seconds hidden terminal",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
@@ -618,6 +620,7 @@ const elements = {
   compactChrome: document.querySelector("#compactChrome"),
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
   copilotCwdQueryTimeoutSeconds: document.querySelector("#copilotCwdQueryTimeoutSeconds"),
+  copilotSessionListTimeoutSeconds: document.querySelector("#copilotSessionListTimeoutSeconds"),
   copilotRemoteKeepAlive: document.querySelector("#copilotRemoteKeepAlive"),
   copilotRemoteSessions: document.querySelector("#copilotRemoteSessions"),
   copilotRemoteStatus: document.querySelector("#copilotRemoteStatus"),
@@ -1610,6 +1613,10 @@ function bindControls() {
     state.settings.copilotCwdQueryTimeoutSeconds,
     elements.copilotCwdQueryTimeoutSeconds
   );
+  state.settings.copilotSessionListTimeoutSeconds = clampCopilotSessionListTimeoutSeconds(
+    state.settings.copilotSessionListTimeoutSeconds,
+    elements.copilotSessionListTimeoutSeconds
+  );
   state.settings.copilotRemoteKeepAlive = normalizeCopilotKeepAlive(state.settings.copilotRemoteKeepAlive);
   elements.copilotRemoteSessions.checked = Boolean(state.settings.copilotRemoteSessions);
   elements.copilotRemoteKeepAlive.value = state.settings.copilotRemoteKeepAlive;
@@ -1853,6 +1860,7 @@ function bindControls() {
   bindSetting(elements.cleanCopilotClipboard, "cleanCopilotClipboard", "change", (_, element) => element.checked);
   bindSetting(elements.copilotImportContextKb, "copilotImportContextKb", "change", clampCopilotImportContextKb);
   bindSetting(elements.copilotCwdQueryTimeoutSeconds, "copilotCwdQueryTimeoutSeconds", "change", clampCopilotCwdQueryTimeoutSeconds);
+  bindSetting(elements.copilotSessionListTimeoutSeconds, "copilotSessionListTimeoutSeconds", "change", clampCopilotSessionListTimeoutSeconds);
   bindSetting(elements.copilotSessionSearchContextKb, "copilotSessionSearchContextKb", "change", clampCopilotSessionSearchContextKb);
   bindSetting(elements.aiSessionProvider, "aiSessionProvider", "change", normalizeAiProviderId);
   bindSetting(elements.aiSessionModel, "aiSessionModel", "change", normalizeAiSessionModel);
@@ -2086,6 +2094,7 @@ const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 
 const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
 const COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS = { min: 64, max: 16384, fallback: 1024 };
 const COPILOT_CWD_QUERY_TIMEOUT_SECONDS_BOUNDS = { min: 30, max: 900, fallback: 180 };
+const COPILOT_SESSION_LIST_TIMEOUT_SECONDS_BOUNDS = { min: 5, max: 300, fallback: 20 };
 const COPILOT_TITLE_CONTEXT_KB_BOUNDS = { min: 4, max: 24, fallback: 16 };
 const COPILOT_TITLE_WORD_BOUNDS = { min: 1, max: 20 };
 const TITLE_SUGGESTION_HISTORY_BOUNDS = { min: 25, max: TITLE_SUGGESTION_HISTORY_MAX_LIMIT, fallback: 500 };
@@ -2223,6 +2232,14 @@ function clampCopilotSessionSearchContextKb(value, element = elements.copilotSes
 
 function clampCopilotCwdQueryTimeoutSeconds(value, element = elements.copilotCwdQueryTimeoutSeconds) {
   return clampSettingNumber(value, element, COPILOT_CWD_QUERY_TIMEOUT_SECONDS_BOUNDS);
+}
+
+function clampCopilotSessionListTimeoutSeconds(value, element = elements.copilotSessionListTimeoutSeconds) {
+  return clampSettingNumber(value, element, COPILOT_SESSION_LIST_TIMEOUT_SECONDS_BOUNDS);
+}
+
+function copilotSessionListTimeoutMs() {
+  return clampCopilotSessionListTimeoutSeconds(state.settings.copilotSessionListTimeoutSeconds) * 1000;
 }
 
 // "off" means MultiTerm stays out of the way; every other value is passed to
@@ -11636,6 +11653,7 @@ function closeCopilotResume() {
   closeCopilotSessionTitlesFlyout();
   copilotResume.generation += 1;
   copilotResume.suspended = false;
+  elements.copilotResumeRefresh.disabled = false;
   window.clearTimeout(copilotResume.closeTimer);
   elements.copilotResumeOverlay.classList.remove("is-open");
   copilotResume.closeTimer = window.setTimeout(() => {
@@ -12051,12 +12069,13 @@ async function refreshCopilotSessions() {
     staged
       ? { type: "listCopilotSessions", source: "cli" }
       : { type: remote ? "listRemoteCopilotSessions" : provider === "claude" ? "listClaudeSessions" : "listCopilotSessions" },
-    { timeout: remote ? 30000 : 20000 }
+    { timeout: remote ? 30000 : copilotSessionListTimeoutMs() }
   );
   if (generation !== copilotResume.generation || (elements.copilotResumeOverlay.hidden && !copilotResume.suspended)) return;
 
   copilotResume.silent = !first;
   applyResponse(first, false);
+  elements.copilotResumeRefresh.disabled = false;
   if (remote) {
     copilotResume.remoteSource = first?.source === "api" ? "api" : "fallback";
     copilotResume.remoteMessage = copilotResume.remoteSource === "api"
@@ -12068,7 +12087,6 @@ async function refreshCopilotSessions() {
   renderCopilotSessions();
 
   if (!staged) {
-    elements.copilotResumeRefresh.disabled = false;
     reportCopilotSessionStatus(first, remote, name);
     refreshIcons(elements.copilotResumeOverlay);
     return;
@@ -18833,6 +18851,10 @@ function syncControlsFromSettings() {
     state.settings.copilotCwdQueryTimeoutSeconds,
     elements.copilotCwdQueryTimeoutSeconds
   );
+  state.settings.copilotSessionListTimeoutSeconds = clampCopilotSessionListTimeoutSeconds(
+    state.settings.copilotSessionListTimeoutSeconds,
+    elements.copilotSessionListTimeoutSeconds
+  );
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
@@ -21935,10 +21957,11 @@ function automationStepCommand(action, terminal) {
 
 function automationPowerShellBody(action, terminal) {
   const command = automationStepCommand(action, terminal);
+  const captureLimit = automationOutputCaptureLimitBytes();
   const changeDirectory = action.cwd && cwdTerminalShell(terminal) !== "wsl"
-    ? `Push-Location -LiteralPath ${powerShellLiteral(action.cwd)}; $mtChangedDirectory=$true; `
+    ? `Push-Location -LiteralPath ${powerShellLiteral(action.cwd)}; $mtState.ChangedDirectory=$true; `
     : "";
-  return `$mtCode=1; $mtChangedDirectory=$false; try { ${changeDirectory}& { ${command} }; $mtCode=if ($?) { 0 } elseif ($LASTEXITCODE -is [int]) { $LASTEXITCODE } else { 1 } } catch { Write-Error $_; $mtCode=1 } finally { if ($mtChangedDirectory) { Pop-Location } }`;
+  return `$mtOutputAvailable=$true; $mtState=[pscustomobject]@{Code=1;ChangedDirectory=$false;CommandSucceeded=$false;LastExitCode=$null}; $mtCapture=New-Object Text.StringBuilder; & { try { ${changeDirectory}& { ${command} }; $mtState.CommandSucceeded=$?; if ($LASTEXITCODE -is [int]) { $mtState.LastExitCode=$LASTEXITCODE }; $mtState.Code=if ($mtState.CommandSucceeded) { 0 } elseif ($mtState.LastExitCode -is [int]) { $mtState.LastExitCode } else { 1 } } catch { Write-Error $_; $mtState.Code=1 } finally { if ($mtState.ChangedDirectory) { Pop-Location } } } *>&1 | ForEach-Object { $mtRendered=($_ | Out-String -Width 4096); [void]$mtCapture.Append($mtRendered); if ($mtCapture.Length -gt ${captureLimit}) { [void]$mtCapture.Remove(0,$mtCapture.Length-${captureLimit}) }; $_ | Out-Default }; $mtCode=$mtState.Code; $mtCaptureText=$mtCapture.ToString(); $mtCaptureBytes=[Text.Encoding]::UTF8.GetBytes($mtCaptureText); if ($mtCaptureBytes.Length -gt ${captureLimit}) { $mtCaptureText=[Text.Encoding]::UTF8.GetString($mtCaptureBytes,$mtCaptureBytes.Length-${captureLimit},${captureLimit}).TrimStart([char]0xFFFD) }`;
 }
 
 function automationWrappedCommand(rule, action, terminal, token) {
@@ -21947,10 +21970,10 @@ function automationWrappedCommand(rule, action, terminal, token) {
   const differentUser = requestedUser
     && automationApi.terminalName(requestedUser) !== automationApi.terminalName(state.hostUser);
   const execute = differentUser
-    ? `$mtCredential=Get-Credential -UserName ${powerShellLiteral(requestedUser)} -Message ${powerShellLiteral(`Credentials for ${rule.name}`)}; if ($null -eq $mtCredential) { $mtCode=1 } else { $mtProcess=Start-Process powershell.exe -Credential $mtCredential -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',${powerShellLiteral(encodePowerShellCommand(`${innerBody}; exit $mtCode`))}) -Wait -PassThru; $mtCode=$mtProcess.ExitCode }`
+    ? `$mtOutputAvailable=$false; $mtCaptureText=''; $mtCredential=Get-Credential -UserName ${powerShellLiteral(requestedUser)} -Message ${powerShellLiteral(`Credentials for ${rule.name}`)}; if ($null -eq $mtCredential) { $mtCode=1 } else { $mtProcess=Start-Process powershell.exe -Credential $mtCredential -ArgumentList @('-NoLogo','-NoProfile','-EncodedCommand',${powerShellLiteral(encodePowerShellCommand(`${innerBody}; exit $mtCode`))}) -Wait -PassThru; $mtCode=$mtProcess.ExitCode }`
     : innerBody;
   const startMarker = `[Console]::Write(([char]27)+']777;multiterm-automation;${token};start'+([char]7))`;
-  const endMarker = `[Console]::Write(([char]27)+']777;multiterm-automation;${token};'+$mtCode+([char]7))`;
+  const endMarker = `$mtEncoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$mtCaptureText)); [Console]::Write(([char]27)+']777;multiterm-automation;${token};'+$mtCode+';'+([int]$mtOutputAvailable)+';'+$mtEncoded+([char]7))`;
   return `powershell.exe -NoLogo -NoProfile -EncodedCommand ${encodePowerShellCommand(`${startMarker}; ${execute}; ${endMarker}`)}`;
 }
 
@@ -21966,6 +21989,10 @@ function automationStepTimeoutMs() {
   const bounds = AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS;
   const clamped = Number.isFinite(minutes) ? Math.min(bounds.max, Math.max(bounds.min, Math.round(minutes))) : bounds.fallback;
   return clamped * 60 * 1000;
+}
+
+function automationCompletionPayloadLimitCharacters() {
+  return Math.ceil(automationOutputCaptureLimitBytes() * 4 / 3) + 256;
 }
 
 function scheduleAutomationTaskTimeout(task) {
@@ -22001,7 +22028,7 @@ function automationOutputMatches(action, value) {
   if (!pattern) return false;
   const output = String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const acrossLines = action.outputMatchAcrossLines === true;
-  const candidates = acrossLines ? [output] : output.split("\n");
+  const candidates = acrossLines ? [output.replace(/\n+$/, "")] : output.split("\n");
   const expected = pattern.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (action.outputMatchType === "regex") {
     try {
@@ -22256,7 +22283,10 @@ function queueCopilotAutomationStep(run, action, resolution) {
       : "Could not stage Copilot prompt");
     return;
   }
-  const sessionId = claimAiSessionId(terminal);
+  const readiness = terminal.status === "live" ? terminalExecutionReadiness(terminal) : { mode: "shell" };
+  const sessionId = readiness.mode === "copilot"
+    ? claimAiSessionId(terminal, terminal.aiSessionId)
+    : claimAiSessionId(terminal);
   const token = createId().replace(/[^a-zA-Z0-9_-]/g, "");
   const task = {
     actionId: action.id,
@@ -22292,6 +22322,7 @@ function queueAutomationWorkflowStep(run, action, resolution) {
     command,
     kind: "command",
     output: "",
+    outputAvailable: false,
     runId: run.id,
     terminalId: terminal.id,
     timeoutTimer: 0,
@@ -22420,11 +22451,33 @@ function consumeAutomationWorkflowOutput(terminal, data) {
     const end = terminal.automationWorkflowBuffer.indexOf("\x07", endStart + endPrefix.length);
     if (end >= 0) {
       appendAutomationStepOutput(task, terminal.automationWorkflowBuffer.slice(0, endStart));
-      const exitCode = Number(terminal.automationWorkflowBuffer.slice(endStart + endPrefix.length, end));
+      const payload = terminal.automationWorkflowBuffer.slice(endStart + endPrefix.length, end);
+      const separator = payload.indexOf(";");
+      const exitCode = Number(separator >= 0 ? payload.slice(0, separator) : payload);
+      if (separator < 0) task.outputAvailable = true;
+      if (separator >= 0) {
+        try {
+          const remainder = payload.slice(separator + 1);
+          const availabilitySeparator = remainder.indexOf(";");
+          const availability = availabilitySeparator >= 0 ? remainder.slice(0, availabilitySeparator) : "1";
+          const encoded = availabilitySeparator >= 0 ? remainder.slice(availabilitySeparator + 1) : remainder;
+          task.outputAvailable = availability !== "0";
+          const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+          task.output = boundedAutomationOutput(new TextDecoder().decode(bytes));
+        } catch {
+          // Older or malformed payloads keep the raw stream capture above.
+        }
+      }
       terminal.automationWorkflowBuffer = terminal.automationWorkflowBuffer.slice(end + 1);
       finishAutomationWorkflowTask(task.token, Number.isFinite(exitCode) ? exitCode : 1);
       return;
     }
+    appendAutomationStepOutput(task, terminal.automationWorkflowBuffer.slice(0, endStart));
+    terminal.automationWorkflowBuffer = terminal.automationWorkflowBuffer.slice(endStart);
+    if (terminal.automationWorkflowBuffer.length > automationCompletionPayloadLimitCharacters()) {
+      finishAutomationWorkflowTask(task.token, 1, "Automation output marker exceeded the configured capture limit");
+    }
+    return;
   }
   const markerReserve = endPrefix.length + 16;
   if (terminal.automationWorkflowBuffer.length > markerReserve) {
@@ -22453,7 +22506,14 @@ function finishAutomationWorkflowTask(token, exitCode, overrideDetail = "") {
     scheduleAutomationWorkflowCheck(terminal, 150);
   }
   if (!run || !action) return false;
-  return completeAutomationStep(run, action, exitCode === 0, overrideDetail || `Exited with code ${exitCode}`, task.output, true);
+  return completeAutomationStep(
+    run,
+    action,
+    exitCode === 0,
+    overrideDetail || `Exited with code ${exitCode}`,
+    task.output,
+    task.outputAvailable !== false
+  );
 }
 
 function failAutomationWorkflowTasksForTerminal(terminal, reason) {
@@ -28695,11 +28755,22 @@ function normalizeWorkspaceZoom(value) {
 
 async function refreshAiProviders(options = {}) {
   const generation = ++state.aiProviderDiscovery.generation;
+  const previousProviders = state.aiProviders;
   state.aiProviderDiscovery.loading = true;
   elements.aiTitleProviderStatus.textContent = "Checking local AI providers...";
   const response = await requestBridge({ type: "listAiProviders" }, { timeout: 30000 });
   if (generation !== state.aiProviderDiscovery.generation) return state.aiProviders;
   state.aiProviderDiscovery.loading = false;
+  if (!response) {
+    state.aiProviders = previousProviders;
+    syncAiSessionControls();
+    syncAiTitleControls();
+    updateCopilotSetupActions();
+    elements.aiTitleProviderStatus.textContent = state.socketReady
+      ? "MultiTerm's bridge did not answer the provider check. Keeping the last known availability."
+      : "MultiTerm is disconnected. Keeping the last known provider availability.";
+    return state.aiProviders;
+  }
   state.aiProviders = Array.isArray(response?.providers)
     ? response.providers.filter((provider) => AI_PROVIDER_IDS.has(provider?.id))
     : [];

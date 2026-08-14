@@ -174,11 +174,86 @@ test.describe("Copilot resume listing", () => {
     await expect(page.locator(".copilot-resume-empty")).toContainText("did not answer in time");
     await expect(page.locator(".copilot-resume-empty")).not.toContainText("No resumable");
     await expect(page.locator("#copilotResumeStatus")).toContainText("did not answer in time");
+    await expect(page.locator("#copilotResumeRefresh")).toBeEnabled();
+
+    await page.evaluate((session) => {
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        if (frame.type !== "listCopilotSessions") {
+          window.__originalSend.call(this, payload);
+          return;
+        }
+        window.setTimeout(() => handleBridgeMessage({
+          type: "copilotSessions",
+          requestId: frame.requestId,
+          sessions: [session],
+          message: ""
+        }), 0);
+      };
+    }, CLI_SESSION);
+    await page.locator("#copilotResumeRefresh").click();
+    await expect(page.locator(".copilot-session-card")).toContainText("Native CLI history");
+    await expect(page.locator("#copilotResumeRefresh")).toBeEnabled();
 
     await page.evaluate(() => {
       state.socket.send = window.__originalSend;
       delete window.__originalSend;
       closeCopilotResume();
+    });
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+  });
+
+  test("reopens after a pending request with the configured local timeout", async () => {
+    await page.evaluate((session) => {
+      window.__resumeListingOriginalRequestBridge = requestBridge;
+      window.__resumeListingPreviousTimeout = state.settings.copilotSessionListTimeoutSeconds;
+      window.__resumeListingRequests = [];
+      window.__resumeListingReply = false;
+      window.__resumeListingRelease = null;
+      state.settings.copilotSessionListTimeoutSeconds = 45;
+      requestBridge = (message, options) => {
+        if (message.type !== "listCopilotSessions") {
+          return window.__resumeListingOriginalRequestBridge(message, options);
+        }
+        window.__resumeListingRequests.push({ source: message.source || "all", timeout: options.timeout });
+        if (!window.__resumeListingReply) {
+          return new Promise((resolve) => { window.__resumeListingRelease = resolve; });
+        }
+        return Promise.resolve({ sessions: [session], message: "" });
+      };
+      openCopilotResume([...state.terminals.values()][0]);
+    }, CLI_SESSION);
+
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await expect(page.locator("#copilotResumeRefresh")).toBeDisabled();
+    expect(await page.evaluate(() => window.__resumeListingRequests[0])).toEqual({ source: "cli", timeout: 45_000 });
+
+    await page.evaluate(() => closeCopilotResume());
+    expect(await page.evaluate(() => elements.copilotResumeRefresh.disabled)).toBe(false);
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+
+    await page.evaluate(() => {
+      window.__resumeListingReply = true;
+      openCopilotResume([...state.terminals.values()][0]);
+    });
+    await expect(page.locator(".copilot-session-card")).toContainText("Native CLI history");
+    await expect(page.locator("#copilotResumeRefresh")).toBeEnabled();
+    expect(await page.evaluate(() => window.__resumeListingRequests.slice(0, 2))).toEqual([
+      { source: "cli", timeout: 45_000 },
+      { source: "cli", timeout: 45_000 }
+    ]);
+
+    await page.evaluate(() => {
+      window.__resumeListingRelease?.(null);
+      closeCopilotResume();
+      requestBridge = window.__resumeListingOriginalRequestBridge;
+      state.settings.copilotSessionListTimeoutSeconds = window.__resumeListingPreviousTimeout;
+      clampCopilotSessionListTimeoutSeconds(state.settings.copilotSessionListTimeoutSeconds);
+      delete window.__resumeListingOriginalRequestBridge;
+      delete window.__resumeListingPreviousTimeout;
+      delete window.__resumeListingRequests;
+      delete window.__resumeListingReply;
+      delete window.__resumeListingRelease;
     });
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
   });

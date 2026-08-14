@@ -842,6 +842,57 @@ test.describe("Settings panel verification", () => {
     });
   });
 
+  test("keeps resume available when provider discovery goes silent", async () => {
+    const result = await page.evaluate(async () => {
+      const originalRequestBridge = requestBridge;
+      const originalProviders = state.aiProviders;
+      const originalProvider = state.settings.aiSessionProvider;
+      state.settings.aiSessionProvider = "copilot";
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        authenticated: true,
+        cliInstalled: true,
+        available: true,
+        titleAvailable: true,
+        interactiveAvailable: true,
+        models: [{ id: "auto", name: "Auto", efforts: [] }]
+      }];
+      syncAiSessionControls();
+      const before = {
+        disabled: elements.copilotSessionsToggle.disabled,
+        providers: state.aiProviders.map((provider) => provider.id)
+      };
+      requestBridge = async () => null;
+      try {
+        await refreshAiProviders({ openSetup: false });
+        return {
+          before,
+          after: {
+            disabled: elements.copilotSessionsToggle.disabled,
+            providers: state.aiProviders.map((provider) => provider.id),
+            status: elements.aiTitleProviderStatus.textContent
+          }
+        };
+      } finally {
+        requestBridge = originalRequestBridge;
+        state.aiProviders = originalProviders;
+        state.settings.aiSessionProvider = originalProvider;
+        syncAiSessionControls();
+        syncAiTitleControls();
+      }
+    });
+
+    expect(result).toEqual({
+      before: { disabled: false, providers: ["copilot"] },
+      after: {
+        disabled: false,
+        providers: ["copilot"],
+        status: "MultiTerm's bridge did not answer the provider check. Keeping the last known availability."
+      }
+    });
+  });
+
   test("keeps guided setup single-instance and hides actions for non-remediable states", async () => {
     const result = await page.evaluate(() => {
       state.aiProviders = [{
@@ -1261,6 +1312,18 @@ test.describe("Settings panel verification", () => {
     expect(await setting("copilotCwdQueryTimeoutSeconds")).toBe(900);
     expect(await page.locator("#copilotCwdQueryTimeoutSeconds").inputValue()).toBe("900");
     await set("#copilotCwdQueryTimeoutSeconds", "180", "change");
+
+    await set("#copilotSessionListTimeoutSeconds", "45", "change");
+    expect(await setting("copilotSessionListTimeoutSeconds")).toBe(45);
+    expect(await page.evaluate(() => copilotSessionListTimeoutMs())).toBe(45_000);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).copilotSessionListTimeoutSeconds)).toBe(45);
+    await set("#copilotSessionListTimeoutSeconds", "1", "change");
+    expect(await setting("copilotSessionListTimeoutSeconds")).toBe(5);
+    expect(await page.locator("#copilotSessionListTimeoutSeconds").inputValue()).toBe("5");
+    await set("#copilotSessionListTimeoutSeconds", "99999", "change");
+    expect(await setting("copilotSessionListTimeoutSeconds")).toBe(300);
+    expect(await page.locator("#copilotSessionListTimeoutSeconds").inputValue()).toBe("300");
+    await set("#copilotSessionListTimeoutSeconds", "20", "change");
 
     await page.evaluate(() => {
       window.__settingsOriginalUpdateRequest = requestLatestRelease;

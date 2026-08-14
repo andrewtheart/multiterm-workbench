@@ -616,6 +616,10 @@
               <span title="How long a private resumed Copilot session may take to report its previous working directory before MultiTerm closes the probe.">Session CWD query timeout (s)</span>
               <input id="copilotCwdQueryTimeoutSeconds" type="number" min="30" max="900" step="15" inputmode="numeric">
             </label>
+            <label class="control-row">
+              <span title="How long MultiTerm waits for the first local Copilot or Claude session list. Editor history continues loading separately in the background.">Session list timeout (s)</span>
+              <input id="copilotSessionListTimeoutSeconds" type="number" min="5" max="300" step="5" inputmode="numeric">
+            </label>
             <label class="toggle-row">
               <input id="bellNotify" type="checkbox">
               <span>Bell notifications</span>

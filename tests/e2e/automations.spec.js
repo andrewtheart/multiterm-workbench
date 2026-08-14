@@ -673,6 +673,7 @@ test.describe("Automation Studio", () => {
           containsSensitive: automationOutputMatches({ outputMatchCaseSensitive: true, outputMatchType: "contains", outputMatchValue: "passed" }, "PASSED"),
           exactLine: automationOutputMatches({ outputMatchType: "exact", outputMatchValue: "second" }, "first\nsecond"),
           exactAcross: automationOutputMatches({ outputMatchAcrossLines: true, outputMatchType: "exact", outputMatchValue: "first\nsecond" }, "first\nsecond"),
+          exactAcrossTrailingNewline: automationOutputMatches({ outputMatchAcrossLines: true, outputMatchType: "exact", outputMatchValue: "first\nsecond" }, "first\r\nsecond\r\n"),
           regexLine: automationOutputMatches({ outputMatchType: "regex", outputMatchValue: "first.*second" }, "first\nsecond"),
           regexAcross: automationOutputMatches({ outputMatchAcrossLines: true, outputMatchType: "regex", outputMatchValue: "first.*second" }, "first\nsecond"),
           regexAcrossLineAnchor: automationOutputMatches({ outputMatchAcrossLines: true, outputMatchType: "regex", outputMatchValue: "^second$" }, "first\nsecond"),
@@ -725,6 +726,7 @@ test.describe("Automation Studio", () => {
       containsSensitive: false,
       exactLine: true,
       exactAcross: true,
+      exactAcrossTrailingNewline: true,
       regexLine: false,
       regexAcross: true,
       regexAcrossLineAnchor: true,
@@ -733,6 +735,225 @@ test.describe("Automation Studio", () => {
       invalidNotMatchDecision: "skip",
       stagedOutputDecision: "skip"
     });
+  });
+
+  test("decodes a bounded output payload split across transport chunks", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const action = automationApi.normalizeAction({
+        command: "payload",
+        id: "action-payload1",
+        targetName: terminal.titleInput.value
+      });
+      const run = {
+        id: "run-payload1",
+        outputAvailable: new Set(),
+        outputs: new Map(),
+        rule: { actions: [action], id: "automation-payload1", name: "Payload split" },
+        states: new Map([[action.id, "running"]])
+      };
+      const token = "payload-split-token";
+      const task = {
+        actionId: action.id,
+        captureStarted: true,
+        kind: "command",
+        output: "raw fallback",
+        runId: run.id,
+        terminalId: terminal.id,
+        timeoutTimer: 0,
+        token
+      };
+      state.automationRuntime.runs.set(run.id, run);
+      state.automationRuntime.steps.set(token, task);
+      terminal.automationWorkflowActive = token;
+      terminal.automationWorkflowBuffer = "";
+      const expected = "First line\nSecond line\n";
+      const encoded = btoa(String.fromCharCode(...new TextEncoder().encode(expected)));
+      const prefix = `\x1b]777;multiterm-automation;${token};0;1;`;
+      consumeAutomationWorkflowOutput(terminal, `${prefix}${encoded.slice(0, 9)}`);
+      const retainedPrefix = terminal.automationWorkflowBuffer.startsWith(prefix);
+      const pending = state.automationRuntime.steps.has(token);
+      consumeAutomationWorkflowOutput(terminal, `${encoded.slice(9)}\x07`);
+      return {
+        output: run.outputs.get(action.id),
+        outputAvailable: run.outputAvailable.has(action.id),
+        pending,
+        retainedPrefix,
+        state: run.states.get(action.id)
+      };
+    });
+    expect(result).toEqual({
+      output: "First line\nSecond line\n",
+      outputAvailable: true,
+      pending: true,
+      retainedPrefix: true,
+      state: "succeeded"
+    });
+  });
+
+  test("fails an incomplete output marker that exceeds the configured ceiling", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const priorCaptureKb = state.settings.automationOutputCaptureKb;
+      state.settings.automationOutputCaptureKb = 16;
+      const action = automationApi.normalizeAction({ command: "oversized", id: "action-oversized1", targetName: terminal.titleInput.value });
+      const run = {
+        id: "run-oversized1",
+        outputAvailable: new Set(),
+        outputs: new Map(),
+        rule: { actions: [action], id: "automation-oversized1", name: "Oversized marker" },
+        states: new Map([[action.id, "running"]])
+      };
+      const token = "oversized-marker-token";
+      const task = { actionId: action.id, captureStarted: true, kind: "command", output: "", runId: run.id, terminalId: terminal.id, timeoutTimer: 0, token };
+      state.automationRuntime.runs.set(run.id, run);
+      state.automationRuntime.steps.set(token, task);
+      terminal.automationWorkflowActive = token;
+      terminal.automationWorkflowBuffer = "";
+      const prefix = `\x1b]777;multiterm-automation;${token};0;1;`;
+      consumeAutomationWorkflowOutput(terminal, `${prefix}${"A".repeat(automationCompletionPayloadLimitCharacters() + 1)}`);
+      const history = state.automations.history.filter((entry) => entry.automationId === run.rule.id);
+      state.settings.automationOutputCaptureKb = priorCaptureKb;
+      return {
+        active: terminal.automationWorkflowActive,
+        detail: history.find((entry) => entry.status === "failed" && entry.title.endsWith("Step 1"))?.detail || "",
+        pending: state.automationRuntime.steps.has(token),
+        state: run.states.get(action.id)
+      };
+    });
+    expect(result).toEqual({
+      active: "",
+      detail: "Automation output marker exceeded the configured capture limit",
+      pending: false,
+      state: "failed"
+    });
+  });
+
+  test("marks a completion payload without capturable child output as unavailable", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const action = automationApi.normalizeAction({ command: "credential child", id: "action-unavailable1", targetName: terminal.titleInput.value });
+      const run = {
+        id: "run-unavailable1",
+        outputAvailable: new Set(),
+        outputs: new Map(),
+        rule: { actions: [action], id: "automation-unavailable1", name: "Unavailable output" },
+        states: new Map([[action.id, "running"]])
+      };
+      const token = "unavailable-output-token";
+      const task = { actionId: action.id, captureStarted: true, kind: "command", output: "raw", runId: run.id, terminalId: terminal.id, timeoutTimer: 0, token };
+      state.automationRuntime.runs.set(run.id, run);
+      state.automationRuntime.steps.set(token, task);
+      terminal.automationWorkflowActive = token;
+      terminal.automationWorkflowBuffer = "";
+      consumeAutomationWorkflowOutput(terminal, `\x1b]777;multiterm-automation;${token};0;0;\x07`);
+      return {
+        available: run.outputAvailable.has(action.id),
+        output: run.outputs.get(action.id),
+        state: run.states.get(action.id)
+      };
+    });
+    expect(result).toEqual({ available: false, output: "", state: "succeeded" });
+  });
+
+  test("bounds authoritative command output by UTF-8 bytes", async ({ page }) => {
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0]?.status)).toBe("live");
+    const result = await page.evaluate(async () => {
+      const terminal = [...state.terminals.values()][0];
+      const priorCaptureKb = state.settings.automationOutputCaptureKb;
+      const originalComplete = completeAutomationStep;
+      let captured = "";
+      state.settings.automationOutputCaptureKb = 16;
+      completeAutomationStep = function (run, action, succeeded, detail, output, available) {
+        if (run.rule.id === "automation-unicode1") captured = output;
+        return originalComplete(run, action, succeeded, detail, output, available);
+      };
+      try {
+        const rule = automationApi.normalizeRule({
+          actions: [{
+            command: "Write-Output ([string]::new([char]0x6F22,7000) + 'UNICODE_TAIL')",
+            id: "action-unicode1",
+            inputType: "powershell",
+            targetName: terminal.titleInput.value
+          }],
+          enabled: true,
+          id: "automation-unicode1",
+          name: "Unicode output bound",
+          trigger: { intervalMinutes: 60, mode: "interval" }
+        });
+        runAutomationRule(rule);
+        const deadline = Date.now() + 30000;
+        while ([...state.automationRuntime.runs.values()].some((run) => run.rule.id === rule.id) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        return {
+          bytes: new TextEncoder().encode(captured).length,
+          endsWithTail: captured.trimEnd().endsWith("UNICODE_TAIL"),
+          finished: ![...state.automationRuntime.runs.values()].some((run) => run.rule.id === rule.id)
+        };
+      } finally {
+        completeAutomationStep = originalComplete;
+        state.settings.automationOutputCaptureKb = priorCaptureKb;
+      }
+    });
+    expect(result.finished).toBe(true);
+    expect(result.bytes).toBeLessThanOrEqual(16 * 1024);
+    expect(result.endsWithTail).toBe(true);
+  });
+
+  test("flushes cold formatted multiline output before evaluating a regex gate", async ({ page }) => {
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0]?.status)).toBe("live");
+    const ruleId = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const rule = automationApi.normalizeRule({
+        actions: [
+          {
+            command: "Write-Output 'Cold Line One'; Write-Output 'Cold Line Two'",
+            id: "action-coldfmt1",
+            inputType: "powershell",
+            targetName: terminal.titleInput.value
+          },
+          {
+            command: "Write-Output 'COLD_REGEX_BRANCH_RAN'",
+            condition: "output-match",
+            dependsOn: ["action-coldfmt1"],
+            id: "action-coldfmt2",
+            inputType: "powershell",
+            outputMatchAcrossLines: true,
+            outputMatchCaseSensitive: true,
+            outputMatchType: "regex",
+            outputMatchValue: "Cold Line One.*Cold Line Two",
+            targetName: terminal.titleInput.value
+          }
+        ],
+        enabled: true,
+        id: "automation-coldfmt1",
+        name: "Cold multiline output",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      runAutomationRule(rule, { manual: true });
+      return rule.id;
+    });
+
+    await expect.poll(() => page.evaluate((id) => (
+      [...state.automationRuntime.runs.values()].some((run) => run.rule.id === id)
+    ), ruleId), { timeout: 30000 }).toBe(false);
+    const result = await page.evaluate((id) => {
+      const history = state.automations.history.filter((entry) => entry.automationId === id);
+      const terminal = [...state.terminals.values()][0];
+      const buffer = terminal.term.buffer.active;
+      const lines = [];
+      for (let index = 0; index < buffer.length; index += 1) {
+        const line = buffer.getLine(index);
+        if (line) lines.push(line.translateToString(true));
+      }
+      return {
+        stepTwo: history.filter((entry) => entry.title.endsWith("Step 2")).at(-1),
+        terminalText: lines.join("\n")
+      };
+    }, ruleId);
+    expect(result.stepTwo).toMatchObject({ status: "completed" });
+    expect(result.terminalText).toContain("COLD_REGEX_BRANCH_RAN");
   });
 
   test("fails a timed-out step and opens its failure branch", async ({ page }) => {
@@ -755,14 +976,16 @@ test.describe("Automation Studio", () => {
       const task = terminal.automationWorkflowTasks[0];
       const expired = expireAutomationTask(task);
       const states = Object.fromEntries(run.states);
+      const outputAvailable = run.outputAvailable.has("action-timeout1");
       const detail = state.automations.history.find((entry) => entry.title.endsWith("Step 1") && entry.status === "failed")?.detail || "";
       for (const pending of [...terminal.automationWorkflowTasks]) finishAutomationWorkflowTask(pending.token, 0);
       state.settings.automationStepTimeoutMinutes = priorTimeout;
-      return { detail, expired, states };
+      return { detail, expired, outputAvailable, states };
     });
     expect(result).toMatchObject({
       detail: "Timed out after 1 minute",
       expired: true,
+      outputAvailable: false,
       states: {
         "action-timeout1": "failed",
         "action-timeout2": "running"
@@ -849,12 +1072,14 @@ test.describe("Automation Studio", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         const states = Object.fromEntries(run.states);
         const output = run.outputs.get("action-copilot1");
+        const secondTask = [...state.automationRuntime.steps.values()].find((task) => task.actionId === "action-copilot2");
+        const secondSessionId = secondTask?.sessionId || "";
         for (const task of [...state.automationRuntime.steps.values()]) {
           if (task.kind === "copilot") finishCopilotAutomationTask(task.token, false, "test cleanup");
         }
         window.clearTimeout(terminal.automationCopilotTimer);
         terminal.automationCopilotTimer = 0;
-        return { output, queued, requests, started, states };
+        return { output, queued, requests, secondSessionId, started, states };
       } finally {
         queueAutomaticTerminalCommand = savedQueue;
         terminalExecutionReadiness = savedReadiness;
@@ -865,6 +1090,7 @@ test.describe("Automation Studio", () => {
     expect(result.queued.map((entry) => entry.command)).toEqual(["/cwd D:\multiTerm", "Review the pending changes", "Prepare the release"]);
     expect(result.requests[0]).toMatchObject({ sessionId: expect.any(String), snapshot: true, type: "copilotAutomationOutput" });
     expect(result.requests[1]).toMatchObject({ cursor: 120, sessionId: result.requests[0].sessionId, type: "copilotAutomationOutput" });
+    expect(result.secondSessionId).toBe(result.requests[0].sessionId);
     expect(result.output).toBe("Review APPROVED\nReady to ship");
     expect(result.states).toMatchObject({
       "action-copilot1": "succeeded",
