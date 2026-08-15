@@ -10,16 +10,37 @@
 
 const { test, expect } = require("../support/renderer-coverage");
 
-async function reset(page, count = 1) {
+async function reset(page, count = 1, { synthetic = false } = {}) {
   await page.goto("/");
   await expect(page.locator("#statusConn")).toHaveText("Connected");
   await page.evaluate(() => closeAllTerminals());
   await expect(page.locator(".terminal-pane")).toHaveCount(0);
-  await page.evaluate(() => {
+  await page.evaluate((useSyntheticTerminal) => {
     localStorage.removeItem("multiterm.terminalArtifacts");
     state.terminalArtifacts = emptyTerminalArtifacts();
     updateTerminalArtifactIndicators();
-  });
+    if (!useSyntheticTerminal) return;
+    window.__artifactOriginalSocketSend = state.socket.send;
+    window.__artifactSyntheticTerminalIds = new Set();
+    state.socket.send = function sendArtifactFixture(payload) {
+      const message = JSON.parse(payload);
+      if (message.type === "create") {
+        window.__artifactSyntheticTerminalIds.add(message.id);
+        const pid = 42000 + window.__artifactSyntheticTerminalIds.size;
+        queueMicrotask(() => handleBridgeMessage({
+          type: "created",
+          id: message.id,
+          pid,
+          cwd: message.cwd || state.cwd,
+          startedAt: new Date().toISOString(),
+          title: message.title
+        }));
+        return;
+      }
+      if (message.type === "kill" && window.__artifactSyntheticTerminalIds.has(message.id)) return;
+      return window.__artifactOriginalSocketSend.call(this, payload);
+    };
+  }, synthetic);
   for (let index = 0; index < count; index += 1) {
     await page.evaluate((number) => addTerminal({ title: `Artifact terminal ${number}` }), index + 1);
   }
@@ -35,6 +56,11 @@ test.describe("Terminal notes and command queue", () => {
       closeTerminalNotesFlyout({ restoreFocus: false });
       closeTerminalArtifacts({ restoreFocus: false });
       closeAllTerminals();
+      if (window.__artifactOriginalSocketSend) {
+        state.socket.send = window.__artifactOriginalSocketSend;
+        delete window.__artifactOriginalSocketSend;
+        delete window.__artifactSyntheticTerminalIds;
+      }
       localStorage.removeItem("multiterm.terminalArtifacts");
       state.terminalArtifacts = emptyTerminalArtifacts();
     });
@@ -115,7 +141,7 @@ test.describe("Terminal notes and command queue", () => {
   });
 
   test("manages multiple notes inline and expands a draft into the full editor", async ({ page }) => {
-    await reset(page);
+    await reset(page, 1, { synthetic: true });
     const notesButton = page.locator('.terminal-pane [data-action="artifacts"]');
     await notesButton.click();
     const flyout = page.locator("#terminalNotesFlyout");
