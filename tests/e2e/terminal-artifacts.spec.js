@@ -15,45 +15,29 @@ async function reset(page, count = 1, { synthetic = false } = {}) {
   await expect(page.locator("#statusConn")).toHaveText("Connected");
   await page.evaluate(() => closeAllTerminals());
   await expect(page.locator(".terminal-pane")).toHaveCount(0);
-  await page.evaluate((useSyntheticTerminal) => {
+  await page.evaluate(() => {
     localStorage.removeItem("multiterm.terminalArtifacts");
     state.terminalArtifacts = emptyTerminalArtifacts();
     updateTerminalArtifactIndicators();
-    if (!useSyntheticTerminal) return;
-    window.__artifactOriginalSocketSend = state.socket.send;
-    window.__artifactOriginalHandleBridgeMessage = handleBridgeMessage;
-    window.__artifactSyntheticTerminalIds = new Set();
-    handleBridgeMessage = function handleArtifactFixtureMessage(message) {
-      const syntheticFailure = window.__artifactSyntheticTerminalIds.has(message?.id)
-        && ["exited", "createFailed", "error"].includes(message?.type);
-      if (syntheticFailure) return;
-      return window.__artifactOriginalHandleBridgeMessage(message);
-    };
-    state.socket.send = function sendArtifactFixture(payload) {
-      const message = JSON.parse(payload);
-      if (message.type === "create") {
-        window.__artifactSyntheticTerminalIds.add(message.id);
-        const pid = 42000 + window.__artifactSyntheticTerminalIds.size;
-        queueMicrotask(() => {
-          handleBridgeMessage({
-            type: "created",
-            id: message.id,
-            pid,
-            cwd: message.cwd || state.cwd,
+  });
+  for (let index = 0; index < count; index += 1) {
+    await page.evaluate(({ number, useSyntheticTerminal }) => {
+      if (useSyntheticTerminal) {
+        const terminal = addTerminal({
+          reattach: true,
+          session: {
+            id: `artifact-fixture-${crypto.randomUUID()}`,
+            pid: 42000 + number,
+            cwd: state.cwd,
             startedAt: new Date().toISOString(),
-            title: message.title
-          });
-          const terminal = state.terminals.get(message.id);
-          if (terminal) terminal.remoteRequested = false;
+            title: `Artifact terminal ${number}`
+          }
         });
+        terminal.remoteRequested = false;
         return;
       }
-      if (message.type === "kill" && window.__artifactSyntheticTerminalIds.has(message.id)) return;
-      return window.__artifactOriginalSocketSend.call(this, payload);
-    };
-  }, synthetic);
-  for (let index = 0; index < count; index += 1) {
-    await page.evaluate((number) => addTerminal({ title: `Artifact terminal ${number}` }), index + 1);
+      addTerminal({ title: `Artifact terminal ${number}` });
+    }, { number: index + 1, useSyntheticTerminal: synthetic });
   }
   await expect(page.locator(".terminal-pane")).toHaveCount(count);
   await expect
@@ -67,13 +51,6 @@ test.describe("Terminal notes and command queue", () => {
       closeTerminalNotesFlyout({ restoreFocus: false });
       closeTerminalArtifacts({ restoreFocus: false });
       closeAllTerminals();
-      if (window.__artifactOriginalSocketSend) {
-        state.socket.send = window.__artifactOriginalSocketSend;
-        handleBridgeMessage = window.__artifactOriginalHandleBridgeMessage;
-        delete window.__artifactOriginalSocketSend;
-        delete window.__artifactOriginalHandleBridgeMessage;
-        delete window.__artifactSyntheticTerminalIds;
-      }
       localStorage.removeItem("multiterm.terminalArtifacts");
       state.terminalArtifacts = emptyTerminalArtifacts();
     });
@@ -162,10 +139,6 @@ test.describe("Terminal notes and command queue", () => {
       openFolders: [],
       openTerminals: []
     }));
-    await page.evaluate(() => {
-      const terminal = [...state.terminals.values()][0];
-      handleBridgeMessage({ type: "exited", id: terminal.id, code: 0 });
-    });
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
     await expect(page.locator(".pane-status")).toHaveClass(/is-live/);
     const notesButton = page.locator('.terminal-pane [data-action="artifacts"]');
@@ -219,6 +192,9 @@ test.describe("Terminal notes and command queue", () => {
     await page.locator("#terminalNotesFlyoutCancel").click();
     await expect(page.locator(".terminal-notes-flyout-item")).toHaveCount(2);
     await page.setViewportSize({ width: 1280, height: 720 });
+    await page.evaluate(() => closeTerminalNotesFlyout({ restoreFocus: false }));
+    await notesButton.click();
+    await expect(flyout).toBeVisible();
 
     const geometry = await page.evaluate(() => {
       const anchor = document.querySelector('.terminal-pane [data-action="artifacts"]').getBoundingClientRect();
