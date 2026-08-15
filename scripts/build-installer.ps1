@@ -220,7 +220,7 @@ function Get-NativeOutput {
 
 function ConvertTo-NativeText {
     param($Output)
-    return (@($Output) | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    return (@($Output) | Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
 }
 
 function ConvertTo-AbsolutePath {

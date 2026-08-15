@@ -113,6 +113,10 @@ describe("installer release notes", () => {
     expect(script).toContain("The release failed and pending-change restoration also failed");
   });
 
+  it("normalizes empty native output without dereferencing null", () => {
+    expect(script).toContain("Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString() }");
+  });
+
   it("re-asks about a surviving lock holder instead of aborting", () => {
     // A process that still holds conpty.node after the first round is usually a
     // sibling instance, so the guard offers to stop it rather than giving up.

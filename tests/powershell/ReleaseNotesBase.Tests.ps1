@@ -109,6 +109,13 @@ Describe "pending release change stash" {
     }
 }
 
+Describe "native output normalization" {
+    It "treats a native command with no output as empty text" {
+        ConvertTo-NativeText -Output $null | Should Be ""
+        ConvertTo-NativeText -Output @("first", $null, "second") | Should Be ("first" + [Environment]::NewLine + "second")
+    }
+}
+
 Describe "release notes comparison base" {
     BeforeEach {
         $root = Join-Path $TestDrive ([Guid]::NewGuid().ToString("N"))
