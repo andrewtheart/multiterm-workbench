@@ -24,6 +24,9 @@ test.describe("Copilot remote control", () => {
 
   async function stubRemoteSessions(source, sessions, message = "") {
     await page.evaluate(({ source, sessions, message }) => {
+      const localSessionId = "3818ca4d-66ba-49ef-9a68-56192d4c04ce";
+      const terminal = [...state.terminals.values()][0];
+      if (terminal) assignAssistantSessionIdentity(terminal, localSessionId, `cli:${localSessionId}`);
       window.__remoteFrames = [];
       window.__remoteOriginalSend = state.socket.send;
       state.socket.send = function (payload) {
@@ -43,8 +46,8 @@ test.describe("Copilot remote control", () => {
             type: "copilotSessions",
             requestId: frame.requestId,
             sessions: [{
-              id: "3818ca4d-66ba-49ef-9a68-56192d4c04ce",
-              key: "cli:3818ca4d-66ba-49ef-9a68-56192d4c04ce",
+              id: localSessionId,
+              key: `cli:${localSessionId}`,
               source: "cli",
               name: "Local history",
               cwd: "D:\\multiTerm",

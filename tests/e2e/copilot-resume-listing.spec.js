@@ -32,6 +32,15 @@ const EDITOR_SESSION = {
   cwd: "D:\\multiTerm",
   updatedAt: "2026-08-09T19:00:00.000Z"
 };
+const EXTERNAL_CLI_SESSION = {
+  id: "8cdab4d5-2a0c-4a61-8bc1-4dc5b3659f29",
+  key: "cli:8cdab4d5-2a0c-4a61-8bc1-4dc5b3659f29",
+  source: "cli",
+  name: "External CLI in same folder",
+  cwd: CLI_SESSION.cwd,
+  repository: "multiTerm",
+  updatedAt: "2026-08-08T19:00:00.000Z"
+};
 
 test.describe("Copilot resume listing", () => {
   let context;
@@ -60,6 +69,9 @@ test.describe("Copilot resume listing", () => {
         models: [{ id: "auto", name: "Auto", efforts: [] }]
       }];
     });
+    await page.evaluate(({ id, key }) => {
+      assignAssistantSessionIdentity([...state.terminals.values()][0], id, key);
+    }, CLI_SESSION);
   });
 
   test.afterAll(async () => {
@@ -116,9 +128,13 @@ test.describe("Copilot resume listing", () => {
     await expect(page.locator("#copilotResumeStatus")).toContainText("Adding VS Code and Visual Studio history");
     expect(await page.evaluate(() => typeof window.__releaseFull === "function")).toBe(true);
     await page.evaluate(() => window.__releaseFull());
-    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
+    await expect(page.locator(".copilot-session-card")).toHaveCount(1);
     await expect(worktreeActions.getByRole("button", { name: "Review", exact: true })).toBeVisible();
     await expect(worktreeActions.getByRole("button", { name: "Bring changes back", exact: true })).toBeVisible();
+
+    await page.locator("#copilotResumeOriginAll").click();
+    await page.locator("#copilotResumeSourceFilter").selectOption("all");
+    await expect(page.locator(".copilot-session-card")).toHaveCount(2);
 
     await page.evaluate(() => {
       window.__originalRequestBridge = requestBridge;
@@ -160,6 +176,67 @@ test.describe("Copilot resume listing", () => {
       delete window.__originalSend;
       delete window.__frames;
       delete window.__releaseFull;
+      closeCopilotResume();
+    });
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+  });
+
+  test("defaults to exact MultiTerm CLI sessions and filters the loaded catalog", async () => {
+    await page.evaluate(({ owned, external, editor }) => {
+      window.__originalSend = state.socket.send;
+      const now = Date.now();
+      const sessions = [
+        { ...owned, repository: "owned-project", updatedAt: new Date(now - 60 * 60 * 1000).toISOString() },
+        { ...external, updatedAt: new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString() },
+        { ...editor, repository: "editor-project", updatedAt: new Date(now - 40 * 24 * 60 * 60 * 1000).toISOString() }
+      ];
+      state.socket.send = function (payload) {
+        const frame = JSON.parse(payload);
+        if (frame.type !== "listCopilotSessions") {
+          window.__originalSend.call(this, payload);
+          return;
+        }
+        const listed = frame.source === "cli" ? sessions.filter((session) => session.source === "cli") : sessions;
+        window.setTimeout(() => handleBridgeMessage({
+          type: "copilotSessions",
+          requestId: frame.requestId,
+          sessions: listed,
+          message: ""
+        }), 0);
+      };
+      openCopilotResume([...state.terminals.values()][0]);
+    }, { owned: CLI_SESSION, external: EXTERNAL_CLI_SESSION, editor: EDITOR_SESSION });
+
+    const cards = page.locator(".copilot-session-card");
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText("Native CLI history");
+    await expect(cards.locator(".copilot-session-origin")).toHaveText("MultiTerm");
+    await expect(page.locator("#copilotResumeSourceFilter")).toHaveValue("cli");
+    await expect(page.locator("#copilotResumeOriginMultiTerm")).toHaveAttribute("aria-pressed", "true");
+
+    await page.locator("#copilotResumeOriginOther").click();
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText("External CLI in same folder");
+    await expect(cards.locator(".copilot-session-origin")).toHaveCount(0);
+
+    await page.locator("#copilotResumeOriginAll").click();
+    await expect(cards).toHaveCount(2);
+    await page.locator("#copilotResumeSourceFilter").selectOption("all");
+    await expect(cards).toHaveCount(3);
+
+    await page.locator("#copilotResumeProjectFilter").selectOption({ label: "owned-project" });
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText("Native CLI history");
+
+    await page.locator("#copilotResumeProjectFilter").selectOption("all");
+    await page.locator("#copilotResumeUpdatedFilter").selectOption("day");
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toContainText("Native CLI history");
+    await expect(page.locator("#copilotResumeStatus")).toContainText("1 matching filters, 3 total");
+
+    await page.evaluate(() => {
+      state.socket.send = window.__originalSend;
+      delete window.__originalSend;
       closeCopilotResume();
     });
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
@@ -301,5 +378,108 @@ test.describe("Copilot resume listing", () => {
       closeCopilotResume();
     });
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+  });
+
+  test("classifies recovered session identities and guards resume filters", async () => {
+    const result = await page.evaluate(({ sessionId, sessionKey }) => {
+      const previous = {
+        aiKeys: copilotResume.aiKeys,
+        filters: { ...copilotResume.filters },
+        notes: state.terminalArtifacts.recoveredNotes,
+        origin: copilotResume.filters.origin,
+        provider: copilotResume.provider,
+        scope: copilotResume.scope,
+        sessions: copilotResume.sessions,
+        silent: copilotResume.silent,
+        terminals: state.terminalArtifacts.terminals,
+        titles: state.terminalArtifacts.recoveredTitles
+      };
+      state.terminalArtifacts.terminals = {};
+      state.terminalArtifacts.recoveredTitles = [{ assistantSessionKey: sessionKey }];
+      state.terminalArtifacts.recoveredNotes = [];
+      const fromRecoveredTitle = copilotSessionStartedByMultiTerm({
+        id: sessionId, key: sessionKey, source: "cli"
+      });
+
+      state.terminalArtifacts.recoveredTitles = [];
+      state.terminalArtifacts.recoveredNotes = [{ aiSessionId: sessionId.toUpperCase() }];
+      const fromRecoveredNote = copilotSessionStartedByMultiTerm({
+        id: sessionId, key: "", source: "cli"
+      });
+      state.terminalArtifacts.recoveredNotes = [];
+      const editor = copilotSessionStartedByMultiTerm({ id: sessionId, key: sessionKey, source: "vscode" });
+      const identityless = copilotSessionStartedByMultiTerm({ id: "not-an-id", key: "", source: "cli" });
+      const unmatched = copilotSessionStartedByMultiTerm({ id: sessionId, key: sessionKey, source: "cli" });
+      state.terminalArtifacts.recoveredTitles = null;
+      state.terminalArtifacts.recoveredNotes = null;
+      const missingRecoveredCollections = copilotSessionStartedByMultiTerm({
+        id: sessionId, key: sessionKey, source: "cli"
+      });
+
+      copilotResume.provider = "copilot";
+      copilotResume.filters.origin = "multiterm";
+      setCopilotResumeOriginFilter("invalid");
+      const afterInvalidOrigin = copilotResume.filters.origin;
+      copilotResume.provider = "claude";
+      setCopilotResumeOriginFilter("all");
+      const afterUnsupportedProvider = copilotResume.filters.origin;
+
+      copilotResume.provider = "copilot";
+      copilotResume.scope = "remote";
+      copilotResume.sessions = [];
+      copilotResume.aiKeys = null;
+      copilotResume.silent = false;
+      renderCopilotSessions();
+      const remoteEmpty = elements.copilotResumeList.textContent;
+
+      copilotResume.scope = "local";
+      copilotResume.sessions = [{
+        id: sessionId,
+        key: sessionKey,
+        source: "cli",
+        name: "Filtered by AI"
+      }];
+      copilotResume.aiKeys = new Set();
+      renderCopilotSessions();
+      const aiEmpty = elements.copilotResumeList.textContent;
+
+      state.terminalArtifacts.terminals = previous.terminals;
+      state.terminalArtifacts.recoveredTitles = previous.titles;
+      state.terminalArtifacts.recoveredNotes = previous.notes;
+      copilotResume.provider = previous.provider;
+      copilotResume.scope = previous.scope;
+      copilotResume.sessions = previous.sessions;
+      copilotResume.aiKeys = previous.aiKeys;
+      copilotResume.silent = previous.silent;
+      copilotResume.filters = previous.filters;
+      syncCopilotResumeScope();
+      syncCopilotResumeFilters();
+      renderCopilotSessions();
+      return {
+        aiEmpty,
+        afterInvalidOrigin,
+        afterUnsupportedProvider,
+        editor,
+        fromRecoveredNote,
+        fromRecoveredTitle,
+        identityless,
+        missingRecoveredCollections,
+        remoteEmpty,
+        unmatched
+      };
+    }, { sessionId: CLI_SESSION.id, sessionKey: CLI_SESSION.key });
+
+    expect(result).toEqual({
+      aiEmpty: "Copilot found no sessions matching that request.",
+      afterInvalidOrigin: "multiterm",
+      afterUnsupportedProvider: "multiterm",
+      editor: false,
+      fromRecoveredNote: true,
+      fromRecoveredTitle: true,
+      identityless: false,
+      missingRecoveredCollections: false,
+      remoteEmpty: "No remote sessions were found for this account.",
+      unmatched: false
+    });
   });
 });

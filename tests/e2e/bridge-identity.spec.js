@@ -14,6 +14,78 @@ test.describe("Bridge identity card", () => {
     await open(page);
     await expect(page.locator("#bridgeIdentityId")).toHaveText(/^BRIDGE-\d{3,}$/);
     await expect(page.locator("#statusConn")).toHaveAttribute("title", /^Bridge BRIDGE-\d{3,}$/);
+    const background = await page.locator("#bridgeIdentityCard").evaluate((card) => getComputedStyle(card).backgroundColor);
+    const surface = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--surface-high").trim());
+    expect(background).toBe(surface.startsWith("#")
+      ? `rgb(${Number.parseInt(surface.slice(1, 3), 16)}, ${Number.parseInt(surface.slice(3, 5), 16)}, ${Number.parseInt(surface.slice(5, 7), 16)})`
+      : surface);
+    await expect(page.locator("#bridgeIdentityChoose")).toBeHidden();
+  });
+
+  test("offers bridge switching in Electron and reports cancel and failure", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      window.__chooseBridgeCalls = 0;
+      window.multiterm = {
+        chooseBridgeNow: async () => {
+          window.__chooseBridgeCalls += 1;
+          return { changed: false, cancelled: true };
+        }
+      };
+      renderBridgeIdentity();
+    });
+    await page.locator(".status-conn-wrap").hover();
+    const choose = page.locator("#bridgeIdentityChoose");
+    await expect(choose).toBeVisible();
+    await choose.click();
+    await expect(page.locator("#bridgeIdentityStatus")).toHaveText("Kept this bridge.");
+    expect(await page.evaluate(() => window.__chooseBridgeCalls)).toBe(1);
+
+    await page.evaluate(() => {
+      window.multiterm.chooseBridgeNow = async () => { throw new Error("chooser unavailable"); };
+    });
+    await page.locator(".status-conn-wrap").hover();
+    await expect(choose).toBeVisible();
+    await choose.click();
+    await expect(page.locator("#bridgeIdentityStatus")).toContainText("Could not choose a bridge: chooser unavailable");
+    await expect(page.locator("#bridgeIdentityStatus")).toHaveAttribute("data-tone", "error");
+  });
+
+  test("handles unavailable, successful, and unchanged bridge choices", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const result = await page.evaluate(async () => {
+      const previous = window.multiterm;
+      window.multiterm = {};
+      const unavailable = await chooseAnotherBridge();
+
+      elements.bridgeIdentityCard.hidden = true;
+      window.multiterm.chooseBridgeNow = async () => ({ changed: true });
+      const changed = await chooseAnotherBridge();
+      const changedStatus = elements.bridgeIdentityStatus.textContent;
+
+      elements.bridgeIdentityCard.hidden = false;
+      window.multiterm.chooseBridgeNow = async () => ({ changed: false, cancelled: false });
+      const unchanged = await chooseAnotherBridge();
+      const unchangedStatus = elements.bridgeIdentityStatus.textContent;
+
+      window.multiterm.chooseBridgeNow = async () => { throw "raw chooser failure"; };
+      const failed = await chooseAnotherBridge();
+      const failedStatus = elements.bridgeIdentityStatus.textContent;
+      window.multiterm = previous;
+      return { changed, changedStatus, failed, failedStatus, unavailable, unchanged, unchangedStatus };
+    });
+
+    expect(result).toEqual({
+      changed: true,
+      changedStatus: "Connecting to the selected bridge...",
+      failed: false,
+      failedStatus: "Could not choose a bridge: raw chooser failure",
+      unavailable: false,
+      unchanged: false,
+      unchangedStatus: "No bridge change was made."
+    });
   });
 
   test("hides the card again once the pointer leaves", async ({ page }) => {

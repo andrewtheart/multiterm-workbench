@@ -120,10 +120,9 @@ test.describe("MultiTerm Workbench UI", () => {
         await page.setViewportSize({ width, height: 768 });
         const addTerminalButton = page.locator("#addTerminal");
         const headerToggle = page.locator("#toggleHeaderTop");
-        const minimizeButton = page.locator("#minimizeApp");
         await expect(addTerminalButton).toBeVisible();
         await expect(headerToggle).toBeVisible();
-        await expect(minimizeButton).toBeVisible();
+        await expect(page.locator("#minimizeApp")).toHaveCount(0);
 
         const layout = await page.evaluate(() => {
           const bounds = (selector) => {
@@ -138,7 +137,6 @@ test.describe("MultiTerm Workbench UI", () => {
           };
           return {
             add: bounds("#addTerminal"),
-            minimize: bounds("#minimizeApp"),
             toggle: bounds("#toggleHeaderTop"),
             shellWidth: document.querySelector(".shell-field").getBoundingClientRect().width,
             cwdWidth: document.querySelector("#cwdInput").getBoundingClientRect().width,
@@ -157,7 +155,6 @@ test.describe("MultiTerm Workbench UI", () => {
           expect(layout.add.width, `${width}px full add width`).toBeGreaterThan(38);
         }
         expect(layout.add.hit, `${width}px add hit target`).toBe(true);
-        expect(layout.minimize.hit, `${width}px minimize hit target`).toBe(true);
         expect(layout.toggle.right, `${width}px toggle right`).toBeLessThanOrEqual(layout.viewportWidth);
         expect(layout.toggle.hit, `${width}px toggle hit target`).toBe(true);
         expect(layout.toggle.right, `${width}px collapse precedes add`).toBeLessThan(layout.add.left);
@@ -281,8 +278,9 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#settings-group-session")).toHaveAttribute("aria-expanded", "true");
     await expect(page.locator("#startupCommand")).toBeVisible();
     await expect(page.locator("#restoreSession")).toBeVisible();
+    await expect(page.locator("#bridgeStartupAskRow")).toBeVisible();
     await expect(page.locator("#settings-group-appearance")).toBeHidden();
-    await expect(page.locator(".settings-filter-item:not([hidden])")).toHaveCount(2);
+    await expect(page.locator(".settings-filter-item:not([hidden])")).toHaveCount(3);
 
     await page.locator("#settingsSearch").press("Escape");
     await expect(page.locator("#settingsSearch")).toHaveValue("");
@@ -1941,7 +1939,6 @@ test.describe("MultiTerm Workbench UI", () => {
       { actionId: "top.ai-sessions", bindings: ["Ctrl+Alt+R"], buttonId: "copilotSessionsToggle", exposedAction: "top.ai-sessions", title: "Resume an AI assistant session (Ctrl+Alt+R)" },
       { actionId: "top.theme", bindings: ["Ctrl+Alt+D"], buttonId: "themeToggle", exposedAction: "top.theme", title: "Toggle theme (Ctrl+Alt+D)" },
       { actionId: "top.tmux", bindings: ["Ctrl+Alt+T"], buttonId: "attachTmux", exposedAction: "top.tmux", title: "Attach WSL tmux session (Ctrl+Alt+T)" },
-      { actionId: "top.minimize", bindings: ["Ctrl+Alt+M"], buttonId: "minimizeApp", exposedAction: "top.minimize", title: "Minimize MultiTerm (Ctrl+Alt+M)" },
       { actionId: "top.toggle-header", bindings: ["Ctrl+Shift+H"], buttonId: "toggleHeaderTop", exposedAction: "top.toggle-header", title: "Collapse top bar (Ctrl+Shift+H)" },
       { actionId: "terminal.new", bindings: ["Ctrl+N", "Ctrl+Shift+T"], buttonId: "addTerminal", exposedAction: "terminal.new", title: "New terminal (Ctrl+N / Ctrl+Shift+T)" }
     ]);
@@ -1952,6 +1949,10 @@ test.describe("MultiTerm Workbench UI", () => {
       && menu.text.includes("Add another shortcut")
       && menu.text.includes("Open in Keyboard Shortcuts")
     ))).toBe(true);
+    expect(await page.evaluate(() => {
+      const action = GLOBAL_SHORTCUT_ACTION_BY_ID.get("top.minimize");
+      return { section: action.section, topBarElement: action.topBarElement || "", binding: formatGlobalShortcut(globalShortcutBindings(action.id)[0]) };
+    })).toEqual({ section: "App", topBarElement: "", binding: "Ctrl+Alt+M" });
 
     const automations = page.locator("#automationsToggle");
     await automations.click({ button: "right" });

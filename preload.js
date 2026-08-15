@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld("multiterm", {
   setFullscreen: (enabled) => ipcRenderer.invoke("multiterm:set-fullscreen", Boolean(enabled)),
   minimizeWindow: () => ipcRenderer.invoke("multiterm:minimize-window"),
   configureDiagnostics: (settings) => ipcRenderer.invoke("multiterm:configure-diagnostics", settings),
+  getBridgeStartupPreference: () => ipcRenderer.invoke("multiterm:get-bridge-startup-preference"),
+  setBridgeStartupAsk: (enabled) => ipcRenderer.invoke("multiterm:set-bridge-startup-ask", Boolean(enabled)),
+  chooseBridgeNow: () => ipcRenderer.invoke("multiterm:choose-bridge-now"),
   onFullscreenChange: (handler) => {
     if (typeof handler !== "function") return;
     ipcRenderer.on("multiterm:fullscreen-change", (_event, enabled) => handler(Boolean(enabled)));

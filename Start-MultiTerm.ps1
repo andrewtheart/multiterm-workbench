@@ -16,6 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #>
 
+# Entry-point options are resolved before any listener or terminal is created.
+# Instance discovery keeps each registered bridge tied to its own lifecycle.
+
 param(
     [int]$Port = 0,
     [string]$HostName = "",

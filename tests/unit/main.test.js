@@ -21,6 +21,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
@@ -71,7 +72,10 @@ function makeElectron() {
       writeText: vi.fn()
     },
     shell: { openExternal: vi.fn() },
-    dialog: { showErrorBox: vi.fn() },
+    dialog: {
+      showErrorBox: vi.fn(),
+      showMessageBox: vi.fn(async () => ({ response: 0, checkboxChecked: false }))
+    },
     ipcMain: {
       handle: vi.fn(),
       removeHandler: vi.fn(),
@@ -785,6 +789,529 @@ describe("onReady", () => {
     expect(electron.dialog.showErrorBox).toHaveBeenCalled();
     expect(electron.app.quit).toHaveBeenCalled();
     expect(main.getMainWindow()).toBeNull();
+  });
+});
+
+describe("bridge startup discovery", () => {
+  it("formats IPv4 and IPv6 loopback bridge origins", () => {
+    expect(main.bridgeOrigin("127.0.0.1", 3177)).toBe("http://127.0.0.1:3177");
+    expect(main.bridgeOrigin("::1", 3177)).toBe("http://[::1]:3177");
+  });
+
+  it("normalizes and persists the reversible startup preference", () => {
+    const files = new Map();
+    const fileSystem = {
+      mkdirSync: vi.fn(),
+      readFileSync: vi.fn((target) => files.get(target)),
+      writeFileSync: vi.fn((target, text) => files.set(target, text)),
+      renameSync: vi.fn((from, to) => { files.set(to, files.get(from)); files.delete(from); })
+    };
+    const target = "C:\\prefs\\bridge-startup.json";
+    expect(main.saveBridgeStartupPreference({ askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-007" }, fileSystem, target))
+      .toEqual({ askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-007", bridgePort: 0 });
+    expect(main.loadBridgeStartupPreference(fileSystem, target))
+      .toEqual({ askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-007", bridgePort: 0 });
+    expect(main.normalizeBridgeStartupPreference({ askOnStartup: "no", mode: "junk", bridgeId: 9 }))
+      .toEqual({ askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 });
+    expect(main.normalizeBridgeStartupPreference({ mode: "bridge", bridgeId: "x".repeat(80), bridgePort: 65535 }))
+      .toEqual({ askOnStartup: true, mode: "bridge", bridgeId: "x".repeat(64), bridgePort: 65535 });
+  });
+
+  it("falls back safely when preference and instance paths are unavailable", () => {
+    expect(main.bridgePreferencePath({})).toBe("");
+    expect(main.loadBridgeStartupPreference({}, ""))
+      .toEqual({ askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 });
+    expect(main.loadBridgeStartupPreference({ readFileSync: () => "{" }, "C:\\bad.json"))
+      .toEqual({ askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 });
+    expect(main.saveBridgeStartupPreference({ askOnStartup: false }, {}, ""))
+      .toEqual({ askOnStartup: false, mode: "new", bridgeId: "", bridgePort: 0 });
+    expect(main.bridgeInstanceDirectory({})).toBe("");
+  });
+
+  it("returns only live, PID-matched loopback bridge records", async () => {
+    const records = new Map([
+      ["good.json", JSON.stringify({ app: "MultiTerm Workbench", bridgeId: "BRIDGE-002", bridgeType: "installed", pid: 22, port: 3190, startedAt: "2026-08-14T12:00:00Z", url: "http://127.0.0.1:3190/" })],
+      ["stale.json", JSON.stringify({ app: "MultiTerm Workbench", bridgeId: "BRIDGE-003", pid: 99, port: 3191, startedAt: "2026-08-14T13:00:00Z", url: "http://127.0.0.1:3191/" })],
+      ["remote.json", JSON.stringify({ app: "MultiTerm Workbench", pid: 44, port: 3192, url: "http://example.com:3192/" })],
+      ["bad.json", "{not json"]
+    ]);
+    const fileSystem = {
+      readdirSync: vi.fn(() => [...records.keys()].map((name) => ({ name, isFile: () => true }))),
+      readFileSync: vi.fn((target) => records.get(path.basename(target)))
+    };
+    const probe = vi.fn(async (_host, port) => (
+      port === 3190 ? { app: "MultiTerm Workbench", pid: 22, port, sessions: 3, rendererClients: 1 } : { app: "MultiTerm Workbench", pid: 55, port }
+    ));
+
+    const result = await main.discoverBridgeInstances({ fileSystem, directory: "C:\\instances", probe });
+
+    expect(result).toEqual([expect.objectContaining({
+      bridgeId: "BRIDGE-002",
+      bridgeType: "installed",
+      port: 3190,
+      health: expect.objectContaining({ sessions: 3 })
+    })]);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("filters invalid instance records and sorts viable loopback variants", async () => {
+    const records = new Map([
+      ["localhost.json", { app: "MultiTerm Workbench", pid: 10, port: 3200, startedAt: "2026-08-15T13:00:00Z", url: "http://localhost:3200/" }],
+      ["ipv6.json", { app: "MultiTerm Workbench", bridgeId: "BRIDGE-V6", bridgeType: "installed", pid: 11, port: 3201, startedAt: "2026-08-15T12:00:00Z", url: "http://[::1]:3201/" }],
+      ["default-time.json", { app: "MultiTerm Workbench", bridgeId: "BRIDGE-OLD", pid: 12, port: 3202, url: "http://127.0.0.1:3202/" }],
+      ["wrong-app.json", { app: "Other", pid: 20, port: 3220, url: "http://127.0.0.1:3220/" }],
+      ["https.json", { app: "MultiTerm Workbench", pid: 21, port: 3221, url: "https://127.0.0.1:3221/" }],
+      ["float.json", { app: "MultiTerm Workbench", pid: 22, port: 3222.5, url: "http://127.0.0.1:3222/" }],
+      ["zero.json", { app: "MultiTerm Workbench", pid: 23, port: 0, url: "http://127.0.0.1:3223/" }],
+      ["high.json", { app: "MultiTerm Workbench", pid: 24, port: 70000, url: "http://127.0.0.1:3224/" }],
+      ["mismatch.json", { app: "MultiTerm Workbench", pid: 25, port: 3225, url: "http://127.0.0.1:3226/" }],
+      ["missing-url.json", { app: "MultiTerm Workbench", pid: 26, port: 3226 }],
+      ["no-health.json", { app: "MultiTerm Workbench", pid: 27, port: 3227, url: "http://127.0.0.1:3227/" }],
+      ["stale-pid.json", { app: "MultiTerm Workbench", pid: 28, port: 3228, url: "http://127.0.0.1:3228/" }]
+    ]);
+    const entries = [
+      { name: "folder.json", isFile: () => false },
+      { name: "notes.txt", isFile: () => true },
+      ...[...records.keys()].map((name) => ({ name, isFile: () => true }))
+    ];
+    const fileSystem = {
+      readdirSync: vi.fn(() => entries),
+      readFileSync: vi.fn((target) => JSON.stringify(records.get(path.basename(target))))
+    };
+    const probe = vi.fn(async (_host, port) => {
+      if (port === 3227) return null;
+      if (port === 3228) return { pid: 999 };
+      return { pid: port === 3200 ? 10 : port === 3201 ? 11 : 12, sessions: 0 };
+    });
+
+    await expect(main.discoverBridgeInstances({ fileSystem, directory: "C:\\instances", probe }))
+      .resolves.toEqual([
+        expect.objectContaining({ bridgeId: "Bridge", bridgeType: "electron", host: "127.0.0.1", port: 3200 }),
+        expect.objectContaining({ bridgeId: "BRIDGE-V6", bridgeType: "installed", host: "::1", port: 3201 }),
+        expect.objectContaining({ bridgeId: "BRIDGE-OLD", bridgeType: "electron", host: "127.0.0.1", port: 3202, startedAt: "" })
+      ]);
+    await expect(main.discoverBridgeInstances({
+      fileSystem: { readdirSync: () => { throw new Error("denied"); } },
+      directory: "C:\\denied"
+    })).resolves.toEqual([]);
+    await expect(main.discoverBridgeInstances({ directory: "" })).resolves.toEqual([]);
+  });
+
+  it("skips an occupied preferred port when starting a separate bridge", async () => {
+    let attempts = 0;
+    vi.spyOn(net, "createServer").mockImplementation(() => {
+      const listener = new EventEmitter();
+      listener.listen = vi.fn((_port, _host, callback) => {
+        attempts += 1;
+        if (attempts === 1) process.nextTick(() => listener.emit("error", new Error("occupied")));
+        else callback();
+      });
+      listener.close = vi.fn((callback) => callback());
+      return listener;
+    });
+
+    await expect(main.findFreePort(3200)).resolves.toBe(3201);
+    expect(attempts).toBe(2);
+  });
+
+  it("reports when the local port range is exhausted", async () => {
+    await expect(main.findFreePort(65536)).rejects.toThrow("No free local port");
+  });
+
+  it("labels a bridge with identity, type, port, and session count", () => {
+    expect(main.bridgeChoiceLabel({ bridgeId: "BRIDGE-004", bridgeType: "electron", port: 3200, health: { sessions: 1 } }))
+      .toBe("BRIDGE-004 · Electron · port 3200 · 1 session");
+    expect(main.bridgeChoiceLabel({ bridgeId: "BRIDGE-005", bridgeType: "installed", port: 3201 }))
+      .toBe("BRIDGE-005 · installed · port 3201 · 0 sessions");
+  });
+
+  it("offers every live bridge plus a separate-bridge choice", async () => {
+    electron.dialog.showMessageBox = vi.fn(async (options) => {
+      expect(options.buttons).toEqual([
+        "BRIDGE-004 · installed · port 3200 · 2 sessions",
+        "Start a new bridge",
+        "Cancel"
+      ]);
+      expect(options.checkboxLabel).toBe("Don't show this again");
+      return { response: 0, checkboxChecked: false };
+    });
+    const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
+    await expect(main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "" }))
+      .resolves.toEqual({ candidate, startNew: false, preference: { askOnStartup: true, mode: "new", bridgeId: "" } });
+  });
+
+  it("asks before starting a new bridge from the manual chooser when no alternative exists", async () => {
+    electron.dialog.showMessageBox = vi.fn(async (options) => {
+      expect(options.buttons).toEqual(["Start a new bridge", "Cancel"]);
+      expect(options.cancelId).toBe(1);
+      return { response: 1, checkboxChecked: false };
+    });
+    await expect(main.chooseStartupBridge(
+      [],
+      { askOnStartup: true, mode: "new", bridgeId: "" },
+      { alwaysPrompt: true }
+    )).resolves.toMatchObject({ cancelled: true });
+  });
+
+  it("honors remembered new and existing bridge choices without prompting", async () => {
+    electron.dialog.showMessageBox = vi.fn();
+    const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
+    await expect(main.chooseStartupBridge([candidate], { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004" }))
+      .resolves.toEqual({ candidate, startNew: false, preference: { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004" } });
+    await expect(main.chooseStartupBridge([candidate], { askOnStartup: false, mode: "new", bridgeId: "" }))
+      .resolves.toEqual({ candidate: null, startNew: true, preference: { askOnStartup: false, mode: "new", bridgeId: "" } });
+    expect(electron.dialog.showMessageBox).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a new bridge when a remembered bridge is gone", async () => {
+    await expect(main.chooseStartupBridge([], { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-404", bridgePort: 3299 }))
+      .resolves.toEqual({ candidate: null, startNew: true, preference: { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-404", bridgePort: 3299 } });
+    const reusedId = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3300, health: { sessions: 0 } };
+    await expect(main.chooseStartupBridge([reusedId], { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004", bridgePort: 3200 }))
+      .resolves.toMatchObject({ candidate: null, startNew: true });
+  });
+
+  it("cancels cleanly and persists a don't-show-again bridge choice", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-choice-"));
+    electron.app.getPath = vi.fn(() => root);
+    const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
+    electron.dialog.showMessageBox = vi.fn()
+      .mockResolvedValueOnce({ response: 0, checkboxChecked: true })
+      .mockResolvedValueOnce({ response: 2, checkboxChecked: false });
+
+    const remembered = await main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "" });
+    expect(remembered).toEqual({
+      candidate,
+      startNew: false,
+      preference: { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004", bridgePort: 3200 }
+    });
+    expect(main.loadBridgeStartupPreference()).toEqual(remembered.preference);
+    await expect(main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "" }))
+      .resolves.toMatchObject({ cancelled: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("uses the selected bridge even when saving don't-show-again fails", async () => {
+    electron.app.getPath = vi.fn(() => "Z:\\denied");
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: true }));
+    const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
+    vi.spyOn(fs, "writeFileSync").mockImplementation(() => { throw new Error("denied"); });
+
+    await expect(main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 }))
+      .resolves.toEqual({
+        candidate,
+        startNew: false,
+        preference: { askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 }
+      });
+  });
+
+  it("remembers a don't-show-again choice to start a new bridge", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-choice-new-"));
+    electron.app.getPath = vi.fn(() => root);
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: true }));
+    try {
+      await expect(main.chooseStartupBridge(
+        [],
+        { askOnStartup: true, mode: "bridge", bridgeId: "BRIDGE-OLD", bridgePort: 3200 },
+        { alwaysPrompt: true }
+      )).resolves.toEqual({
+        candidate: null,
+        startNew: true,
+        preference: { askOnStartup: false, mode: "new", bridgeId: "", bridgePort: 0 }
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not detach when no owned bridge exists", async () => {
+    await expect(main.detachOwnedBridge()).resolves.toBeUndefined();
+  });
+
+  it("maps configured-port health and startup choices without mutating new-bridge choices", () => {
+    const candidates = [];
+    const health = { pid: 317700, port: 3177, sessions: 2 };
+    const configured = main.appendConfiguredBridgeCandidate(health, candidates);
+    expect(configured).toEqual(expect.objectContaining({
+      bridgeId: "Existing bridge",
+      host: "127.0.0.1",
+      port: 3177,
+      health
+    }));
+    expect(candidates).toEqual([configured]);
+    expect(main.appendConfiguredBridgeCandidate(null, candidates)).toBeNull();
+    expect(candidates).toEqual([configured]);
+
+    const chosen = { bridgeId: "BRIDGE-CHOSEN", port: 3299 };
+    expect(main.selectStartupBridge({ startNew: true, candidate: chosen }, configured)).toBeNull();
+    expect(main.selectStartupBridge({ startNew: false, candidate: chosen }, configured)).toBe(chosen);
+    expect(main.selectStartupBridge({ startNew: false, candidate: null }, configured)).toBe(configured);
+  });
+});
+
+describe("bridge startup preference IPC", () => {
+  function bridgeStartupHandler(channel) {
+    return electron.ipcMain.handle.mock.calls.find(([registered]) => registered === channel)?.[1];
+  }
+
+  it("reads and reverses the startup prompt preference through trusted IPC", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-bridge-pref-"));
+    electron.app.getPath = vi.fn(() => root);
+    vi.spyOn(http, "get").mockImplementation((_options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      sendHealthyResponse(callback);
+      return request;
+    });
+    await main.onReady();
+    const getHandler = bridgeStartupHandler("multiterm:get-bridge-startup-preference");
+    const setHandler = bridgeStartupHandler("multiterm:set-bridge-startup-ask");
+    const event = trustedIpcEvent();
+
+    expect(getHandler(event)).toMatchObject({ askOnStartup: true });
+    expect(setHandler(event, false)).toMatchObject({ askOnStartup: false });
+    expect(getHandler(event)).toMatchObject({ askOnStartup: false });
+    expect(setHandler(event, true)).toMatchObject({ askOnStartup: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("switches to a discovered bridge and detaches the owned bridge", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-bridge-switch-"));
+    electron.app.getPath = vi.fn(() => root);
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const instanceDirectory = path.join(root, "MultiTerm", "Instances");
+    fs.mkdirSync(instanceDirectory, { recursive: true });
+    fs.writeFileSync(path.join(instanceDirectory, "9009.json"), JSON.stringify({
+      app: "MultiTerm Workbench",
+      bridgeId: "BRIDGE-009",
+      bridgeType: "installed",
+      pid: 9009,
+      port: 3299,
+      startedAt: "2026-08-15T10:00:00Z",
+      url: "http://127.0.0.1:3299/"
+    }));
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      sendHealthyResponse(callback, { pid: 9009, port: Number(options.port), sessions: 2 });
+      return request;
+    });
+    vi.spyOn(http, "request").mockImplementation((_options, callback) => {
+      const response = new EventEmitter();
+      response.resume = vi.fn();
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      request.end = vi.fn(() => {
+        callback(response);
+        process.nextTick(() => response.emit("end"));
+      });
+      return request;
+    });
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+    main.createWindow();
+    main.registerWindowIpc();
+    main.startServer();
+    const ownedBridge = main.getServerProcess();
+    ownedBridge.unref = vi.fn();
+
+    try {
+      await expect(bridgeStartupHandler("multiterm:choose-bridge-now")(trustedIpcEvent()))
+        .resolves.toEqual({ changed: true, host: "127.0.0.1", port: 3299 });
+      expect(ownedBridge.unref).toHaveBeenCalled();
+      expect(main.getMainWindow().loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:3299/");
+      ownedBridge.emit("exit", 1, null);
+      expect(childProcess.spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("starts a fresh bridge from the manual chooser", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-bridge-new-"));
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const listener = new EventEmitter();
+    listener.listen = vi.fn((_port, _host, callback) => callback());
+    listener.close = vi.fn((callback) => callback());
+    vi.spyOn(net, "createServer").mockReturnValue(listener);
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      sendHealthyResponse(callback, { port: Number(options.port) });
+      return request;
+    });
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+    main.createWindow();
+    main.registerWindowIpc();
+
+    try {
+      await expect(bridgeStartupHandler("multiterm:choose-bridge-now")(trustedIpcEvent()))
+        .resolves.toEqual({ changed: true, host: "127.0.0.1", port: 3177 });
+      expect(childProcess.spawn).toHaveBeenCalledOnce();
+      expect(main.getMainWindow().loadURL).toHaveBeenLastCalledWith("http://127.0.0.1:3177/");
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes the current bridge and leaves it unchanged when the chooser is cancelled", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-bridge-current-"));
+    electron.app.getPath = vi.fn(() => root);
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const instanceDirectory = path.join(root, "MultiTerm", "Instances");
+    fs.mkdirSync(instanceDirectory, { recursive: true });
+    fs.writeFileSync(path.join(instanceDirectory, "3177.json"), JSON.stringify({
+      app: "MultiTerm Workbench",
+      bridgeId: "BRIDGE-CURRENT",
+      pid: 317700,
+      port: 3177,
+      url: "http://127.0.0.1:3177/"
+    }));
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      sendHealthyResponse(callback, { pid: 317700, port: Number(options.port) });
+      return request;
+    });
+    electron.dialog.showMessageBox = vi.fn(async (options) => {
+      expect(options.buttons).toEqual(["Start a new bridge", "Cancel"]);
+      return { response: 1, checkboxChecked: false };
+    });
+    main.createWindow();
+    main.registerWindowIpc();
+
+    try {
+      await expect(bridgeStartupHandler("multiterm:choose-bridge-now")(trustedIpcEvent()))
+        .resolves.toEqual({ changed: false, cancelled: true });
+      expect(childProcess.spawn).not.toHaveBeenCalled();
+      expect(main.getMainWindow().loadURL).toHaveBeenCalledTimes(1);
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bridge startup selection integration", () => {
+  it("quits cleanly when startup bridge selection is cancelled", async () => {
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      sendHealthyResponse(callback, { port: Number(options.port) });
+      return request;
+    });
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 2, checkboxChecked: false }));
+
+    await main.onReady();
+
+    expect(electron.app.quit).toHaveBeenCalledOnce();
+    expect(main.getMainWindow()).toBeNull();
+    expect(childProcess.spawn).not.toHaveBeenCalled();
+  });
+
+  it("uses a discovered configured-port bridge without probing it twice before selection", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-default-bridge-"));
+    electron.app.getPath = vi.fn(() => root);
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const instanceDirectory = path.join(root, "MultiTerm", "Instances");
+    fs.mkdirSync(instanceDirectory, { recursive: true });
+    fs.writeFileSync(path.join(instanceDirectory, "317700.json"), JSON.stringify({
+      app: "MultiTerm Workbench",
+      bridgeId: "BRIDGE-DEFAULT",
+      bridgeType: "installed",
+      pid: 317700,
+      port: 3177,
+      url: "http://127.0.0.1:3177/"
+    }));
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      sendHealthyResponse(callback, { pid: 317700, port: Number(options.port) });
+      return request;
+    });
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+
+    try {
+      await main.onReady();
+      expect(http.get).toHaveBeenCalledTimes(2);
+      expect(childProcess.spawn).not.toHaveBeenCalled();
+      expect(main.getMainWindow().loadURL).toHaveBeenCalledWith("http://127.0.0.1:3177/");
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("loads a selected non-default bridge without spawning another", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-select-"));
+    electron.app.getPath = vi.fn(() => root);
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+    const record = { app: "MultiTerm Workbench", bridgeId: "BRIDGE-009", bridgeType: "installed", pid: 9009, port: 3299, startedAt: "2026-08-14T12:00:00Z", url: "http://127.0.0.1:3299/" };
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const expectedDirectory = path.join(process.env.LOCALAPPDATA, "MultiTerm", "Instances");
+    fs.mkdirSync(expectedDirectory, { recursive: true });
+    fs.writeFileSync(path.join(expectedDirectory, "9009.json"), JSON.stringify(record));
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      sendHealthyResponse(callback, { pid: 9009, port: Number(options.port), sessions: 2 });
+      return request;
+    });
+    try {
+      await main.onReady();
+      expect(childProcess.spawn).not.toHaveBeenCalled();
+      expect(main.getMainWindow().loadURL).toHaveBeenCalledWith("http://127.0.0.1:3299/");
+      electron.app.whenReady.mockReturnValue(new Promise(() => {}));
+      main.bootstrap();
+      handlerFor("before-quit")();
+      expect(childProcess.spawn).not.toHaveBeenCalled();
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("starts a separate bridge when that chooser button is selected", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-new-"));
+    electron.app.getPath = vi.fn(() => root);
+    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 1, checkboxChecked: false }));
+    const record = { app: "MultiTerm Workbench", bridgeId: "BRIDGE-009", bridgeType: "installed", pid: 9009, port: 3299, startedAt: "2026-08-14T12:00:00Z", url: "http://127.0.0.1:3299/" };
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = root;
+    const instanceDirectory = path.join(process.env.LOCALAPPDATA, "MultiTerm", "Instances");
+    fs.mkdirSync(instanceDirectory, { recursive: true });
+    fs.writeFileSync(path.join(instanceDirectory, "9009.json"), JSON.stringify(record));
+    let attempts = 0;
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      attempts += 1;
+      if (Number(options.port) === 3299) sendHealthyResponse(callback, { pid: 9009, port: 3299, sessions: 2 });
+      else if (attempts < 3) process.nextTick(() => request.emit("error", new Error("starting")));
+      else sendHealthyResponse(callback, { port: Number(options.port) });
+      return request;
+    });
+    try {
+      await main.onReady();
+      const environment = childProcess.spawn.mock.calls[0][2].env;
+      expect(Number(environment.PORT)).toBeGreaterThanOrEqual(3177);
+      expect(main.getMainWindow().loadURL).toHaveBeenCalledWith(`http://127.0.0.1:${environment.PORT}/`);
+    } finally {
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

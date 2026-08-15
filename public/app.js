@@ -16,6 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+// Defaults here define renderer behavior before saved settings are applied.
+// Renderer-owned state stays local unless a bridge message explicitly carries it.
+
 const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
 const WORKSPACE_ZOOM_BOUNDS = { min: 25, max: 200, step: 5, fallback: 100 };
 const SIDECAR_WIDTH_BOUNDS = { min: 240, max: 720, step: 10, fallback: 300 };
@@ -25,6 +28,9 @@ const defaultSettings = {
   aiSessionEffort: "none",
   aiSessionModel: "",
   aiSessionProvider: "copilot",
+  // Bypassing the assistant's permission prompts has been unconditional; it is
+  // now a visible choice, defaulted to the previous behaviour.
+  aiSessionYolo: true,
   aiSetupCompleted: false,
   aiTitleProvider: "copilot",
   allowBridgeTerminalFocus: false,
@@ -78,6 +84,9 @@ const defaultSettings = {
   focusWidth: 65,
   fontFamily: "Cascadia Mono",
   fontSize: 14,
+  terminalBackground: "",
+  terminalForeground: "",
+  terminalHeaderBackground: null,
   folderEverythingReminderDismissed: false,
   titleFontScale: TITLE_FONT_SCALE_BOUNDS.fallback,
   gap: 10,
@@ -145,6 +154,13 @@ let headerBackgroundOpen = false;
 let headerBackgroundReady = false;
 let headerBackgroundFlyoutId = null;
 let headerBackgroundFlyoutAnchor = null;
+let terminalAppearanceTab = "terminal";
+let terminalAppearanceScope = "terminal";
+let terminalAppearanceDraft = null;
+const terminalAppearanceColorState = {
+  background: { hue: 0, saturation: 0, value: 0 },
+  foreground: { hue: 0, saturation: 0, value: 0 }
+};
 const TERMINAL_NOTIFICATION_SETTINGS = Object.freeze({
   activity: "notifyActivity",
   question: "notifyQuestions",
@@ -157,6 +173,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   aiSessionEffort: "ai assistant session thinking reasoning effort interactive cli",
   aiSessionModel: "ai assistant session model interactive cli github copilot claude",
   aiSessionProvider: "ai assistant session provider interactive cli github copilot claude launch",
+  aiSessionYolo: "ai assistant yolo mode permissions prompts bypass skip dangerous auto approve confirm interactive cli copilot claude",
   aiCopilotSetup: "ai assistant github copilot cli install setup login sign in winget",
   aiTitleProvider: "ai assistant provider github copilot claude terminal title suggestions",
   aiProvidersRefresh: "ai assistant provider refresh rescan detect installed authentication models",
@@ -226,6 +243,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   bellNotify: "bell beep ding sound terminal notification notifications alert alerts audible",
   allowBridgeTerminalFocus: "bridge terminal focus window automation ui automation bring to front show bridge",
   bridgeHeartbeatTimeoutSeconds: "bridge connection heartbeat health response timeout recovery reconnect frozen hung unresponsive seconds",
+  bridgeStartupAsk: "bridge startup launch choose chooser connect existing separate ask remember don't show again electron",
   worktreeSharedRoot: "worktree worktrees git clone shared location folder repository repo agent isolated parallel branch",
   copyOnSelect: "selection selected highlight mouse clipboard copy automatically auto",
   highlightInputPrompts: "awaiting input prompt prompts question questions badge glow attention detect detection interactive highlight",
@@ -344,14 +362,29 @@ const automationApi = window.MultiTermAutomations;
 // must still be forwarded but must not count as input.
 const FOCUS_REPORT_SEQUENCE = /^\u001b\[[IO]$/;
 
-const fontStacks = {
-  "Cascadia Mono": "'Cascadia Mono', Consolas, 'Courier New', monospace",
-  "Cascadia Code": "'Cascadia Code', 'Cascadia Mono', Consolas, monospace",
-  "Consolas": "Consolas, 'Cascadia Mono', 'Courier New', monospace",
-  "JetBrains Mono": "'JetBrains Mono', 'Cascadia Mono', Consolas, monospace",
-  "Fira Code": "'Fira Code', 'Cascadia Mono', Consolas, monospace",
-  "Courier New": "'Courier New', Consolas, monospace"
-};
+const FONT_CATALOG = Object.freeze([
+  ["Cascadia Mono", "'Cascadia Mono', Consolas, 'Courier New', monospace"],
+  ["Cascadia Code", "'Cascadia Code', 'Cascadia Mono', Consolas, monospace"],
+  ["Consolas", "Consolas, 'Cascadia Mono', 'Courier New', monospace"],
+  ["JetBrains Mono", "'JetBrains Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Fira Code", "'Fira Code', 'Cascadia Mono', Consolas, monospace"],
+  ["Source Code Pro", "'Source Code Pro', 'Cascadia Mono', Consolas, monospace"],
+  ["IBM Plex Mono", "'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Roboto Mono", "'Roboto Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Ubuntu Mono", "'Ubuntu Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Noto Sans Mono", "'Noto Sans Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["DejaVu Sans Mono", "'DejaVu Sans Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Liberation Mono", "'Liberation Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Hack", "Hack, 'Cascadia Mono', Consolas, monospace"],
+  ["Inconsolata", "Inconsolata, 'Cascadia Mono', Consolas, monospace"],
+  ["Menlo", "Menlo, 'Cascadia Mono', Consolas, monospace"],
+  ["Monaco", "Monaco, 'Cascadia Mono', Consolas, monospace"],
+  ["SFMono-Regular", "'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"],
+  ["Lucida Console", "'Lucida Console', Consolas, monospace"],
+  ["Droid Sans Mono", "'Droid Sans Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Courier New", "'Courier New', Consolas, monospace"]
+]);
+const fontStacks = Object.freeze(Object.fromEntries(FONT_CATALOG));
 
 const themes = {
   ember: {
@@ -444,6 +477,36 @@ const themes = {
   }
 };
 
+function normalizeTerminalColor(value) {
+  const color = String(value || "").trim().toUpperCase();
+  return /^#[0-9A-F]{6}$/.test(color) ? color : "";
+}
+
+function normalizeTerminalFontFamily(value, fallback = "") {
+  const font = String(value || "");
+  return Object.hasOwn(fontStacks, font) ? font : fallback;
+}
+
+function terminalThemeWithColors(background = "", foreground = "") {
+  const baseTheme = themes[state.settings.theme] || themes.ember;
+  const resolvedBackground = normalizeTerminalColor(background || state.settings.terminalBackground);
+  const resolvedForeground = normalizeTerminalColor(foreground || state.settings.terminalForeground);
+  if (!resolvedBackground && !resolvedForeground) return baseTheme;
+  const theme = { ...baseTheme };
+  if (resolvedBackground) theme.background = resolvedBackground;
+  if (resolvedForeground) theme.foreground = resolvedForeground;
+  return theme;
+}
+
+function terminalThemeFor(terminal) {
+  return terminalThemeWithColors(terminal?.terminalBackground, terminal?.terminalForeground);
+}
+
+function terminalFontFamilyName(terminal) {
+  return normalizeTerminalFontFamily(terminal?.terminalFontFamily)
+    || normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily);
+}
+
 const elements = {
   addTerminal: document.querySelector("#addTerminal"),
   aiCopilotSetup: document.querySelector("#aiCopilotSetup"),
@@ -466,6 +529,7 @@ const elements = {
   aiSessionEffort: document.querySelector("#aiSessionEffort"),
   aiSessionModel: document.querySelector("#aiSessionModel"),
   aiSessionProvider: document.querySelector("#aiSessionProvider"),
+  aiSessionYolo: document.querySelector("#aiSessionYolo"),
   aiSessionProviderStatus: document.querySelector("#aiSessionProviderStatus"),
   aiTitleProvider: document.querySelector("#aiTitleProvider"),
   aiTitleProviderStatus: document.querySelector("#aiTitleProviderStatus"),
@@ -693,6 +757,33 @@ const elements = {
   headerGradientShapeRow: document.querySelector("#headerGradientShapeRow"),
   headerGradientStopList: document.querySelector("#headerGradientStopList"),
   headerGradientStopsCount: document.querySelector("#headerGradientStopsCount"),
+  terminalAppearanceApplyAll: document.querySelector("#terminalAppearanceApplyAll"),
+  terminalAppearanceApplyChoices: document.querySelector("#terminalAppearanceApplyChoices"),
+  terminalAppearanceApplyTerminal: document.querySelector("#terminalAppearanceApplyTerminal"),
+  terminalAppearanceBackgroundB: document.querySelector("#terminalAppearanceBackgroundB"),
+  terminalAppearanceBackgroundExpand: document.querySelector("#terminalAppearanceBackgroundExpand"),
+  terminalAppearanceBackgroundG: document.querySelector("#terminalAppearanceBackgroundG"),
+  terminalAppearanceBackgroundHandle: document.querySelector("#terminalAppearanceBackgroundHandle"),
+  terminalAppearanceBackgroundHex: document.querySelector("#terminalAppearanceBackgroundHex"),
+  terminalAppearanceBackgroundHue: document.querySelector("#terminalAppearanceBackgroundHue"),
+  terminalAppearanceBackgroundPicker: document.querySelector("#terminalAppearanceBackgroundPicker"),
+  terminalAppearanceBackgroundPlane: document.querySelector("#terminalAppearanceBackgroundPlane"),
+  terminalAppearanceBackgroundR: document.querySelector("#terminalAppearanceBackgroundR"),
+  terminalAppearanceFontFamily: document.querySelector("#terminalAppearanceFontFamily"),
+  terminalAppearanceForegroundB: document.querySelector("#terminalAppearanceForegroundB"),
+  terminalAppearanceForegroundExpand: document.querySelector("#terminalAppearanceForegroundExpand"),
+  terminalAppearanceForegroundG: document.querySelector("#terminalAppearanceForegroundG"),
+  terminalAppearanceForegroundHandle: document.querySelector("#terminalAppearanceForegroundHandle"),
+  terminalAppearanceForegroundHex: document.querySelector("#terminalAppearanceForegroundHex"),
+  terminalAppearanceForegroundHue: document.querySelector("#terminalAppearanceForegroundHue"),
+  terminalAppearanceForegroundPicker: document.querySelector("#terminalAppearanceForegroundPicker"),
+  terminalAppearanceForegroundPlane: document.querySelector("#terminalAppearanceForegroundPlane"),
+  terminalAppearanceForegroundR: document.querySelector("#terminalAppearanceForegroundR"),
+  terminalAppearancePanel: document.querySelector("#terminalAppearancePanel"),
+  terminalAppearancePreview: document.querySelector("#terminalAppearancePreview"),
+  terminalAppearanceTabHeader: document.querySelector("#terminalAppearanceTabHeader"),
+  terminalAppearanceTabTerminal: document.querySelector("#terminalAppearanceTabTerminal"),
+  terminalHeaderAppearancePanel: document.querySelector("#terminalHeaderAppearancePanel"),
   assistantRestoreOverlay: document.querySelector("#assistantRestoreOverlay"),
   assistantRestoreList: document.querySelector("#assistantRestoreList"),
   assistantRestoreStatus: document.querySelector("#assistantRestoreStatus"),
@@ -704,17 +795,24 @@ const elements = {
   copilotResumeConnect: document.querySelector("#copilotResumeConnect"),
   copilotResumeConnectId: document.querySelector("#copilotResumeConnectId"),
   copilotResumeDescription: document.querySelector("#copilotResumeDescription"),
+  copilotResumeFilters: document.querySelector("#copilotResumeFilters"),
   copilotResumeList: document.querySelector("#copilotResumeList"),
   copilotResumeNotice: document.querySelector("#copilotResumeNotice"),
   copilotResumeOverlay: document.querySelector("#copilotResumeOverlay"),
   copilotResumePicker: document.querySelector("#copilotResumePicker"),
   copilotResumeRefresh: document.querySelector("#copilotResumeRefresh"),
   copilotResumeRemoteFoot: document.querySelector("#copilotResumeRemoteFoot"),
+  copilotResumeOriginAll: document.querySelector("#copilotResumeOriginAll"),
+  copilotResumeOriginMultiTerm: document.querySelector("#copilotResumeOriginMultiTerm"),
+  copilotResumeOriginOther: document.querySelector("#copilotResumeOriginOther"),
+  copilotResumeProjectFilter: document.querySelector("#copilotResumeProjectFilter"),
   copilotResumeSearch: document.querySelector("#copilotResumeSearch"),
+  copilotResumeSourceFilter: document.querySelector("#copilotResumeSourceFilter"),
   copilotResumeStatus: document.querySelector("#copilotResumeStatus"),
   copilotResumeTabLocal: document.querySelector("#copilotResumeTabLocal"),
   copilotResumeTabRemote: document.querySelector("#copilotResumeTabRemote"),
   copilotResumeTabs: document.querySelector("#copilotResumeTabs"),
+  copilotResumeUpdatedFilter: document.querySelector("#copilotResumeUpdatedFilter"),
   copilotSessionsToggle: document.querySelector("#copilotSessionsToggle"),
   copilotSessionTitlesFlyout: document.querySelector("#copilotSessionTitlesFlyout"),
   copilotSessionTitlesList: document.querySelector("#copilotSessionTitlesList"),
@@ -821,7 +919,6 @@ const elements = {
   logToggleDot: document.querySelector("#logToggleDot"),
   minWidth: document.querySelector("#minWidth"),
   minWidthValue: document.querySelector("#minWidthValue"),
-  minimizeApp: document.querySelector("#minimizeApp"),
   minimizedDock: document.querySelector("#minimizedDock"),
   messageComposerError: document.querySelector("#messageComposerError"),
   messageConnectionsEmpty: document.querySelector("#messageConnectionsEmpty"),
@@ -852,6 +949,8 @@ const elements = {
   automationOutputCaptureKb: document.querySelector("#automationOutputCaptureKb"),
   automationStepTimeoutMinutes: document.querySelector("#automationStepTimeoutMinutes"),
   bridgeHeartbeatTimeoutSeconds: document.querySelector("#bridgeHeartbeatTimeoutSeconds"),
+  bridgeStartupAsk: document.querySelector("#bridgeStartupAsk"),
+  bridgeStartupAskRow: document.querySelector("#bridgeStartupAskRow"),
   pagerPlacement: document.querySelector("#pagerPlacement"),
   sidecarWidth: document.querySelector("#sidecarWidth"),
   sidecarWidthValue: document.querySelector("#sidecarWidthValue"),
@@ -971,6 +1070,7 @@ const elements = {
   statusConn: document.querySelector("#statusConn"),
   statusShortcutHint: document.querySelector("#statusShortcutHint"),
   bridgeIdentityCard: document.querySelector("#bridgeIdentityCard"),
+  bridgeIdentityChoose: document.querySelector("#bridgeIdentityChoose"),
   bridgeIdentityId: document.querySelector("#bridgeIdentityId"),
   bridgeIdentityNote: document.querySelector("#bridgeIdentityNote"),
   bridgeIdentityFocus: document.querySelector("#bridgeIdentityFocus"),
@@ -1085,6 +1185,25 @@ const elements = {
   workspaceZoomValue: document.querySelector("#workspaceZoomValue"),
   workbench: document.querySelector(".workbench")
 };
+
+function populateFontSelectors() {
+  const selected = normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily);
+  for (const select of [elements.fontFamily, elements.terminalAppearanceFontFamily]) {
+    if (!select) continue;
+    select.replaceChildren();
+    select.dataset.fontSelector = "true";
+    for (const [name, stack] of FONT_CATALOG) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      option.dataset.fontStack = stack;
+      option.style.fontFamily = stack;
+      select.append(option);
+    }
+    select.value = selected;
+    select.style.fontFamily = fontStacks[selected];
+  }
+}
 
 const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
 const palette = { open: false, index: 0, items: [] };
@@ -1443,6 +1562,7 @@ window.addEventListener("unhandledrejection", (event) => {
 
 window.addEventListener("DOMContentLoaded", () => {
   log.info("app", `MultiTerm ${APP_VERSION} starting`);
+  populateFontSelectors();
   initializeSettingsPanel();
   bindControls();
   bindAiSetup();
@@ -1556,6 +1676,7 @@ function bindControls() {
   elements.aiSessionEffort.value = state.settings.aiSessionEffort;
   elements.aiSessionModel.value = state.settings.aiSessionModel;
   elements.aiSessionProvider.value = state.settings.aiSessionProvider;
+  elements.aiSessionYolo.checked = Boolean(state.settings.aiSessionYolo);
   elements.aiTitleProvider.value = state.settings.aiTitleProvider;
   elements.layoutMode.value = state.settings.layout;
   elements.pagerPlacement.value = normalizedPagerPlacement();
@@ -1667,10 +1788,6 @@ function bindControls() {
     terminal.term.focus();
   });
   elements.attachTmux.addEventListener("click", openTmuxAttach);
-  elements.minimizeApp.addEventListener("click", () => {
-    if (window.multiterm?.minimizeWindow) window.multiterm.minimizeWindow();
-    else toast("Use the window's native minimize control in this browser-hosted build", "info", 2400);
-  });
   elements.copilotSessionsToggle.addEventListener("click", () => openCopilotResume(null, { newTerminal: true }));
   elements.tmuxAttachClose.addEventListener("click", closeTmuxAttach);
   elements.tmuxAttachRefresh.addEventListener("click", refreshTmuxSessions);
@@ -1688,6 +1805,12 @@ function bindControls() {
   elements.copilotResumeAiSearch.addEventListener("click", searchCopilotSessionsWithAi);
   elements.copilotResumeTabLocal.addEventListener("click", () => setCopilotResumeScope("local"));
   elements.copilotResumeTabRemote.addEventListener("click", () => setCopilotResumeScope("remote"));
+  for (const button of [elements.copilotResumeOriginMultiTerm, elements.copilotResumeOriginOther, elements.copilotResumeOriginAll]) {
+    button.addEventListener("click", () => setCopilotResumeOriginFilter(button.dataset.resumeOrigin));
+  }
+  for (const control of [elements.copilotResumeSourceFilter, elements.copilotResumeProjectFilter, elements.copilotResumeUpdatedFilter]) {
+    control.addEventListener("change", applyCopilotResumeFilterControls);
+  }
   elements.copilotResumePicker.addEventListener("click", openCopilotRemotePicker);
   elements.copilotResumeConnect.addEventListener("click", () => connectToRemoteCopilotSessionId(elements.copilotResumeConnectId.value));
   elements.copilotResumeConnectId.addEventListener("keydown", (event) => {
@@ -1863,6 +1986,7 @@ function bindControls() {
   bindSetting(elements.copilotSessionListTimeoutSeconds, "copilotSessionListTimeoutSeconds", "change", clampCopilotSessionListTimeoutSeconds);
   bindSetting(elements.copilotSessionSearchContextKb, "copilotSessionSearchContextKb", "change", clampCopilotSessionSearchContextKb);
   bindSetting(elements.aiSessionProvider, "aiSessionProvider", "change", normalizeAiProviderId);
+  bindSetting(elements.aiSessionYolo, "aiSessionYolo", "change", (_, element) => element.checked);
   bindSetting(elements.aiSessionModel, "aiSessionModel", "change", normalizeAiSessionModel);
   bindSetting(elements.aiSessionEffort, "aiSessionEffort", "change", normalizeAiSessionEffort);
   bindSetting(elements.aiSessionContext, "aiSessionContext", "change", normalizeAiSessionContext);
@@ -1982,6 +2106,8 @@ function bindControls() {
     setSearchAcrossPages(elements.searchAcrossPages.checked);
   });
 
+  bindBridgeStartupPreference();
+
   elements.allowBridgeTerminalFocus.addEventListener("change", () => {
     state.settings.allowBridgeTerminalFocus = elements.allowBridgeTerminalFocus.checked;
     saveSettings();
@@ -1996,6 +2122,37 @@ function bindControls() {
       Notification.requestPermission();
     }
   });
+}
+
+function bindBridgeStartupPreference() {
+  const getPreference = window.multiterm?.getBridgeStartupPreference;
+  const setAsk = window.multiterm?.setBridgeStartupAsk;
+  const available = typeof getPreference === "function" && typeof setAsk === "function";
+  elements.bridgeStartupAskRow.hidden = !available;
+  elements.bridgeStartupAsk.disabled = !available;
+  if (!available || elements.bridgeStartupAsk.dataset.bound === "true") return;
+  elements.bridgeStartupAsk.dataset.bound = "true";
+  getPreference().then((preference) => {
+    elements.bridgeStartupAsk.checked = preference?.askOnStartup !== false;
+  }).catch(() => {
+    elements.bridgeStartupAsk.checked = true;
+  });
+  elements.bridgeStartupAsk.addEventListener("change", async () => {
+    const requested = elements.bridgeStartupAsk.checked;
+    try {
+      const preference = await setAsk(requested);
+      elements.bridgeStartupAsk.checked = preference?.askOnStartup !== false;
+    } catch {
+      elements.bridgeStartupAsk.checked = !requested;
+      toast("Could not update the bridge startup preference", "warn", 2800);
+    }
+  });
+}
+
+function minimizeMultiTerm() {
+  if (window.multiterm?.minimizeWindow) return window.multiterm.minimizeWindow();
+  toast("Use the window's native minimize control in this browser-hosted build", "info", 2400);
+  return false;
 }
 
 function toggleChrome(key) {
@@ -2351,6 +2508,7 @@ function syncAiSessionSettings() {
   elements.aiSessionModel.value = state.settings.aiSessionModel;
   elements.aiSessionEffort.value = state.settings.aiSessionEffort;
   elements.aiSessionContext.value = state.settings.aiSessionContext;
+  elements.aiSessionYolo.checked = Boolean(state.settings.aiSessionYolo);
   if (state.aiProviders.length > 0) syncAiSessionControls();
 }
 
@@ -2976,6 +3134,9 @@ function handleBridgeMessage(message) {
               color: meta.color,
               headerBackground: meta.headerBackground,
               fontSizeOverride: meta.fontSizeOverride,
+              terminalBackground: meta.terminalBackground,
+              terminalForeground: meta.terminalForeground,
+              terminalFontFamily: meta.terminalFontFamily,
               headerActionOverrides: meta.headerActionOverrides,
               headerActionShortcutOverrides: meta.headerActionShortcutOverrides,
               notificationOverrides: meta.notificationOverrides,
@@ -3085,9 +3246,11 @@ function handleBridgeMessage(message) {
     }
     if (terminal.pendingAiAssistant) {
       terminal.pendingAiAssistant = false;
+      const yolo = terminal.pendingAiAssistantYolo;
+      terminal.pendingAiAssistantYolo = null;
       window.setTimeout(() => {
         const liveTerminal = state.terminals.get(terminal.id);
-        if (liveTerminal?.status === "live") invokeAiAssistant(liveTerminal);
+        if (liveTerminal?.status === "live") invokeAiAssistant(liveTerminal, { yolo });
       }, 500);
     }
     if (terminal.pendingExternalAssistant) {
@@ -3439,6 +3602,9 @@ function addTerminal(options = {}) {
   const fontSizeOverride = Number.isFinite(Number(rawFontSizeOverride))
     ? Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(Number(rawFontSizeOverride))))
     : null;
+  const terminalBackground = normalizeTerminalColor(savedMeta?.terminalBackground ?? options.terminalBackground);
+  const terminalForeground = normalizeTerminalColor(savedMeta?.terminalForeground ?? options.terminalForeground);
+  const terminalFontFamily = normalizeTerminalFontFamily(savedMeta?.terminalFontFamily ?? options.terminalFontFamily);
   const pane = elements.paneTemplate.content.firstElementChild.cloneNode(true);
   const screen = pane.querySelector(".terminal-screen");
   const titleInput = pane.querySelector(".pane-title");
@@ -3452,11 +3618,11 @@ function addTerminal(options = {}) {
     convertEol: false,
     cursorBlink: state.settings.cursorBlink,
     cursorStyle: state.settings.cursorStyle,
-    fontFamily: fontStacks[state.settings.fontFamily] || fontStacks["Cascadia Mono"],
+    fontFamily: fontStacks[terminalFontFamily || state.settings.fontFamily] || fontStacks["Cascadia Mono"],
     fontSize: fontSizeOverride ?? state.settings.fontSize,
     scrollback: effectiveScrollback(),
     tabStopWidth: 4,
-    theme: themes[state.settings.theme]
+    theme: terminalThemeWithColors(terminalBackground, terminalForeground)
   });
   const fitAddon = new FitAddon.FitAddon();
 
@@ -3529,6 +3695,9 @@ function addTerminal(options = {}) {
     elevated,
     fitAddon,
     fontSizeOverride,
+    terminalBackground,
+    terminalForeground,
+    terminalFontFamily,
     headerBackground: normalizeHeaderBackground(savedMeta?.headerBackground ?? options.headerBackground),
     headerActionOverrides: normalizeHeaderActionOverrides(savedMeta?.headerActionOverrides ?? options.headerActionOverrides),
     headerActionShortcutOverrides: normalizeHeaderActionShortcuts(
@@ -3551,6 +3720,7 @@ function addTerminal(options = {}) {
     observer: null,
     pane,
     pendingAiAssistant: Boolean(options.pendingAiAssistant),
+    pendingAiAssistantYolo: typeof options.pendingAiAssistantYolo === "boolean" ? options.pendingAiAssistantYolo : null,
     pendingExternalAssistant: options.pendingExternalAssistant && typeof options.pendingExternalAssistant === "object"
       ? options.pendingExternalAssistant
       : null,
@@ -4873,6 +5043,9 @@ function runHeaderAction(terminal, action, anchor = null) {
       copilotCwd: terminal.copilotCwd,
       fontSizeOverride: terminal.fontSizeOverride,
       headerBackground: cloneHeaderBackground(terminal.headerBackground),
+      terminalBackground: terminal.terminalBackground,
+      terminalForeground: terminal.terminalForeground,
+      terminalFontFamily: terminal.terminalFontFamily,
       headerActionOverrides: { ...terminal.headerActionOverrides },
       headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
       notificationOverrides: { ...terminal.notificationOverrides }
@@ -8771,13 +8944,12 @@ function applySettings() {
   updateChromeToggles();
   applySnapLayout();
 
-  const fontFamily = fontStacks[state.settings.fontFamily] || fontStacks["Cascadia Mono"];
   for (const terminal of state.terminals.values()) {
     terminal.term.options.fontSize = terminalFontSize(terminal);
-    terminal.term.options.fontFamily = fontFamily;
+    terminal.term.options.fontFamily = fontStacks[terminalFontFamilyName(terminal)];
     terminal.term.options.cursorStyle = state.settings.cursorStyle;
     terminal.term.options.cursorBlink = state.settings.cursorBlink;
-    terminal.term.options.theme = themes[state.settings.theme];
+    terminal.term.options.theme = terminalThemeFor(terminal);
     terminal.term.options.scrollback = effectiveScrollback();
     applyManualLayout(terminal, ensureManualLayout(terminal.id));
     updateTerminalNotificationButton(terminal);
@@ -8847,6 +9019,9 @@ function renderBridgeIdentity() {
   elements.statusConn.title = identifier ? `Bridge ${identifier}` : "";
   const focusable = Boolean(identifier) && state.canFocusBridgeTerminal && state.socketReady;
   elements.bridgeIdentityFocus.disabled = !focusable;
+  const canChooseBridge = typeof window.multiterm?.chooseBridgeNow === "function";
+  elements.bridgeIdentityChoose.hidden = !canChooseBridge;
+  elements.bridgeIdentityChoose.disabled = !canChooseBridge;
   elements.bridgeIdentityNote.textContent = !identifier
     ? "This bridge did not report an id."
     : state.canFocusBridgeTerminal
@@ -8926,6 +9101,28 @@ async function requestBridgeTerminalFocus() {
   );
 }
 
+async function chooseAnotherBridge() {
+  const choose = window.multiterm?.chooseBridgeNow;
+  if (typeof choose !== "function") return false;
+  elements.bridgeIdentityChoose.disabled = true;
+  elements.bridgeIdentityFocus.disabled = true;
+  setBridgeIdentityStatus("Looking for other bridges...", "");
+  try {
+    const result = await choose();
+    if (result?.changed) {
+      setBridgeIdentityStatus("Connecting to the selected bridge...", "");
+      return true;
+    }
+    setBridgeIdentityStatus(result?.cancelled ? "Kept this bridge." : "No bridge change was made.", "");
+    return false;
+  } catch (error) {
+    setBridgeIdentityStatus(`Could not choose a bridge: ${String(error?.message || error)}`, "error");
+    return false;
+  } finally {
+    if (!elements.bridgeIdentityCard.hidden) renderBridgeIdentity();
+  }
+}
+
 function bindBridgeIdentityCard() {
   const wrap = elements.statusConn?.parentElement;
   if (!wrap || !elements.bridgeIdentityCard) {
@@ -8940,6 +9137,7 @@ function bindBridgeIdentityCard() {
     }
   });
   elements.bridgeIdentityFocus.addEventListener("click", requestBridgeTerminalFocus);
+  elements.bridgeIdentityChoose.addEventListener("click", chooseAnotherBridge);
 }
 
 function updateFontZoomControls() {
@@ -9396,6 +9594,10 @@ function loadSettings() {
     settings.pageCloseAction = normalizePageCloseAction(settings.pageCloseAction);
     settings.titleFontScale = normalizeTitleFontScale(settings.titleFontScale);
     settings.workspaceZoom = normalizeWorkspaceZoom(settings.workspaceZoom);
+    settings.terminalBackground = normalizeTerminalColor(settings.terminalBackground);
+    settings.terminalForeground = normalizeTerminalColor(settings.terminalForeground);
+    settings.terminalHeaderBackground = cloneHeaderBackground(settings.terminalHeaderBackground);
+    settings.fontFamily = normalizeTerminalFontFamily(settings.fontFamily, defaultSettings.fontFamily);
     return settings;
   } catch (error) {
     // Falling back to defaults discards every stored preference, so it must not
@@ -10280,6 +10482,12 @@ function ingestServerLog(message) {
 function clearTerminal(id) {
   const terminal = state.terminals.get(id);
   if (!terminal) return;
+  // An assistant TUI owns its own screen and repaints the composer, so clearing
+  // xterm alone leaves whatever was typed sitting in the prompt box. Empty the
+  // composer first, then clear, so the repaint lands on a clean screen.
+  if (cwdTerminalProvider(terminal)) {
+    sendBridge({ type: "input", id: terminal.id, data: COPILOT_CLEAR_PROMPT });
+  }
   terminal.term.clear();
   terminal.searchText = "";
   terminal.searchTextStale = false;
@@ -11509,7 +11717,9 @@ const copilotResume = {
   silent: false,
   suspended: false,
   terminalId: null,
+  yolo: true,
   expandedNotes: new Set(),
+  filters: { origin: "multiterm", source: "cli", project: "all", updated: "any" },
   visibleLimit: COPILOT_SESSION_PAGE_SIZE
 };
 
@@ -11613,7 +11823,10 @@ function buildCopilotSessionNotes(session) {
   return wrap;
 }
 
-function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
+function openCopilotResume(terminal = null, {
+  newTerminal = !terminal,
+  yolo = state.settings.aiSessionYolo
+} = {}) {
   const provider = state.settings.aiSessionProvider;
   if (provider !== "copilot" && provider !== "claude") {
     toast("Choose an interactive AI assistant in Settings first", "warn", 2800);
@@ -11622,6 +11835,7 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
   copilotResume.terminalId = terminal?.id || null;
   copilotResume.newTerminal = Boolean(newTerminal);
   copilotResume.provider = provider;
+  copilotResume.yolo = Boolean(yolo);
   copilotResume.aiKeys = null;
   copilotResume.aiQuery = "";
   copilotResume.aiSearching = false;
@@ -11630,6 +11844,9 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
   copilotResume.scope = "local";
   copilotResume.remoteSource = "";
   copilotResume.remoteMessage = "";
+  copilotResume.filters = provider === "copilot"
+    ? { origin: "multiterm", source: "cli", project: "all", updated: "any" }
+    : { origin: "all", source: "all", project: "all", updated: "any" };
   copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
   copilotResume.generation += 1;
   window.clearTimeout(copilotResume.closeTimer);
@@ -11643,6 +11860,7 @@ function openCopilotResume(terminal = null, { newTerminal = !terminal } = {}) {
     : `Choose a local ${name} session to continue in ${terminal?.titleInput.value || "this terminal"}.`;
   elements.copilotResumeSearch.value = "";
   elements.copilotResumeConnectId.value = "";
+  syncCopilotResumeFilters();
   syncCopilotResumeScope();
   elements.copilotResumeOverlay.hidden = false;
   window.requestAnimationFrame(() => {
@@ -11710,6 +11928,84 @@ function syncCopilotResumeScope() {
   const showNotice = remote && Boolean(copilotResume.remoteMessage);
   elements.copilotResumeNotice.hidden = !showNotice;
   elements.copilotResumeNotice.textContent = showNotice ? copilotResume.remoteMessage : "";
+  syncCopilotResumeFilters();
+}
+
+function copilotSessionProject(session) {
+  return String(session?.repository || session?.cwd || "").trim();
+}
+
+function copilotSessionProjectKey(session) {
+  return normalizeSearchText(copilotSessionProject(session));
+}
+
+function syncCopilotResumeFilters() {
+  const remote = copilotResume.scope === "remote";
+  elements.copilotResumeFilters.hidden = remote;
+  const origin = copilotResume.filters.origin;
+  for (const button of [elements.copilotResumeOriginMultiTerm, elements.copilotResumeOriginOther, elements.copilotResumeOriginAll]) {
+    const active = button.dataset.resumeOrigin === origin;
+    button.setAttribute("aria-pressed", String(active));
+    button.classList.toggle("is-active", active);
+    button.disabled = copilotResume.provider !== "copilot";
+  }
+  elements.copilotResumeSourceFilter.value = copilotResume.filters.source;
+  elements.copilotResumeUpdatedFilter.value = copilotResume.filters.updated;
+
+  const selectedProject = copilotResume.filters.project;
+  const projects = new Map();
+  for (const session of copilotResume.sessions) {
+    const label = copilotSessionProject(session);
+    const key = copilotSessionProjectKey(session);
+    if (key && !projects.has(key)) projects.set(key, label);
+  }
+  elements.copilotResumeProjectFilter.textContent = "";
+  const all = document.createElement("option");
+  all.value = "all";
+  all.textContent = "All projects";
+  elements.copilotResumeProjectFilter.append(all);
+  for (const [key, label] of [...projects].sort((left, right) => left[1].localeCompare(right[1]))) {
+    const option = document.createElement("option");
+    option.value = key;
+    option.textContent = label;
+    elements.copilotResumeProjectFilter.append(option);
+  }
+  copilotResume.filters.project = projects.has(selectedProject) ? selectedProject : "all";
+  elements.copilotResumeProjectFilter.value = copilotResume.filters.project;
+}
+
+function setCopilotResumeOriginFilter(origin) {
+  if (!new Set(["multiterm", "other", "all"]).has(origin) || copilotResume.provider !== "copilot") return;
+  copilotResume.filters.origin = origin;
+  copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
+  clearCopilotAiSearch();
+  syncCopilotResumeFilters();
+  renderCopilotSessions();
+}
+
+function applyCopilotResumeFilterControls() {
+  copilotResume.filters.source = elements.copilotResumeSourceFilter.value;
+  copilotResume.filters.project = elements.copilotResumeProjectFilter.value;
+  copilotResume.filters.updated = elements.copilotResumeUpdatedFilter.value;
+  copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
+  clearCopilotAiSearch();
+  renderCopilotSessions();
+}
+
+function copilotSessionMatchesResumeFilters(session) {
+  if (copilotResume.scope === "remote") return true;
+  const { origin, source, project, updated } = copilotResume.filters;
+  const startedByMultiTerm = copilotSessionStartedByMultiTerm(session);
+  if (origin === "multiterm" && !startedByMultiTerm) return false;
+  if (origin === "other" && startedByMultiTerm) return false;
+  if (source !== "all" && session.source !== source) return false;
+  if (project !== "all" && copilotSessionProjectKey(session) !== project) return false;
+  const ageByRange = { day: 86400000, week: 604800000, month: 2592000000 };
+  if (updated !== "any") {
+    const timestamp = Date.parse(session.updatedAt);
+    if (!Number.isFinite(timestamp) || timestamp < Date.now() - ageByRange[updated]) return false;
+  }
+  return true;
 }
 
 function setCopilotResumeScope(scope) {
@@ -11783,6 +12079,17 @@ function copilotSessionIdentity(session) {
     if (COPILOT_RESUME_ID_PATTERN.test(String(candidate || ""))) ids.add(String(candidate).toLowerCase());
   }
   return { key, ids };
+}
+
+function copilotSessionStartedByMultiTerm(session) {
+  if (session?.source !== "cli") return false;
+  const identity = copilotSessionIdentity(session);
+  if (!identity.key && identity.ids.size === 0) return false;
+  const matches = (record) => (identity.key && String(record?.assistantSessionKey || "") === identity.key)
+    || (record?.aiSessionId && identity.ids.has(String(record.aiSessionId).toLowerCase()));
+  if (Object.values(state.terminalArtifacts.terminals).some(matches)) return true;
+  if ((state.terminalArtifacts.recoveredTitles || []).some(matches)) return true;
+  return (state.terminalArtifacts.recoveredNotes || []).some(matches);
 }
 
 function copilotSessionTitleAssociations(session) {
@@ -12170,18 +12477,20 @@ function remoteSessionBlockReason(session) {
 
 function renderCopilotSessions() {
   closeCopilotSessionTitlesFlyout();
+  syncCopilotResumeFilters();
   const query = normalizeSearchText(elements.copilotResumeSearch.value);
   const queryTokens = query.split(/\s+/).filter(Boolean);
+  const structured = copilotResume.sessions.filter(copilotSessionMatchesResumeFilters);
   const filtered = copilotResume.aiKeys
-    ? copilotResume.sessions.filter((session) => copilotResume.aiKeys.has(session.key))
+    ? structured.filter((session) => copilotResume.aiKeys.has(session.key))
     : query
-    ? copilotResume.sessions.filter((session) => {
+    ? structured.filter((session) => {
       const corpus = normalizeSearchText([
         copilotSourceLabel(session.source), session.name, session.repository, session.branch, session.cwd, session.id, session.state || ""
       ].join(" "));
       return queryTokens.every((token) => corpus.includes(token));
     })
-    : copilotResume.sessions;
+    : structured;
   const shown = filtered.slice(0, copilotResume.visibleLimit);
   elements.copilotResumeList.textContent = "";
 
@@ -12202,6 +12511,8 @@ function renderCopilotSessions() {
         ? "Copilot found no sessions matching that request."
         : copilotResume.silent
           ? copilotSessionSilenceReason()
+          : copilotResume.sessions.length > 0
+            ? "No sessions match the selected filters."
           : copilotResume.scope === "remote"
             ? "No remote sessions were found for this account."
             : `No resumable ${aiAssistantName(copilotResume.provider)} sessions found.`;
@@ -12237,6 +12548,13 @@ function renderCopilotSessions() {
     source.className = "copilot-session-source";
     source.textContent = copilotSourceLabel(session.source);
     context.append(source);
+    if (copilotSessionStartedByMultiTerm(session)) {
+      const origin = document.createElement("span");
+      origin.className = "copilot-session-origin";
+      origin.textContent = "MultiTerm";
+      origin.title = "This Copilot CLI session was started in a MultiTerm terminal";
+      context.append(origin);
+    }
     if (session.repository) {
       const repository = document.createElement("span");
       repository.className = "copilot-session-repository";
@@ -12348,7 +12666,9 @@ function renderCopilotSessions() {
       ? `${shown.length} of ${filtered.length} AI match${filtered.length === 1 ? "" : "es"}`
       : query
       ? `${shown.length} shown, ${filtered.length} matching, ${copilotResume.sessions.length} total`
-      : `${shown.length} of ${copilotResume.sessions.length} resumable session${copilotResume.sessions.length === 1 ? "" : "s"}`;
+      : filtered.length !== copilotResume.sessions.length
+        ? `${shown.length} shown, ${filtered.length} matching filters, ${copilotResume.sessions.length} total`
+        : `${shown.length} of ${copilotResume.sessions.length} resumable session${copilotResume.sessions.length === 1 ? "" : "s"}`;
   }
 }
 
@@ -12447,7 +12767,7 @@ function connectToRemoteCopilotSession(session) {
     toast(blocked, "warn", 3600);
     return false;
   }
-  const command = buildAiAssistantCommand({ provider: "copilot", connectId: id });
+  const command = buildAiAssistantCommand({ provider: "copilot", connectId: id, yolo: copilotResume.yolo });
   if (!command) {
     toast("GitHub Copilot is not installed and signed in", "error", 2800);
     return false;
@@ -12495,7 +12815,7 @@ function openCopilotRemotePicker() {
     runStartup: true,
     shell: "pwsh",
     title: "Copilot remote picker",
-    pendingCommand: buildAiAssistantCommand({ provider: "copilot", connectPicker: true, logKey })
+    pendingCommand: buildAiAssistantCommand({ provider: "copilot", connectPicker: true, logKey, yolo: copilotResume.yolo })
   });
   registerCopilotLogTerminal(logKey, terminal);
   return true;
@@ -12513,7 +12833,7 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
     return openResumeCwdChange(session);
   }
   if (copilotResume.newTerminal && (session.source === "cli" || session.source === "claude")) {
-    const command = buildAiAssistantCommand({ provider, resumeId: id });
+    const command = buildAiAssistantCommand({ provider, resumeId: id, yolo: copilotResume.yolo });
     if (!command) {
       restoreCopilotResume();
       return false;
@@ -12565,7 +12885,7 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
     closeCopilotResume();
     openCopilotSessionTerminal(
       session,
-      buildAiAssistantCommand({ provider: "copilot", sessionId, initialPrompt: prompt }),
+      buildAiAssistantCommand({ provider: "copilot", sessionId, initialPrompt: prompt, yolo: copilotResume.yolo }),
       confirmedCwd,
       "copilot",
       null,
@@ -12580,7 +12900,7 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
   sendBridge({
     type: "input",
     id: terminal.id,
-    data: `${buildAiAssistantCommand({ provider, resumeId: id, shell: cwdTerminalShell(terminal) })}\r`
+    data: `${buildAiAssistantCommand({ provider, resumeId: id, shell: cwdTerminalShell(terminal), yolo: copilotResume.yolo })}\r`
   });
   window.requestAnimationFrame(() => terminal.term.focus());
   return true;
@@ -12763,7 +13083,7 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
   { id: "top.ai-sessions", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "copilotSessionsToggle", label: "Resume AI assistant session", detail: "Opens saved GitHub Copilot or Claude sessions.", defaults: [{ ctrl: true, alt: true, key: "r" }], run: () => elements.copilotSessionsToggle.click() },
   { id: "top.theme", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "themeToggle", label: "Toggle theme", detail: "Switches between the light and dark app themes.", defaults: [{ ctrl: true, alt: true, key: "d" }], run: () => elements.themeToggle.click() },
   { id: "top.tmux", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "attachTmux", label: "Attach WSL tmux session", detail: "Opens the WSL tmux session picker.", defaults: [{ ctrl: true, alt: true, key: "t" }], run: () => elements.attachTmux.click() },
-  { id: "top.minimize", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "minimizeApp", label: "Minimize MultiTerm", detail: "Minimizes the application window.", defaults: [{ ctrl: true, alt: true, key: "m" }], run: () => elements.minimizeApp.click() },
+  { id: "top.minimize", section: "App", label: "Minimize MultiTerm", detail: "Minimizes the application window.", defaults: [{ ctrl: true, alt: true, key: "m" }], run: minimizeMultiTerm },
   { id: "top.toggle-header", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "toggleHeaderTop", label: "Collapse or expand top bar", detail: "Hides or restores the app top bar.", defaults: [{ ctrl: true, shift: true, key: "h" }], run: () => elements.toggleHeaderTop.click() },
   { id: "terminal.new", section: TOP_BAR_SHORTCUT_SECTION, topBarElement: "addTerminal", label: "New terminal", detail: "Starts a terminal on the active page.", defaults: [{ ctrl: true, key: "n" }, { ctrl: true, shift: true, key: "t" }], run: () => addTerminal({ reveal: true, runStartup: true }) },
   { id: "app.quick-switch", section: "App", label: "Switch terminal", detail: "Opens the quick terminal switcher.", defaults: [{ alt: true, key: "q" }], run: () => quickSwitch.open ? closeQuickSwitch() : openQuickSwitch() },
@@ -13307,6 +13627,9 @@ function restartSession(id) {
     color: terminal.color,
     headerBackground: cloneHeaderBackground(terminal.headerBackground),
     fontSizeOverride: terminal.fontSizeOverride,
+    terminalBackground: terminal.terminalBackground,
+    terminalForeground: terminal.terminalForeground,
+    terminalFontFamily: terminal.terminalFontFamily,
     headerActionOverrides: { ...terminal.headerActionOverrides },
     headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
     notificationOverrides: { ...terminal.notificationOverrides },
@@ -13326,6 +13649,9 @@ function restartSession(id) {
     color: meta.color,
     headerBackground: meta.headerBackground,
     fontSizeOverride: meta.fontSizeOverride,
+    terminalBackground: meta.terminalBackground,
+    terminalForeground: meta.terminalForeground,
+    terminalFontFamily: meta.terminalFontFamily,
     headerActionOverrides: meta.headerActionOverrides,
     headerActionShortcutOverrides: meta.headerActionShortcutOverrides,
     notificationOverrides: meta.notificationOverrides,
@@ -14775,6 +15101,7 @@ const worktreeDialog = {
   source: "folder",
   terminalId: null,
   openInNewTerminal: false,
+  yolo: true,
   returnFocus: null,
   closeTimer: 0,
   inspectTimer: 0,
@@ -14915,10 +15242,16 @@ function setWorktreeSource(source) {
   updateWorktreeReadiness();
 }
 
-function openWorktreeDialog({ terminalId = null, openInNewTerminal = false, returnFocus = document.activeElement } = {}) {
+function openWorktreeDialog({
+  terminalId = null,
+  openInNewTerminal = false,
+  returnFocus = document.activeElement,
+  yolo = state.settings.aiSessionYolo
+} = {}) {
   const terminal = terminalId ? state.terminals.get(terminalId) : null;
   worktreeDialog.terminalId = terminal ? terminalId : null;
   worktreeDialog.openInNewTerminal = openInNewTerminal || !terminal;
+  worktreeDialog.yolo = Boolean(yolo);
   worktreeDialog.returnFocus = returnFocus;
   worktreeDialog.inspection = null;
   worktreeDialog.existingNames = [];
@@ -15047,7 +15380,7 @@ async function createWorktreeAndRun() {
       return;
     }
     const sessionId = state.settings.aiSessionProvider === "copilot" ? claimAiSessionId(terminal) : "";
-    const command = `Set-Location -LiteralPath ${powerShellLiteral(worktreePath)}; ${buildAiAssistantCommand({ sessionId })}`;
+    const command = `Set-Location -LiteralPath ${powerShellLiteral(worktreePath)}; ${buildAiAssistantCommand({ sessionId, yolo: worktreeDialog.yolo })}`;
     if (sessionId) registerCopilotLogTerminal(sessionId, terminal);
     setAwaitingInput(terminal, false);
     sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
@@ -15068,7 +15401,7 @@ async function createWorktreeAndRun() {
     parentDirectory,
     worktreePath,
     name,
-    assistantCommand: buildAiAssistantCommand({ sessionId: worktreeSessionId })
+    assistantCommand: buildAiAssistantCommand({ sessionId: worktreeSessionId, yolo: worktreeDialog.yolo })
   });
 
   let terminal = worktreeDialog.openInNewTerminal ? null : state.terminals.get(worktreeDialog.terminalId);
@@ -16085,7 +16418,7 @@ function startCwdSessionQuery({ retry = false } = {}) {
   const session = cwdChange.resumeSession;
   if (!cwdSessionQueryEligible(session) || cwdChange.queryBusy) return false;
   if (retry) discardCwdSessionQuery();
-  if (!buildAiAssistantCommand({ provider: "copilot", resumeId: session.id })) {
+  if (!buildAiAssistantCommand({ provider: "copilot", resumeId: session.id, yolo: copilotResume.yolo })) {
     setCwdChangeStatus("GitHub Copilot is not installed and signed in.", "error");
     return false;
   }
@@ -16112,7 +16445,8 @@ function startCwdSessionQuery({ retry = false } = {}) {
       provider: "copilot",
       resumeId: session.id,
       initialPrompt: cwdSessionQueryPrompt(token),
-      tools: false
+      tools: false,
+      yolo: copilotResume.yolo
     }),
     cwdSessionProbe: { generation, sessionId: session.id, token, resolved: false }
   });
@@ -18713,6 +19047,9 @@ function saveWorkspace(rawName) {
       color: terminal.color,
       headerBackground: cloneHeaderBackground(terminal.headerBackground),
       fontSizeOverride: terminal.fontSizeOverride,
+      terminalBackground: terminal.terminalBackground,
+      terminalForeground: terminal.terminalForeground,
+      terminalFontFamily: terminal.terminalFontFamily,
       headerActionOverrides: { ...terminal.headerActionOverrides },
       headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
       notificationOverrides: { ...terminal.notificationOverrides },
@@ -18739,6 +19076,10 @@ function restoreWorkspace(name) {
   state.settings.pageCloseAction = normalizePageCloseAction(state.settings.pageCloseAction);
   state.settings.titleFontScale = normalizeTitleFontScale(state.settings.titleFontScale);
   state.settings.workspaceZoom = normalizeWorkspaceZoom(state.settings.workspaceZoom);
+  state.settings.terminalBackground = normalizeTerminalColor(state.settings.terminalBackground);
+  state.settings.terminalForeground = normalizeTerminalColor(state.settings.terminalForeground);
+  state.settings.terminalHeaderBackground = cloneHeaderBackground(state.settings.terminalHeaderBackground);
+  state.settings.fontFamily = normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily);
   syncControlsFromSettings();
   clearSnapLayout(false);
   applySettings();
@@ -18793,6 +19134,9 @@ function restoreWorkspace(name) {
         color: meta.color,
         headerBackground: meta.headerBackground,
         fontSizeOverride: meta.fontSizeOverride,
+        terminalBackground: meta.terminalBackground,
+        terminalForeground: meta.terminalForeground,
+        terminalFontFamily: meta.terminalFontFamily,
         headerActionOverrides: meta.headerActionOverrides,
         headerActionShortcutOverrides: meta.headerActionShortcutOverrides,
         notificationOverrides: meta.notificationOverrides,
@@ -19000,7 +19344,205 @@ function paintTerminalHeaderBackground(terminal, value) {
 }
 
 function applyTerminalHeaderBackground(terminal) {
-  paintTerminalHeaderBackground(terminal, terminal?.headerBackground);
+  paintTerminalHeaderBackground(terminal, terminal?.headerBackground || state.settings.terminalHeaderBackground);
+}
+
+function applyTerminalAppearance(terminal) {
+  if (!terminal?.term) return;
+  terminal.term.options.fontFamily = fontStacks[terminalFontFamilyName(terminal)];
+  terminal.term.options.theme = terminalThemeFor(terminal);
+  scheduleFit(terminal);
+}
+
+function terminalColorChannels(hex) {
+  const color = normalizeTerminalColor(hex) || "#000000";
+  return [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
+}
+
+function terminalColorToHsv(hex) {
+  const [red, green, blue] = terminalColorChannels(hex).map((channel) => channel / 255);
+  const maximum = Math.max(red, green, blue);
+  const minimum = Math.min(red, green, blue);
+  const delta = maximum - minimum;
+  let hue = 0;
+  if (delta > 0) {
+    if (maximum === red) hue = 60 * (((green - blue) / delta) % 6);
+    else if (maximum === green) hue = 60 * (((blue - red) / delta) + 2);
+    else hue = 60 * (((red - green) / delta) + 4);
+  }
+  if (hue < 0) hue += 360;
+  return {
+    hue: Math.round(hue) % 360,
+    saturation: maximum === 0 ? 0 : (delta / maximum) * 100,
+    value: maximum * 100
+  };
+}
+
+function terminalHsvToColor({ hue, saturation, value }) {
+  const normalizedHue = ((Number(hue) % 360) + 360) % 360;
+  const normalizedSaturation = Math.min(100, Math.max(0, Number(saturation))) / 100;
+  const normalizedValue = Math.min(100, Math.max(0, Number(value))) / 100;
+  const chroma = normalizedValue * normalizedSaturation;
+  const section = normalizedHue / 60;
+  const secondary = chroma * (1 - Math.abs((section % 2) - 1));
+  const offset = normalizedValue - chroma;
+  const channels = section < 1 ? [chroma, secondary, 0]
+    : section < 2 ? [secondary, chroma, 0]
+      : section < 3 ? [0, chroma, secondary]
+        : section < 4 ? [0, secondary, chroma]
+          : section < 5 ? [secondary, 0, chroma]
+            : [chroma, 0, secondary];
+  return headerGradientChannelsToHex(channels.map((channel) => (channel + offset) * 255));
+}
+
+function terminalAppearanceValues(terminal, scope = terminalAppearanceScope) {
+  const theme = themes[state.settings.theme] || themes.ember;
+  if (scope === "all") {
+    return {
+      background: normalizeTerminalColor(state.settings.terminalBackground) || theme.background,
+      foreground: normalizeTerminalColor(state.settings.terminalForeground) || theme.foreground,
+      fontFamily: normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily)
+    };
+  }
+  return {
+    background: normalizeTerminalColor(terminal?.terminalBackground || state.settings.terminalBackground) || theme.background,
+    foreground: normalizeTerminalColor(terminal?.terminalForeground || state.settings.terminalForeground) || theme.foreground,
+    fontFamily: terminalFontFamilyName(terminal)
+  };
+}
+
+function setTerminalAppearanceColorControls(kind, hex, pickerState = null) {
+  const color = normalizeTerminalColor(hex);
+  if (!color) return;
+  const channels = terminalColorChannels(color);
+  const prefix = kind === "background" ? "terminalAppearanceBackground" : "terminalAppearanceForeground";
+  elements[`${prefix}Hex`].value = color;
+  elements[`${prefix}Hex`].removeAttribute("aria-invalid");
+  ["R", "G", "B"].forEach((channel, index) => { elements[`${prefix}${channel}`].value = String(channels[index]); });
+  const picker = pickerState || terminalColorToHsv(color);
+  terminalAppearanceColorState[kind] = { ...picker };
+  elements[`${prefix}Hue`].value = String(Math.round(picker.hue));
+  elements[`${prefix}Picker`].style.setProperty("--terminal-picker-hue", String(picker.hue));
+  elements[`${prefix}Handle`].style.left = `${picker.saturation}%`;
+  elements[`${prefix}Handle`].style.top = `${100 - picker.value}%`;
+  elements[`${prefix}Plane`].setAttribute(
+    "aria-valuetext",
+    `Saturation ${Math.round(picker.saturation)}%, brightness ${Math.round(picker.value)}%`
+  );
+}
+
+function commitTerminalInlineColor(kind) {
+  if (!terminalAppearanceDraft) return;
+  const picker = { ...terminalAppearanceColorState[kind] };
+  const color = terminalHsvToColor(picker);
+  terminalAppearanceDraft[kind] = color;
+  setTerminalAppearanceColorControls(kind, color, picker);
+  updateTerminalAppearancePreview();
+}
+
+function setTerminalColorPickerExpanded(kind, expanded) {
+  const prefix = kind === "background" ? "terminalAppearanceBackground" : "terminalAppearanceForeground";
+  const button = elements[`${prefix}Expand`];
+  const editor = elements[`${prefix}Picker`].closest(".terminal-color-editor");
+  const open = Boolean(expanded);
+  editor.classList.toggle("is-picker-expanded", open);
+  button.setAttribute("aria-expanded", String(open));
+  button.title = `${open ? "Collapse" : "Expand"} ${kind === "background" ? "background" : "font"} color picker`;
+  button.setAttribute("aria-label", button.title);
+  button.innerHTML = `<i data-lucide="${open ? "minimize-2" : "maximize-2"}"></i>`;
+  refreshIcons(button);
+}
+
+function bindTerminalInlineColorPicker(kind) {
+  const prefix = kind === "background" ? "terminalAppearanceBackground" : "terminalAppearanceForeground";
+  const plane = elements[`${prefix}Plane`];
+  const hue = elements[`${prefix}Hue`];
+  const expand = elements[`${prefix}Expand`];
+  const updateFromPoint = (clientX, clientY) => {
+    const rect = plane.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    terminalAppearanceColorState[kind].saturation = Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
+    terminalAppearanceColorState[kind].value = 100 - Math.min(100, Math.max(0, ((clientY - rect.top) / rect.height) * 100));
+    commitTerminalInlineColor(kind);
+  };
+  plane.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    plane.setPointerCapture(event.pointerId);
+    updateFromPoint(event.clientX, event.clientY);
+  });
+  plane.addEventListener("pointermove", (event) => {
+    if (!plane.hasPointerCapture(event.pointerId)) return;
+    updateFromPoint(event.clientX, event.clientY);
+  });
+  plane.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const amount = event.shiftKey ? 5 : 1;
+    const picker = terminalAppearanceColorState[kind];
+    if (event.key === "ArrowLeft") picker.saturation = Math.max(0, picker.saturation - amount);
+    if (event.key === "ArrowRight") picker.saturation = Math.min(100, picker.saturation + amount);
+    if (event.key === "ArrowDown") picker.value = Math.max(0, picker.value - amount);
+    if (event.key === "ArrowUp") picker.value = Math.min(100, picker.value + amount);
+    commitTerminalInlineColor(kind);
+  });
+  hue.addEventListener("input", () => {
+    terminalAppearanceColorState[kind].hue = headerGradientControlValue(hue.value, 0, 359, 0);
+    commitTerminalInlineColor(kind);
+  });
+  expand.addEventListener("click", () => {
+    setTerminalColorPickerExpanded(kind, expand.getAttribute("aria-expanded") !== "true");
+  });
+}
+
+function updateTerminalAppearancePreview() {
+  if (!terminalAppearanceDraft) return;
+  elements.terminalAppearancePreview.style.background = terminalAppearanceDraft.background;
+  elements.terminalAppearancePreview.style.color = terminalAppearanceDraft.foreground;
+  elements.terminalAppearancePreview.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
+  const terminal = state.terminals.get(headerBackgroundTerminalId);
+  if (terminal) {
+    terminal.term.options.theme = terminalThemeWithColors(terminalAppearanceDraft.background, terminalAppearanceDraft.foreground);
+    terminal.term.options.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
+  }
+}
+
+function loadTerminalAppearanceDraft() {
+  const terminal = state.terminals.get(headerBackgroundTerminalId);
+  terminalAppearanceDraft = terminalAppearanceValues(terminal);
+  setTerminalAppearanceColorControls("background", terminalAppearanceDraft.background);
+  setTerminalAppearanceColorControls("foreground", terminalAppearanceDraft.foreground);
+  elements.terminalAppearanceFontFamily.value = terminalAppearanceDraft.fontFamily;
+  elements.terminalAppearanceFontFamily.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
+  headerBackgroundDraft = cloneHeaderBackground(
+    terminalAppearanceScope === "all" ? state.settings.terminalHeaderBackground : terminal?.headerBackground || state.settings.terminalHeaderBackground
+  ) || defaultHeaderBackground(terminal);
+  syncHeaderGradientGeometry();
+  renderHeaderGradientStops();
+  updateTerminalAppearancePreview();
+}
+
+function setTerminalAppearanceTab(tab, { focus = false } = {}) {
+  terminalAppearanceTab = tab === "header" ? "header" : "terminal";
+  const header = terminalAppearanceTab === "header";
+  elements.terminalAppearancePanel.hidden = header;
+  elements.terminalHeaderAppearancePanel.hidden = !header;
+  elements.terminalAppearanceTabTerminal.setAttribute("aria-selected", String(!header));
+  elements.terminalAppearanceTabHeader.setAttribute("aria-selected", String(header));
+  elements.headerBackgroundReset.querySelector("span").textContent = header ? "Use default header" : "Use default terminal";
+  setTerminalAppearanceApplyChoices(false);
+  if (focus) (header ? elements.terminalAppearanceTabHeader : elements.terminalAppearanceTabTerminal).focus();
+}
+
+function setTerminalAppearanceApplyChoices(open) {
+  const expanded = Boolean(open);
+  elements.terminalAppearanceApplyChoices.hidden = !expanded;
+  elements.headerBackgroundApply.setAttribute("aria-expanded", String(expanded));
+}
+
+function commitTerminalAppearance(scope) {
+  terminalAppearanceScope = scope === "all" ? "all" : "terminal";
+  setTerminalAppearanceApplyChoices(false);
+  applyHeaderBackgroundEditor();
 }
 
 function headerGradientChannelsToHex(channels) {
@@ -19259,7 +19801,7 @@ function addHeaderGradientStop() {
   renderHeaderGradientStops();
 }
 
-function openHeaderBackgroundEditor(terminal) {
+function openTerminalAppearanceDialog(terminal, tab = "terminal") {
   if (!terminal || !headerBackgroundReady) return;
   hideContextMenu();
   // A pending close animation would otherwise hide the dialog we are about to
@@ -19269,20 +19811,31 @@ function openHeaderBackgroundEditor(terminal) {
   headerBackgroundTerminalId = terminal.id;
   headerBackgroundOpen = true;
   headerBackgroundReturnFocus = terminal.term.textarea || terminal.screen;
-  headerBackgroundDraft = cloneHeaderBackground(terminal.headerBackground) || defaultHeaderBackground(terminal);
+  terminalAppearanceScope = "terminal";
   elements.headerBackgroundSubtitle.textContent = terminal.titleInput.value || "Terminal";
   const bar = terminal.pane?.querySelector(".pane-bar");
   const barHeight = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
   if (barHeight > 0) elements.headerBackgroundPreview.style.setProperty("--header-preview-height", `${barHeight}px`);
   else elements.headerBackgroundPreview.style.removeProperty("--header-preview-height");
-  syncHeaderGradientGeometry();
-  renderHeaderGradientStops();
+  loadTerminalAppearanceDraft();
+  setTerminalAppearanceApplyChoices(false);
+  setTerminalColorPickerExpanded("background", false);
+  setTerminalColorPickerExpanded("foreground", false);
+  setTerminalAppearanceTab(tab);
   elements.headerBackgroundOverlay.hidden = false;
   window.requestAnimationFrame(() => {
     elements.headerBackgroundOverlay.classList.add("is-open");
-    elements.headerBackgroundOverlay.querySelector(`[data-header-gradient-type="${headerBackgroundDraft?.type}"]`)?.focus();
+    (tab === "header" ? elements.terminalAppearanceTabHeader : elements.terminalAppearanceTabTerminal).focus();
   });
   refreshIcons(elements.headerBackgroundOverlay);
+}
+
+function openTerminalAppearanceEditor(terminal) {
+  openTerminalAppearanceDialog(terminal, "terminal");
+}
+
+function openHeaderBackgroundEditor(terminal) {
+  openTerminalAppearanceDialog(terminal, "header");
 }
 
 function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
@@ -19292,10 +19845,15 @@ function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
   headerBackgroundTerminalId = null;
   headerBackgroundReturnFocus = null;
   headerBackgroundDraft = null;
+  terminalAppearanceDraft = null;
+  setTerminalAppearanceApplyChoices(false);
   headerBackgroundOpen = false;
   // Repaint from the terminal's stored value. That discards an uncommitted
   // live preview on cancel, and is a no-op after Apply or Use default.
-  if (terminal) applyTerminalHeaderBackground(terminal);
+  if (terminal) {
+    applyTerminalAppearance(terminal);
+    applyTerminalHeaderBackground(terminal);
+  }
   elements.headerBackgroundOverlay.classList.remove("is-open");
   headerBackgroundCloseTimer = window.setTimeout(() => {
     headerBackgroundCloseTimer = 0;
@@ -19306,35 +19864,93 @@ function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
 
 function applyHeaderBackgroundEditor() {
   const terminal = state.terminals.get(headerBackgroundTerminalId);
-  const background = cloneHeaderBackground(headerBackgroundDraft);
   if (!terminal) {
     closeHeaderBackgroundEditor();
-    toast("That terminal is gone; header background not saved", "warn", 2600);
+    toast("That terminal is gone; appearance not saved", "warn", 2600);
     return;
   }
-  if (!background) {
-    toast("Header background needs at least two valid color stops", "warn", 2600);
-    return;
+  if (terminalAppearanceTab === "header") {
+    const background = cloneHeaderBackground(headerBackgroundDraft);
+    if (!background) {
+      toast("Header background needs at least two valid color stops", "warn", 2600);
+      return;
+    }
+    if (terminalAppearanceScope === "all") {
+      state.settings.terminalHeaderBackground = background;
+      for (const candidate of state.terminals.values()) candidate.headerBackground = null;
+      saveSettings();
+      saveSessionSnapshot();
+    } else {
+      terminal.headerBackground = background;
+      saveSessionSnapshot();
+    }
+    for (const candidate of state.terminals.values()) applyTerminalHeaderBackground(candidate);
+  } else if (terminalAppearanceDraft) {
+    if (terminalAppearanceScope === "all") {
+      state.settings.terminalBackground = terminalAppearanceDraft.background;
+      state.settings.terminalForeground = terminalAppearanceDraft.foreground;
+      state.settings.fontFamily = terminalAppearanceDraft.fontFamily;
+      elements.fontFamily.value = state.settings.fontFamily;
+      for (const candidate of state.terminals.values()) {
+        candidate.terminalBackground = "";
+        candidate.terminalForeground = "";
+        candidate.terminalFontFamily = "";
+      }
+      saveSettings();
+      saveSessionSnapshot();
+    } else {
+      terminal.terminalBackground = terminalAppearanceDraft.background;
+      terminal.terminalForeground = terminalAppearanceDraft.foreground;
+      terminal.terminalFontFamily = terminalAppearanceDraft.fontFamily;
+      saveSessionSnapshot();
+    }
+    for (const candidate of state.terminals.values()) applyTerminalAppearance(candidate);
   }
-  terminal.headerBackground = background;
-  applyTerminalHeaderBackground(terminal);
-  saveSessionSnapshot();
   closeHeaderBackgroundEditor();
-  toast("Header background updated", "success", 1800);
+  toast(terminalAppearanceTab === "header" ? "Terminal header updated" : "Terminal appearance updated", "success", 1800);
 }
 
 function resetHeaderBackgroundEditor() {
   const terminal = state.terminals.get(headerBackgroundTerminalId);
   if (!terminal) {
     closeHeaderBackgroundEditor();
-    toast("That terminal is gone; header background not reset", "warn", 2600);
+    toast("That terminal is gone; appearance not reset", "warn", 2600);
     return;
   }
-  terminal.headerBackground = null;
-  applyTerminalHeaderBackground(terminal);
-  saveSessionSnapshot();
+  if (terminalAppearanceTab === "header") {
+    if (terminalAppearanceScope === "all") {
+      state.settings.terminalHeaderBackground = null;
+      for (const candidate of state.terminals.values()) candidate.headerBackground = null;
+      saveSettings();
+      saveSessionSnapshot();
+    } else {
+      terminal.headerBackground = null;
+      saveSessionSnapshot();
+    }
+    for (const candidate of state.terminals.values()) applyTerminalHeaderBackground(candidate);
+  } else {
+    if (terminalAppearanceScope === "all") {
+      state.settings.terminalBackground = "";
+      state.settings.terminalForeground = "";
+      state.settings.fontFamily = defaultSettings.fontFamily;
+      elements.fontFamily.value = state.settings.fontFamily;
+      for (const candidate of state.terminals.values()) {
+        candidate.terminalBackground = "";
+        candidate.terminalForeground = "";
+        candidate.terminalFontFamily = "";
+      }
+      saveSettings();
+      saveSessionSnapshot();
+    } else {
+      terminal.terminalBackground = "";
+      terminal.terminalForeground = "";
+      terminal.terminalFontFamily = "";
+      saveSessionSnapshot();
+    }
+    for (const candidate of state.terminals.values()) applyTerminalAppearance(candidate);
+  }
   closeHeaderBackgroundEditor();
-  toast("Header background reset", "info", 1800);
+  toast("Terminal appearance reset", "info", 1800);
 }
 
 function bindHeaderBackgroundEditor() {
@@ -19347,7 +19963,16 @@ function bindHeaderBackgroundEditor() {
     "headerBackgroundReset", "headerBackgroundSubtitle", "headerGradientAddStop", "headerGradientAngle",
     "headerGradientAngleRow", "headerGradientAngleValue", "headerGradientCenterX", "headerGradientCenterXRow",
     "headerGradientCenterXValue", "headerGradientCenterY", "headerGradientCenterYRow", "headerGradientCenterYValue",
-    "headerGradientShape", "headerGradientShapeRow", "headerGradientStopList", "headerGradientStopsCount"
+    "headerGradientShape", "headerGradientShapeRow", "headerGradientStopList", "headerGradientStopsCount",
+    "terminalAppearanceApplyAll", "terminalAppearanceApplyChoices", "terminalAppearanceApplyTerminal",
+    "terminalAppearanceBackgroundB", "terminalAppearanceBackgroundExpand", "terminalAppearanceBackgroundG",
+    "terminalAppearanceBackgroundHandle", "terminalAppearanceBackgroundHex", "terminalAppearanceBackgroundHue",
+    "terminalAppearanceBackgroundPicker", "terminalAppearanceBackgroundPlane", "terminalAppearanceBackgroundR",
+    "terminalAppearanceFontFamily", "terminalAppearanceForegroundB", "terminalAppearanceForegroundExpand",
+    "terminalAppearanceForegroundG", "terminalAppearanceForegroundHandle", "terminalAppearanceForegroundHex",
+    "terminalAppearanceForegroundHue", "terminalAppearanceForegroundPicker", "terminalAppearanceForegroundPlane",
+    "terminalAppearanceForegroundR", "terminalAppearancePanel", "terminalAppearancePreview",
+    "terminalAppearanceTabHeader", "terminalAppearanceTabTerminal", "terminalHeaderAppearancePanel"
   ];
   const missing = required.filter((key) => !elements[key]);
   if (missing.length > 0) {
@@ -19355,6 +19980,56 @@ function bindHeaderBackgroundEditor() {
     return;
   }
   headerBackgroundReady = true;
+  elements.terminalAppearanceTabTerminal.addEventListener("click", () => setTerminalAppearanceTab("terminal"));
+  elements.terminalAppearanceTabHeader.addEventListener("click", () => setTerminalAppearanceTab("header"));
+  bindTerminalInlineColorPicker("background");
+  bindTerminalInlineColorPicker("foreground");
+  const bindTerminalColor = (kind) => {
+    const key = kind === "background" ? "background" : "foreground";
+    const prefix = kind === "background" ? "terminalAppearanceBackground" : "terminalAppearanceForeground";
+    const hex = elements[`${prefix}Hex`];
+    const channels = [elements[`${prefix}R`], elements[`${prefix}G`], elements[`${prefix}B`]];
+    const commitColor = (value) => {
+      const normalized = normalizeTerminalColor(value);
+      hex.setAttribute("aria-invalid", String(!normalized));
+      if (!normalized || !terminalAppearanceDraft) return;
+      terminalAppearanceDraft[key] = normalized;
+      setTerminalAppearanceColorControls(kind, normalized);
+      updateTerminalAppearancePreview();
+    };
+    hex.addEventListener("input", () => commitColor(hex.value));
+    hex.addEventListener("blur", () => {
+      if (!terminalAppearanceDraft) return;
+      setTerminalAppearanceColorControls(kind, terminalAppearanceDraft[key]);
+    });
+    const commitChannels = () => {
+      if (!terminalAppearanceDraft || channels.some((input) => input.value === "")) return;
+      const values = channels.map((input) => headerGradientControlValue(input.value, 0, 255, 0));
+      commitColor(headerGradientChannelsToHex(values));
+    };
+    for (const input of channels) {
+      input.addEventListener("input", commitChannels);
+      input.addEventListener("change", commitChannels);
+    }
+  };
+  bindTerminalColor("background");
+  bindTerminalColor("foreground");
+  elements.terminalAppearanceFontFamily.addEventListener("change", () => {
+    if (!terminalAppearanceDraft) return;
+    terminalAppearanceDraft.fontFamily = normalizeTerminalFontFamily(
+      elements.terminalAppearanceFontFamily.value,
+      defaultSettings.fontFamily
+    );
+    elements.terminalAppearanceFontFamily.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
+    updateTerminalAppearancePreview();
+  });
+  for (const tab of [elements.terminalAppearanceTabTerminal, elements.terminalAppearanceTabHeader]) {
+    tab.addEventListener("keydown", (event) => {
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+      event.preventDefault();
+      setTerminalAppearanceTab(terminalAppearanceTab === "header" ? "terminal" : "header", { focus: true });
+    });
+  }
   for (const button of elements.headerBackgroundOverlay.querySelectorAll("[data-header-gradient-type]")) {
     button.addEventListener("click", () => {
       if (!headerBackgroundDraft) return;
@@ -19386,7 +20061,13 @@ function bindHeaderBackgroundEditor() {
   elements.headerGradientAddStop.addEventListener("click", addHeaderGradientStop);
   elements.headerBackgroundClose.addEventListener("click", closeHeaderBackgroundEditor);
   elements.headerBackgroundCancel.addEventListener("click", closeHeaderBackgroundEditor);
-  elements.headerBackgroundApply.addEventListener("click", applyHeaderBackgroundEditor);
+  elements.headerBackgroundApply.addEventListener("click", () => {
+      const open = elements.headerBackgroundApply.getAttribute("aria-expanded") === "true";
+      setTerminalAppearanceApplyChoices(!open);
+      if (!open) elements.terminalAppearanceApplyTerminal.focus();
+    });
+    elements.terminalAppearanceApplyTerminal.addEventListener("click", () => commitTerminalAppearance("terminal"));
+    elements.terminalAppearanceApplyAll.addEventListener("click", () => commitTerminalAppearance("all"));
   elements.headerBackgroundReset.addEventListener("click", resetHeaderBackgroundEditor);
   elements.headerBackgroundOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.headerBackgroundOverlay) closeHeaderBackgroundEditor();
@@ -19693,6 +20374,9 @@ function saveSessionSnapshot() {
     color: terminal.color,
     headerBackground: cloneHeaderBackground(terminal.headerBackground),
     fontSizeOverride: terminal.fontSizeOverride,
+    terminalBackground: terminal.terminalBackground,
+    terminalForeground: terminal.terminalForeground,
+    terminalFontFamily: terminal.terminalFontFamily,
     headerActionOverrides: { ...terminal.headerActionOverrides },
     headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
     notificationOverrides: { ...terminal.notificationOverrides },
@@ -24198,7 +24882,8 @@ const TERMINAL_SHORTCUT_LABELS = Object.freeze({
   "terminal.logging.toggle": "Toggle logging",
   "terminal.logging.reveal-last": "Reveal last log",
   "terminal.logging.reveal-folder": "Reveal log folder",
-  "terminal.duplicate": "Split (duplicate)",
+  "terminal.change-appearance": "Change appearance",
+  "terminal.duplicate": "Duplicate terminal",
   "terminal.restart": "Restart",
   "terminal.cycle-color": "Cycle color",
   "terminal.header-background": "Header background",
@@ -25591,6 +26276,9 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const isZoomed = state.zoomedId === terminal.id;
   const assistantName = aiAssistantName();
   const assistantAvailable = aiAssistantAvailable();
+  const runYolo = aiYoloMenuToggle();
+  const worktreeYolo = aiYoloMenuToggle();
+  const resumeYolo = aiYoloMenuToggle();
   const snippetItems = (state.settings.snippets || []).slice(0, 8).map((snippet) => ({
     label: snippet.name || snippet.command,
     icon: "terminal",
@@ -25646,10 +26334,11 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       icon: "bot",
       shortcutId: "terminal.copilot-yolo",
       title: assistantAvailable
-        ? `Runs ${assistantName} with permission prompts bypassed in the focused terminal, or opens one on this page`
+        ? `Runs ${assistantName} in the focused terminal, or opens one on this page`
         : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
       disabled: !assistantAvailable,
-      run: launchAiAssistant
+      toggle: runYolo,
+      run: () => launchAiAssistant({ yolo: runYolo.checked })
     },
     {
       label: `Run ${assistantName} in a worktree\u2026`,
@@ -25659,17 +26348,19 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
         ? `Creates an isolated worktree and starts ${assistantName} in it`
         : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
       disabled: !assistantAvailable,
-      run: () => openWorktreeDialog({ terminalId: terminal.id })
+      toggle: worktreeYolo,
+      run: () => openWorktreeDialog({ terminalId: terminal.id, yolo: worktreeYolo.checked })
     },
     {
       label: `Resume ${assistantName} session\u2026`,
       icon: "history",
       shortcutId: "terminal.copilot-resume",
       title: assistantAvailable
-        ? `Choose a local ${assistantName} session and resume it with permission prompts bypassed`
+        ? `Choose a local ${assistantName} session and resume it`
         : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
       disabled: !assistantAvailable,
-      run: () => openCopilotResume(terminal)
+      toggle: resumeYolo,
+      run: () => openCopilotResume(terminal, { yolo: resumeYolo.checked })
     },
     ...buildCopilotRemoteMenuItem(terminal),
     {
@@ -25696,29 +26387,14 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       suggestions: state.copilotCwdHistory,
       run: (value) => sendCopilotCwd(terminal, value)
     },
-    ...(snippetItems.length ? [{ group: "Snippets", groupId: "snippets" }, ...snippetItems] : []),
-    { group: "Session", groupId: "session" },
-    {
-      label: "Split (duplicate)",
-      icon: "copy-plus",
-      shortcutId: "terminal.duplicate",
-      run: () => addTerminal({
-        reveal: true,
-        runStartup: true,
-        title: `${terminal.titleInput.value} copy`,
-        copilotCwd: terminal.copilotCwd,
-        fontSizeOverride: terminal.fontSizeOverride,
-        headerBackground: cloneHeaderBackground(terminal.headerBackground),
-        headerActionOverrides: { ...terminal.headerActionOverrides },
-        headerActionShortcutOverrides: { ...terminal.headerActionShortcutOverrides },
-        notificationOverrides: { ...terminal.notificationOverrides }
-      })
-    },
-    { label: "Restart", ...shortcutHint("terminal.restart"), icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
+    { group: "Appearance", groupId: "appearance" },
+    { label: "Change appearance...", icon: "swatch-book", shortcutId: "terminal.change-appearance", run: () => openTerminalAppearanceEditor(terminal) },
     { label: "Cycle color", icon: "tag", shortcutId: "terminal.cycle-color", run: () => cyclePaneColor(terminal) },
     { label: "Header background\u2026", icon: "palette", shortcutId: "terminal.header-background", run: () => openHeaderBackgroundEditor(terminal) },
-    ...buildMoveToPageItems(terminal),
-    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", shortcutId: "terminal.close", danger: true, run: () => removeTerminal(terminal.id) }
+    { group: "Session", groupId: "session" },
+    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", shortcutId: "terminal.close", danger: true, pinnedFirst: true, run: () => removeTerminal(terminal.id) },
+    { label: "Restart", ...shortcutHint("terminal.restart"), icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
+    ...buildMoveToPageItems(terminal)
   ];
 
   renderContextMenu(items, {
@@ -25766,6 +26442,24 @@ function aiAssistantName(provider = state.settings.aiSessionProvider) {
   if (provider === "claude") return "Claude";
   if (provider === "copilot") return "GitHub Copilot";
   return "AI assistant";
+}
+
+// Shown on every row that ends up starting an assistant CLI, so the permission
+// choice is made where the launch happens rather than only in Settings.
+function aiYoloMenuToggle() {
+  const assistant = aiAssistantName();
+  const flag = state.settings.aiSessionProvider === "claude" ? "--dangerously-skip-permissions" : "--yolo";
+  let checked = Boolean(state.settings.aiSessionYolo);
+  return {
+    caption: "YOLO",
+    get checked() { return checked; },
+    label: `Start ${assistant} with permission prompts bypassed`,
+    onChange: (next) => {
+      checked = Boolean(next);
+      rerenderOpenContextMenu({ focusSearch: false });
+    },
+    title: `Passes ${flag} so ${assistant} does not ask before each action. Clear it to keep the CLI's own prompts.`
+  };
 }
 
 function aiAssistantAvailable() {
@@ -25854,15 +26548,18 @@ function buildAiAssistantCommand({
   shell = "pwsh",
   initialPrompt = "",
   tools = true,
+  yolo = state.settings.aiSessionYolo,
   remote = provider === "copilot" && state.settings.copilotRemoteSessions,
   model = state.settings.aiSessionModel,
   effort = state.settings.aiSessionEffort,
   context = state.settings.aiSessionContext
 } = {}) {
   if (provider !== "copilot" && provider !== "claude") return "";
+  // Without the bypass flag each assistant falls back to its own interactive
+  // permission prompts, which is the safe default the CLIs ship with.
   const parts = provider === "claude"
-    ? ["claude", "--dangerously-skip-permissions"]
-    : ["copilot", "--yolo"];
+    ? ["claude", ...(yolo ? ["--dangerously-skip-permissions"] : [])]
+    : ["copilot", ...(yolo ? ["--yolo"] : [])];
   if (provider === "copilot" && state.settings.copilotLogViewerEnabled && state.copilotLogDirectory) {
     const launchLogKey = /^[a-z0-9-]{1,128}$/i.test(logKey) ? logKey : connectId || resumeId || sessionId || createAiSessionId();
     const logDirectory = `${state.copilotLogDirectory.replace(/[\\/]+$/, "")}\\${launchLogKey}`;
@@ -25983,10 +26680,10 @@ async function copyRemoteSessionLink(terminal) {
   }
 }
 
-function invokeAiAssistant(terminal) {
+function invokeAiAssistant(terminal, { yolo = state.settings.aiSessionYolo } = {}) {
   const provider = state.settings.aiSessionProvider;
   const sessionId = provider === "copilot" ? claimAiSessionId(terminal) : "";
-  const command = buildAiAssistantCommand({ sessionId, shell: cwdTerminalShell(terminal) });
+  const command = buildAiAssistantCommand({ sessionId, shell: cwdTerminalShell(terminal), yolo });
   if (!command || !aiAssistantAvailable()) {
     toast(`${aiAssistantName()} is not installed and signed in`, "error", 2800);
     return false;
@@ -26010,15 +26707,16 @@ function noteRemoteAssistantLaunch(terminal) {
   terminal.pendingKeepAlive = keepAlive;
 }
 
-function launchAiAssistant() {
+function launchAiAssistant({ yolo = state.settings.aiSessionYolo } = {}) {
   if (!aiAssistantAvailable()) {
     toast(`${aiAssistantName()} is not installed and signed in`, "error", 2800);
     return false;
   }
   const focused = keyboardFocusedTerminal();
   if (focused) {
-    if (focused.status === "live") return invokeAiAssistant(focused);
+    if (focused.status === "live") return invokeAiAssistant(focused, { yolo });
     focused.pendingAiAssistant = true;
+    focused.pendingAiAssistantYolo = Boolean(yolo);
     toast(`${aiAssistantName()} will start when ${focused.titleInput.value || "the terminal"} is ready`, "info", 2200);
     return true;
   }
@@ -26028,7 +26726,8 @@ function launchAiAssistant() {
     reveal: true,
     runStartup: true,
     pageId: currentPageId,
-    pendingAiAssistant: true
+    pendingAiAssistant: true,
+    pendingAiAssistantYolo: Boolean(yolo)
   });
   toast(`Opening ${terminal.titleInput.value || "a new terminal"} on ${pageName(currentPageId) || "the current page"}`, "success", 2200);
   return true;
@@ -26054,6 +26753,8 @@ function buildSurfaceContextMenu() {
   // which for this menu is the stage — and focusing the stage deselects the
   // terminal. So terminal-scoped rows bind the target chosen at open time.
   const invokedTerminalId = state.activeId;
+  const runYolo = aiYoloMenuToggle();
+  const worktreeYolo = aiYoloMenuToggle();
 
   renderContextMenu([
     { label: "New terminal", ...shortcutHint("terminal.new"), icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
@@ -26066,10 +26767,11 @@ function buildSurfaceContextMenu() {
       label: `Run ${aiAssistantName()}`,
       icon: "bot",
       title: aiAssistantAvailable()
-        ? `Runs ${aiAssistantName()} with permission prompts bypassed in the focused terminal, or opens one on this page`
+        ? `Runs ${aiAssistantName()} in the focused terminal, or opens one on this page`
         : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
       disabled: !aiAssistantAvailable(),
-      run: launchAiAssistant
+      toggle: runYolo,
+      run: () => launchAiAssistant({ yolo: runYolo.checked })
     },
     {
       label: `Run ${aiAssistantName()} in a worktree\u2026`,
@@ -26078,7 +26780,8 @@ function buildSurfaceContextMenu() {
         ? `Creates an isolated worktree and starts ${aiAssistantName()} in a new terminal`
         : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
       disabled: !aiAssistantAvailable(),
-      run: () => openWorktreeDialog({ openInNewTerminal: true })
+      toggle: worktreeYolo,
+      run: () => openWorktreeDialog({ openInNewTerminal: true, yolo: worktreeYolo.checked })
     },
     {
       label: "Worktrees\u2026",
@@ -26233,6 +26936,12 @@ function buildPaneOverflowMenu(terminal) {
 
 const CONTEXT_MENU_LAYOUT_STORAGE_KEY = "multiterm.contextMenuLayout";
 const CONTEXT_MENU_LAYOUT_VERSION = 1;
+const CONTEXT_MENU_APPEARANCE_ITEMS_VERSION = 1;
+const CONTEXT_MENU_APPEARANCE_ITEM_IDS = Object.freeze([
+  "terminal.change-appearance",
+  "terminal.cycle-color",
+  "terminal.header-background"
+]);
 const CONTEXT_MENU_MAX_SECTIONS = 32;
 const CONTEXT_MENU_MAX_ITEMS = 512;
 const CONTEXT_MENU_ID_PATTERN = /^[a-z0-9][a-z0-9:._-]{0,159}$/;
@@ -26252,6 +26961,7 @@ function normalizeContextMenuSectionName(value) {
 function normalizeContextMenuLayout(value) {
   const empty = {
     version: CONTEXT_MENU_LAYOUT_VERSION,
+    appearanceItemsVersion: 0,
     sections: [],
     hidden: [],
     removedSections: []
@@ -26304,16 +27014,50 @@ function normalizeContextMenuLayout(value) {
     removedSectionIds.add(sectionId);
     removedSections.push(sectionId);
   }
-  return { version: CONTEXT_MENU_LAYOUT_VERSION, sections, hidden, removedSections };
+  const appearanceItemsVersion = Number(value.appearanceItemsVersion) === CONTEXT_MENU_APPEARANCE_ITEMS_VERSION
+    ? CONTEXT_MENU_APPEARANCE_ITEMS_VERSION
+    : 0;
+  return { version: CONTEXT_MENU_LAYOUT_VERSION, appearanceItemsVersion, sections, hidden, removedSections };
+}
+
+function migrateContextMenuAppearanceItems(layout) {
+  if (layout.appearanceItemsVersion >= CONTEXT_MENU_APPEARANCE_ITEMS_VERSION) {
+    return { changed: false, layout };
+  }
+  const appearanceIds = new Set(CONTEXT_MENU_APPEARANCE_ITEM_IDS);
+  const sections = layout.sections.map((section) => ({
+    ...section,
+    items: section.items.filter((itemId) => !appearanceIds.has(itemId))
+  }));
+  let appearance = sections.find((section) => section.id === "appearance");
+  if (!appearance) {
+    appearance = { id: "appearance", name: "Appearance", custom: false, items: [] };
+    const assistantIndex = sections.findIndex((section) => section.id === "ai-assistant");
+    sections.splice(assistantIndex >= 0 ? assistantIndex + 1 : sections.length, 0, appearance);
+  }
+  appearance.name ||= "Appearance";
+  appearance.items = [...CONTEXT_MENU_APPEARANCE_ITEM_IDS, ...appearance.items];
+  return {
+    changed: true,
+    layout: {
+      ...layout,
+      appearanceItemsVersion: CONTEXT_MENU_APPEARANCE_ITEMS_VERSION,
+      sections
+    }
+  };
 }
 
 function loadContextMenuLayout() {
   try {
     const stored = localStorage.getItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY);
-    if (!stored || stored.length > 64 * 1024) return normalizeContextMenuLayout(null);
-    return normalizeContextMenuLayout(JSON.parse(stored));
+    const normalized = !stored || stored.length > 64 * 1024
+      ? normalizeContextMenuLayout(null)
+      : normalizeContextMenuLayout(JSON.parse(stored));
+    const migration = migrateContextMenuAppearanceItems(normalized);
+    if (migration.changed) localStorage.setItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY, JSON.stringify(migration.layout));
+    return migration.layout;
   } catch {
-    return normalizeContextMenuLayout(null);
+    return migrateContextMenuAppearanceItems(normalizeContextMenuLayout(null)).layout;
   }
 }
 
@@ -26391,7 +27135,23 @@ function buildCustomizableContextMenu(items) {
       continue;
     }
     const section = { ...defaultSection, items: [] };
-    sections.push(section);
+    const defaultIndex = defaultSections.indexOf(defaultSection);
+    let insertionIndex = sections.length;
+    for (let siblingIndex = defaultIndex - 1; siblingIndex >= 0; siblingIndex -= 1) {
+      const placedIndex = sections.findIndex((candidate) => candidate.id === defaultSections[siblingIndex].id);
+      if (placedIndex < 0) continue;
+      insertionIndex = placedIndex + 1;
+      break;
+    }
+    if (insertionIndex === sections.length) {
+      for (let siblingIndex = defaultIndex + 1; siblingIndex < defaultSections.length; siblingIndex += 1) {
+        const placedIndex = sections.findIndex((candidate) => candidate.id === defaultSections[siblingIndex].id);
+        if (placedIndex < 0) continue;
+        insertionIndex = placedIndex;
+        break;
+      }
+    }
+    sections.splice(insertionIndex, 0, section);
     sectionById.set(section.id, section);
   }
   if (sections.length === 0 && defaultSections.length > 0) {
@@ -26425,6 +27185,8 @@ function buildCustomizableContextMenu(items) {
       target.items.splice(insertionIndex < 0 ? target.items.length : insertionIndex, 0, itemId);
       placedItemIds.add(itemId);
     }
+    const pinned = defaultSection.items.filter((itemId) => itemById.get(itemId)?.pinnedFirst);
+    if (pinned.length > 0) target.items = [...pinned, ...target.items.filter((itemId) => !pinned.includes(itemId))];
   }
 
   const hidden = new Set(saved.hidden);
@@ -26454,6 +27216,7 @@ function buildCustomizableContextMenu(items) {
     items: renderedItems,
     model: {
       version: CONTEXT_MENU_LAYOUT_VERSION,
+      appearanceItemsVersion: saved.appearanceItemsVersion,
       sections,
       hidden,
       hiddenCurrentCount,
@@ -26669,6 +27432,7 @@ function persistContextMenuCustomizationModel() {
   const removedSections = ctxCustomizationModel.removedSections || new Set();
   saveContextMenuLayout({
     version: CONTEXT_MENU_LAYOUT_VERSION,
+    appearanceItemsVersion: ctxCustomizationModel.appearanceItemsVersion,
     sections: ctxCustomizationModel.sections,
     hidden: [...ctxCustomizationModel.hidden],
     removedSections: [...removedSections]
@@ -27178,6 +27942,8 @@ function renderContextMenu(items, {
   let groupsRoot = null;
   let groupColumns = null;
   const groupColumnWeights = [0, 0];
+  let previousGroupId = "";
+  let previousGroupColumn = 0;
 
   if (searchable) {
     const toolbar = document.createElement("div");
@@ -27276,8 +28042,13 @@ function renderContextMenu(items, {
       for (let nextIndex = itemIndex + 1; nextIndex < renderItems.length && !renderItems[nextIndex].group; nextIndex += 1) {
         if (!renderItems[nextIndex].separator) groupWeight += 1;
       }
-      const columnIndex = groupColumnWeights[0] <= groupColumnWeights[1] ? 0 : 1;
+      const followsAssistant = item.groupId === "appearance" && previousGroupId === "ai-assistant";
+      const columnIndex = followsAssistant
+        ? previousGroupColumn
+        : groupColumnWeights[0] <= groupColumnWeights[1] ? 0 : 1;
       groupColumnWeights[columnIndex] += groupWeight;
+      previousGroupId = item.groupId || "";
+      previousGroupColumn = columnIndex;
       const group = document.createElement("section");
       group.className = "ctx-group";
       if (item.customSection) group.classList.add("is-custom-section");
@@ -27527,6 +28298,28 @@ function renderContextMenu(items, {
     const number = actionable && !shortcutEditor && ctxByNumber.size < 9 ? ctxByNumber.size + 1 : null;
 
     el.append(renderAccelLabel(item.label, accel ? accel.index : -1));
+    let toggleField = null;
+    if (item.toggle) {
+      toggleField = document.createElement("label");
+      toggleField.className = "ctx-item-toggle";
+      toggleField.title = item.toggle.title || item.toggle.label;
+      const toggleBox = document.createElement("input");
+      toggleBox.type = "checkbox";
+      toggleBox.checked = Boolean(item.toggle.checked);
+      toggleBox.disabled = Boolean(item.disabled);
+      toggleBox.setAttribute("aria-label", item.toggle.label);
+      const swallow = (event) => event.stopPropagation();
+      toggleField.addEventListener("click", swallow);
+      toggleField.addEventListener("pointerdown", swallow);
+      toggleBox.addEventListener("keydown", swallow);
+      toggleBox.addEventListener("change", (event) => {
+        event.stopPropagation();
+        item.toggle.onChange(toggleBox.checked);
+      });
+      const toggleCaption = document.createElement("span");
+      toggleCaption.textContent = item.toggle.caption || "";
+      toggleField.append(toggleBox, toggleCaption);
+    }
 
     // Rows whose label cannot spell out the whole story (a path, say) carry the
     // detail as a tooltip rather than growing the menu.
@@ -27538,6 +28331,7 @@ function renderContextMenu(items, {
     if (item.hint
       || number != null
       || item.submenu
+      || item.toggle
       || customBinding
       || item.customizationHidden
       || (ctxShortcutEditing && shortcutEligible)) {
@@ -27602,6 +28396,7 @@ function renderContextMenu(items, {
         caret.append(caretIcon);
         accessories.append(caret);
       }
+      if (toggleField) accessories.append(toggleField);
       el.append(accessories);
     }
     if (customizationDragHandle) el.append(customizationDragHandle);
@@ -28348,8 +29143,10 @@ function enhanceSelect(select) {
   wrap.className = "combobox";
   const showsLayoutGlyph = select === elements.layoutMode;
   const showsOptionIcon = [...select.options].some((option) => option.dataset.icon);
+  const showsFontFace = select.dataset.fontSelector === "true";
   if (showsLayoutGlyph) wrap.classList.add("layout-mode-combobox");
   if (showsOptionIcon) wrap.classList.add("option-icon-combobox");
+  if (showsFontFace) wrap.classList.add("font-face-combobox");
   select.parentNode.insertBefore(wrap, select);
   wrap.append(select);
   select.classList.add("combobox-native");
@@ -28446,6 +29243,7 @@ function enhanceSelect(select) {
       const label = document.createElement("span");
       label.className = "combobox-option-label";
       label.textContent = o.textContent;
+      if (showsFontFace) label.style.fontFamily = o.dataset.fontStack || fontStacks[o.value] || "inherit";
       li.append(label);
       li.setAttribute("role", "option");
       li.setAttribute("aria-selected", String(o.value === select.value));
@@ -28507,6 +29305,10 @@ function enhanceSelect(select) {
   const sync = () => {
     if (!box.open) {
       input.value = currentLabel();
+      if (showsFontFace) {
+        const selected = select.options[select.selectedIndex];
+        input.style.fontFamily = selected?.dataset.fontStack || fontStacks[select.value] || "inherit";
+      }
       if (showsLayoutGlyph || showsOptionIcon) {
         const replacement = showsLayoutGlyph
           ? createLayoutModeGlyph(select.value)

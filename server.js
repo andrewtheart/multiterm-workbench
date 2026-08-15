@@ -16,6 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+// Server-side capabilities remain loopback-scoped and protocol-driven.
+// Transport messages are routed through the bridge before reaching a session.
+
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");

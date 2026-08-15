@@ -101,6 +101,17 @@ test.describe("Surface context menu", () => {
     return menu;
   };
 
+  test("offers terminal appearance in Appearance without a duplicate Session action", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const menu = await openTerminalMenu(page);
+    const appearance = menu.locator('.ctx-group[data-section-id="appearance"]');
+    await expect(appearance.locator('[data-customization-id="terminal.change-appearance"]')).toHaveText(/Change appearance/);
+    await expect(menu.locator('.ctx-group[data-section-id="session"] [data-customization-id="terminal.change-appearance"]')).toHaveCount(0);
+    await expect(menu.locator('[data-customization-id="terminal.duplicate"]')).toHaveCount(0);
+    await expect(menu.locator(".ctx-item", { hasText: "Split (duplicate)" })).toHaveCount(0);
+  });
+
   const stubStatisticsReplies = (page) => page.evaluate(() => {
     const socket = state.socket;
     const originalSend = state.socket.send.bind(state.socket);
@@ -404,6 +415,7 @@ test.describe("Surface context menu", () => {
         "Find & context",
         "Tools & automation",
         "AI assistant",
+        "Appearance",
         "Session"
       ]));
 
@@ -422,6 +434,29 @@ test.describe("Surface context menu", () => {
       const toolsIds = await menu.locator('.ctx-group[data-section-id="tools-automation"] .ctx-item')
         .evaluateAll((items) => items.map((item) => item.dataset.customizationId));
       expect(toolsIds.filter((id) => id.startsWith("terminal.copilot"))).toEqual([]);
+      const appearanceSection = menu.locator('.ctx-group[data-section-id="appearance"]');
+      const appearanceIds = await appearanceSection.locator(".ctx-item")
+        .evaluateAll((items) => items.map((item) => item.dataset.customizationId));
+      expect(appearanceIds).toEqual([
+        "terminal.change-appearance",
+        "terminal.cycle-color",
+        "terminal.header-background"
+      ]);
+      const groupOrder = await menu.locator(".ctx-group").evaluateAll((groups) => groups.map((group) => group.dataset.sectionId));
+      expect(groupOrder.indexOf("appearance")).toBe(groupOrder.indexOf("ai-assistant") + 1);
+      const sessionIds = await menu.locator('.ctx-group[data-section-id="session"] .ctx-item')
+        .evaluateAll((items) => items.map((item) => item.dataset.customizationId));
+      expect(sessionIds[0]).toBe("terminal.close");
+
+      const expectedSnippetIds = await page.evaluate(() => state.settings.snippets.slice(0, 8).map((snippet) => (
+        `terminal.snippet:${stableContextActionToken(`${snippet.name || ""}\n${snippet.command || ""}`)}`
+      )));
+      const snippetGroups = menu.locator('.ctx-group[data-section-id="snippets"]');
+      await expect(snippetGroups).toHaveCount(1);
+      const renderedSnippetIds = await snippetGroups.locator(".ctx-item")
+        .evaluateAll((items) => items.map((item) => item.dataset.customizationId));
+      expect(renderedSnippetIds).toEqual(expectedSnippetIds);
+      expect(new Set(renderedSnippetIds).size).toBe(renderedSnippetIds.length);
 
       const desktopGrid = await menu.locator(".ctx-group-column").evaluateAll((columns) => {
         const visible = columns.map((column) => column.getBoundingClientRect());
@@ -582,6 +617,9 @@ test.describe("Surface context menu", () => {
   });
 
   test("reorders and removes sections without losing their actions", async ({ page }) => {
+    // Keep every drag source and target in view. Scrolling after mousedown makes
+    // Chromium re-hit-test the source against whichever row moved underneath it.
+    await page.setViewportSize({ width: 1280, height: 1000 });
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await page.evaluate(() => {
@@ -799,8 +837,16 @@ test.describe("Surface context menu", () => {
     expect(result.normalized.removedSections).toEqual(["find-context", "custom:saved"]);
     expect(result.tooManySections).toBe(32);
     expect(result.wrongVersion).toMatchObject({ sections: [], hidden: [] });
-    expect(result.malformedStored).toMatchObject({ sections: [], hidden: [] });
-    expect(result.oversizedStored).toMatchObject({ sections: [], hidden: [] });
+    for (const recovered of [result.malformedStored, result.oversizedStored]) {
+      expect(recovered).toMatchObject({
+        appearanceItemsVersion: 1,
+        hidden: [],
+        sections: [{
+          id: "appearance",
+          items: ["terminal.change-appearance", "terminal.cycle-color", "terminal.header-background"]
+        }]
+      });
+    }
     expect(result.recoveredRemovedSection).toEqual({
       items: ["only.action"],
       removedSections: [],
@@ -867,6 +913,95 @@ test.describe("Surface context menu", () => {
       { id: "custom:moved", items: ["action.b"] }
     ]);
     expect(mergedItems.appendWithoutSibling[0].items).toEqual(["custom.saved", "action.a", "action.b"]);
+  });
+
+  test("moves saved appearance actions once and preserves later customization", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const result = await page.evaluate(() => {
+      const storedBefore = localStorage.getItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY);
+      const memoryBefore = contextMenuLayout;
+      try {
+        localStorage.setItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY, JSON.stringify({
+          version: CONTEXT_MENU_LAYOUT_VERSION,
+          sections: [
+            { id: "ai-assistant", name: "AI assistant", items: ["terminal.copilot-yolo"] },
+            {
+              id: "session",
+              name: "Session",
+              items: [
+                "terminal.close",
+                "terminal.change-appearance",
+                "terminal.cycle-color",
+                "terminal.header-background",
+                "terminal.restart"
+              ]
+            }
+          ]
+        }));
+        const migrated = loadContextMenuLayout();
+        const migratedAppearance = migrated.sections.find((section) => section.id === "appearance");
+        const migratedSession = migrated.sections.find((section) => section.id === "session");
+        const laterSections = migrated.sections.map((section) => ({
+          ...section,
+          items: section.items.filter((itemId) => itemId !== "terminal.cycle-color")
+        }));
+        laterSections.find((section) => section.id === "session").items.push("terminal.cycle-color");
+        saveContextMenuLayout({ ...migrated, sections: laterSections });
+        const reloaded = loadContextMenuLayout();
+        const existingAppearance = migrateContextMenuAppearanceItems({
+          version: CONTEXT_MENU_LAYOUT_VERSION,
+          appearanceItemsVersion: 0,
+          sections: [{ id: "appearance", name: "", custom: false, items: [] }],
+          hidden: [],
+          removedSections: []
+        }).layout.sections[0];
+        contextMenuLayout = {
+          version: CONTEXT_MENU_LAYOUT_VERSION,
+          appearanceItemsVersion: CONTEXT_MENU_APPEARANCE_ITEMS_VERSION,
+          sections: [{ id: "first", name: "First", custom: false, items: [] }],
+          hidden: [],
+          removedSections: ["middle"]
+        };
+        const insertionOrder = buildCustomizableContextMenu([
+          { group: "First", groupId: "first" },
+          { label: "First action", customizationId: "action.first", run() {} },
+          { group: "Middle", groupId: "middle" },
+          { label: "Middle action", customizationId: "action.middle", run() {} },
+          { group: "Last", groupId: "last" },
+          { label: "Last action", customizationId: "action.last", run() {} }
+        ]).model.sections.map((section) => section.id);
+        return {
+          version: migrated.appearanceItemsVersion,
+          appearance: migratedAppearance.items,
+          existingAppearance,
+          session: migratedSession.items,
+          persistedVersion: JSON.parse(localStorage.getItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY)).appearanceItemsVersion,
+          laterAppearance: reloaded.sections.find((section) => section.id === "appearance").items,
+          laterSession: reloaded.sections.find((section) => section.id === "session").items,
+          insertionOrder
+        };
+      } finally {
+        if (storedBefore == null) localStorage.removeItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY);
+        else localStorage.setItem(CONTEXT_MENU_LAYOUT_STORAGE_KEY, storedBefore);
+        contextMenuLayout = memoryBefore;
+      }
+    });
+    expect(result).toEqual({
+      version: 1,
+      appearance: ["terminal.change-appearance", "terminal.cycle-color", "terminal.header-background"],
+      existingAppearance: {
+        id: "appearance",
+        name: "Appearance",
+        custom: false,
+        items: ["terminal.change-appearance", "terminal.cycle-color", "terminal.header-background"]
+      },
+      session: ["terminal.close", "terminal.restart"],
+      persistedVersion: 1,
+      laterAppearance: ["terminal.change-appearance", "terminal.header-background"],
+      laterSession: ["terminal.close", "terminal.restart", "terminal.cycle-color"],
+      insertionOrder: ["first", "last"]
+    });
   });
 
   test("supports keyboard section editing and safely rejects invalid customization operations", async ({ page }) => {
@@ -1762,9 +1897,26 @@ test.describe("Surface context menu", () => {
 
         // Fall back to the host element when the screen node cannot be found.
         screen.classList.remove("xterm-screen");
-        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0, clientX: 50, clientY: 50 }));
-        window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
-        window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: 400, clientY: 50 }));
+        const hostRect = terminal.term.element.getBoundingClientRect();
+        const fallbackY = hostRect.top + ((row + 0.5) * (hostRect.height / terminal.term.rows));
+        terminal.term.element.dispatchEvent(new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          clientX: hostRect.left + 10,
+          clientY: fallbackY
+        }));
+        window.dispatchEvent(new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          clientX: hostRect.right - 10,
+          clientY: fallbackY
+        }));
+        window.dispatchEvent(new MouseEvent("mouseup", {
+          bubbles: true,
+          button: 0,
+          clientX: hostRect.right - 10,
+          clientY: fallbackY
+        }));
         const withoutScreen = terminal.term.getSelection();
         screen.classList.add("xterm-screen");
 
@@ -1929,5 +2081,242 @@ test.describe("Surface context menu", () => {
     await expect(overlay).toBeHidden();
     await expect.poll(() => page.evaluate(() => document.activeElement === window.__statisticsReturnFocus)).toBe(true);
     await page.evaluate(() => window.__restoreStatisticsSocket());
+  });
+
+  // Bypassing the assistant's permission prompts used to be unconditional, so
+  // there was no way to start a supervised session from the menu that starts it.
+  test("chooses YOLO mode from the menu row that launches the assistant", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => {
+      // The launch row, and therefore its option, is disabled unless a provider
+      // is actually available; the e2e bridge has none signed in.
+      state.aiProviders = [{ id: "copilot", name: "GitHub Copilot", interactiveAvailable: true, available: true, models: [] }];
+      state.settings.aiSessionProvider = "copilot";
+      state.settings.aiSessionYolo = true;
+      saveSettings();
+    });
+
+    const menu = await openTerminalMenu(page);
+    const assistantRows = menu.locator('.ctx-group[data-section-id="ai-assistant"] .ctx-item').filter({ has: page.locator(".ctx-item-toggle") });
+    await expect(assistantRows).toHaveCount(3);
+    const launchRow = assistantRows.nth(0);
+    const togglePill = launchRow.locator(".ctx-item-toggle");
+    const toggle = launchRow.locator(".ctx-item-toggle input[type=checkbox]");
+    await expect(togglePill).toBeVisible();
+    await expect(toggle).toBeChecked();
+    const placement = await launchRow.evaluate((row) => {
+      const pill = row.querySelector(".ctx-item-toggle").getBoundingClientRect();
+      const grip = row.querySelector(".ctx-item-drag-handle").getBoundingClientRect();
+      return { pillRight: pill.right, gripLeft: grip.left, trailingGap: grip.left - pill.right };
+    });
+    expect(placement.pillRight).toBeLessThanOrEqual(placement.gripLeft);
+    expect(placement.trailingGap).toBeLessThanOrEqual(12);
+
+    // With the bypass on, the built command carries the flag.
+    const withYolo = await page.evaluate(() => buildAiAssistantCommand({ provider: "copilot" }));
+    expect(withYolo).toContain("--yolo");
+
+    // Clearing one row must not change either sibling or the Settings default.
+    await togglePill.click();
+    await expect(page.locator("#contextMenu")).toBeVisible();
+    await expect(assistantRows.nth(0).locator('input[type="checkbox"]')).not.toBeChecked();
+    await expect(assistantRows.nth(1).locator('input[type="checkbox"]')).toBeChecked();
+    await expect(assistantRows.nth(2).locator('input[type="checkbox"]')).toBeChecked();
+
+    const commands = await page.evaluate(() => {
+      const rows = ctxRenderedItems.filter((item) => item.toggle);
+      return rows.slice(0, 3).map((item) => buildAiAssistantCommand({ provider: "copilot", yolo: item.toggle.checked }));
+    });
+    const withoutYolo = commands[0];
+    expect(withoutYolo).not.toContain("--yolo");
+    expect(withoutYolo.startsWith("copilot")).toBe(true);
+    expect(commands[1]).toContain("--yolo");
+    expect(commands[2]).toContain("--yolo");
+
+    const terminalWorktree = await page.evaluate(() => {
+      const item = ctxRenderedItems.filter((candidate) => candidate.toggle)[1];
+      item.run();
+      const result = {
+        openInNewTerminal: worktreeDialog.openInNewTerminal,
+        terminalId: worktreeDialog.terminalId,
+        yolo: worktreeDialog.yolo
+      };
+      closeWorktreeDialog();
+      return result;
+    });
+    expect(terminalWorktree.terminalId).toBeTruthy();
+    expect(terminalWorktree).toMatchObject({ openInNewTerminal: false, yolo: true });
+
+    const pendingLaunch = await page.evaluate(() => {
+      const terminal = state.terminals.get(state.activeId) || [...state.terminals.values()][0];
+      const previousStatus = terminal.status;
+      terminal.status = "creating";
+      terminal.term.focus();
+      const launched = launchAiAssistant({ yolo: false });
+      const result = {
+        launched,
+        pending: terminal.pendingAiAssistant,
+        yolo: terminal.pendingAiAssistantYolo
+      };
+      terminal.status = previousStatus;
+      terminal.pendingAiAssistant = false;
+      terminal.pendingAiAssistantYolo = null;
+      return result;
+    });
+    expect(pendingLaunch).toEqual({ launched: true, pending: true, yolo: false });
+
+    const cancelledDeferredLaunch = await page.evaluate(() => {
+      const terminal = state.terminals.get(state.activeId) || [...state.terminals.values()][0];
+      const nativeSetTimeout = window.setTimeout;
+      let deferred = null;
+      window.setTimeout = (callback, delay, ...args) => {
+        if (delay === 500 && !deferred) {
+          deferred = callback;
+          return 98765;
+        }
+        return nativeSetTimeout(callback, delay, ...args);
+      };
+      terminal.pendingAiAssistant = true;
+      terminal.pendingAiAssistantYolo = false;
+      handleBridgeMessage({
+        type: "created",
+        id: terminal.id,
+        cwd: terminal.cwd,
+        pid: terminal.pid || 42001,
+        startedAt: terminal.startedAt,
+        title: terminal.titleInput.value
+      });
+      window.setTimeout = nativeSetTimeout;
+      state.terminals.delete(terminal.id);
+      deferred?.();
+      state.terminals.set(terminal.id, terminal);
+      return {
+        captured: typeof deferred === "function",
+        pending: terminal.pendingAiAssistant,
+        yolo: terminal.pendingAiAssistantYolo
+      };
+    });
+    expect(cancelledDeferredLaunch).toEqual({ captured: true, pending: false, yolo: null });
+
+    // Claude uses a different flag for the same idea.
+    const claude = await page.evaluate(() => buildAiAssistantCommand({ provider: "claude", yolo: false }));
+    expect(claude).not.toContain("--dangerously-skip-permissions");
+
+    // The current private CWD probe also suppresses tools. Both independently
+    // added options must survive the stash merge when used together.
+    const supervisedProbe = await page.evaluate(() => buildAiAssistantCommand({
+      provider: "copilot",
+      tools: false,
+      yolo: false
+    }));
+    expect(supervisedProbe).toContain("--available-tools=");
+    expect(supervisedProbe).not.toContain("--yolo");
+
+    // Row-local choices never rewrite the persisted default or Settings control.
+    const persisted = await page.evaluate(() => {
+      const saved = JSON.parse(window.localStorage.getItem("multiterm.settings") || "{}");
+      return { saved: saved.aiSessionYolo, checkbox: document.querySelector("#aiSessionYolo").checked };
+    });
+    expect(persisted.saved).toBe(true);
+    expect(persisted.checkbox).toBe(true);
+
+    await page.evaluate(() => {
+      hideContextMenu();
+      showSurfaceContextMenu(420, 320);
+    });
+    const surfacePills = page.locator("#contextMenu .ctx-item-toggle");
+    await expect(surfacePills).toHaveCount(2);
+    await expect(surfacePills.nth(0).locator('input[type="checkbox"]')).toBeChecked();
+    await expect(surfacePills.nth(1).locator('input[type="checkbox"]')).toBeChecked();
+    await surfacePills.nth(0).click();
+    await expect(surfacePills.nth(0).locator('input[type="checkbox"]')).not.toBeChecked();
+    await expect(surfacePills.nth(1).locator('input[type="checkbox"]')).toBeChecked();
+
+    const surfaceWorktree = await page.evaluate(() => {
+      const item = ctxRenderedItems.filter((candidate) => candidate.toggle)[1];
+      item.run();
+      const result = {
+        openInNewTerminal: worktreeDialog.openInNewTerminal,
+        terminalId: worktreeDialog.terminalId,
+        yolo: worktreeDialog.yolo
+      };
+      closeWorktreeDialog();
+      return result;
+    });
+    expect(surfaceWorktree).toEqual({ openInNewTerminal: true, terminalId: null, yolo: true });
+
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      state.settings.aiSessionYolo = true;
+      saveSettings();
+      syncControlsFromSettings();
+    });
+  });
+
+  test("renders toggle defaults and dispatches their change contract", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const result = await page.evaluate(() => {
+      window.__fallbackToggleValue = null;
+      renderContextMenu([{
+        label: "Fallback toggle row",
+        run() {},
+        toggle: {
+          checked: false,
+          label: "Fallback toggle",
+          onChange: (checked) => { window.__fallbackToggleValue = checked; }
+        }
+      }]);
+      const field = elements.contextMenu.querySelector(".ctx-item-toggle");
+      const checkbox = field.querySelector("input");
+      const caption = field.querySelector("span").textContent;
+      checkbox.checked = true;
+      checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+      const value = window.__fallbackToggleValue;
+      delete window.__fallbackToggleValue;
+      hideContextMenu();
+      return { caption, title: field.title, value };
+    });
+
+    expect(result).toEqual({ caption: "", title: "Fallback toggle", value: true });
+  });
+
+  // Clearing the screen in an assistant TUI used to leave whatever had been
+  // typed sitting in the composer, because the TUI repaints its own prompt box.
+  test("clears the assistant composer as well as the screen", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const frames = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const sent = [];
+      const originalSend = state.socket.send.bind(state.socket);
+      state.socket.send = (payload) => {
+        try {
+          const message = JSON.parse(payload);
+          if (message.type === "input" && message.id === terminal.id) sent.push(message.data);
+        } catch { /* not a JSON frame */ }
+        return originalSend(payload);
+      };
+
+      // A plain shell must keep the old behaviour: no input is injected.
+      terminal.aiAssistantTuiProvider = "";
+      clearTerminal(terminal.id);
+      const shellFrames = sent.slice();
+
+      // Once the pane is a Copilot TUI, the composer is emptied too.
+      sent.length = 0;
+      terminal.aiAssistantTuiProvider = "copilot";
+      clearTerminal(terminal.id);
+      const copilotFrames = sent.slice();
+
+      state.socket.send = originalSend;
+      terminal.aiAssistantTuiProvider = "";
+      return { shellFrames, copilotFrames };
+    });
+
+    expect(frames.shellFrames).toEqual([]);
+    expect(frames.copilotFrames).toEqual(["\u0015"]);
   });
 });

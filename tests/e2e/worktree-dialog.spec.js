@@ -22,6 +22,34 @@ test.describe("Run in a worktree dialog", () => {
     await expect(page.locator("#worktreeOverlay")).toBeVisible();
   };
 
+  test("opens from the surface with default launch options", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const result = await page.evaluate(() => {
+      closeAllTerminals();
+      const previousYolo = state.settings.aiSessionYolo;
+      state.settings.aiSessionYolo = false;
+      elements.addTerminal.focus();
+      openWorktreeDialog();
+      const opened = {
+        openInNewTerminal: worktreeDialog.openInNewTerminal,
+        returnFocusId: worktreeDialog.returnFocus?.id,
+        terminalId: worktreeDialog.terminalId,
+        yolo: worktreeDialog.yolo
+      };
+      closeWorktreeDialog();
+      state.settings.aiSessionYolo = previousYolo;
+      return opened;
+    });
+
+    expect(result).toEqual({
+      openInNewTerminal: true,
+      returnFocusId: "addTerminal",
+      terminalId: null,
+      yolo: false
+    });
+  });
+
   test("inspects a real repository and suggests a name from its branch", async ({ page }) => {
     await open(page);
     await page.locator("#worktreeFolderInput").fill("D:\\multiTerm");

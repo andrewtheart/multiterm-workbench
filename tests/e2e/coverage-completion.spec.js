@@ -1458,7 +1458,7 @@ test.describe("Renderer coverage completion", () => {
     expect(result.idleNotified).toBe(true);
     expect(result.requestValue).toBe("D:\\chosen.ps1");
     expect(result.idleFallback).toBe(true);
-    expect(result.fallbackPages).toEqual([{ id: "page-1", name: "Page 1" }]);
+    expect(result.fallbackPages).toEqual([{ id: "page-1", name: "Page 1", groupId: null }]);
     expect(result.fallbackTerminalPages).toEqual({});
     expect(result.collision).toBe("page-4");
   });
@@ -3186,27 +3186,28 @@ test.describe("Renderer coverage completion", () => {
         cancelable: true
       }));
 
+      const submenuItems = [
+        { label: "First child", icon: "copy", run: () => runs.push("child-one") },
+        { label: "Second child", icon: "copy", run: () => runs.push("child-two") }
+      ];
       renderContextMenu([
         {
           label: "Parent",
           icon: "list",
           run: () => runs.push("parent"),
-          submenu: [
-            { label: "First child", icon: "copy", run: () => runs.push("child-one") },
-            { label: "Second child", icon: "copy", run: () => runs.push("child-two") }
-          ]
+          submenu: submenuItems
         }
       ]);
       elements.contextMenu.hidden = false;
       const parent = elements.contextMenu.querySelector(".ctx-item");
-      openContextSubmenuFor(parent, ctxSubmenus.get(parent));
-      openContextSubmenuFor(parent, ctxSubmenus.get(parent));
+      openContextSubmenuFor(parent, submenuItems);
+      openContextSubmenuFor(parent, submenuItems);
       setSubmenuFocus(0);
       for (const key of ["ArrowDown", "ArrowUp", "Home", "End", "x"]) {
         window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
       }
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }));
-      openContextSubmenuFor(parent, ctxSubmenus.get(parent));
+      openContextSubmenuFor(parent, submenuItems);
       subKeyIndex = -1;
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "x", bubbles: true, cancelable: true }));
 
@@ -4531,7 +4532,8 @@ test.describe("Renderer coverage completion", () => {
       const savedPagerList = elements.pagerList;
       const pagerHandlers = {};
       elements.pagerList = {
-        addEventListener(type, callback) { pagerHandlers[type] = callback; }
+        addEventListener(type, callback) { pagerHandlers[type] = callback; },
+        querySelector() { return null; }
       };
       bindPager();
       elements.pagerList = savedPagerList;
@@ -6282,7 +6284,7 @@ test.describe("Renderer coverage completion", () => {
       refreshes: 2,
       removeStatus: "remove failed",
       repositoryRoot: "D:\\repo",
-      reviewEmpty: "This worktree has no committed changes yet.",
+      reviewEmpty: "This worktree has no committed or pending changes yet.",
       reviewNoReply: "The bridge did not answer.",
       reviewNoViewer: "The diff viewer did not load.",
       reviewTruncated: "Showing the first 2 MB of a larger diff.",

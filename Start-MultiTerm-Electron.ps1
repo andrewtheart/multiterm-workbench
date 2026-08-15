@@ -16,6 +16,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #>
 
+# Native launcher setup stays separate from the Electron application's runtime.
+
 <#
 .SYNOPSIS
   Launch MultiTerm Workbench in its Electron shell.

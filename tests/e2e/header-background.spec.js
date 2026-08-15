@@ -45,6 +45,46 @@ test.describe("Terminal header backgrounds", () => {
     });
   });
 
+  test("opens anchored notes and background flyouts from header actions", async ({ page }) => {
+    await reset(page, 1);
+    const result = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const anchor = elements.addTerminal;
+      runHeaderAction(terminal, "artifacts", anchor);
+      const notesOpen = !elements.terminalNotesFlyout.hidden;
+      closeTerminalNotesFlyout();
+      runHeaderAction(terminal, "header-background", anchor);
+      const backgroundOpen = !elements.headerBackgroundFlyout.hidden;
+      closeHeaderBackgroundFlyout();
+      const originalSend = state.socket.send;
+      const sent = [];
+      state.socket.send = (payload) => { sent.push(JSON.parse(payload)); };
+      const record = ensureTerminalArtifact(terminal);
+      record.queue = [{
+        id: "header-dequeue",
+        command: "Write-Output 'queued from header'",
+        createdAt: new Date().toISOString(),
+        occurrenceKey: "",
+        runWhenReady: false
+      }];
+      runHeaderAction(terminal, "dequeue");
+      state.socket.send = originalSend;
+      return {
+        backgroundOpen,
+        dequeuedData: sent.find((frame) => frame.type === "input")?.data,
+        notesOpen,
+        queueLength: record.queue.length
+      };
+    });
+
+    expect(result).toEqual({
+      backgroundOpen: true,
+      dequeuedData: "Write-Output 'queued from header'",
+      notesOpen: true,
+      queueLength: 0
+    });
+  });
+
   test("builds an arbitrary gradient for only the invoked header and restores it", async ({ page }) => {
     await reset(page, 2);
     const initial = await page.evaluate(() => {
@@ -75,6 +115,7 @@ test.describe("Terminal header backgrounds", () => {
 
     await expect.poll(() => page.locator("#headerBackgroundPreview").evaluate((preview) => preview.style.background)).toContain("conic-gradient");
     await page.locator("#headerBackgroundApply").click();
+    await page.locator("#terminalAppearanceApplyTerminal").click();
     await expect(page.locator("#headerBackgroundOverlay")).toBeHidden();
 
     const applied = await page.evaluate((firstId) => {

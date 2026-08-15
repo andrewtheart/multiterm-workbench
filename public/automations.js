@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+// Accept only plain-data automation definitions at this boundary.
+// Normalize persisted shapes before runtime code consumes them.
+
 (function exposeAutomations(root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;

@@ -615,7 +615,7 @@ test.describe("Enhancement milestone", () => {
     expect({ ...result, frames: undefined }).toEqual({
       focused: true,
       hidden: true,
-      title: "Runs GitHub Copilot with permission prompts bypassed in the focused terminal, or opens one on this page",
+      title: "Runs GitHub Copilot in the focused terminal, or opens one on this page",
       frames: undefined
     });
     // MultiTerm mints the session UUID so a terminal's notes can be hung off the
@@ -711,7 +711,7 @@ test.describe("Enhancement milestone", () => {
     });
 
     const commandPattern = /^copilot --yolo --session-id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12} --model "gpt-5\.4" --effort high --context long_context$/;
-    await page.getByRole("menuitem", { name: "Run GitHub Copilot", exact: true }).click();
+    await page.getByTitle("Runs GitHub Copilot in the focused terminal, or opens one on this page", { exact: true }).click();
     await expect(page.locator(".terminal-pane")).toHaveCount(2);
     // The session UUID MultiTerm mints varies, so the launch is matched by shape.
     await expect.poll(() => page.evaluate((source) => window.__copilotLaunchFrames
@@ -815,6 +815,7 @@ test.describe("Enhancement milestone", () => {
     await page.locator("#contextMenu .ctx-item", { hasText: "Resume GitHub Copilot session" }).click();
     await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
     await expect(page.locator("#copilotResumeSearch")).toBeFocused();
+    await page.locator("#copilotResumeOriginAll").click();
     await expect(page.locator(".copilot-session-card")).toHaveCount(2);
     await page.locator("#copilotResumeSearch").fill("yagu indexing");
     await expect(page.locator(".copilot-session-card")).toHaveCount(1);
@@ -987,6 +988,8 @@ test.describe("Enhancement milestone", () => {
 
     await page.locator("#copilotSessionsToggle").click();
     await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await page.locator("#copilotResumeOriginAll").click();
+    await page.locator("#copilotResumeSourceFilter").selectOption("all");
     await expect(page.locator(".copilot-session-card")).toHaveCount(3);
     await expect(page.locator(".copilot-session-source")).toHaveText(["Copilot CLI", "VS Code", "Visual Studio"]);
     await page.locator(".copilot-session-card", { hasText: "VS Code history" }).click();
@@ -1088,6 +1091,8 @@ test.describe("Enhancement milestone", () => {
     });
 
     await page.locator("#copilotSessionsToggle").click();
+    await page.locator("#copilotResumeOriginAll").click();
+    await page.locator("#copilotResumeSourceFilter").selectOption("all");
     await expect(page.locator(".copilot-session-card")).toHaveCount(3);
     await page.locator("#copilotResumeSearch").fill("Find sessions where I worked on data storage or login tokens");
     await page.locator("#copilotResumeAiSearch").click();
@@ -1162,6 +1167,7 @@ test.describe("Enhancement milestone", () => {
     });
 
     await page.locator("#copilotSessionsToggle").click();
+    await page.locator("#copilotResumeOriginAll").click();
     await page.locator("#copilotResumeSearch").fill("preserve picker");
     await page.locator(".copilot-session-card").click();
     await expect(page.locator("#cwdChangeOverlay")).toBeVisible();
@@ -1280,6 +1286,7 @@ test.describe("Enhancement milestone", () => {
     });
 
     await page.locator("#copilotSessionsToggle").click();
+    await page.locator("#copilotResumeOriginAll").click();
     await page.locator(".copilot-session-card", { hasText: "Native relocation" }).click();
     await page.locator("#cwdChangeInput").fill("D:\\chosen project");
     await expect(page.locator("#cwdChangeSend")).toBeEnabled();

@@ -22,6 +22,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
@@ -38,6 +39,9 @@ function registerWindowIpc() {
   try { ipcMain.removeHandler("multiterm:set-fullscreen"); } catch { /* no existing handler */ }
   try { ipcMain.removeHandler("multiterm:minimize-window"); } catch { /* no existing handler */ }
   try { ipcMain.removeHandler("multiterm:configure-diagnostics"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:get-bridge-startup-preference"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:set-bridge-startup-ask"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:choose-bridge-now"); } catch { /* no existing handler */ }
   ipcMain.handle("multiterm:set-fullscreen", (event, enabled) => {
     assertTrustedIpcSender(event);
     const next = Boolean(enabled);
@@ -57,14 +61,63 @@ function registerWindowIpc() {
       viewerEntries: settings?.viewerEntries
     });
   });
+  ipcMain.handle("multiterm:get-bridge-startup-preference", (event) => {
+    assertTrustedIpcSender(event);
+    return loadBridgeStartupPreference();
+  });
+  ipcMain.handle("multiterm:set-bridge-startup-ask", (event, enabled) => {
+    assertTrustedIpcSender(event);
+    const current = loadBridgeStartupPreference();
+    return saveBridgeStartupPreference({
+      ...current,
+      askOnStartup: Boolean(enabled),
+      mode: activeBridgeRecord ? "bridge" : "new",
+      bridgeId: activeBridgeRecord?.bridgeId || "",
+      bridgePort: activeBridgeRecord?.port || 0
+    });
+  });
+  ipcMain.handle("multiterm:choose-bridge-now", async (event) => {
+    assertTrustedIpcSender(event);
+    const candidates = await discoverBridgeInstances();
+    const current = candidates.find((candidate) => candidate.host === activeBridgeHost && candidate.port === activeBridgePort);
+    const choices = current ? candidates.filter((candidate) => candidate !== current) : candidates;
+    const choice = await chooseStartupBridge(
+      choices,
+      { askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 },
+      { alwaysPrompt: true }
+    );
+    if (choice.cancelled) return { changed: false, cancelled: true };
+    if (serverProcess) await detachOwnedBridge();
+    if (choice.startNew) {
+      activeBridgeHost = HOST;
+      activeBridgePort = await findFreePort(PORT, HOST);
+      activeBridgeRecord = null;
+      startServer();
+      await waitForServer();
+    } else {
+      activeBridgeHost = choice.candidate.host;
+      activeBridgePort = choice.candidate.port;
+      activeBridgeRecord = choice.candidate;
+    }
+    await mainWindow.loadURL(`${bridgeOrigin()}/`);
+    return { changed: true, host: activeBridgeHost, port: activeBridgePort };
+  });
 }
 
 function formatError(err) {
   return String(err.message || err);
 }
 
+function bridgeOrigin(host = activeBridgeHost, port = activeBridgePort) {
+  const displayHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${displayHost}:${port}`;
+}
+
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT || 3177);
+let activeBridgeHost = HOST;
+let activeBridgePort = PORT;
+let activeBridgeRecord = null;
 let clipboardImageDirectory = null;
 
 // Whether a URL points back at the app's own local origin. Used to allow internal
@@ -73,9 +126,10 @@ function isInternalUrl(url) {
   if (typeof url !== "string") return false;
   try {
     const parsed = new URL(url);
+    const parsedHost = parsed.hostname === "[::1]" ? "::1" : parsed.hostname;
     return parsed.protocol === "http:"
-      && (parsed.hostname === HOST || parsed.hostname === "localhost")
-      && parsed.port === String(PORT);
+      && (parsedHost === activeBridgeHost || parsedHost === "localhost")
+      && parsed.port === String(activeBridgePort);
   } catch {
     return false;
   }
@@ -130,6 +184,7 @@ let elevationChecked = false;
 let mainWindow = null;
 let tray = null;
 let serverProcess = null;
+const detachedServerProcesses = new Set();
 let runtimeDiagnostics = new RuntimeDiagnostics();
 let bridgeHandledForQuit = false;
 // Timestamps of recent unexpected bridge restarts, used as a crash-loop guard so
@@ -165,17 +220,18 @@ function captureBridgeOutput(stream, level, event) {
 // background broadcast.
 function startServer() {
   const nodeExe = process.platform === "win32" ? "node.exe" : "node";
-  serverProcess = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
+  const spawnedServer = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
     cwd: __dirname,
     detached: true,
-    env: { ...process.env, HOST, PORT: String(PORT), MULTITERM_UI_OWNER_PID: String(process.pid) },
+    env: { ...process.env, HOST: activeBridgeHost, PORT: String(activeBridgePort), MULTITERM_UI_OWNER_PID: String(process.pid) },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
   });
+  serverProcess = spawnedServer;
   recordElectronDiagnostic({
     level: "info",
     event: "bridge-spawn",
-    message: `Started terminal bridge on ${HOST}:${PORT}.`,
+    message: `Started terminal bridge on ${activeBridgeHost}:${activeBridgePort}.`,
     pid: serverProcess.pid
   });
   captureBridgeOutput(serverProcess.stdout, "info", "bridge-stdout");
@@ -194,7 +250,7 @@ function startServer() {
       );
     }
   });
-  serverProcess.on("exit", (code, signal) => {
+  spawnedServer.on("exit", (code, signal) => {
     recordElectronDiagnostic({
       level: app.isQuiting || code === 0 || code === null ? "info" : "error",
       event: "bridge-exit",
@@ -202,8 +258,11 @@ function startServer() {
       code,
       signal
     });
-    serverProcess = null;
+    if (serverProcess === spawnedServer) serverProcess = null;
     // A clean exit (0) or a kill we requested (null on signal) needs no action.
+    if (detachedServerProcesses.delete(spawnedServer)) {
+      return;
+    }
     if (app.isQuiting || code === 0 || code === null) return;
 
     // The bridge died unexpectedly. node-pty's native ConPTY path can abort the
@@ -263,8 +322,8 @@ function requestServerShutdown(callback) {
     }
   };
   const request = http.request({
-    host: HOST,
-    port: PORT,
+    host: activeBridgeHost,
+    port: activeBridgePort,
     path: "/shutdown",
     method: "POST",
     headers: { "X-MultiTerm-Request": "Launcher" },
@@ -289,8 +348,8 @@ function requestWatchdogSuppression(callback) {
     }
   };
   const request = http.request({
-    host: HOST,
-    port: PORT,
+    host: activeBridgeHost,
+    port: activeBridgePort,
     path: "/watchdog/keep",
     method: "POST",
     headers: { "X-MultiTerm-Request": "Launcher" },
@@ -305,6 +364,10 @@ function requestWatchdogSuppression(callback) {
 }
 
 function probeServer(timeoutMs = 500) {
+  return probeBridge(activeBridgeHost, activeBridgePort, timeoutMs).then(Boolean);
+}
+
+function probeBridge(host, port, timeoutMs = 500) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (ready) => {
@@ -315,7 +378,7 @@ function probeServer(timeoutMs = 500) {
         resolve(ready);
       }
     };
-    const request = http.get({ host: HOST, port: PORT, path: "/health", timeout: timeoutMs }, (response) => {
+    const request = http.get({ host, port, path: "/health", timeout: timeoutMs }, (response) => {
       let body = "";
       response.setEncoding?.("utf8");
       response.on("data", (chunk) => { body += chunk; });
@@ -326,15 +389,215 @@ function probeServer(timeoutMs = 500) {
             && health.app === "MultiTerm Workbench"
             && Number.isSafeInteger(Number(health.pid))
             && Number(health.pid) > 0
-            && Number(health.port) === PORT);
+            && Number(health.port) === port
+            ? health
+            : null);
         } catch {
-          finish(false);
+          finish(null);
         }
       });
     });
     request.on("timeout", () => request.destroy(new Error("Bridge health check timed out.")));
-    request.on("error", () => finish(false));
+    request.on("error", () => finish(null));
   });
+}
+
+function bridgePreferencePath(targetApp = app) {
+  return typeof targetApp?.getPath === "function"
+    ? path.join(targetApp.getPath("userData"), "bridge-startup.json")
+    : "";
+}
+
+function normalizeBridgeStartupPreference(value) {
+  const bridgePort = Number(value?.bridgePort);
+  return {
+    askOnStartup: value?.askOnStartup !== false,
+    mode: value?.mode === "bridge" ? "bridge" : "new",
+    bridgeId: typeof value?.bridgeId === "string" ? value.bridgeId.slice(0, 64) : "",
+    bridgePort: Number.isSafeInteger(bridgePort) && bridgePort > 0 && bridgePort <= 65535 ? bridgePort : 0
+  };
+}
+
+function loadBridgeStartupPreference(fileSystem = fs, filePath = bridgePreferencePath()) {
+  if (!filePath) return normalizeBridgeStartupPreference(null);
+  try {
+    return normalizeBridgeStartupPreference(JSON.parse(fileSystem.readFileSync(filePath, "utf8")));
+  } catch {
+    return normalizeBridgeStartupPreference(null);
+  }
+}
+
+function saveBridgeStartupPreference(value, fileSystem = fs, filePath = bridgePreferencePath()) {
+  const preference = normalizeBridgeStartupPreference(value);
+  if (!filePath) return preference;
+  fileSystem.mkdirSync(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  fileSystem.writeFileSync(temporaryPath, `${JSON.stringify(preference, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  fileSystem.renameSync(temporaryPath, filePath);
+  return preference;
+}
+
+function bridgeInstanceDirectory(targetApp = app) {
+  return typeof targetApp?.getPath === "function" && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, "MultiTerm", "Instances")
+    : "";
+}
+
+async function discoverBridgeInstances({ fileSystem = fs, directory = bridgeInstanceDirectory(), probe = probeBridge } = {}) {
+  if (!directory) return [];
+  let files;
+  try {
+    files = fileSystem.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const discovered = [];
+  for (const file of files) {
+    if (!file.isFile() || !file.name.endsWith(".json")) continue;
+    try {
+      const record = JSON.parse(fileSystem.readFileSync(path.join(directory, file.name), "utf8"));
+      const url = new URL(String(record.url || ""));
+      const port = Number(record.port);
+      if (record.app !== "MultiTerm Workbench"
+          || url.protocol !== "http:"
+          || ![HOST, "localhost", "::1", "[::1]"].includes(url.hostname)
+          || !Number.isSafeInteger(port)
+          || port <= 0
+          || port > 65535
+          || Number(url.port) !== port) continue;
+      const host = url.hostname === "localhost"
+        ? HOST
+        : url.hostname === "[::1]" ? "::1" : url.hostname;
+      const health = await probe(host, port, 1200);
+      if (!health || Number(health.pid) !== Number(record.pid)) continue;
+      discovered.push({
+        bridgeId: String(record.bridgeId || "Bridge"),
+        bridgeType: record.bridgeType === "installed" ? "installed" : "electron",
+        host,
+        port,
+        startedAt: String(record.startedAt || ""),
+        health
+      });
+    } catch {
+      // Malformed, stale, and half-written records are not viable choices.
+    }
+  }
+  return discovered.sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+function findFreePort(startPort = PORT, host = HOST) {
+  return new Promise((resolve, reject) => {
+    const tryPort = (port) => {
+      if (port > 65535) {
+        reject(new Error("No free local port is available for a new MultiTerm bridge."));
+        return;
+      }
+      const listener = net.createServer();
+      listener.once("error", () => tryPort(port + 1));
+      listener.listen(port, host, () => listener.close(() => resolve(port)));
+    };
+    tryPort(Math.max(1, startPort));
+  });
+}
+
+function bridgeChoiceLabel(candidate) {
+  const type = candidate.bridgeType === "installed" ? "installed" : "Electron";
+  const sessions = Number(candidate.health?.sessions) || 0;
+  return `${candidate.bridgeId} · ${type} · port ${candidate.port} · ${sessions} session${sessions === 1 ? "" : "s"}`;
+}
+
+async function chooseStartupBridge(candidates, preference = loadBridgeStartupPreference(), options = {}) {
+  if (preference.askOnStartup === false) {
+    if (preference.mode === "bridge") {
+      const preferred = candidates.find((candidate) => candidate.bridgeId === preference.bridgeId
+        && (!preference.bridgePort || candidate.port === preference.bridgePort));
+      if (preferred) return { candidate: preferred, startNew: false, preference };
+    }
+    return { candidate: null, startNew: true, preference };
+  }
+  if (candidates.length === 0 && !options.alwaysPrompt) return { candidate: null, startNew: true, preference };
+
+  const buttons = candidates.map(bridgeChoiceLabel).concat("Start a new bridge", "Cancel");
+  const hasCandidates = candidates.length > 0;
+  const result = await dialog.showMessageBox({
+    type: "question",
+    title: "Choose a MultiTerm bridge",
+    message: hasCandidates
+      ? "MultiTerm found other bridges running on this machine."
+      : "No other MultiTerm bridges are currently available.",
+    detail: hasCandidates
+      ? "Connect this window to an existing bridge, or start a separate bridge for it."
+      : "You can keep this bridge or start a separate bridge for this window.",
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+    checkboxLabel: "Don't show this again",
+    checkboxChecked: false,
+    noLink: true
+  });
+  if (result.response === buttons.length - 1) return { cancelled: true, preference };
+  const candidate = result.response < candidates.length ? candidates[result.response] : null;
+  let nextPreference = preference;
+  if (result.checkboxChecked) {
+    try {
+      nextPreference = saveBridgeStartupPreference({
+        askOnStartup: false,
+        mode: candidate ? "bridge" : "new",
+        bridgeId: candidate?.bridgeId || "",
+        bridgePort: candidate?.port || 0
+      });
+    } catch (error) {
+      recordElectronDiagnostic({
+        level: "warn",
+        event: "bridge-startup-preference-save-failed",
+        message: formatError(error)
+      });
+    }
+  }
+  return { candidate, startNew: !candidate, preference: nextPreference };
+}
+
+function detachOwnedBridge() {
+  const child = serverProcess;
+  return child
+    ? new Promise((resolve) => {
+      requestWatchdogSuppression(() => {
+        child.unref?.();
+        detachedServerProcesses.add(child);
+        serverProcess = null;
+        resolve();
+      });
+    })
+    : Promise.resolve();
+}
+
+function needsConfiguredBridgeProbe(candidate) {
+  return !candidate;
+}
+
+function appendConfiguredBridgeCandidate(health, candidates) {
+  if (health) {
+    const candidate = {
+      bridgeId: "Existing bridge",
+      bridgeType: "electron",
+      host: HOST,
+      port: PORT,
+      startedAt: "",
+      health
+    };
+    candidates.push(candidate);
+    return candidate;
+  } else {
+    return null;
+  }
+}
+
+function selectStartupBridge(choice, samePort) {
+  if (choice.startNew) {
+    return null;
+  } else {
+    return choice.candidate || samePort;
+  }
 }
 
 function waitForServer(timeoutMs = 10000) {
@@ -434,7 +697,7 @@ function createWindow() {
     ));
   }
 
-  mainWindow.loadURL(`http://${HOST}:${PORT}/`);
+  mainWindow.loadURL(`${bridgeOrigin()}/`);
 
   // Closing the window docks MultiTerm to the system tray instead of quitting,
   // so terminal sessions survive. The renderer decides (via a modal) whether to
@@ -740,11 +1003,32 @@ function readTerminalClipboardText(
 
 // Single-instance: focus the existing window instead of launching a second app.
 async function onReady() {
-  const reusedBridge = await probeServer();
-  if (!reusedBridge) {
-    startServer();
-  } else {
-    // A healthy detached bridge can be reused by this Electron window.
+  const candidates = await discoverBridgeInstances();
+  let samePort = candidates.find((candidate) => candidate.host === HOST && candidate.port === PORT);
+  if (needsConfiguredBridgeProbe(samePort)) {
+    const health = await probeBridge(HOST, PORT, 500);
+    samePort = appendConfiguredBridgeCandidate(health, candidates);
+  }
+  const choice = await chooseStartupBridge(candidates);
+  switch (choice.cancelled) {
+    case true:
+      app.quit();
+      return;
+    default:
+      break;
+  }
+  const selected = selectStartupBridge(choice, samePort);
+  switch (selected) {
+    case null:
+      activeBridgeHost = HOST;
+      activeBridgePort = typeof app?.getPath === "function" ? await findFreePort(PORT, HOST) : PORT;
+      activeBridgeRecord = null;
+      startServer();
+      break;
+    default:
+      activeBridgeHost = selected.host;
+      activeBridgePort = selected.port;
+      activeBridgeRecord = selected;
   }
   try {
     await waitForServer();
@@ -874,7 +1158,7 @@ function relaunchAsAdmin() {
     const args = process.argv.slice(1);
     const argList = args.length ? args.map((a) => `'${String(a).replace(/'/g, "''")}'`).join(",") : "";
     const startArgs = argList ? `-ArgumentList ${argList} ` : "";
-    const psCommand = `$env:PORT='${PORT}'; $env:MULTITERM_ELEVATED='1'; Start-Process -FilePath '${exe.replace(/'/g, "''")}' ${startArgs}-WorkingDirectory '${__dirname.replace(/'/g, "''")}' -Verb RunAs`;
+    const psCommand = `$env:PORT='${activeBridgePort}'; $env:MULTITERM_ELEVATED='1'; Start-Process -FilePath '${exe.replace(/'/g, "''")}' ${startArgs}-WorkingDirectory '${__dirname.replace(/'/g, "''")}' -Verb RunAs`;
     childProcess.spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { detached: true, stdio: "ignore", windowsHide: true }).unref();
     return true;
   } catch {
@@ -1339,6 +1623,19 @@ module.exports = {
   requestServerShutdown,
   requestWatchdogSuppression,
   probeServer,
+  probeBridge,
+  bridgePreferencePath,
+  normalizeBridgeStartupPreference,
+  loadBridgeStartupPreference,
+  saveBridgeStartupPreference,
+  bridgeInstanceDirectory,
+  discoverBridgeInstances,
+  findFreePort,
+  bridgeChoiceLabel,
+  chooseStartupBridge,
+  detachOwnedBridge,
+  appendConfiguredBridgeCandidate,
+  selectStartupBridge,
   handleCloseResponse,
   registerCloseHandler,
   registerClipboardIpc,
@@ -1381,6 +1678,7 @@ module.exports = {
   },
   formatError,
   isInternalUrl,
+  bridgeOrigin,
   isAllowedExternalUrl,
   isTrustedIpcSender,
   getMainWindow: () => mainWindow,
@@ -1390,8 +1688,12 @@ module.exports = {
     mainWindow = null;
     tray = null;
     serverProcess = null;
+    detachedServerProcesses.clear();
     bridgeHandledForQuit = false;
     serverRestarts = [];
+    activeBridgeHost = HOST;
+    activeBridgePort = PORT;
+    activeBridgeRecord = null;
     appIsElevated = false;
     elevationChecked = false;
     cleanupClipboardImages();

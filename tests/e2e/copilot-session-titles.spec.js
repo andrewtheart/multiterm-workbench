@@ -25,8 +25,7 @@ test.describe("Copilot session terminal title associations", () => {
     terminalId = await page.evaluate(({ session }) => {
       closeAllTerminals();
       const terminal = addTerminal({ reveal: true, runStartup: false, title: "Current linked title" });
-      terminal.assistantSessionKey = session.key;
-      terminal.aiSessionId = session.id;
+      assignAssistantSessionIdentity(terminal, session.id, session.key);
       return terminal.id;
     }, { session: SESSION });
     await expect.poll(() => page.evaluate((id) => state.terminals.get(id)?.status, terminalId), { timeout: 30000 }).toBe("live");
@@ -50,8 +49,7 @@ test.describe("Copilot session terminal title associations", () => {
       const terminal = state.terminals.get(terminalId);
       terminal.titleInput.value = "Current linked title";
       setTerminalTitleDisplay(terminal, "Current linked title");
-      terminal.assistantSessionKey = session.key;
-      terminal.aiSessionId = session.id;
+      assignAssistantSessionIdentity(terminal, session.id, session.key);
       terminal.pid = 42424;
       const now = Date.parse("2026-08-13T20:00:00.000Z");
       state.sessionManualTitleHistory = [{

@@ -16,6 +16,67 @@ test.describe("Copilot session working-directory recovery", () => {
     });
   });
 
+  test("does not start a private query without an eligible resume session", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const result = await page.evaluate(() => {
+      const previous = {
+        mode: cwdChange.mode,
+        provider: copilotResume.provider,
+        queryBusy: cwdChange.queryBusy,
+        resumeSession: cwdChange.resumeSession
+      };
+      cwdChange.mode = "terminal";
+      cwdChange.resumeSession = null;
+      cwdChange.queryBusy = false;
+      copilotResume.provider = "copilot";
+      const ineligible = startCwdSessionQuery();
+      cwdChange.mode = previous.mode;
+      cwdChange.resumeSession = previous.resumeSession;
+      cwdChange.queryBusy = previous.queryBusy;
+      copilotResume.provider = previous.provider;
+      return ineligible;
+    });
+
+    expect(result).toBe(false);
+  });
+
+  test("reports when an eligible CWD query command cannot be built", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const result = await page.evaluate(() => {
+      const previous = {
+        buildCommand: buildAiAssistantCommand,
+        mode: cwdChange.mode,
+        provider: copilotResume.provider,
+        providers: state.aiProviders,
+        resumeSession: cwdChange.resumeSession
+      };
+      state.aiProviders = [{ id: "copilot", available: true, interactiveAvailable: true }];
+      copilotResume.provider = "copilot";
+      cwdChange.mode = "resume";
+      cwdChange.resumeSession = {
+        id: "62d43a25-c209-4933-af9a-24d9bff3789c",
+        key: "cli:62d43a25-c209-4933-af9a-24d9bff3789c",
+        source: "cli"
+      };
+      buildAiAssistantCommand = () => "";
+      const started = startCwdSessionQuery();
+      const status = elements.cwdChangeStatus.textContent;
+      buildAiAssistantCommand = previous.buildCommand;
+      cwdChange.mode = previous.mode;
+      cwdChange.resumeSession = previous.resumeSession;
+      copilotResume.provider = previous.provider;
+      state.aiProviders = previous.providers;
+      return { started, status };
+    });
+
+    expect(result).toEqual({
+      started: false,
+      status: "GitHub Copilot is not installed and signed in."
+    });
+  });
+
   test("privately asks an unavailable session and promotes that terminal on Send", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");

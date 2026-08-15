@@ -16,6 +16,8 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <https://www.gnu.org/licenses/>.
 -->
+<!-- Early metadata keeps the shell deterministic before renderer startup.
+     Workspace controls are progressively enhanced after app.js loads. -->
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -120,9 +122,6 @@
             </button>
             <button id="attachTmux" class="icon-button" type="button" title="Attach WSL tmux session" aria-label="Attach WSL tmux session">
               <i data-lucide="link"></i>
-            </button>
-            <button id="minimizeApp" class="icon-button" type="button" title="Minimize MultiTerm" aria-label="Minimize MultiTerm">
-              <i data-lucide="minus"></i>
             </button>
             <button id="toggleHeaderTop" class="icon-button topbar-collapse" type="button" title="Collapse top bar" aria-label="Collapse top bar" aria-pressed="false">
               <i data-lucide="chevron-up"></i>
@@ -414,6 +413,10 @@
                 <option value="default">Provider default</option>
               </select>
             </label>
+            <label class="toggle-row">
+              <input id="aiSessionYolo" type="checkbox">
+              <span title="Starts interactive assistant sessions with permission prompts bypassed (--yolo for GitHub Copilot, --dangerously-skip-permissions for Claude). Clear it to keep each CLI's own confirmations. Every menu entry that launches an assistant shows this as a YOLO checkbox you can change at launch time.">YOLO mode for new assistant sessions</span>
+            </label>
             <h3 class="settings-subheading">Remote control</h3>
             <label class="toggle-row">
               <input id="copilotRemoteSessions" type="checkbox">
@@ -580,6 +583,10 @@
 
           <section class="control-section">
             <h2>Session</h2>
+            <label id="bridgeStartupAskRow" class="toggle-row" hidden>
+              <input id="bridgeStartupAsk" type="checkbox">
+              <span title="When other MultiTerm bridges are running, ask whether this Electron window should connect to one or start a separate bridge.">Ask which bridge to use at startup</span>
+            </label>
             <label class="toggle-row">
               <input id="keepSessionsOnClose" type="checkbox">
               <span>Keep terminals when closed</span>
@@ -877,10 +884,13 @@
         </span>
         <span class="status-conn-wrap">
           <span class="status-dot" id="statusConn" data-tone="offline" tabindex="0" aria-describedby="bridgeIdentityCard">Connecting</span>
-          <div class="bridge-identity-card" id="bridgeIdentityCard" role="tooltip" hidden>
+          <div class="bridge-identity-card" id="bridgeIdentityCard" role="dialog" aria-modal="false" aria-labelledby="bridgeIdentityId" hidden>
             <div class="bridge-identity-id" id="bridgeIdentityId">BRIDGE-???</div>
             <p class="bridge-identity-note" id="bridgeIdentityNote">This window is served by its own MultiTerm bridge.</p>
-            <button type="button" class="bridge-identity-action" id="bridgeIdentityFocus">Show bridge terminal</button>
+            <div class="bridge-identity-actions">
+              <button type="button" class="bridge-identity-action" id="bridgeIdentityFocus">Show bridge terminal</button>
+              <button type="button" class="bridge-identity-action" id="bridgeIdentityChoose" hidden>Connect to another bridge...</button>
+            </div>
             <p class="bridge-identity-status" id="bridgeIdentityStatus" role="status" hidden></p>
           </div>
         </span>
@@ -1014,6 +1024,40 @@
             <i data-lucide="refresh-cw"></i>
             <span>Refresh</span>
           </button>
+        </div>
+        <div id="copilotResumeFilters" class="copilot-resume-filters" aria-label="Filter assistant sessions">
+          <div class="copilot-resume-filter-group" role="group" aria-label="Session origin">
+            <span>Origin</span>
+            <button id="copilotResumeOriginMultiTerm" type="button" class="copilot-resume-filter-button" data-resume-origin="multiterm" aria-pressed="true">MultiTerm</button>
+            <button id="copilotResumeOriginOther" type="button" class="copilot-resume-filter-button" data-resume-origin="other" aria-pressed="false">Other</button>
+            <button id="copilotResumeOriginAll" type="button" class="copilot-resume-filter-button" data-resume-origin="all" aria-pressed="false">All</button>
+          </div>
+          <label class="copilot-resume-filter-field">
+            <span>Source</span>
+            <select id="copilotResumeSourceFilter">
+              <option value="all">All sources</option>
+              <option value="cli">Copilot CLI</option>
+              <option value="vscode">VS Code</option>
+              <option value="visualstudio">Visual Studio</option>
+              <option value="claude">Claude</option>
+              <option value="remote">Remote</option>
+            </select>
+          </label>
+          <label class="copilot-resume-filter-field">
+            <span>Project</span>
+            <select id="copilotResumeProjectFilter">
+              <option value="all">All projects</option>
+            </select>
+          </label>
+          <label class="copilot-resume-filter-field">
+            <span>Updated</span>
+            <select id="copilotResumeUpdatedFilter">
+              <option value="any">Any time</option>
+              <option value="day">Past day</option>
+              <option value="week">Past week</option>
+              <option value="month">Past month</option>
+            </select>
+          </label>
         </div>
         <p id="copilotResumeNotice" class="copilot-resume-notice" hidden></p>
         <div class="copilot-resume-summary">
@@ -2192,19 +2236,95 @@
     </div>
 
     <div id="headerBackgroundOverlay" class="palette-overlay header-background-overlay" hidden>
-      <div class="palette header-background-dialog" role="dialog" aria-modal="true" aria-labelledby="headerBackgroundTitle" aria-describedby="headerBackgroundSubtitle" tabindex="-1">
+      <div class="palette header-background-dialog terminal-appearance-dialog" role="dialog" aria-modal="true" aria-labelledby="headerBackgroundTitle" aria-describedby="headerBackgroundSubtitle" tabindex="-1">
         <header class="header-background-head">
           <i data-lucide="palette" aria-hidden="true"></i>
           <div>
-            <h2 id="headerBackgroundTitle">Terminal header background</h2>
+            <h2 id="headerBackgroundTitle">Terminal appearance</h2>
             <p id="headerBackgroundSubtitle"></p>
           </div>
-          <button id="headerBackgroundClose" class="icon-button" type="button" title="Close" aria-label="Close header background editor">
+          <button id="headerBackgroundClose" class="icon-button" type="button" title="Close" aria-label="Close terminal appearance editor">
             <i data-lucide="x"></i>
           </button>
         </header>
 
-        <div class="header-background-body">
+        <div class="terminal-appearance-layout">
+          <nav class="terminal-appearance-blade" role="tablist" aria-label="Appearance section">
+            <button id="terminalAppearanceTabTerminal" type="button" role="tab" aria-selected="true" aria-controls="terminalAppearancePanel">
+              <i data-lucide="square-terminal"></i><span>Terminal</span>
+            </button>
+            <button id="terminalAppearanceTabHeader" type="button" role="tab" aria-selected="false" aria-controls="terminalHeaderAppearancePanel">
+              <i data-lucide="panel-top"></i><span>Header</span>
+            </button>
+          </nav>
+
+          <div class="terminal-appearance-content">
+            <section id="terminalAppearancePanel" class="terminal-appearance-panel" role="tabpanel" aria-labelledby="terminalAppearanceTabTerminal">
+              <div id="terminalAppearancePreview" class="terminal-appearance-preview" aria-label="Terminal color and font preview">
+                <span>PS D:\multiTerm&gt; Get-Process</span>
+                <span>MultiTerm  15196  Running</span>
+                <span class="terminal-appearance-preview-prompt">PS D:\multiTerm&gt; <i></i></span>
+              </div>
+
+              <div class="terminal-appearance-fields">
+                <fieldset class="terminal-color-editor" data-terminal-color="background">
+                  <legend>Background color</legend>
+                  <div id="terminalAppearanceBackgroundPicker" class="terminal-inline-color-picker">
+                    <div id="terminalAppearanceBackgroundPlane" class="terminal-color-plane" role="slider" tabindex="0" aria-label="Background color saturation and brightness" aria-valuemin="0" aria-valuemax="100">
+                      <span id="terminalAppearanceBackgroundHandle" class="terminal-color-plane-handle" aria-hidden="true"></span>
+                    </div>
+                    <div class="terminal-color-picker-tools">
+                      <label><span>Hue</span><input id="terminalAppearanceBackgroundHue" class="terminal-color-hue" type="range" min="0" max="359" step="1" value="0" aria-label="Background color hue"></label>
+                      <button id="terminalAppearanceBackgroundExpand" type="button" class="icon-button terminal-color-expand" aria-expanded="false" title="Expand background color picker" aria-label="Expand background color picker"><i data-lucide="maximize-2"></i></button>
+                    </div>
+                  </div>
+                  <div class="terminal-color-primary">
+                    <label><span>Hex</span><input id="terminalAppearanceBackgroundHex" type="text" value="#0D0E0C" maxlength="7" spellcheck="false" autocomplete="off"></label>
+                  </div>
+                  <div class="terminal-rgb-fields" aria-label="Terminal background RGB channels">
+                    <label><span>R</span><input id="terminalAppearanceBackgroundR" type="number" min="0" max="255" step="1" value="13"></label>
+                    <label><span>G</span><input id="terminalAppearanceBackgroundG" type="number" min="0" max="255" step="1" value="14"></label>
+                    <label><span>B</span><input id="terminalAppearanceBackgroundB" type="number" min="0" max="255" step="1" value="12"></label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="terminal-color-editor" data-terminal-color="foreground">
+                  <legend>Font color</legend>
+                  <div id="terminalAppearanceForegroundPicker" class="terminal-inline-color-picker">
+                    <div id="terminalAppearanceForegroundPlane" class="terminal-color-plane" role="slider" tabindex="0" aria-label="Font color saturation and brightness" aria-valuemin="0" aria-valuemax="100">
+                      <span id="terminalAppearanceForegroundHandle" class="terminal-color-plane-handle" aria-hidden="true"></span>
+                    </div>
+                    <div class="terminal-color-picker-tools">
+                      <label><span>Hue</span><input id="terminalAppearanceForegroundHue" class="terminal-color-hue" type="range" min="0" max="359" step="1" value="0" aria-label="Font color hue"></label>
+                      <button id="terminalAppearanceForegroundExpand" type="button" class="icon-button terminal-color-expand" aria-expanded="false" title="Expand font color picker" aria-label="Expand font color picker"><i data-lucide="maximize-2"></i></button>
+                    </div>
+                  </div>
+                  <div class="terminal-color-primary">
+                    <label><span>Hex</span><input id="terminalAppearanceForegroundHex" type="text" value="#EEE9DB" maxlength="7" spellcheck="false" autocomplete="off"></label>
+                  </div>
+                  <div class="terminal-rgb-fields" aria-label="Terminal font RGB channels">
+                    <label><span>R</span><input id="terminalAppearanceForegroundR" type="number" min="0" max="255" step="1" value="238"></label>
+                    <label><span>G</span><input id="terminalAppearanceForegroundG" type="number" min="0" max="255" step="1" value="233"></label>
+                    <label><span>B</span><input id="terminalAppearanceForegroundB" type="number" min="0" max="255" step="1" value="219"></label>
+                  </div>
+                </fieldset>
+              </div>
+
+              <label class="terminal-appearance-font">
+                <span>Font family</span>
+                <select id="terminalAppearanceFontFamily">
+                  <option value="Cascadia Mono">Cascadia Mono</option>
+                  <option value="Cascadia Code">Cascadia Code</option>
+                  <option value="Consolas">Consolas</option>
+                  <option value="JetBrains Mono">JetBrains Mono</option>
+                  <option value="Fira Code">Fira Code</option>
+                  <option value="Courier New">Courier New</option>
+                </select>
+              </label>
+            </section>
+
+            <section id="terminalHeaderAppearancePanel" class="terminal-appearance-panel" role="tabpanel" aria-labelledby="terminalAppearanceTabHeader" hidden>
+              <div class="header-background-body">
           <div id="headerBackgroundPreview" class="header-background-preview" aria-label="Header background preview">
             <span class="header-background-preview-title"><i data-lucide="terminal"></i><span>Terminal header</span></span>
             <i data-lucide="more-horizontal" aria-hidden="true"></i>
@@ -2260,13 +2380,22 @@
             </div>
             <div id="headerGradientStopList" class="header-gradient-stop-list"></div>
           </section>
+              </div>
+            </section>
+          </div>
         </div>
 
         <footer class="header-background-actions">
           <button id="headerBackgroundReset" type="button" class="secondary-action"><i data-lucide="rotate-ccw"></i><span>Use default</span></button>
           <span></span>
           <button id="headerBackgroundCancel" type="button" class="secondary-action">Cancel</button>
-          <button id="headerBackgroundApply" type="button" class="primary-action">Apply</button>
+          <div class="terminal-appearance-apply-wrap">
+            <button id="headerBackgroundApply" type="button" class="primary-action" aria-expanded="false" aria-controls="terminalAppearanceApplyChoices">Apply</button>
+            <div id="terminalAppearanceApplyChoices" class="terminal-appearance-apply-choices" role="group" aria-label="Apply terminal appearance to" hidden>
+              <button id="terminalAppearanceApplyTerminal" type="button" class="secondary-action">This terminal</button>
+              <button id="terminalAppearanceApplyAll" type="button" class="secondary-action">All terminals</button>
+            </div>
+          </div>
         </footer>
       </div>
     </div>

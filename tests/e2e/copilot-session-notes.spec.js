@@ -92,6 +92,7 @@ test.describe("Copilot session notes", () => {
 
       copilotResume.provider = "copilot";
       copilotResume.scope = "local";
+      copilotResume.filters = { origin: "all", source: "cli", project: "all", updated: "any" };
       copilotResume.sessions = sessions;
       copilotResume.expandedNotes.clear();
       elements.copilotResumeOverlay.hidden = false;

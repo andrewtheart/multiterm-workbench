@@ -64,6 +64,27 @@ test.describe("Settings panel verification", () => {
   const hostVar = (name) => page.evaluate((name) => document.querySelector("#terminalHost").style.getPropertyValue(name).trim(), name);
 
   test("appearance settings", async () => {
+    const catalogs = await page.evaluate(() => [elements.fontFamily, elements.terminalAppearanceFontFamily].map((select) => (
+      [...select.options].map((option) => ({
+        value: option.value,
+        stack: option.dataset.fontStack,
+        rendered: option.style.fontFamily
+      }))
+    )));
+    expect(catalogs[0]).toHaveLength(20);
+    expect(catalogs[1]).toEqual(catalogs[0]);
+    expect(catalogs[0].every((option) => (
+      option.stack && option.rendered.toLowerCase().includes(option.value.toLowerCase())
+    ))).toBe(true);
+
+    await openSettingsGroup("appearance");
+    await page.locator("#fontFamily").locator("xpath=..").locator(".combobox-input").click();
+    const renderedRows = page.locator(".combobox-list:not([hidden]) .combobox-option-label");
+    await expect(renderedRows).toHaveCount(20);
+    const rowFaces = await renderedRows.evaluateAll((rows) => rows.map((row) => row.style.fontFamily));
+    expect(rowFaces).toEqual(catalogs[0].map((option) => option.rendered));
+    await page.keyboard.press("Escape");
+
     await set("#appTheme", "light", "change");
     expect(await setting("appTheme")).toBe("light");
     expect(await page.evaluate(() => document.documentElement.dataset.appTheme)).toBe("light");
@@ -81,6 +102,38 @@ test.describe("Settings panel verification", () => {
     await set("#cursorBlink", false, "change");
     expect(await setting("cursorBlink")).toBe(false);
     expect(await firstTermOption("cursorBlink")).toBe(false);
+
+    const fallbackFaces = await page.evaluate(() => {
+      const holder = document.createElement("div");
+      const select = document.createElement("select");
+      select.dataset.fontSelector = "true";
+      select.setAttribute("aria-label", "Font fallback probe");
+      for (const [value, label] of [["Consolas", "Known font"], ["Missing font", "Unknown font"]]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        select.append(option);
+      }
+      holder.append(select);
+      document.body.append(holder);
+      enhanceSelect(select);
+      const input = holder.querySelector(".combobox-input");
+      input.focus();
+      const list = [...document.querySelectorAll(".combobox-list")].at(-1);
+      const rows = [...list.querySelectorAll(".combobox-option-label")].map((label) => label.style.fontFamily);
+      const knownInput = input.style.fontFamily;
+      select._combo.close();
+      select.value = "Missing font";
+      select._combo.sync();
+      const unknownInput = input.style.fontFamily;
+      list.remove();
+      holder.remove();
+      return { knownInput, rows, unknownInput };
+    });
+    expect(fallbackFaces.knownInput).toContain("Consolas");
+    expect(fallbackFaces.rows[0]).toContain("Consolas");
+    expect(fallbackFaces.rows[1]).toBe("inherit");
+    expect(fallbackFaces.unknownInput).toBe("inherit");
   });
 
   test("layout range settings", async () => {
@@ -1346,6 +1399,80 @@ test.describe("Settings panel verification", () => {
       requestLatestRelease = window.__settingsOriginalUpdateRequest;
       delete window.__settingsOriginalUpdateRequest;
     });
+  });
+
+  test("shows and reverses the Electron bridge startup prompt preference", async () => {
+    await expect(page.locator("#bridgeStartupAskRow")).toBeHidden();
+    const result = await page.evaluate(async () => {
+      const previous = window.multiterm;
+      const updates = [];
+      window.multiterm = {
+        ...(previous || {}),
+        getBridgeStartupPreference: async () => ({ askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-003" }),
+        setBridgeStartupAsk: async (enabled) => {
+          updates.push(enabled);
+          if (!enabled) throw new Error("disk denied");
+          return { askOnStartup: enabled, mode: "bridge", bridgeId: "BRIDGE-003" };
+        }
+      };
+      delete elements.bridgeStartupAsk.dataset.bound;
+      bindBridgeStartupPreference();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const initial = {
+        checked: elements.bridgeStartupAsk.checked,
+        hidden: elements.bridgeStartupAskRow.hidden
+      };
+      elements.bridgeStartupAsk.checked = true;
+      elements.bridgeStartupAsk.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const enabled = elements.bridgeStartupAsk.checked;
+      elements.bridgeStartupAsk.checked = false;
+      elements.bridgeStartupAsk.dispatchEvent(new Event("change", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const rolledBack = elements.bridgeStartupAsk.checked;
+      window.multiterm = previous;
+      return { initial, enabled, rolledBack, updates };
+    });
+
+    expect(result).toEqual({
+      initial: { checked: false, hidden: false },
+      enabled: true,
+      rolledBack: true,
+      updates: [true, false]
+    });
+  });
+
+  test("uses safe browser defaults when Electron bridge preferences are unavailable", async () => {
+    const result = await page.evaluate(async () => {
+      const previous = window.multiterm;
+      const previousYolo = state.settings.aiSessionYolo;
+      window.multiterm = {
+        getBridgeStartupPreference: async () => { throw new Error("preference unavailable"); },
+        setBridgeStartupAsk: async (enabled) => ({ askOnStartup: enabled })
+      };
+      delete elements.bridgeStartupAsk.dataset.bound;
+      elements.bridgeStartupAsk.checked = false;
+      bindBridgeStartupPreference();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const checkedAfterFailure = elements.bridgeStartupAsk.checked;
+      const minimizeResult = minimizeMultiTerm();
+      const message = elements.toastHost.textContent;
+      window.multiterm.minimizeWindow = () => "delegated";
+      const delegatedMinimize = minimizeMultiTerm();
+      elements.aiSessionYolo.checked = !previousYolo;
+      elements.aiSessionYolo.dispatchEvent(new Event("change", { bubbles: true }));
+      const changedYolo = state.settings.aiSessionYolo;
+      state.settings.aiSessionYolo = previousYolo;
+      elements.aiSessionYolo.checked = previousYolo;
+      window.multiterm = previous;
+      return { changedYolo, checkedAfterFailure, delegatedMinimize, message, minimizeResult, previousYolo };
+    });
+
+    expect(result.checkedAfterFailure).toBe(true);
+    expect(result.minimizeResult).toBe(false);
+    expect(result.delegatedMinimize).toBe("delegated");
+    expect(result.changedYolo).toBe(!result.previousYolo);
+    expect(result.message).toContain("native minimize control");
   });
 
   test("broadcast Enter toggle", async () => {
