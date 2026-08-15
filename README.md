@@ -742,6 +742,9 @@ It can also cut the GitHub release for you:
 # commit all pending changes, bump, build, generate notes, push, and publish
 # (needs authenticated gh and GitHub Copilot CLIs)
 .\scripts\build-installer.ps1 -Push
+
+# release committed HEAD while temporarily stashing local pending work
+.\scripts\build-installer.ps1 -Push -IgnorePendingChanges
 ```
 
 Build-only mode treats the `package.json` version as the source of truth and
@@ -770,12 +773,16 @@ Publish options:
   skips the Git push and GitHub release.
 - `-NoGitPush` — create the local snapshot and release commits, but skip the Git
   push and GitHub release.
+- `-IgnorePendingChanges` — stash staged, unstaged, and untracked work, publish
+  from committed `HEAD`, then restore the exact stash and its staged state. The
+  stash is also restored when a build or publication stage fails. Ignored files
+  stay in place. This option cannot be combined with `-NoGitCommit`.
 - `-Draft` / `-Prerelease` — control the release type.
 - `-WhatIf` — preview every step (snapshot, version bump, build, release commit,
   push, and release) without changing anything.
 
 The conventional PowerShell spellings above and the double-dash aliases
-`--NoGitCommit` / `--NoGitPush` are both accepted.
+`--NoGitCommit` / `--NoGitPush` / `--IgnorePendingChanges` are also accepted.
 
 The resulting `installer\Output\MultiTerm-Setup-<version>.exe` performs a
 per-user install by default (no UAC prompt); users may elect a machine-wide

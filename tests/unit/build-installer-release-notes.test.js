@@ -89,6 +89,30 @@ describe("installer release notes", () => {
     expect(nativeInstruction).toContain("Stop only the PIDs returned by the repo-specific guard");
   });
 
+  it("can isolate pending work for a release and always restores its exact stash", () => {
+    expect(script).toContain("[switch]$IgnorePendingChanges,");
+    expect(script).toContain("$null = Invoke-Native {");
+    expect(script).toContain("git --no-pager -C $RepositoryRoot stash push --include-untracked --message $marker");
+    expect(script).toContain("git --no-pager -C $RepositoryRoot stash apply --index $commit");
+    expect(script).toContain("git --no-pager -C $RepositoryRoot stash drop --quiet $matchingRef");
+    expect(script).toContain("local file(s) revealed by stashed ignore rules");
+    expect(script).toContain("Remove-TemporaryReleaseExcludes -StashRecord $StashRecord");
+    expect(script).toContain("-IgnorePendingChanges could not isolate every pending path");
+    expect(script).toContain("its -IgnorePendingChanges setting does not match this run");
+    expect(script).toContain("ignorePendingChanges = [bool]$IgnorePendingChanges");
+    expect(script).toContain("-IgnorePendingChanges cannot be combined with -NoGitCommit");
+
+    const guardCall = "& $NativeModuleGuardPath -RepositoryRoot $RepoRoot";
+    const saveCall = "Save-PendingChangesForRelease -RepositoryRoot $RepoRoot";
+    const restoreCall = "Restore-PendingChangesForRelease -RepositoryRoot $RepoRoot -StashRecord $PendingChangeStash";
+    expect(script.indexOf(guardCall)).toBeLessThan(script.indexOf(saveCall));
+    expect(script.indexOf(saveCall)).toBeLessThan(script.indexOf("# --- Current version"));
+    expect(script.lastIndexOf("finally {")).toBeLessThan(script.lastIndexOf(restoreCall));
+    expect(script.lastIndexOf(restoreCall)).toBeGreaterThan(script.indexOf('Write-Step "Release $Tag published."'));
+    expect(script).toContain("$ReleasePipelineError = $_");
+    expect(script).toContain("The release failed and pending-change restoration also failed");
+  });
+
   it("re-asks about a surviving lock holder instead of aborting", () => {
     // A process that still holds conpty.node after the first round is usually a
     // sibling instance, so the guard offers to stop it rather than giving up.

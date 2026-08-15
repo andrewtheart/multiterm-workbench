@@ -110,6 +110,13 @@
     Skip the release test gate. -Push otherwise runs the unit, PowerShell, and
     end-to-end suites before anything is committed or the version is bumped.
 
+.PARAMETER IgnorePendingChanges
+    With -Push, temporarily stash staged, unstaged, and untracked changes before
+    the release workflow inspects or builds the repository. The exact stash is
+    restored with its staged state when the script exits, whether publication
+    succeeds or any stage fails. Ignored files are not included. Incompatible
+    with -NoGitCommit because that mode intentionally leaves release files dirty.
+
 .PARAMETER FreshStart
     Discard any checkpoint left by an interrupted run and start the pipeline
     from the beginning, re-running every stage.
@@ -143,6 +150,11 @@
     Build the bumped installer but leave every change uncommitted and unpublished.
 
 .EXAMPLE
+    .\scripts\build-installer.ps1 -Push -IgnorePendingChanges
+    Stash pending work, publish a release from committed HEAD, then restore the
+    pending work and its original staged state.
+
+.EXAMPLE
     .\scripts\build-installer.ps1 -Push -WhatIf
     Show the pending-change commit phase, version bump, build, release commit,
     push, and publish steps without changing anything. Atomic planning is skipped
@@ -164,6 +176,7 @@ param(
     [string]$IsccPath,
     [string]$CopilotPath,
     [switch]$SkipTests,
+    [switch]$IgnorePendingChanges,
     [switch]$FreshStart,
     [switch]$ShowReleaseState,
     [Parameter(ValueFromRemainingArguments = $true, DontShow = $true)]
@@ -222,6 +235,141 @@ function Test-InteractiveTerminalForDirtyPublish {
     if ([Console]::IsOutputRedirected) { return $false }
     if ($env:CI) { return $false }
     return $true
+}
+
+function Add-TemporaryReleaseExcludes {
+    param([string]$RepositoryRoot, [string[]]$Paths, [string]$Marker)
+
+    if ($Paths.Count -eq 0) { return [pscustomobject]@{ Path = ''; Block = '' } }
+    $gitExcludeInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-parse --git-path info/exclude }
+    if ($gitExcludeInfo.ExitCode -ne 0 -or -not $gitExcludeInfo.Output) {
+        throw "Could not resolve Git's local exclude file while isolating pending changes."
+    }
+    $excludePath = ConvertTo-AbsolutePath -BasePath $RepositoryRoot -CandidatePath (($gitExcludeInfo.Output | Select-Object -First 1).ToString().Trim())
+    $patterns = @()
+    foreach ($path in $Paths) {
+        if ([string]::IsNullOrWhiteSpace($path) -or $path.StartsWith('"') -or $path -match '[\r\n\*\?\[\]]') {
+            throw "A file revealed by the stashed ignore rules has a path that cannot be excluded safely: $path"
+        }
+        $patterns += '/' + $path.Replace('\', '/')
+    }
+    $block = "`n# $Marker temporary release excludes`n$($patterns -join "`n")`n# end $Marker temporary release excludes`n"
+    $excludeDirectory = Split-Path -Parent $excludePath
+    if (-not (Test-Path -LiteralPath $excludeDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $excludeDirectory -Force | Out-Null
+    }
+    [System.IO.File]::AppendAllText($excludePath, $block, [System.Text.UTF8Encoding]::new($false))
+    return [pscustomobject]@{ Path = $excludePath; Block = $block }
+}
+
+function Remove-TemporaryReleaseExcludes {
+    param($StashRecord)
+
+    if (-not $StashRecord -or [string]::IsNullOrEmpty([string]$StashRecord.ExcludeBlock)) { return }
+    $excludePath = [string]$StashRecord.ExcludePath
+    if (-not (Test-Path -LiteralPath $excludePath -PathType Leaf)) { return }
+    $text = [System.IO.File]::ReadAllText($excludePath)
+    $updated = $text.Replace([string]$StashRecord.ExcludeBlock, '')
+    if ($updated -ne $text) {
+        [System.IO.File]::WriteAllText($excludePath, $updated, [System.Text.UTF8Encoding]::new($false))
+    }
+}
+
+function Save-PendingChangesForRelease {
+    param([string]$RepositoryRoot)
+
+    $status = Get-NativeOutput { git --no-pager -C $RepositoryRoot status --porcelain=v1 --untracked-files=all }
+    if ($status.ExitCode -ne 0) { throw "Could not inspect pending changes before release stashing." }
+    $pending = @($status.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
+    if ($pending.Count -eq 0) {
+        Write-Step "-IgnorePendingChanges: no pending changes need to be stashed."
+        return $null
+    }
+
+    $marker = "multiterm-release-{0}" -f [guid]::NewGuid().ToString('N')
+    Write-Step "Stashing $($pending.Count) pending path record(s) for the release..."
+    $null = Invoke-Native {
+        git --no-pager -C $RepositoryRoot stash push --include-untracked --message $marker
+    } "git stash push failed"
+
+    $commitInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot rev-parse --verify refs/stash }
+    if ($commitInfo.ExitCode -ne 0 -or -not $commitInfo.Output) {
+        throw "Pending changes were stashed as '$marker', but the stash commit could not be resolved. Restore it manually with git stash list/apply."
+    }
+    $commit = ($commitInfo.Output | Select-Object -First 1).ToString().Trim()
+    $record = [pscustomobject]@{ Commit = $commit; Marker = $marker; ExcludePath = ''; ExcludeBlock = '' }
+
+    $remaining = Get-NativeOutput { git --no-pager -C $RepositoryRoot status --porcelain=v1 --untracked-files=all }
+    if ($remaining.ExitCode -ne 0) {
+        Restore-PendingChangesForRelease -RepositoryRoot $RepositoryRoot -StashRecord $record
+        throw "Could not verify that pending changes were isolated for the release."
+    }
+    $remainingChanges = @($remaining.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
+    if ($remainingChanges.Count -gt 0) {
+        $revealedPaths = @()
+        foreach ($entry in $remainingChanges) {
+            $line = $entry.ToString()
+            if (-not $line.StartsWith('?? ') -or $line.Length -lt 4) {
+                Restore-PendingChangesForRelease -RepositoryRoot $RepositoryRoot -StashRecord $record
+                throw "-IgnorePendingChanges could not isolate every pending path. Commit or clean the remaining changes before publishing."
+            }
+            $revealedPaths += $line.Substring(3)
+        }
+        Write-Step "Temporarily excluding $($revealedPaths.Count) local file(s) revealed by stashed ignore rules..."
+        try {
+            $exclude = Add-TemporaryReleaseExcludes -RepositoryRoot $RepositoryRoot -Paths $revealedPaths -Marker $marker
+        }
+        catch {
+            Restore-PendingChangesForRelease -RepositoryRoot $RepositoryRoot -StashRecord $record
+            throw
+        }
+        $record.ExcludePath = $exclude.Path
+        $record.ExcludeBlock = $exclude.Block
+
+        $verified = Get-NativeOutput { git --no-pager -C $RepositoryRoot status --porcelain=v1 --untracked-files=all }
+        $stillPending = @($verified.Output | Where-Object { $_ -ne $null -and $_.ToString().Length -gt 0 })
+        if ($verified.ExitCode -ne 0 -or $stillPending.Count -gt 0) {
+            Restore-PendingChangesForRelease -RepositoryRoot $RepositoryRoot -StashRecord $record
+            throw "-IgnorePendingChanges could not isolate every pending path. Commit or clean the remaining changes before publishing."
+        }
+    }
+    return $record
+}
+
+function Restore-PendingChangesForRelease {
+    param([string]$RepositoryRoot, $StashRecord)
+
+    if (-not $StashRecord) { return }
+    $commit = [string]$StashRecord.Commit
+    $marker = [string]$StashRecord.Marker
+    Write-Step "Restoring pending changes stashed as $marker..."
+
+    $apply = Get-NativeOutput { git --no-pager -C $RepositoryRoot stash apply --index $commit }
+    Remove-TemporaryReleaseExcludes -StashRecord $StashRecord
+    if ($apply.ExitCode -ne 0) {
+        throw "Could not automatically restore pending changes. The stash is retained as '$marker' ($commit). Resolve the working tree, then run: git stash apply --index $commit"
+    }
+
+    $stashList = Get-NativeOutput { git --no-pager -C $RepositoryRoot stash list '--format=%H%x09%gd' }
+    if ($stashList.ExitCode -ne 0) {
+        Write-Warning "Pending changes were restored, but the temporary stash could not be listed for cleanup. Drop commit $commit manually."
+        return
+    }
+    $matchingRef = $null
+    foreach ($line in @($stashList.Output)) {
+        $parts = $line.ToString().Split("`t", 2)
+        if ($parts.Count -eq 2 -and $parts[0] -eq $commit) {
+            $matchingRef = $parts[1]
+            break
+        }
+    }
+    if ($matchingRef) {
+        $drop = Get-NativeOutput { git --no-pager -C $RepositoryRoot stash drop --quiet $matchingRef }
+        if ($drop.ExitCode -ne 0) {
+            Write-Warning "Pending changes were restored, but temporary stash $matchingRef could not be dropped. Drop it manually."
+        }
+    }
+    Write-Step "Pending changes restored."
 }
 
 function Assert-CommitishMatchesPaths {
@@ -1108,6 +1256,7 @@ foreach ($option in $CompatibilityOptions) {
     switch ($option) {
         '--NoGitCommit' { $NoGitCommit = $true }
         '--NoGitPush' { $NoGitPush = $true }
+        '--IgnorePendingChanges' { $IgnorePendingChanges = $true }
         default { throw "Unknown argument '$option'." }
     }
 }
@@ -1117,6 +1266,12 @@ if ($SetVersion -and $SetVersion -notmatch '^\d+\.\d+\.\d+$') {
 }
 if (($NoGitCommit -or $NoGitPush) -and -not $Push) {
     throw "-NoGitCommit and -NoGitPush are only meaningful with -Push."
+}
+if ($IgnorePendingChanges -and -not $Push) {
+    throw "-IgnorePendingChanges is only meaningful with -Push."
+}
+if ($IgnorePendingChanges -and $NoGitCommit) {
+    throw "-IgnorePendingChanges cannot be combined with -NoGitCommit because release files would remain dirty before stash restoration."
 }
 
 # --- Checkpoint from an interrupted run -----------------------------------------
@@ -1145,8 +1300,10 @@ if ($ReleaseState) {
     # start over rather than inherit half of someone else's pipeline.
     $stateOptions = if ($ReleaseState.ContainsKey('options') -and ($ReleaseState.options -is [hashtable])) { $ReleaseState.options } else { @{} }
     $statePush = $stateOptions.ContainsKey('push') -and [bool]$stateOptions.push
+    $stateIgnorePendingChanges = $stateOptions.ContainsKey('ignorePendingChanges') -and [bool]$stateOptions.ignorePendingChanges
     $conflicts = @()
     if ($statePush -ne [bool]$Push) { $conflicts += "it was created for a $(if ($statePush) { 'publish' } else { 'build-only' }) run" }
+    if ($stateIgnorePendingChanges -ne [bool]$IgnorePendingChanges) { $conflicts += "its -IgnorePendingChanges setting does not match this run" }
     if ($SetVersion -and $SetVersion -ne [string]$ReleaseState.version) { $conflicts += "it targets version $($ReleaseState.version), not $SetVersion" }
     if ($Tag -and $Tag -ne [string]$ReleaseState.tag) { $conflicts += "it targets tag $($ReleaseState.tag), not $Tag" }
 
@@ -1158,6 +1315,22 @@ if ($ReleaseState) {
     Write-Host (Format-ReleaseStateSummary -State $ReleaseState) -ForegroundColor DarkGray
     $ResumedVersionBump = Test-ReleaseStageComplete -State $ReleaseState -Name 'versionBump'
 }
+
+$PendingChangeStash = $null
+$ReleasePipelineError = $null
+try {
+    if (-not $WhatIfPreference) {
+        # A running Electron bridge can map this repository's conpty.node. This
+        # guard must run before stashing changes or performing any release side
+        # effect, and it stops only the exact repo-specific lock holders.
+        $NativeModuleGuardPath = Join-Path $RepoRoot 'scripts\confirm-native-module-unlocked.ps1'
+        Write-Step "Checking for running MultiTerm native module users..."
+        & $NativeModuleGuardPath -RepositoryRoot $RepoRoot
+
+        if ($IgnorePendingChanges) {
+            $PendingChangeStash = Save-PendingChangesForRelease -RepositoryRoot $RepoRoot
+        }
+    }
 
 # --- Current version (package.json is the source of truth) ----------------------
 $CurrentVersion = (Get-Content -LiteralPath $PackageJsonPath -Raw | ConvertFrom-Json).version
@@ -1269,6 +1442,7 @@ else {
         noGitCommit   = [bool]$NoGitCommit
         noGitPush     = [bool]$NoGitPush
         noVersionBump = [bool]$NoVersionBump
+        ignorePendingChanges = [bool]$IgnorePendingChanges
         draft         = [bool]$Draft
         prerelease    = [bool]$Prerelease
     }
@@ -1288,6 +1462,9 @@ if ($WhatIfPreference) {
     Write-Step "[WhatIf] Resolved tag: $Tag"
     Write-Step "[WhatIf] Planned output: $OutputExe"
     if ($Push) {
+        if ($IgnorePendingChanges) {
+            Write-Step "[WhatIf] Planned pending changes: stash staged, unstaged, and untracked files, then restore them with staged state when the workflow exits."
+        }
         if ($NoGitCommit) {
             Write-Step "[WhatIf] Planned commit flow: skip pending-change commit and skip release-version commit (-NoGitCommit)."
         }
@@ -1322,13 +1499,6 @@ if ($WhatIfPreference) {
     }
     return
 }
-
-# A running Electron bridge loads this repository's conpty.node. Native npm
-# rebuilds replace that file, so stop only the identified MultiTerm processes
-# before any help generation, git commit, version bump, or installer build.
-$NativeModuleGuardPath = Join-Path $RepoRoot 'scripts\confirm-native-module-unlocked.ps1'
-Write-Step "Checking for running MultiTerm native module users..."
-& $NativeModuleGuardPath -RepositoryRoot $RepoRoot
 
 Save-ReleaseState -State $ReleaseState -Path $ReleaseStatePath
 
@@ -1747,5 +1917,25 @@ else {
     }
     else {
         Write-Step "GitHub release publication was declined."
+    }
+}
+}
+catch {
+    $ReleasePipelineError = $_
+    throw
+}
+finally {
+    if ($PendingChangeStash) {
+        try {
+            Restore-PendingChangesForRelease -RepositoryRoot $RepoRoot -StashRecord $PendingChangeStash
+        }
+        catch {
+            if ($ReleasePipelineError) {
+                Write-Error "The release failed and pending-change restoration also failed: $($_.Exception.Message)" -ErrorAction Continue
+            }
+            else {
+                throw
+            }
+        }
     }
 }

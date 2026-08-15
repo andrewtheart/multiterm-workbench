@@ -28,9 +28,86 @@ function Import-BuildInstallerFunction {
 }
 
 Import-BuildInstallerFunction -Name @(
-    "Invoke-Native", "Get-NativeOutput", "Get-NativeExit", "ConvertTo-NativeText",
-    "Get-PreviousPublishedReleaseTag"
+    "Write-Step", "Invoke-Native", "Get-NativeOutput", "Get-NativeExit", "ConvertTo-NativeText",
+    "ConvertTo-AbsolutePath", "Add-TemporaryReleaseExcludes", "Remove-TemporaryReleaseExcludes",
+    "Get-PreviousPublishedReleaseTag", "Save-PendingChangesForRelease", "Restore-PendingChangesForRelease"
 )
+
+Describe "pending release change stash" {
+    BeforeEach {
+        $root = Join-Path $TestDrive ([Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+        & git -C $root init --quiet
+        & git -C $root config user.email "release-test@example.com"
+        & git -C $root config user.name "Release Test"
+        Set-Content -LiteralPath (Join-Path $root "staged.txt") -Value "base staged" -Encoding Ascii
+        Set-Content -LiteralPath (Join-Path $root "unstaged.txt") -Value "base unstaged" -Encoding Ascii
+        & git -C $root add -- staged.txt unstaged.txt
+        & git -C $root commit --quiet -m "base"
+    }
+
+    It "restores staged, unstaged, and untracked work exactly" {
+        Set-Content -LiteralPath (Join-Path $root "staged.txt") -Value "pending staged" -Encoding Ascii
+        & git -C $root add -- staged.txt
+        Set-Content -LiteralPath (Join-Path $root "unstaged.txt") -Value "pending unstaged" -Encoding Ascii
+        Set-Content -LiteralPath (Join-Path $root "untracked.txt") -Value "pending untracked" -Encoding Ascii
+        $before = (@(& git -C $root status --porcelain=v1 --untracked-files=all) -join "`n")
+
+        $result = @(Save-PendingChangesForRelease -RepositoryRoot $root)
+        $result.Count | Should Be 1
+        $record = $result[0]
+        $record.Commit | Should Not BeNullOrEmpty
+        @(& git -C $root status --porcelain=v1 --untracked-files=all).Count | Should Be 0
+
+        Restore-PendingChangesForRelease -RepositoryRoot $root -StashRecord $record
+        $after = (@(& git -C $root status --porcelain=v1 --untracked-files=all) -join "`n")
+        $after | Should Be $before
+        @(& git -C $root stash list).Count | Should Be 0
+    }
+
+    It "drops only the stash created for the release" {
+        Set-Content -LiteralPath (Join-Path $root "unstaged.txt") -Value "older pending work" -Encoding Ascii
+        & git -C $root stash push --quiet --message "pre-existing stash"
+        Set-Content -LiteralPath (Join-Path $root "staged.txt") -Value "current pending work" -Encoding Ascii
+
+        $result = @(Save-PendingChangesForRelease -RepositoryRoot $root)
+        $result.Count | Should Be 1
+        $record = $result[0]
+        Restore-PendingChangesForRelease -RepositoryRoot $root -StashRecord $record
+
+        $stashes = @(& git -C $root stash list)
+        $stashes.Count | Should Be 1
+        $stashes[0] | Should Match "pre-existing stash"
+        (Get-Content -LiteralPath (Join-Path $root "staged.txt") -Raw).Trim() | Should Be "current pending work"
+    }
+
+    It "keeps generated files hidden when their pending ignore rule is stashed" {
+        Set-Content -LiteralPath (Join-Path $root ".gitignore") -Value "generated/" -Encoding Ascii
+        New-Item -ItemType Directory -Path (Join-Path $root "generated") -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $root "generated\baseline.json") -Value '{}' -Encoding Ascii
+        Set-Content -LiteralPath (Join-Path $root "staged.txt") -Value "pending work" -Encoding Ascii
+        $before = (@(& git -C $root status --porcelain=v1 --untracked-files=all) -join "`n")
+        $before | Should Not Match "baseline.json"
+
+        $result = @(Save-PendingChangesForRelease -RepositoryRoot $root)
+        $result.Count | Should Be 1
+        $record = $result[0]
+        @(& git -C $root status --porcelain=v1 --untracked-files=all).Count | Should Be 0
+        (Get-Content -LiteralPath $record.ExcludePath -Raw) | Should Match "generated/baseline.json"
+
+        Restore-PendingChangesForRelease -RepositoryRoot $root -StashRecord $record
+        $after = (@(& git -C $root status --porcelain=v1 --untracked-files=all) -join "`n")
+        $after | Should Be $before
+        (Get-Content -LiteralPath (Join-Path $root "generated\baseline.json") -Raw).Trim() | Should Be '{}'
+        (Get-Content -LiteralPath $record.ExcludePath -Raw) | Should Not Match $record.Marker
+    }
+
+    It "does nothing when the repository has no pending changes" {
+        $record = Save-PendingChangesForRelease -RepositoryRoot $root
+        $record | Should BeNullOrEmpty
+        @(& git -C $root stash list).Count | Should Be 0
+    }
+}
 
 Describe "release notes comparison base" {
     BeforeEach {
