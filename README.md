@@ -10,7 +10,7 @@ layouts from auto-fit grids to a free-form canvas.
 **⬇️ [Download the latest MultiTerm Workbench installer](https://github.com/andrewtheart/multiterm-workbench/releases/latest)** — or browse all [releases](https://github.com/andrewtheart/multiterm-workbench/releases).
 
 <p align="center">
-  <img src="docs/images/workbench-grid.png" alt="MultiTerm Workbench showing three titled PowerShell tasks and three titled Copilot sessions in a six-pane auto-fit grid" width="1200">
+  <img src="docs/images/workbench-grid.png" alt="MultiTerm Workbench showing nine titled terminals in a Bento grid, including four Copilot conversations, colorful terminal appearances, and organized page groups" width="1200">
 </p>
 
 ## Why MultiTerm?
@@ -161,7 +161,7 @@ file-selection prompts on an interactive Windows desktop.
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/workbench-grid.png" alt="MultiTerm in auto-fit grid mode with three titled shell tasks and three completed Copilot prompts">
+      <img src="docs/images/workbench-grid.png" alt="MultiTerm in Bento grid mode with nine titled terminals, four Copilot conversations, varied header and terminal colors, and technical page groups">
       <br><strong>Grid workbench:</strong> titled shell tasks and completed Copilot sessions in one six-pane view.
     </td>
     <td align="center" width="50%">
