@@ -218,6 +218,21 @@ function Get-NativeOutput {
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
 }
 
+function Resolve-CopilotExecutable {
+    $commands = @(Get-Command 'copilot.exe', 'copilot.bat', 'copilot' -All -ErrorAction SilentlyContinue)
+    $application = $commands | Where-Object {
+        $_.CommandType -eq [System.Management.Automation.CommandTypes]::Application -and
+        $_.Source -and (Test-Path -LiteralPath $_.Source -PathType Leaf)
+    } | Sort-Object @{
+        Expression = {
+            $extension = [IO.Path]::GetExtension([string]$_.Source)
+            if ($extension -ieq '.exe') { 0 } elseif ($extension -ieq '.bat' -or $extension -ieq '.cmd') { 1 } else { 2 }
+        }
+    } | Select-Object -First 1
+    if ($application) { return [string]$application.Source }
+    return $null
+}
+
 function ConvertTo-NativeText {
     param($Output)
     return (@($Output) | Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
@@ -933,7 +948,8 @@ function ConvertFrom-CopilotCommitPlan {
     if ($firstBrace -lt 0 -or $lastBrace -le $firstBrace) {
         throw "Copilot did not return a JSON commit plan."
     }
-    return $text.Substring($firstBrace, $lastBrace - $firstBrace + 1) | ConvertFrom-Json
+    $json = $text.Substring($firstBrace, $lastBrace - $firstBrace + 1) -replace '[\r\n]', ''
+    return $json | ConvertFrom-Json
 }
 
 function Assert-AtomicCommitPlan {
@@ -1008,6 +1024,8 @@ function New-CopilotAtomicCommitPlan {
     }
 
     $contextPath = Join-Path ([System.IO.Path]::GetTempPath()) ("multiterm-commit-context-{0}.txt" -f [guid]::NewGuid().ToString('N'))
+    $promptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("multiterm-commit-prompt-{0}.txt" -f [guid]::NewGuid().ToString('N'))
+    $errorPath = Join-Path ([System.IO.Path]::GetTempPath()) ("multiterm-commit-error-{0}.txt" -f [guid]::NewGuid().ToString('N'))
     try {
         $status = Get-NativeOutput { git --no-pager -C $RepositoryRoot status --short --untracked-files=all }
         $stat = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --stat HEAD -- . }
@@ -1058,17 +1076,24 @@ Safety rules:
 Return JSON only in this exact shape:
 {"groups":[{"message":"type(scope): concise description","paths":["path/one","path/two"]}]}
 "@
+        [System.IO.File]::WriteAllText($promptPath, $prompt, [System.Text.UTF8Encoding]::new($false))
+        $launcherPrompt = "Read and follow the instructions in this file: $promptPath"
         $result = Get-NativeOutput {
-            & $Executable -C $RepositoryRoot -p $prompt --silent --no-color `
+            & $Executable -C $RepositoryRoot "--prompt=$launcherPrompt" --silent --no-color `
                 --no-custom-instructions --no-ask-user --disable-builtin-mcps --allow-all-tools `
-                --deny-tool shell --deny-tool write
+                --deny-tool=shell --deny-tool=write 2> $errorPath
         }
-        if ($result.ExitCode -ne 0) { throw "Copilot commit planning failed (exit $($result.ExitCode))." }
+        if ($result.ExitCode -ne 0) {
+            $detail = if (Test-Path -LiteralPath $errorPath) { [System.IO.File]::ReadAllText($errorPath).Trim() } else { '' }
+            throw "Copilot commit planning failed (exit $($result.ExitCode))$(if ($detail) { ": $detail" } else { '.' })"
+        }
         $plan = ConvertFrom-CopilotCommitPlan -RawPlan (ConvertTo-NativeText $result.Output)
         return Assert-AtomicCommitPlan -Plan $plan -PendingPaths $PendingPaths
     }
     finally {
         Remove-Item -LiteralPath $contextPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $promptPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $errorPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -1143,6 +1168,7 @@ function New-CopilotReleaseNotes {
     )
 
     $contextPath = Join-Path ([System.IO.Path]::GetTempPath()) ("multiterm-release-context-{0}.txt" -f [guid]::NewGuid().ToString('N'))
+    $promptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("multiterm-release-prompt-{0}.txt" -f [guid]::NewGuid().ToString('N'))
     try {
         $context = Get-ReleaseChangeContext -RepositoryRoot $RepositoryRoot -ReleaseTag $ReleaseTag -Base $Base
         [System.IO.File]::WriteAllText($contextPath, $context, [System.Text.UTF8Encoding]::new($false))
@@ -1160,10 +1186,12 @@ add Assets, Validation, or Full changelog sections and do not include any checks
 digest, or validation claims; release automation appends deterministic metadata. Do not
 modify any files.
 "@
+        [System.IO.File]::WriteAllText($promptPath, $prompt, [System.Text.UTF8Encoding]::new($false))
+        $launcherPrompt = "Read and follow the instructions in this file: $promptPath"
         $result = Get-NativeOutput {
-            & $Executable -C $RepositoryRoot -p $prompt --silent --no-color `
+            & $Executable -C $RepositoryRoot "--prompt=$launcherPrompt" --silent --no-color `
                 --no-custom-instructions --no-ask-user --disable-builtin-mcps --allow-all-tools `
-                --deny-tool shell --deny-tool write
+                --deny-tool=shell --deny-tool=write
         }
         if ($result.ExitCode -ne 0) {
             throw "Copilot CLI failed to generate release notes (exit $($result.ExitCode))."
@@ -1182,6 +1210,7 @@ modify any files.
     }
     finally {
         Remove-Item -LiteralPath $contextPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $promptPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -1585,7 +1614,7 @@ if ($Push) {
         }
         if (-not $releaseExists) {
             if (-not $ResolvedCopilotPath) {
-                $ResolvedCopilotPath = Get-Command 'copilot' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+                $ResolvedCopilotPath = Resolve-CopilotExecutable
             }
             if (-not $ResolvedCopilotPath -or -not (Test-Path -LiteralPath $ResolvedCopilotPath)) {
                 throw "GitHub Copilot CLI not found but a new release will be published. Install it, authenticate it, or pass -CopilotPath."
@@ -1646,7 +1675,7 @@ if ($Push) {
     elseif ($PSCmdlet.ShouldProcess($RepoRoot, "Commit pending changes before $Tag")) {
         $plannerPath = $ResolvedCopilotPath
         if (-not $plannerPath) {
-            $plannerPath = Get-Command 'copilot' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue
+            $plannerPath = Resolve-CopilotExecutable
         }
         Invoke-InteractiveDirtyPublishCommitFlow -RepositoryRoot $RepoRoot -ReleaseTag $Tag -CopilotExecutable $plannerPath
         Set-ReleaseStageComplete -State $ReleaseState -Name 'pendingCommit' -Path $ReleaseStatePath

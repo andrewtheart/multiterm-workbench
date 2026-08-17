@@ -117,6 +117,23 @@ describe("installer release notes", () => {
     expect(script).toContain("Where-Object { $_ -ne $null } | ForEach-Object { $_.ToString() }");
   });
 
+  it("prefers a Windows PowerShell-compatible Copilot application over a PowerShell shim", () => {
+    expect(script).toContain("function Resolve-CopilotExecutable");
+    expect(script).toContain("Get-Command 'copilot.exe', 'copilot.bat', 'copilot' -All");
+    expect(script).toContain("CommandTypes]::Application");
+    expect(script).toContain("if ($extension -ieq '.exe') { 0 }");
+    expect(script).not.toContain("Get-Command 'copilot' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source");
+    expect(script).toContain('"--prompt=$launcherPrompt"');
+    expect(script).toContain("Read and follow the instructions in this file: $promptPath");
+    expect(script).toContain("WriteAllText($promptPath, $prompt");
+    expect(script).toContain("--deny-tool=shell --deny-tool=write");
+    expect(script).not.toContain('"--prompt=$prompt"');
+    expect(script).not.toContain(" -p $prompt ");
+    expect(runPowerShellFunctions(["Resolve-CopilotExecutable"], [
+      "Resolve-CopilotExecutable"
+    ])).toMatch(/copilot\.exe$/i);
+  });
+
   it("re-asks about a surviving lock holder instead of aborting", () => {
     // A process that still holds conpty.node after the first round is usually a
     // sibling instance, so the guard offers to stop it rather than giving up.
@@ -187,18 +204,22 @@ describe("installer release notes", () => {
       [
         "$paths = @('main.js', 'tests/unit/main.test.js')",
         "$valid = ConvertFrom-CopilotCommitPlan -RawPlan 'prefix {\"groups\":[{\"message\":\"fix(security): restrict handoff\",\"paths\":[\"main.js\",\"tests/unit/main.test.js\"]}]} suffix'",
+        "$wrappedRaw = '{' + [Environment]::NewLine + '\"groups\":[{\"message\":\"fix(secur' + [Environment]::NewLine + 'ity): restrict handoff\",\"paths\":[\"main.js\",\"tests/unit/main.te' + [Environment]::NewLine + 'st.js\"]}]' + [Environment]::NewLine + '}'",
+        "$wrapped = ConvertFrom-CopilotCommitPlan -RawPlan $wrappedRaw",
         "$checked = Assert-AtomicCommitPlan -Plan $valid -PendingPaths $paths",
+        "$wrappedChecked = Assert-AtomicCommitPlan -Plan $wrapped -PendingPaths $paths",
         "$duplicateRejected = $false",
         "try { Assert-AtomicCommitPlan -Plan (ConvertFrom-Json '{\"groups\":[{\"message\":\"fix: one\",\"paths\":[\"main.js\"]},{\"message\":\"test: two\",\"paths\":[\"main.js\",\"tests/unit/main.test.js\"]}]}') -PendingPaths $paths | Out-Null } catch { $duplicateRejected = $true }",
         "$unknownRejected = $false",
         "try { Assert-AtomicCommitPlan -Plan (ConvertFrom-Json '{\"groups\":[{\"message\":\"fix: one\",\"paths\":[\"main.js\",\"unknown.js\"]}]}') -PendingPaths $paths | Out-Null } catch { $unknownRejected = $true }",
         "$omittedRejected = $false",
         "try { Assert-AtomicCommitPlan -Plan (ConvertFrom-Json '{\"groups\":[{\"message\":\"fix: one\",\"paths\":[\"main.js\"]}]}') -PendingPaths $paths | Out-Null } catch { $omittedRejected = $true }",
-        "[pscustomobject]@{ Groups=@($checked.groups).Count; DuplicateRejected=$duplicateRejected; UnknownRejected=$unknownRejected; OmittedRejected=$omittedRejected } | ConvertTo-Json -Compress"
+        "[pscustomobject]@{ Groups=@($checked.groups).Count; WrappedGroups=@($wrappedChecked.groups).Count; DuplicateRejected=$duplicateRejected; UnknownRejected=$unknownRejected; OmittedRejected=$omittedRejected } | ConvertTo-Json -Compress"
       ]
     );
     expect(JSON.parse(output)).toEqual({
       Groups: 1,
+      WrappedGroups: 1,
       DuplicateRejected: true,
       UnknownRejected: true,
       OmittedRejected: true
@@ -223,7 +244,7 @@ describe("installer release notes", () => {
     const nonDeferredScript = script.replace(/<#\s*DEFERRED:[\s\S]*?#>/g, "");
 
     expect(script).toContain("Never split or repeat a file across commits");
-    expect(script).toContain("--deny-tool shell --deny-tool write");
+    expect(script).toContain("--deny-tool=shell --deny-tool=write");
     expect(script).toContain("Assert-PushGitPreflight -RepositoryRoot $RepoRoot");
     expect(script).toContain("Test-AtomicCommitStaging -RepositoryRoot $RepositoryRoot -Plan $plan");
     expect(script).toContain("$env:GIT_INDEX_FILE = $tempIndex");
