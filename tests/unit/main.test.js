@@ -80,6 +80,7 @@ function makeElectron() {
       handle: vi.fn(),
       removeHandler: vi.fn(),
       on: vi.fn(),
+      removeListener: vi.fn(),
       removeAllListeners: vi.fn()
     }
   };
@@ -124,6 +125,7 @@ function makeWindow() {
       }
     },
     loadURL: vi.fn(),
+    loadFile: vi.fn(() => Promise.resolve()),
     on: vi.fn(),
     isMinimized: vi.fn(() => false),
     isVisible: vi.fn(() => true),
@@ -134,7 +136,8 @@ function makeWindow() {
     setFullScreen: vi.fn(),
     show: vi.fn(),
     hide: vi.fn(),
-    focus: vi.fn()
+    focus: vi.fn(),
+    destroy: vi.fn()
   };
 }
 
@@ -172,6 +175,11 @@ beforeEach(() => {
   electron.BrowserWindow.mockImplementation(function BrowserWindowMock() { return makeWindow(); });
   vi.spyOn(childProcess, "spawn").mockImplementation(() => makeChild());
   main.__reset();
+  main.__setBridgeChooserPresenter(async (candidates) => ({
+    action: candidates.length > 0 ? "connect" : "new",
+    index: 0,
+    remember: false
+  }));
 });
 
 afterEach(() => {
@@ -925,42 +933,44 @@ describe("bridge startup discovery", () => {
       .toBe("BRIDGE-005 · installed · port 3201 · 0 sessions");
   });
 
-  it("offers every live bridge plus a separate-bridge choice", async () => {
-    electron.dialog.showMessageBox = vi.fn(async (options) => {
-      expect(options.buttons).toEqual([
-        "BRIDGE-004 · installed · port 3200 · 2 sessions",
-        "Start a new bridge",
-        "Cancel"
-      ]);
-      expect(options.checkboxLabel).toBe("Don't show this again");
-      return { response: 0, checkboxChecked: false };
-    });
+  it("offers every live bridge to the custom chooser", async () => {
     const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
-    await expect(main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "" }))
+    const presentChooser = vi.fn(async () => ({ action: "connect", index: 0, remember: false }));
+    await expect(main.chooseStartupBridge(
+      [candidate],
+      { askOnStartup: true, mode: "new", bridgeId: "" },
+      { presentChooser }
+    ))
       .resolves.toEqual({ candidate, startNew: false, preference: { askOnStartup: true, mode: "new", bridgeId: "" } });
+    expect(presentChooser).toHaveBeenCalledWith([candidate]);
   });
 
   it("asks before starting a new bridge from the manual chooser when no alternative exists", async () => {
-    electron.dialog.showMessageBox = vi.fn(async (options) => {
-      expect(options.buttons).toEqual(["Start a new bridge", "Cancel"]);
-      expect(options.cancelId).toBe(1);
-      return { response: 1, checkboxChecked: false };
-    });
+    const presentChooser = vi.fn(async () => ({ action: "cancel", remember: false }));
     await expect(main.chooseStartupBridge(
       [],
       { askOnStartup: true, mode: "new", bridgeId: "" },
-      { alwaysPrompt: true }
+      { alwaysPrompt: true, presentChooser }
     )).resolves.toMatchObject({ cancelled: true });
+    expect(presentChooser).toHaveBeenCalledWith([]);
   });
 
   it("honors remembered new and existing bridge choices without prompting", async () => {
-    electron.dialog.showMessageBox = vi.fn();
+    const presentChooser = vi.fn();
     const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
-    await expect(main.chooseStartupBridge([candidate], { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004" }))
+    await expect(main.chooseStartupBridge(
+      [candidate],
+      { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004" },
+      { presentChooser }
+    ))
       .resolves.toEqual({ candidate, startNew: false, preference: { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004" } });
-    await expect(main.chooseStartupBridge([candidate], { askOnStartup: false, mode: "new", bridgeId: "" }))
+    await expect(main.chooseStartupBridge(
+      [candidate],
+      { askOnStartup: false, mode: "new", bridgeId: "" },
+      { presentChooser }
+    ))
       .resolves.toEqual({ candidate: null, startNew: true, preference: { askOnStartup: false, mode: "new", bridgeId: "" } });
-    expect(electron.dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(presentChooser).not.toHaveBeenCalled();
   });
 
   it("falls back to a new bridge when a remembered bridge is gone", async () => {
@@ -971,33 +981,45 @@ describe("bridge startup discovery", () => {
       .resolves.toMatchObject({ candidate: null, startNew: true });
   });
 
-  it("cancels cleanly and persists a don't-show-again bridge choice", async () => {
+  it("cancels cleanly and persists a remembered bridge choice", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-choice-"));
     electron.app.getPath = vi.fn(() => root);
     const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
-    electron.dialog.showMessageBox = vi.fn()
-      .mockResolvedValueOnce({ response: 0, checkboxChecked: true })
-      .mockResolvedValueOnce({ response: 2, checkboxChecked: false });
+    const presentChooser = vi.fn()
+      .mockResolvedValueOnce({ action: "connect", index: 0, remember: true })
+      .mockResolvedValueOnce({ action: "cancel", remember: false });
 
-    const remembered = await main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "" });
+    const remembered = await main.chooseStartupBridge(
+      [candidate],
+      { askOnStartup: true, mode: "new", bridgeId: "" },
+      { presentChooser }
+    );
     expect(remembered).toEqual({
       candidate,
       startNew: false,
       preference: { askOnStartup: false, mode: "bridge", bridgeId: "BRIDGE-004", bridgePort: 3200 }
     });
     expect(main.loadBridgeStartupPreference()).toEqual(remembered.preference);
-    await expect(main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "" }))
+    await expect(main.chooseStartupBridge(
+      [candidate],
+      { askOnStartup: true, mode: "new", bridgeId: "" },
+      { presentChooser }
+    ))
       .resolves.toMatchObject({ cancelled: true });
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("uses the selected bridge even when saving don't-show-again fails", async () => {
+  it("uses the selected bridge even when saving a remembered choice fails", async () => {
     electron.app.getPath = vi.fn(() => "Z:\\denied");
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: true }));
+    const presentChooser = vi.fn(async () => ({ action: "connect", index: 0, remember: true }));
     const candidate = { bridgeId: "BRIDGE-004", bridgeType: "installed", host: "127.0.0.1", port: 3200, health: { sessions: 2 } };
     vi.spyOn(fs, "writeFileSync").mockImplementation(() => { throw new Error("denied"); });
 
-    await expect(main.chooseStartupBridge([candidate], { askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 }))
+    await expect(main.chooseStartupBridge(
+      [candidate],
+      { askOnStartup: true, mode: "new", bridgeId: "", bridgePort: 0 },
+      { presentChooser }
+    ))
       .resolves.toEqual({
         candidate,
         startNew: false,
@@ -1005,15 +1027,15 @@ describe("bridge startup discovery", () => {
       });
   });
 
-  it("remembers a don't-show-again choice to start a new bridge", async () => {
+  it("remembers a choice to start a new bridge", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-choice-new-"));
     electron.app.getPath = vi.fn(() => root);
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: true }));
+    const presentChooser = vi.fn(async () => ({ action: "new", remember: true }));
     try {
       await expect(main.chooseStartupBridge(
         [],
         { askOnStartup: true, mode: "bridge", bridgeId: "BRIDGE-OLD", bridgePort: 3200 },
-        { alwaysPrompt: true }
+        { alwaysPrompt: true, presentChooser }
       )).resolves.toEqual({
         candidate: null,
         startNew: true,
@@ -1022,6 +1044,46 @@ describe("bridge startup discovery", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("renders a sandboxed frameless chooser and accepts only its selected bridge result", async () => {
+    const candidates = [
+      { bridgeId: "BRIDGE-004", bridgeType: "installed", port: 3200, startedAt: "2026-08-16T10:00:00Z", health: { sessions: 2 } },
+      { bridgeId: "BRIDGE-005", bridgeType: "electron", port: 3201, startedAt: "2026-08-16T11:00:00Z", health: { sessions: 1 } }
+    ];
+
+    const pending = main.showBridgeChooser(candidates, { parentWindow: null });
+    const chooser = electron.BrowserWindow.mock.results.at(-1).value;
+    await vi.waitFor(() => expect(chooser.show).toHaveBeenCalled());
+
+    expect(electron.BrowserWindow).toHaveBeenLastCalledWith(expect.objectContaining({
+      frame: false,
+      show: false,
+      minHeight: 420,
+      webPreferences: expect.objectContaining({
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        preload: expect.stringContaining("bridge-chooser-preload.js")
+      })
+    }));
+    expect(chooser.loadFile).toHaveBeenCalledWith(expect.stringContaining("bridge-chooser.html"));
+    expect(chooser.webContents.send).toHaveBeenCalledWith("multiterm:bridge-chooser-data", [
+      expect.objectContaining({ index: 0, bridgeId: "BRIDGE-004", bridgeType: "installed", port: 3200, sessions: 2 }),
+      expect.objectContaining({ index: 1, bridgeId: "BRIDGE-005", bridgeType: "electron", port: 3201, sessions: 1 })
+    ]);
+
+    const resultHandler = electron.ipcMain.on.mock.calls
+      .find(([channel]) => channel === "multiterm:bridge-chooser-result")[1];
+    resultHandler({ sender: {} }, { action: "connect", index: 0, remember: false });
+    expect(chooser.destroy).not.toHaveBeenCalled();
+    resultHandler({ sender: chooser.webContents }, { action: "connect", index: 9, remember: false });
+    expect(chooser.destroy).not.toHaveBeenCalled();
+    resultHandler({ sender: chooser.webContents }, { action: "connect", index: 1, remember: true });
+
+    await expect(pending).resolves.toEqual({ action: "connect", index: 1, remember: true });
+    expect(chooser.destroy).toHaveBeenCalledOnce();
+    expect(electron.ipcMain.removeListener).toHaveBeenCalledWith("multiterm:bridge-chooser-result", resultHandler);
   });
 
   it("does not detach when no owned bridge exists", async () => {
@@ -1108,7 +1170,7 @@ describe("bridge startup preference IPC", () => {
       });
       return request;
     });
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+    main.__setBridgeChooserPresenter(async () => ({ action: "connect", index: 0, remember: false }));
     main.createWindow();
     main.registerWindowIpc();
     main.startServer();
@@ -1143,7 +1205,7 @@ describe("bridge startup preference IPC", () => {
       sendHealthyResponse(callback, { port: Number(options.port) });
       return request;
     });
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+    main.__setBridgeChooserPresenter(async () => ({ action: "new", remember: false }));
     main.createWindow();
     main.registerWindowIpc();
 
@@ -1179,9 +1241,9 @@ describe("bridge startup preference IPC", () => {
       sendHealthyResponse(callback, { pid: 317700, port: Number(options.port) });
       return request;
     });
-    electron.dialog.showMessageBox = vi.fn(async (options) => {
-      expect(options.buttons).toEqual(["Start a new bridge", "Cancel"]);
-      return { response: 1, checkboxChecked: false };
+    main.__setBridgeChooserPresenter(async (candidates) => {
+      expect(candidates).toEqual([]);
+      return { action: "cancel", remember: false };
     });
     main.createWindow();
     main.registerWindowIpc();
@@ -1207,7 +1269,7 @@ describe("bridge startup selection integration", () => {
       sendHealthyResponse(callback, { port: Number(options.port) });
       return request;
     });
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 2, checkboxChecked: false }));
+    main.__setBridgeChooserPresenter(async () => ({ action: "cancel", remember: false }));
 
     await main.onReady();
 
@@ -1237,7 +1299,7 @@ describe("bridge startup selection integration", () => {
       sendHealthyResponse(callback, { pid: 317700, port: Number(options.port) });
       return request;
     });
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+    main.__setBridgeChooserPresenter(async () => ({ action: "connect", index: 0, remember: false }));
 
     try {
       await main.onReady();
@@ -1254,7 +1316,7 @@ describe("bridge startup selection integration", () => {
   it("loads a selected non-default bridge without spawning another", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-select-"));
     electron.app.getPath = vi.fn(() => root);
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 0, checkboxChecked: false }));
+    main.__setBridgeChooserPresenter(async () => ({ action: "connect", index: 0, remember: false }));
     const record = { app: "MultiTerm Workbench", bridgeId: "BRIDGE-009", bridgeType: "installed", pid: 9009, port: 3299, startedAt: "2026-08-14T12:00:00Z", url: "http://127.0.0.1:3299/" };
     const previousLocalAppData = process.env.LOCALAPPDATA;
     process.env.LOCALAPPDATA = root;
@@ -1285,7 +1347,7 @@ describe("bridge startup selection integration", () => {
   it("starts a separate bridge when that chooser button is selected", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-new-"));
     electron.app.getPath = vi.fn(() => root);
-    electron.dialog.showMessageBox = vi.fn(async () => ({ response: 1, checkboxChecked: false }));
+    main.__setBridgeChooserPresenter(async () => ({ action: "new", remember: false }));
     const record = { app: "MultiTerm Workbench", bridgeId: "BRIDGE-009", bridgeType: "installed", pid: 9009, port: 3299, startedAt: "2026-08-14T12:00:00Z", url: "http://127.0.0.1:3299/" };
     const previousLocalAppData = process.env.LOCALAPPDATA;
     process.env.LOCALAPPDATA = root;

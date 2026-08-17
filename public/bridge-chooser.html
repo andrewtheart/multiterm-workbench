@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'">
+  <title>Choose a MultiTerm bridge</title>
+  <link rel="stylesheet" href="bridge-chooser.css">
+</head>
+<body>
+  <main class="chooser-shell" aria-labelledby="chooserTitle">
+    <header class="titlebar">
+      <div class="brand">
+        <img src="favicon.svg" width="18" height="18" alt="">
+        <span>MultiTerm Workbench</span>
+      </div>
+      <button class="window-close" id="closeChooser" type="button" aria-label="Cancel" title="Cancel">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+
+    <section class="chooser-intro">
+      <div class="intro-icon" aria-hidden="true">
+        <i data-lucide="waypoints"></i>
+      </div>
+      <div>
+        <p class="eyebrow">Bridge connection</p>
+        <h1 id="chooserTitle">Connect this window</h1>
+        <p class="summary" id="chooserSummary"></p>
+      </div>
+    </section>
+
+    <section class="bridge-region" aria-label="Available bridges">
+      <div class="bridge-list" id="bridgeList" role="radiogroup" aria-label="Available bridges"></div>
+      <div class="empty-state" id="emptyState" hidden>
+        <span class="empty-icon" aria-hidden="true"><i data-lucide="radio-tower"></i></span>
+        <strong>No other bridges are available</strong>
+        <span>Start a separate bridge for this window.</span>
+      </div>
+      <div class="bridge-choice-warning" id="bridgeChoiceWarning" role="alert" hidden>
+        <strong id="bridgeChoiceWarningTitle">Frontend already connected</strong>
+        <span id="bridgeChoiceWarningText"></span>
+      </div>
+    </section>
+
+    <footer class="chooser-footer">
+      <label class="remember-choice">
+        <input id="rememberChoice" type="checkbox">
+        <span class="checkbox-mark" aria-hidden="true"><i data-lucide="check"></i></span>
+        <span>
+          <strong>Remember my choice</strong>
+          <small>Skip this dialog next time</small>
+        </span>
+      </label>
+      <div class="chooser-actions">
+        <button class="button button-quiet" id="cancelChooser" type="button">Cancel</button>
+        <button class="button button-secondary" id="newBridge" type="button">
+          <i data-lucide="plus" aria-hidden="true"></i>
+          <span>Start new bridge</span>
+        </button>
+        <button class="button button-primary" id="connectBridge" type="button" disabled>
+          <span>Connect</span>
+          <i data-lucide="arrow-right" aria-hidden="true"></i>
+        </button>
+      </div>
+    </footer>
+  </main>
+
+  <script src="vendor/lucide.js"></script>
+  <script src="bridge-chooser.js"></script>
+</body>
+</html>

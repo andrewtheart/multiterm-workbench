@@ -119,6 +119,10 @@ let activeBridgeHost = HOST;
 let activeBridgePort = PORT;
 let activeBridgeRecord = null;
 let clipboardImageDirectory = null;
+let startupWindowTransition = false;
+const BRIDGE_CHOOSER_RESULT_CHANNEL = "multiterm:bridge-chooser-result";
+const BRIDGE_CHOOSER_DATA_CHANNEL = "multiterm:bridge-chooser-data";
+let bridgeChooserPresenter = showBridgeChooser;
 
 // Whether a URL points back at the app's own local origin. Used to allow internal
 // navigations/window-opens while routing everything else to the default browser.
@@ -506,6 +510,108 @@ function bridgeChoiceLabel(candidate) {
   return `${candidate.bridgeId} · ${type} · port ${candidate.port} · ${sessions} session${sessions === 1 ? "" : "s"}`;
 }
 
+function bridgeChooserRows(candidates) {
+  return candidates.map((candidate, index) => ({
+    index,
+    bridgeId: String(candidate.bridgeId || "Bridge").slice(0, 64),
+    bridgeType: candidate.bridgeType === "installed" ? "installed" : "electron",
+    port: Number(candidate.port),
+    rendererClients: Math.max(0, Number(candidate.health?.rendererClients) || 0),
+    sessions: Math.max(0, Number(candidate.health?.sessions) || 0),
+    startedAt: String(candidate.startedAt || "")
+  }));
+}
+
+function normalizeBridgeChooserResult(value, candidateCount) {
+  const remember = Boolean(value?.remember);
+  if (value?.action === "connect"
+      && Number.isSafeInteger(value.index)
+      && value.index >= 0
+      && value.index < candidateCount) {
+    return { action: "connect", index: value.index, remember };
+  }
+  if (value?.action === "new" || value?.action === "cancel") {
+    return { action: value.action, remember };
+  }
+  return null;
+}
+
+function bridgeChooserWindowOptions(candidateCount, parentWindow = mainWindow) {
+  const height = candidateCount === 0
+    ? 440
+    : Math.min(700, 430 + (Math.min(candidateCount, 3) * 82));
+  const options = {
+    width: 660,
+    height,
+    minWidth: 560,
+    minHeight: 420,
+    maxWidth: 760,
+    maxHeight: 760,
+    backgroundColor: "#10151c",
+    title: "Choose a MultiTerm bridge",
+    icon: path.join(__dirname, "public", "favicon.ico"),
+    autoHideMenuBar: true,
+    frame: false,
+    roundedCorners: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      webviewTag: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      sandbox: true,
+      preload: path.join(__dirname, "bridge-chooser-preload.js")
+    }
+  };
+  if (parentWindow && !parentWindow.isDestroyed?.()) {
+    options.parent = parentWindow;
+    options.modal = true;
+  }
+  return options;
+}
+
+function showBridgeChooser(candidates, { parentWindow = mainWindow } = {}) {
+  return new Promise((resolve) => {
+    const chooserWindow = new BrowserWindow(bridgeChooserWindowOptions(candidates.length, parentWindow));
+    let settled = false;
+    const finish = (result, destroyWindow = true) => {
+      if (settled) return;
+      settled = true;
+      ipcMain?.removeListener?.(BRIDGE_CHOOSER_RESULT_CHANNEL, handleResult);
+      if (destroyWindow && !chooserWindow.isDestroyed?.()) chooserWindow.destroy();
+      resolve(result);
+    };
+    const handleResult = (event, value) => {
+      if (event?.sender !== chooserWindow.webContents) return;
+      const result = normalizeBridgeChooserResult(value, candidates.length);
+      if (result) finish(result);
+    };
+
+    ipcMain.on(BRIDGE_CHOOSER_RESULT_CHANNEL, handleResult);
+    chooserWindow.on("closed", () => finish({ action: "cancel", remember: false }, false));
+    chooserWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    Promise.resolve(chooserWindow.loadFile(path.join(__dirname, "public", "bridge-chooser.html")))
+      .then(() => {
+        if (settled) return;
+        chooserWindow.webContents.send(BRIDGE_CHOOSER_DATA_CHANNEL, bridgeChooserRows(candidates));
+        chooserWindow.show();
+        chooserWindow.focus();
+      })
+      .catch((error) => {
+        recordElectronDiagnostic({
+          level: "error",
+          event: "bridge-chooser-load-failed",
+          message: formatError(error)
+        });
+        finish({ action: "cancel", remember: false });
+      });
+  });
+}
+
 async function chooseStartupBridge(candidates, preference = loadBridgeStartupPreference(), options = {}) {
   if (preference.askOnStartup === false) {
     if (preference.mode === "bridge") {
@@ -517,28 +623,11 @@ async function chooseStartupBridge(candidates, preference = loadBridgeStartupPre
   }
   if (candidates.length === 0 && !options.alwaysPrompt) return { candidate: null, startNew: true, preference };
 
-  const buttons = candidates.map(bridgeChoiceLabel).concat("Start a new bridge", "Cancel");
-  const hasCandidates = candidates.length > 0;
-  const result = await dialog.showMessageBox({
-    type: "question",
-    title: "Choose a MultiTerm bridge",
-    message: hasCandidates
-      ? "MultiTerm found other bridges running on this machine."
-      : "No other MultiTerm bridges are currently available.",
-    detail: hasCandidates
-      ? "Connect this window to an existing bridge, or start a separate bridge for it."
-      : "You can keep this bridge or start a separate bridge for this window.",
-    buttons,
-    defaultId: 0,
-    cancelId: buttons.length - 1,
-    checkboxLabel: "Don't show this again",
-    checkboxChecked: false,
-    noLink: true
-  });
-  if (result.response === buttons.length - 1) return { cancelled: true, preference };
-  const candidate = result.response < candidates.length ? candidates[result.response] : null;
+  const result = await (options.presentChooser || bridgeChooserPresenter)(candidates);
+  if (result.action === "cancel") return { cancelled: true, preference };
+  const candidate = result.action === "connect" ? candidates[result.index] : null;
   let nextPreference = preference;
-  if (result.checkboxChecked) {
+  if (result.remember) {
     try {
       nextPreference = saveBridgeStartupPreference({
         askOnStartup: false,
@@ -1003,55 +1092,60 @@ function readTerminalClipboardText(
 
 // Single-instance: focus the existing window instead of launching a second app.
 async function onReady() {
-  const candidates = await discoverBridgeInstances();
-  let samePort = candidates.find((candidate) => candidate.host === HOST && candidate.port === PORT);
-  if (needsConfiguredBridgeProbe(samePort)) {
-    const health = await probeBridge(HOST, PORT, 500);
-    samePort = appendConfiguredBridgeCandidate(health, candidates);
-  }
-  const choice = await chooseStartupBridge(candidates);
-  switch (choice.cancelled) {
-    case true:
+  try {
+    startupWindowTransition = true;
+    const candidates = await discoverBridgeInstances();
+    let samePort = candidates.find((candidate) => candidate.host === HOST && candidate.port === PORT);
+    if (needsConfiguredBridgeProbe(samePort)) {
+      const health = await probeBridge(HOST, PORT, 500);
+      samePort = appendConfiguredBridgeCandidate(health, candidates);
+    }
+    const choice = await chooseStartupBridge(candidates);
+    switch (choice.cancelled) {
+      case true:
+        app.quit();
+        return;
+      default:
+        break;
+    }
+    const selected = selectStartupBridge(choice, samePort);
+    switch (selected) {
+      case null:
+        activeBridgeHost = HOST;
+        activeBridgePort = typeof app?.getPath === "function" ? await findFreePort(PORT, HOST) : PORT;
+        activeBridgeRecord = null;
+        startServer();
+        break;
+      default:
+        activeBridgeHost = selected.host;
+        activeBridgePort = selected.port;
+        activeBridgeRecord = selected;
+    }
+    try {
+      await waitForServer();
+    } catch (err) {
+      dialog.showErrorBox("MultiTerm", formatError(err));
       app.quit();
       return;
-    default:
-      break;
-  }
-  const selected = selectStartupBridge(choice, samePort);
-  switch (selected) {
-    case null:
-      activeBridgeHost = HOST;
-      activeBridgePort = typeof app?.getPath === "function" ? await findFreePort(PORT, HOST) : PORT;
-      activeBridgeRecord = null;
-      startServer();
-      break;
-    default:
-      activeBridgeHost = selected.host;
-      activeBridgePort = selected.port;
-      activeBridgeRecord = selected;
-  }
-  try {
-    await waitForServer();
-  } catch (err) {
-    dialog.showErrorBox("MultiTerm", formatError(err));
-    app.quit();
-    return;
-  }
-  createWindow();
-  createTray();
-
-  registerScriptPicker();
-  registerCloseHandler();
-  registerClipboardIpc();
-  registerWindowIpc();
-  registerAdminIpc();
-  registerUpdateIpc();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
     }
-  });
+    createWindow();
+    createTray();
+
+    registerScriptPicker();
+    registerCloseHandler();
+    registerClipboardIpc();
+    registerWindowIpc();
+    registerAdminIpc();
+    registerUpdateIpc();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  } finally {
+    startupWindowTransition = false;
+  }
 }
 
 // Native "browse for a script" dialog for the renderer's run-script feature.
@@ -1607,7 +1701,7 @@ function bootstrap() {
   });
 
   app.on("window-all-closed", () => {
-    app.quit();
+    if (!startupWindowTransition) app.quit();
   });
 }
 
@@ -1632,6 +1726,10 @@ module.exports = {
   discoverBridgeInstances,
   findFreePort,
   bridgeChoiceLabel,
+  bridgeChooserRows,
+  normalizeBridgeChooserResult,
+  bridgeChooserWindowOptions,
+  showBridgeChooser,
   chooseStartupBridge,
   detachOwnedBridge,
   appendConfiguredBridgeCandidate,
@@ -1673,6 +1771,9 @@ module.exports = {
   onReady,
   bootstrap,
   __setElectron,
+  __setBridgeChooserPresenter(presenter) {
+    bridgeChooserPresenter = presenter || showBridgeChooser;
+  },
   __setRuntimeDiagnostics(diagnostics) {
     runtimeDiagnostics = diagnostics;
   },
@@ -1694,6 +1795,8 @@ module.exports = {
     activeBridgeHost = HOST;
     activeBridgePort = PORT;
     activeBridgeRecord = null;
+    startupWindowTransition = false;
+    bridgeChooserPresenter = showBridgeChooser;
     appIsElevated = false;
     elevationChecked = false;
     cleanupClipboardImages();
