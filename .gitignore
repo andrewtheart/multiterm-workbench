@@ -39,6 +39,9 @@ deploy/
 # Local plans
 plans/
 
+# Local agent customizations
+.github/skills/github-mainimage-generator/
+
 # Test & coverage artifacts
 coverage/
 test-results/
@@ -46,6 +49,7 @@ playwright-report/
 .playwright/
 benchmarks/search-index-wasm/target/
 benchmarks/renderer-spike/target/
+benchmarks/bridge-throughput/results/
 blob-report/
 after-context-loss.png
 after-recovery.png
