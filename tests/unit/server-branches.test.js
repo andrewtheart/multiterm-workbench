@@ -17,6 +17,7 @@
  */
 
 const server = require("../../server.js");
+const http = require("node:http");
 
 function makeTerminal() {
   return {
@@ -81,6 +82,70 @@ describe("handleClientMessage create dispatch", () => {
     );
     expect(server.sessions.has("viamessage1")).toBe(true);
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created" }));
+  });
+
+  it("returns correlated live bridge occupancy through listBridgeInstances", async () => {
+    const client = { send: vi.fn() };
+    const bridges = [{
+      bridgeId: "BRIDGE-004",
+      bridgeType: "installed",
+      current: false,
+      pid: 4400,
+      port: 3204,
+      rendererClients: 1,
+      sessions: 3,
+      startedAt: "2026-08-16T12:00:00.000Z",
+      url: "http://127.0.0.1:3204/"
+    }];
+    server.handleClientMessage(
+      client,
+      JSON.stringify({ type: "listBridgeInstances", requestId: "bridges-1" }),
+      { ...sessionDependencies, discoverBridges: vi.fn(async () => bridges) }
+    );
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
+      type: "bridgeInstances",
+      requestId: "bridges-1",
+      bridges
+    }));
+  });
+});
+
+describe("registered bridge discovery", () => {
+  it("accepts only a loopback health response matching the registered PID and port", async () => {
+    const healthServer = http.createServer((request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        app: "MultiTerm Workbench",
+        pid: process.pid,
+        port: healthServer.address().port,
+        sessions: 4,
+        rendererClients: 2
+      }));
+    });
+    await new Promise((resolve) => healthServer.listen(0, "127.0.0.1", resolve));
+    const port = healthServer.address().port;
+    try {
+      const record = {
+        app: "MultiTerm Workbench",
+        bridgeId: "BRIDGE-TEST",
+        bridgeType: "installed",
+        pid: process.pid,
+        port,
+        startedAt: "2026-08-16T12:00:00.000Z",
+        url: `http://127.0.0.1:${port}/`
+      };
+      await expect(server.probeRegisteredBridge(record)).resolves.toMatchObject({
+        bridgeId: "BRIDGE-TEST",
+        current: true,
+        port,
+        rendererClients: 2,
+        sessions: 4
+      });
+      await expect(server.probeRegisteredBridge({ ...record, pid: process.pid + 1 })).resolves.toBeNull();
+      await expect(server.probeRegisteredBridge({ ...record, url: `http://example.com:${port}/` })).resolves.toBeNull();
+    } finally {
+      await new Promise((resolve) => healthServer.close(resolve));
+    }
   });
 });
 
@@ -176,6 +241,20 @@ describe("start edge cases", () => {
 });
 
 describe("client send when socket is destroyed", () => {
+  it("routes upgraded client frames through the bounded writer", () => {
+    const socket = fakeSocket("127.0.0.1");
+    server.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);
+    const client = [...server.clients].find((candidate) => candidate.socket === socket);
+    expect(client).toBeTruthy();
+    socket.emit("drain");
+    socket.write.mockClear();
+
+    client.sendFrame(Buffer.from("frame"));
+
+    expect(socket.write).toHaveBeenCalledWith(Buffer.from("frame"));
+    server.clients.clear();
+  });
+
   it("skips writing to a destroyed socket", () => {
     const socket = fakeSocket("127.0.0.1");
     server.server.emit("upgrade", { url: "/ws", headers: handshakeHeaders() }, socket);

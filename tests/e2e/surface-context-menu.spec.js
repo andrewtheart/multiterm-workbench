@@ -1283,7 +1283,10 @@ test.describe("Surface context menu", () => {
     const result = await page.evaluate(() => {
       const terminal = state.terminals.values().next().value;
       const savedCwdHistory = state.copilotCwdHistory;
-      state.copilotCwdHistory = Array.from({ length: 10 }, (_, index) => `D:\\recent-${index}`);
+      state.copilotCwdHistory = Array.from({ length: 10 }, (_, index) => ({
+        path: `D:\\recent-${index}`,
+        usedAt: new Date(Date.UTC(2026, 7, 16, 12, index)).toISOString()
+      }));
       const outsideIcon = document.createElement("i");
       outsideIcon.id = "context-menu-icon-scope-probe";
       outsideIcon.dataset.lucide = "activity";
@@ -2253,6 +2256,76 @@ test.describe("Surface context menu", () => {
       saveSettings();
       syncControlsFromSettings();
     });
+  });
+
+  test("selects a discovered Copilot model from the grouped autocomplete", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const initialLists = await page.locator("body > .combobox-list").count();
+    await page.evaluate(() => {
+      window.__modelMenuOriginalProviders = state.aiProviders;
+      window.__modelMenuOriginalProvider = state.settings.aiSessionProvider;
+      window.__modelMenuOriginalSend = state.socket.send;
+      window.__modelMenuFrames = [];
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        available: true,
+        interactiveAvailable: true,
+        models: [
+          { id: "gpt-test", name: "GPT Test", maxContextTokens: 128000 },
+          { id: "claude-test", name: "Claude Test", maxContextTokens: 200000 }
+        ]
+      }];
+      state.settings.aiSessionProvider = "copilot";
+      state.socket.send = (payload) => window.__modelMenuFrames.push(JSON.parse(payload));
+    });
+
+    const menu = await openTerminalMenu(page);
+    const modelRow = menu.locator('[data-customization-id="terminal.copilot-model"]');
+    const modelInput = modelRow.locator(".combobox-input");
+    await expect(modelInput).toHaveValue("Choose a model...");
+    await modelInput.click();
+
+    const list = page.locator(".combobox-list:not([hidden])");
+    await expect(list.locator(".combobox-group")).toHaveText(["Anthropic Claude", "OpenAI GPT"]);
+    await expect(list.locator(".combobox-option-label")).toHaveText([
+      "Claude Test - 200K tokens",
+      "GPT Test - 128K tokens"
+    ]);
+    const popupGeometry = await list.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        clientWidth: element.clientWidth,
+        right: rect.right,
+        scrollWidth: element.scrollWidth,
+        viewportWidth: window.innerWidth
+      };
+    });
+    expect(popupGeometry.scrollWidth).toBeLessThanOrEqual(popupGeometry.clientWidth);
+    expect(popupGeometry.right).toBeLessThanOrEqual(popupGeometry.viewportWidth - 8);
+    await modelInput.fill("gpt");
+    await expect(list.locator(".combobox-option-label")).toHaveText(["GPT Test - 128K tokens"]);
+    await modelInput.press("Enter");
+
+    await expect(menu).toBeHidden();
+    await expect(page.locator("body > .combobox-list")).toHaveCount(initialLists);
+    const frames = await page.evaluate(() => {
+      const sent = window.__modelMenuFrames
+        .filter((frame) => frame.type === "input")
+        .map((frame) => frame.data);
+      state.socket.send = window.__modelMenuOriginalSend;
+      state.aiProviders = window.__modelMenuOriginalProviders;
+      state.settings.aiSessionProvider = window.__modelMenuOriginalProvider;
+      delete window.__modelMenuFrames;
+      delete window.__modelMenuOriginalSend;
+      delete window.__modelMenuOriginalProviders;
+      delete window.__modelMenuOriginalProvider;
+      return sent;
+    });
+    expect(frames.filter((data) => data === "\x15" || data.startsWith("/")))
+      .toEqual(["\x15", "/model gpt-test\r"]);
   });
 
   test("renders toggle defaults and dispatches their change contract", async ({ page }) => {

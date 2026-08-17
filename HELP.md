@@ -11,7 +11,7 @@ MultiTerm Workbench is a Windows terminal workspace for running PowerShell 7, Wi
 
 Use the terminal, page, and empty-workspace context menus for additional actions. Press <kbd>F1</kbd> to open this in-app help guide, or <kbd>Ctrl+Shift+P</kbd> to search the command palette. While Help is open, <kbd>Ctrl+F</kbd> searches this guide and highlights every match. Use <kbd>Enter</kbd> / <kbd>Shift+Enter</kbd> for the next / previous match; select `.*` only when the query should be treated as a regular expression.
 
-When the Electron desktop app starts and finds other registered MultiTerm bridges running under this Windows account, it offers each verified bridge by ID, type, port, and live session count, plus **Start a new bridge**. Selecting an existing bridge attaches this window to that bridge's terminals; starting a new one uses the first available local port. Check **Don't show this again** to remember that choice. Turn **Ask which bridge to use at startup** back on under **Session** settings to restore the chooser. To switch immediately, hover or focus **Connected** in the status bar and select **Connect to another bridge...**. If no alternative is running, the chooser lets you start a separate bridge or cancel. If a remembered bridge is no longer running, MultiTerm starts a new bridge instead of silently choosing another one.
+When the Electron desktop app starts and finds other registered MultiTerm bridges running under this Windows account, it shows a scrollable chooser with every verified bridge's ID, type, port, start time, live session count, and frontend connection state, plus **Start new bridge**. Selecting an existing bridge attaches this window to that bridge's terminals; starting a new one uses the first available local port. Check **Remember my choice** to skip the chooser next time. Turn **Ask which bridge to use at startup** back on under **Session** settings to restore the chooser. To switch immediately in either the Electron or installed app, hover or focus **Connected** in the status bar. The overlay lists every other verified live bridge; the installed app can connect directly from that list, while Electron opens its bridge chooser. A monitor indicator marks a bridge that already has a frontend. MultiTerm warns before joining an occupied bridge because both windows will then control and display the same terminal sessions. If no alternative is running, the overlay reports that no other live bridges were found. If a remembered bridge is no longer running, MultiTerm starts a new bridge instead of silently choosing another one.
 
 ## Terminals
 
@@ -377,6 +377,8 @@ An explicit link is visual metadata only. It does not authenticate either termin
 - The **Search** box in the top bar searches every terminal and hides the panes with nothing to show.
 - Use Enter/Shift+Enter to move between matches and Escape to close search.
 
+The top-right **+ Terminal** action uses a bright blue background by default. Right-click it and choose **Change button color...** to open a compact 24-bit color picker with saturation/brightness, hue, and hexadecimal controls. The selected color is saved in this app profile; **Use default blue** restores `#1677FF`.
+
 Select some terminal text, right-click it, and choose **Search all terminals for "…"** to filter the workspace down to the terminals containing that text. The terminal you right-clicked always stays on screen, even when it is the only place the text appears.
 
 #### Matches on other pages
@@ -473,6 +475,8 @@ Explorer integration is optional and unchecked by default. Enable it explicitly 
 ### Visual Studio Code
 
 The installer can also add MultiTerm commands to Visual Studio Code's Explorer. Right-click a file to open its containing folder, right-click a folder to open that folder, or use **Open Workspace in MultiTerm** from the Explorer when no resource is selected. The command reuses a live MultiTerm instance or starts one if necessary. For a nonstandard installation, set `multiterm.launcherPath` in VS Code.
+
+When VS Code, Visual Studio, File Explorer, or the MultiTerm CLI adds a terminal to an already open window, MultiTerm brings that window forward. The first time this happens, an in-app prompt asks whether future external terminals should focus MultiTerm automatically. Choose **Focus automatically** or **Don't focus**; change the saved choice later with **External terminal focus** under **Session** settings.
 
 ### Command line
 

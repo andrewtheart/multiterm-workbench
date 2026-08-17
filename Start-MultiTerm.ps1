@@ -1996,6 +1996,33 @@ namespace MultiTerm.PowerShellBridge
             public Timer Timer;
         }
 
+        private sealed class OutputChunk
+        {
+            public OutputChunk(long sequence, string data, long bytes)
+            {
+                this.Sequence = sequence;
+                this.Data = data;
+                this.Bytes = bytes;
+            }
+
+            public long Sequence { get; private set; }
+
+            public string Data { get; private set; }
+
+            public long Bytes { get; private set; }
+        }
+
+        // Bounded per-session retention plus the monotonic output sequence. The
+        // lock is held across the broadcast so ring order and wire order cannot
+        // diverge, which is what makes a replayed suffix trustworthy.
+        private sealed class OutputReplayRing
+        {
+            public readonly object Sync = new object();
+            public readonly Queue<OutputChunk> Chunks = new Queue<OutputChunk>();
+            public long Sequence;
+            public long Bytes;
+        }
+
         private readonly string host;
         private int port;
         private readonly bool autoPort;
@@ -2012,6 +2039,9 @@ namespace MultiTerm.PowerShellBridge
         // browser (e.g. Microsoft Edge). Must match the installer shortcut.
         private const string AppUserModelId = "MultiTerm.Workbench";
         private readonly ConcurrentDictionary<string, BridgeClient> clients = new ConcurrentDictionary<string, BridgeClient>();
+        private readonly object configOwnerLock = new object();
+        private string configOwnerClientId = String.Empty;
+        private readonly object sessionCatalogLock = new object();
         private readonly ConcurrentDictionary<string, TerminalSession> sessions = new ConcurrentDictionary<string, TerminalSession>();
         private readonly ConcurrentDictionary<string, CopilotSessionMetadata> copilotSessionCatalog = new ConcurrentDictionary<string, CopilotSessionMetadata>();
         private readonly PromptLibraryHostClient promptLibraryHost = new PromptLibraryHostClient();
@@ -2027,7 +2057,25 @@ namespace MultiTerm.PowerShellBridge
         private const int MaxTerminalMessageStoreBytes = 4 * 1024 * 1024;
         private const int TerminalMessageClaimSeconds = 15;
         private readonly ConcurrentDictionary<string, OutputBatch> outputBatches = new ConcurrentDictionary<string, OutputBatch>();
+        private readonly ConcurrentDictionary<string, OutputReplayRing> outputReplays = new ConcurrentDictionary<string, OutputReplayRing>();
+        private readonly ReaderWriterLockSlim outputCoalesceLock = new ReaderWriterLockSlim();
         private int outputCoalesceMs = 8;
+        // Bridge-global outbound ceiling applied to every client queue. 0 restores the
+        // legacy synchronous send, mirroring the Node bridge.
+        private int clientBacklogKb = BridgeClient.DefaultBacklogKb;
+        private const int MinClientBacklogKb = 64;
+        private const int MaxClientBacklogKb = 16384;
+        // 0 retains nothing, so a reconnect that missed output is told about the gap.
+        private int replayBufferKb = DefaultReplayBufferKb;
+        private const int DefaultReplayBufferKb = 512;
+        private const int MinReplayBufferKb = 16;
+        private const int MaxReplayBufferKb = 4096;
+        // Renderer liveness probe interval; 0 switches sweeping off entirely.
+        private int heartbeatSeconds = DefaultHeartbeatSeconds;
+        private const int DefaultHeartbeatSeconds = 30;
+        private const int MinHeartbeatSeconds = 5;
+        private const int MaxHeartbeatSeconds = 600;
+        private Timer livenessTimer;
         private readonly RuntimeDiagnosticsStore runtimeDiagnostics = new RuntimeDiagnosticsStore();
         private readonly CopilotLogAggregator copilotLogs;
         private readonly object gitMergeLock = new object();
@@ -2223,6 +2271,8 @@ namespace MultiTerm.PowerShellBridge
                 this.OpenBrowser();
             }
 
+            this.StartClientLivenessSweep();
+
             while (!this.stopping && this.listener.IsListening)
             {
                 try
@@ -2255,6 +2305,7 @@ namespace MultiTerm.PowerShellBridge
             }
 
             this.stopping = true;
+            this.StopClientLivenessSweep();
             if (this.consoleDashboard != null)
             {
                 this.consoleDashboard.Stop();
@@ -3943,6 +3994,7 @@ namespace MultiTerm.PowerShellBridge
                         + Process.GetCurrentProcess().Id + ",\"port\":" + this.port
                         + ",\"sessions\":" + this.PublicSessionCount()
                         + ",\"rendererClients\":" + rendererClients
+                        + ",\"transport\":" + this.TransportSnapshotJson()
                         + ",\"watchdogSuppressed\":" + (this.watchdogSuppressed ? "true" : "false")
                         + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + "}";
                     this.SendText(context.Response, 200, body, "application/json; charset=utf-8");
@@ -4284,7 +4336,7 @@ namespace MultiTerm.PowerShellBridge
                         target = client;
                     }
                 }
-                if (target != null && target.Send(message))
+                if (target != null && target.SendAcknowledged(message))
                 {
                     return;
                 }
@@ -4309,7 +4361,7 @@ namespace MultiTerm.PowerShellBridge
                         target = client;
                     }
                 }
-                if (target != null && target.Send(message)) return;
+                if (target != null && target.SendAcknowledged(message)) return;
                 this.pendingOpenTerminals.Enqueue(launch);
             }
         }
@@ -5037,12 +5089,30 @@ namespace MultiTerm.PowerShellBridge
             }
 
             BridgeClient client = new BridgeClient(Guid.NewGuid().ToString("N"), webSocketContext.WebSocket);
+            client.ConfigureBacklogLimitBytes(Volatile.Read(ref this.clientBacklogKb) * 1024L);
             lock (this.openFolderLock)
             {
-                this.clients[client.Id] = client;
                 int pendingFolderCount;
                 int pendingTerminalCount;
-                if (client.Send(this.WelcomeJson(out pendingFolderCount, out pendingTerminalCount)))
+                string welcome;
+                Task<bool> welcomeDelivery;
+                lock (this.sessionCatalogLock)
+                {
+                    if (String.Equals(context.Request.QueryString["renderer"], "1", StringComparison.Ordinal))
+                    {
+                        client.IsRenderer = true;
+                        List<string> pendingResumes = new List<string>();
+                        foreach (TerminalSession session in this.sessions.Values)
+                        {
+                            if (!session.Ephemeral && session.IsAvailable) pendingResumes.Add(session.Id);
+                        }
+                        client.InitializeOutputResumes(pendingResumes);
+                    }
+                    welcome = this.WelcomeJson(out pendingFolderCount, out pendingTerminalCount);
+                    welcomeDelivery = client.SendAcknowledgedAsync(welcome);
+                    this.clients[client.Id] = client;
+                }
+                if (client.WaitForAcknowledged(welcomeDelivery))
                 {
                     string ignoredFolder;
                     for (int index = 0; index < pendingFolderCount; index++)
@@ -5066,8 +5136,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 BridgeClient removed;
                 this.clients.TryRemove(client.Id, out removed);
+                this.PromoteConfigOwner(client.Id);
                 this.ReleaseAutomationLease(client.Id);
                 this.CloseEphemeralSessions(client.Id);
+                if (client.ForcedDrop && client.TryCountForcedDisconnect()) Interlocked.Increment(ref this.forcedDisconnects);
                 client.Close();
                 this.Log("info", "Client disconnected: " + client.Id + "; " + this.clients.Count + " active");
             }
@@ -5104,11 +5176,11 @@ namespace MultiTerm.PowerShellBridge
 
                 string rawMessage = Encoding.UTF8.GetString(messageBuffer.ToArray());
                 messageBuffer.SetLength(0);
-                this.HandleClientMessage(client, rawMessage);
+                this.HandleClientMessage(client, rawMessage, DateTime.UtcNow.Ticks);
             }
         }
 
-        private void HandleClientMessage(BridgeClient client, string rawMessage)
+        private void HandleClientMessage(BridgeClient client, string rawMessage, long receivedAt = 0)
         {
             Dictionary<string, string> message;
             try
@@ -5122,6 +5194,8 @@ namespace MultiTerm.PowerShellBridge
             }
 
             string type = Json.Get(message, "type");
+            bool heartbeatReply = type == "heartbeat" && Json.Get(message, "reply") == "true";
+            client.RecordReceiveComplete(receivedAt > 0 ? receivedAt : DateTime.UtcNow.Ticks, heartbeatReply);
             if (type == "rendererPresence")
             {
                 client.IsRenderer = true;
@@ -5136,7 +5210,16 @@ namespace MultiTerm.PowerShellBridge
                 {
                     nonce = nonce.Substring(0, 64);
                 }
-                client.Send("{\"type\":\"heartbeat\",\"nonce\":" + Json.Quote(nonce) + "}");
+                // A reply to our own liveness probe must not be echoed, or the two
+                // sides would answer each other forever.
+                if (Json.Get(message, "reply") != "true")
+                {
+                    client.Send("{\"type\":\"heartbeat\",\"nonce\":" + Json.Quote(nonce) + "}");
+                }
+                else
+                {
+                    // Receive completion already recorded this exact reply atomically.
+                }
             }
             else if (type == "aiProviderBootstrapConsumed")
             {
@@ -5149,6 +5232,10 @@ namespace MultiTerm.PowerShellBridge
             else if (type == "create")
             {
                 this.CreateSession(client, message);
+            }
+            else if (type == "resumeOutput")
+            {
+                this.ResumeSessionOutput(client, message);
             }
             else if (type == "promoteSession")
             {
@@ -5286,6 +5373,10 @@ namespace MultiTerm.PowerShellBridge
             {
                 client.Send("{\"type\":\"aiUsage\",\"usage\":" + this.AiUsageSnapshotJson() + "}");
             }
+            else if (type == "listBridgeInstances")
+            {
+                this.ListBridgeInstances(client, message);
+            }
             else if (type == "saveAssistantSessions")
             {
                 this.WriteAssistantSessions(Json.Get(message, "sessions"));
@@ -5364,20 +5455,7 @@ namespace MultiTerm.PowerShellBridge
             }
             else if (type == "config")
             {
-                int requested = Json.GetInt(message, "outputCoalesceMs", 8);
-                this.outputCoalesceMs = Math.Min(100, Math.Max(0, requested));
-                int requestedHeartbeatTimeout = Json.GetInt(message, "bridgeHeartbeatTimeoutSeconds", 30);
-                client.SendTimeoutMilliseconds = Math.Min(300, Math.Max(10, requestedHeartbeatTimeout)) * 1000;
-                this.runtimeDiagnostics.Configure(message);
-                this.copilotLogs.Configure(message);
-                client.Send("{\"type\":\"config\",\"outputCoalesceMs\":" + this.outputCoalesceMs
-                    + ",\"bridgeHeartbeatTimeoutSeconds\":" + (client.SendTimeoutMilliseconds / 1000).ToString(CultureInfo.InvariantCulture)
-                    + ",\"diagnosticRetentionDays\":" + this.runtimeDiagnostics.RetentionDays.ToString(CultureInfo.InvariantCulture)
-                    + ",\"diagnosticRotationMb\":" + this.runtimeDiagnostics.RotationMb.ToString(CultureInfo.InvariantCulture)
-                    + ",\"diagnosticViewerEntries\":" + this.runtimeDiagnostics.ViewerEntries.ToString(CultureInfo.InvariantCulture)
-                    + ",\"copilotLogViewerEnabled\":" + (this.copilotLogs.Enabled ? "true" : "false")
-                    + ",\"copilotLogInitialTailKb\":" + this.copilotLogs.InitialTailKb.ToString(CultureInfo.InvariantCulture)
-                    + ",\"copilotLogDirectory\":" + Json.Quote(this.copilotLogs.RootPath) + "}");
+                this.HandleBridgeConfig(client, message);
             }
             else if (type == "diagnosticRecord")
             {
@@ -5436,6 +5514,120 @@ namespace MultiTerm.PowerShellBridge
             {
                 client.Send("{\"type\":\"error\",\"message\":\"Unsupported message type: " + Json.Escape(type) + "\"}");
             }
+        }
+
+        private void ListBridgeInstances(BridgeClient client, Dictionary<string, string> message)
+        {
+            string requestId = Json.Get(message, "requestId");
+            ThreadPool.QueueUserWorkItem(delegate(object ignored)
+            {
+                List<Dictionary<string, object>> bridges = new List<Dictionary<string, object>>();
+                try
+                {
+                    string directory = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                        "MultiTerm", "Instances");
+                    JavaScriptSerializer serializer = ProviderJsonSerializer();
+                    if (Directory.Exists(directory))
+                    {
+                        foreach (string file in Directory.GetFiles(directory, "*.json"))
+                        {
+                            try
+                            {
+                                IDictionary<string, object> record = JsonDictionary(serializer.DeserializeObject(File.ReadAllText(file)));
+                                int recordPort;
+                                int recordPid;
+                                Uri recordUrl;
+                                string recordApp = JsonText(record, "app");
+                                if (recordApp != "MultiTerm Workbench"
+                                    || !Int32.TryParse(JsonText(record, "port"), NumberStyles.Integer, CultureInfo.InvariantCulture, out recordPort)
+                                    || !Int32.TryParse(JsonText(record, "pid"), NumberStyles.Integer, CultureInfo.InvariantCulture, out recordPid)
+                                    || recordPort < 1 || recordPort > 65535 || recordPid < 1
+                                    || !Uri.TryCreate(JsonText(record, "url"), UriKind.Absolute, out recordUrl)
+                                    || recordUrl.Scheme != Uri.UriSchemeHttp
+                                    || !recordUrl.IsLoopback
+                                    || recordUrl.Port != recordPort)
+                                {
+                                    continue;
+                                }
+
+                                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(new Uri(recordUrl, "health"));
+                                request.Method = "GET";
+                                request.Proxy = null;
+                                request.Timeout = 1200;
+                                request.ReadWriteTimeout = 1200;
+                                string body;
+                                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                                using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                                {
+                                    if (response.StatusCode != HttpStatusCode.OK) continue;
+                                    char[] buffer = new char[4096];
+                                    StringBuilder builder = new StringBuilder();
+                                    int read;
+                                    while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                                    {
+                                        if (builder.Length + read > 64 * 1024) throw new InvalidDataException("Bridge health response is too large.");
+                                        builder.Append(buffer, 0, read);
+                                    }
+                                    body = builder.ToString();
+                                }
+
+                                IDictionary<string, object> health = JsonDictionary(serializer.DeserializeObject(body));
+                                int healthPort;
+                                int healthPid;
+                                if (JsonText(health, "app") != "MultiTerm Workbench"
+                                    || !Int32.TryParse(JsonText(health, "port"), NumberStyles.Integer, CultureInfo.InvariantCulture, out healthPort)
+                                    || !Int32.TryParse(JsonText(health, "pid"), NumberStyles.Integer, CultureInfo.InvariantCulture, out healthPid)
+                                    || healthPort != recordPort || healthPid != recordPid)
+                                {
+                                    continue;
+                                }
+
+                                int sessions;
+                                int rendererClients;
+                                Int32.TryParse(JsonText(health, "sessions"), NumberStyles.Integer, CultureInfo.InvariantCulture, out sessions);
+                                Int32.TryParse(JsonText(health, "rendererClients"), NumberStyles.Integer, CultureInfo.InvariantCulture, out rendererClients);
+                                string bridgeType = JsonText(record, "bridgeType") == "installed" ? "installed" : "electron";
+                                bridges.Add(new Dictionary<string, object>
+                                {
+                                    { "bridgeId", JsonText(record, "bridgeId") },
+                                    { "bridgeType", bridgeType },
+                                    { "current", recordPid == Process.GetCurrentProcess().Id },
+                                    { "pid", recordPid },
+                                    { "port", recordPort },
+                                    { "rendererClients", Math.Max(0, rendererClients) },
+                                    { "sessions", Math.Max(0, sessions) },
+                                    { "startedAt", JsonText(record, "startedAt") },
+                                    { "url", recordUrl.GetLeftPart(UriPartial.Authority) + "/" }
+                                });
+                            }
+                            catch
+                            {
+                                // Stale, malformed and unreachable records are not navigation candidates.
+                            }
+                        }
+                    }
+                    bridges.Sort(delegate(Dictionary<string, object> left, Dictionary<string, object> right)
+                    {
+                        return String.Compare(
+                            Convert.ToString(right["startedAt"], CultureInfo.InvariantCulture),
+                            Convert.ToString(left["startedAt"], CultureInfo.InvariantCulture),
+                            StringComparison.Ordinal);
+                    });
+                }
+                catch (Exception error)
+                {
+                    this.Log("warn", "Could not discover bridge instances: " + error.Message);
+                }
+
+                Dictionary<string, object> envelope = new Dictionary<string, object>
+                {
+                    { "type", "bridgeInstances" },
+                    { "requestId", requestId },
+                    { "bridges", bridges }
+                };
+                client.Send(ProviderJsonSerializer().Serialize(envelope));
+            });
         }
 
         private void HandlePromptLibraryRequest(BridgeClient client, Dictionary<string, string> message)
@@ -5963,21 +6155,48 @@ namespace MultiTerm.PowerShellBridge
                 + ",\"message\":" + Json.Quote(message) + "}");
         }
 
+        private void AttachSessionLifecycle(TerminalSession session, string exitLabel)
+        {
+            string id = session.Id;
+            session.Output += delegate(string data)
+            {
+                this.QueueSessionOutput(id, data);
+            };
+            session.Exited += delegate(int exitCode)
+            {
+                lock (this.sessionCatalogLock)
+                {
+                    this.FlushSessionOutput(id);
+                    this.ExpireTerminalMessagesForSession(id);
+                    this.Log("info", exitLabel + id + " (code " + exitCode + ")");
+                    this.SendSessionExitFrame(session, "{\"type\":\"exited\",\"id\":" + Json.Quote(id) + ",\"code\":" + exitCode + "}");
+                    TerminalSession removed;
+                    this.sessions.TryRemove(id, out removed);
+                    this.RemoveSessionOutputBatch(id);
+                }
+            };
+        }
+
+        private void PublishSessionCreated(BridgeClient creator, TerminalSession session, string logMessage)
+        {
+            foreach (BridgeClient peer in this.clients.Values)
+            {
+                peer.ForgetSessionExit(session.Id);
+                if (!session.Ephemeral && !String.Equals(peer.Id, creator.Id, StringComparison.Ordinal) && peer.IsRenderer)
+                {
+                    peer.BeginOutputResume(session.Id);
+                }
+            }
+            creator.ForgetSessionExit(session.Id);
+            this.Log("info", logMessage);
+            string created = "{\"type\":\"created\"," + this.SessionSummaryJson(session).Substring(1);
+            creator.Send(created);
+            if (!session.Ephemeral) this.Broadcast(created, creator.Id);
+        }
+
         private void CreateSession(BridgeClient client, Dictionary<string, string> options)
         {
             string id = this.SanitizeId(Json.Get(options, "id"));
-            if (this.sessions.ContainsKey(id))
-            {
-                client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"A session with this id already exists.\"}");
-                return;
-            }
-
-            if (this.sessions.Count >= MaxSessions)
-            {
-                client.Send("{\"type\":\"createFailed\",\"id\":" + Json.Quote(id) + ",\"message\":\"The bridge is limited to " + MaxSessions + " terminals.\"}");
-                return;
-            }
-
             ShellInfo shell = this.GetShell(Json.Get(options, "shell"));
             string cwd = this.GetWorkingDirectory(Json.Get(options, "cwd"));
             int cols = Math.Max(20, Json.GetInt(options, "cols", 120));
@@ -5990,33 +6209,37 @@ namespace MultiTerm.PowerShellBridge
             }
 
             TerminalSession session = new TerminalSession(id, title.Trim(), shell, cwd, cols, rows, ephemeral, ephemeral ? client.Id : String.Empty);
-            session.Output += delegate(string data)
-            {
-                this.QueueSessionOutput(id, data);
-            };
-            session.Exited += delegate(int exitCode)
-            {
-                this.FlushSessionOutput(id);
-                this.RemoveSessionOutputBatch(id);
-                this.ExpireTerminalMessagesForSession(id);
-                TerminalSession removed;
-                this.sessions.TryRemove(id, out removed);
-                this.Log("info", "Session exited: " + id + " (code " + exitCode + ")");
-                this.SendSessionFrame(session, "{\"type\":\"exited\",\"id\":" + Json.Quote(id) + ",\"code\":" + exitCode + "}");
-            };
+            this.AttachSessionLifecycle(session, "Session exited: ");
 
             try
             {
-                session.Start();
-                if (!this.sessions.TryAdd(id, session))
+                lock (this.sessionCatalogLock)
                 {
-                    session.Kill();
-                    client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"A session with this id already exists.\"}");
-                    return;
-                }
+                    if (this.sessions.ContainsKey(id))
+                    {
+                        client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"A session with this id already exists.\"}");
+                        return;
+                    }
+                    if (this.sessions.Count >= MaxSessions)
+                    {
+                        client.Send("{\"type\":\"createFailed\",\"id\":" + Json.Quote(id) + ",\"message\":\"The bridge is limited to " + MaxSessions + " terminals.\"}");
+                        return;
+                    }
 
-                this.Log("info", "Session created: " + title + " [" + id + ", " + shell.Label + "]");
-                client.Send("{\"type\":\"created\"," + session.SummaryJson().Substring(1));
+                    this.sessions.TryAdd(id, session);
+                    try
+                    {
+                        session.Start();
+                    }
+                    catch
+                    {
+                        TerminalSession removed;
+                        this.sessions.TryRemove(id, out removed);
+                        throw;
+                    }
+
+                    this.PublishSessionCreated(client, session, "Session created: " + title + " [" + id + ", " + shell.Label + "]");
+                }
             }
             catch (Exception error)
             {
@@ -6048,7 +6271,7 @@ namespace MultiTerm.PowerShellBridge
             client.Send("{\"type\":\"sessionPromoted\",\"requestId\":" + Json.Quote(requestId)
                 + ",\"id\":" + Json.Quote(id) + ",\"ok\":" + (ok ? "true" : "false")
                 + ",\"reason\":" + Json.Quote(ok ? String.Empty : "Session is unavailable.") + "}");
-            if (ok) this.Broadcast("{\"type\":\"created\"," + session.SummaryJson().Substring(1), client.Id);
+            if (ok) this.Broadcast("{\"type\":\"created\"," + this.SessionSummaryJson(session).Substring(1), client.Id);
         }
 
         private void CloseEphemeralSessions(string ownerClientId)
@@ -6311,34 +6534,32 @@ namespace MultiTerm.PowerShellBridge
             // Relayed sessions have no local pseudo-console; input, resize and kill travel
             // over the socket instead. Everything downstream treats it as a normal session.
             TerminalSession session = new TerminalSession(id, title, shell, cwd, cols, rows);
-            session.Output += delegate(string data)
-            {
-                this.QueueSessionOutput(id, data);
-            };
-            session.Exited += delegate(int exitCode)
-            {
-                this.FlushSessionOutput(id);
-                this.RemoveSessionOutputBatch(id);
-                this.ExpireTerminalMessagesForSession(id);
-                TerminalSession removed;
-                this.sessions.TryRemove(id, out removed);
-                this.Log("info", "Administrator session exited: " + id + " (code " + exitCode + ")");
-                this.Broadcast("{\"type\":\"exited\",\"id\":" + Json.Quote(id) + ",\"code\":" + exitCode + "}");
-            };
+            this.AttachSessionLifecycle(session, "Administrator session exited: ");
 
             // No further blocking reads once the relay owns the socket.
             stream.ReadTimeout = System.Threading.Timeout.Infinite;
-            session.AttachRemote(connection, reader, writer, Json.GetInt(started, "pid", 0));
-
-            if (!this.sessions.TryAdd(id, session))
+            lock (this.sessionCatalogLock)
             {
-                session.Kill();
-                client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"A session with this id already exists.\"}");
-                return;
-            }
+                if (this.sessions.ContainsKey(id) || this.sessions.Count >= MaxSessions)
+                {
+                    session.Kill();
+                    client.Send("{\"type\":\"error\",\"id\":" + Json.Quote(id) + ",\"message\":\"The session is no longer available.\"}");
+                    return;
+                }
 
-            this.Log("info", "Administrator session created: " + title + " [" + id + ", " + shell.Label + "]");
-            client.Send("{\"type\":\"created\"," + session.SummaryJson().Substring(1));
+                this.sessions.TryAdd(id, session);
+                try
+                {
+                    session.AttachRemote(connection, reader, writer, Json.GetInt(started, "pid", 0));
+                }
+                catch
+                {
+                    TerminalSession removed;
+                    this.sessions.TryRemove(id, out removed);
+                    throw;
+                }
+                this.PublishSessionCreated(client, session, "Administrator session created: " + title + " [" + id + ", " + shell.Label + "]");
+            }
         }
 
         private void SendElevateError(BridgeClient client, string id, string message)
@@ -9663,87 +9884,481 @@ namespace MultiTerm.PowerShellBridge
             bool first = true;
             foreach (TerminalSession session in this.sessions.Values)
             {
-                if (session.Ephemeral) continue;
+                if (session.Ephemeral || !session.IsAvailable) continue;
                 if (!first)
                 {
                     builder.Append(",");
                 }
                 first = false;
-                builder.Append(session.SummaryJson());
+                builder.Append(this.SessionSummaryJson(session));
             }
             builder.Append("]");
             return builder.ToString();
         }
 
+        private string SessionSummaryJson(TerminalSession session)
+        {
+            long sequence = 0;
+            OutputReplayRing ring;
+            if (this.outputReplays.TryGetValue(session.Id, out ring))
+            {
+                lock (ring.Sync) { sequence = ring.Sequence; }
+            }
+            string summary = session.SummaryJson();
+            return summary.Substring(0, summary.Length - 1)
+                + ",\"outputSeq\":" + sequence.ToString(CultureInfo.InvariantCulture) + "}";
+        }
+
         private void Broadcast(string message)
         {
+            byte[] bytes = Encoding.UTF8.GetBytes(message);
             foreach (BridgeClient client in this.clients.Values)
             {
-                client.Send(message);
+                client.SendBytes(bytes);
             }
+        }
+
+        // Exactly 0 selects the legacy synchronous send; anything else is clamped.
+        private static int NormalizeClientBacklogKb(int requested)
+        {
+            if (requested == 0)
+            {
+                return 0;
+            }
+            return Math.Min(MaxClientBacklogKb, Math.Max(MinClientBacklogKb, requested));
         }
 
         private void Broadcast(string message, string excludedClientId)
         {
+            byte[] bytes = Encoding.UTF8.GetBytes(message);
             foreach (BridgeClient client in this.clients.Values)
             {
-                if (!String.Equals(client.Id, excludedClientId, StringComparison.Ordinal)) client.Send(message);
+                if (!String.Equals(client.Id, excludedClientId, StringComparison.Ordinal)) client.SendBytes(bytes);
             }
         }
 
         private void QueueSessionOutput(string id, string data)
         {
-            int delay = Volatile.Read(ref this.outputCoalesceMs);
-            if (delay <= 0)
+            this.outputCoalesceLock.EnterReadLock();
+            try
             {
-                this.BroadcastOutput(id, data);
-                return;
-            }
-
-            OutputBatch batch = this.outputBatches.GetOrAdd(id, delegate { return new OutputBatch(); });
-            lock (batch.Sync)
-            {
-                batch.Data.Append(data);
-                if (batch.Timer == null)
+                int delay = Volatile.Read(ref this.outputCoalesceMs);
+                if (delay <= 0)
                 {
-                    batch.Timer = new Timer(delegate { this.FlushSessionOutput(id); }, null, delay, Timeout.Infinite);
+                    this.BroadcastOutput(id, data);
+                    return;
                 }
+
+                OutputBatch batch = this.outputBatches.GetOrAdd(id, delegate { return new OutputBatch(); });
+                lock (batch.Sync)
+                {
+                    batch.Data.Append(data);
+                    if (batch.Timer == null)
+                    {
+                        batch.Timer = new Timer(delegate { this.FlushSessionOutput(id); }, null, delay, Timeout.Infinite);
+                    }
+                }
+            }
+            finally
+            {
+                this.outputCoalesceLock.ExitReadLock();
             }
         }
 
         private void FlushSessionOutput(string id)
         {
-            OutputBatch batch;
-            if (!this.outputBatches.TryGetValue(id, out batch))
+            lock (this.sessionCatalogLock)
             {
-                return;
-            }
+                OutputBatch batch;
+                if (!this.outputBatches.TryGetValue(id, out batch))
+                {
+                    return;
+                }
 
-            string data = null;
-            lock (batch.Sync)
-            {
-                if (batch.Timer != null)
+                string data = null;
+                lock (batch.Sync)
                 {
-                    batch.Timer.Dispose();
-                    batch.Timer = null;
+                    if (batch.Timer != null)
+                    {
+                        batch.Timer.Dispose();
+                        batch.Timer = null;
+                    }
+                    if (batch.Data.Length > 0)
+                    {
+                        data = batch.Data.ToString();
+                        batch.Data.Clear();
+                    }
                 }
-                if (batch.Data.Length > 0)
-                {
-                    data = batch.Data.ToString();
-                    batch.Data.Clear();
-                }
-            }
-            if (data != null)
-            {
-                this.BroadcastOutput(id, data);
+                if (data != null) this.BroadcastOutput(id, data);
             }
         }
 
         private void BroadcastOutput(string id, string data)
         {
-            TerminalSession session;
-            string message = "{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data) + "}";
-            if (this.sessions.TryGetValue(id, out session)) this.SendSessionFrame(session, message);
+            lock (this.sessionCatalogLock)
+            {
+                TerminalSession session;
+                if (!this.sessions.TryGetValue(id, out session))
+                {
+                    return;
+                }
+
+                OutputReplayRing ring = this.outputReplays.GetOrAdd(id, delegate { return new OutputReplayRing(); });
+                lock (ring.Sync)
+                {
+                    ring.Sequence += 1;
+                    this.RetainOutput(ring, ring.Sequence, data);
+                    string message = "{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data)
+                        + ",\"seq\":" + ring.Sequence.ToString(CultureInfo.InvariantCulture) + "}";
+                    this.SendOutputFrame(session, message);
+                }
+            }
+        }
+
+        private void SendOutputFrame(TerminalSession session, string message)
+        {
+            if (session.Ephemeral)
+            {
+                BridgeClient owner;
+                if (this.clients.TryGetValue(session.OwnerClientId, out owner)) owner.Send(message);
+                return;
+            }
+
+            byte[] bytes = Encoding.UTF8.GetBytes(message);
+            foreach (BridgeClient client in this.clients.Values)
+            {
+                if (!client.ShouldGateOutput(session.Id)) client.SendBytes(bytes);
+            }
+        }
+
+        private void RetainOutput(OutputReplayRing ring, long sequence, string data)
+        {
+            long limit = Volatile.Read(ref this.replayBufferKb) * 1024L;
+            long bytes = Encoding.UTF8.GetByteCount(data);
+            ring.Chunks.Enqueue(new OutputChunk(sequence, data, bytes));
+            ring.Bytes += bytes;
+            this.TrimReplayRing(ring, limit);
+        }
+
+        private void TrimReplayRing(OutputReplayRing ring, long limit)
+        {
+            while (ring.Bytes > limit && ring.Chunks.Count > 0)
+            {
+                OutputChunk dropped = ring.Chunks.Dequeue();
+                ring.Bytes -= dropped.Bytes;
+            }
+        }
+
+        private void TrimAllReplayRings()
+        {
+            long limit = Volatile.Read(ref this.replayBufferKb) * 1024L;
+            foreach (OutputReplayRing ring in this.outputReplays.Values)
+            {
+                lock (ring.Sync)
+                {
+                    this.TrimReplayRing(ring, limit);
+                }
+            }
+        }
+
+        // Exactly 0 retains nothing; anything else is clamped.
+        private static int NormalizeReplayBufferKb(int requested)
+        {
+            if (requested == 0)
+            {
+                return 0;
+            }
+            return Math.Min(MaxReplayBufferKb, Math.Max(MinReplayBufferKb, requested));
+        }
+
+        // Exactly 0 switches liveness sweeping off; anything else is clamped.
+        private static int NormalizeHeartbeatSeconds(int requested)
+        {
+            if (requested == 0)
+            {
+                return 0;
+            }
+            return Math.Min(MaxHeartbeatSeconds, Math.Max(MinHeartbeatSeconds, requested));
+        }
+
+        private static readonly string[] BridgeGlobalConfigFields = new string[]
+        {
+            "outputCoalesceMs", "bridgeClientBacklogKb", "bridgeReplayBufferKb", "bridgeHeartbeatSeconds",
+            "diagnosticRetentionDays", "diagnosticRotationMb", "diagnosticViewerEntries",
+            "copilotLogViewerEnabled", "copilotLogInitialTailKb", "copilotLogEnabledAt"
+        };
+
+        private static bool IsCompleteBridgeConfig(Dictionary<string, string> message)
+        {
+            foreach (string field in BridgeGlobalConfigFields)
+            {
+                if (!message.ContainsKey(field)) return false;
+            }
+            return true;
+        }
+
+        private string ActiveConfigJson(BridgeClient client)
+        {
+            return "{\"type\":\"config\",\"outputCoalesceMs\":" + this.outputCoalesceMs
+                + ",\"bridgeHeartbeatTimeoutSeconds\":" + (client.SendTimeoutMilliseconds / 1000).ToString(CultureInfo.InvariantCulture)
+                + ",\"bridgeClientBacklogKb\":" + Volatile.Read(ref this.clientBacklogKb).ToString(CultureInfo.InvariantCulture)
+                + ",\"bridgeReplayBufferKb\":" + Volatile.Read(ref this.replayBufferKb).ToString(CultureInfo.InvariantCulture)
+                + ",\"bridgeHeartbeatSeconds\":" + Volatile.Read(ref this.heartbeatSeconds).ToString(CultureInfo.InvariantCulture)
+                + ",\"diagnosticRetentionDays\":" + this.runtimeDiagnostics.RetentionDays.ToString(CultureInfo.InvariantCulture)
+                + ",\"diagnosticRotationMb\":" + this.runtimeDiagnostics.RotationMb.ToString(CultureInfo.InvariantCulture)
+                + ",\"diagnosticViewerEntries\":" + this.runtimeDiagnostics.ViewerEntries.ToString(CultureInfo.InvariantCulture)
+                + ",\"copilotLogViewerEnabled\":" + (this.copilotLogs.Enabled ? "true" : "false")
+                + ",\"copilotLogInitialTailKb\":" + this.copilotLogs.InitialTailKb.ToString(CultureInfo.InvariantCulture)
+                + ",\"copilotLogDirectory\":" + Json.Quote(this.copilotLogs.RootPath)
+                + ",\"configOwner\":" + (String.Equals(client.Id, this.configOwnerClientId, StringComparison.Ordinal) ? "true" : "false") + "}";
+        }
+
+        private void ApplyBridgeConfig(BridgeClient client, Dictionary<string, string> message)
+        {
+            this.SetOutputCoalesceMs(Json.GetInt(message, "outputCoalesceMs", 8));
+            int appliedBacklogKb = NormalizeClientBacklogKb(Json.GetInt(message, "bridgeClientBacklogKb", BridgeClient.DefaultBacklogKb));
+            Volatile.Write(ref this.clientBacklogKb, appliedBacklogKb);
+            foreach (BridgeClient peer in this.clients.Values)
+            {
+                peer.ConfigureBacklogLimitBytes(appliedBacklogKb * 1024L);
+            }
+            int appliedReplayKb = NormalizeReplayBufferKb(Json.GetInt(message, "bridgeReplayBufferKb", DefaultReplayBufferKb));
+            Volatile.Write(ref this.replayBufferKb, appliedReplayKb);
+            this.TrimAllReplayRings();
+            int appliedHeartbeatSeconds = NormalizeHeartbeatSeconds(Json.GetInt(message, "bridgeHeartbeatSeconds", DefaultHeartbeatSeconds));
+            Volatile.Write(ref this.heartbeatSeconds, appliedHeartbeatSeconds);
+            this.runtimeDiagnostics.Configure(message);
+            this.copilotLogs.Configure(message);
+            client.Send(this.ActiveConfigJson(client));
+        }
+
+        private void SetOutputCoalesceMs(int requested)
+        {
+            int next = Math.Min(100, Math.Max(0, requested));
+            this.outputCoalesceLock.EnterWriteLock();
+            try
+            {
+                if (next == 0 && this.outputCoalesceMs > 0)
+                {
+                    foreach (string sessionId in this.outputBatches.Keys) this.FlushSessionOutput(sessionId);
+                }
+                this.outputCoalesceMs = next;
+            }
+            finally
+            {
+                this.outputCoalesceLock.ExitWriteLock();
+            }
+        }
+
+        private void HandleBridgeConfig(BridgeClient client, Dictionary<string, string> message)
+        {
+            int requestedHeartbeatTimeout = Json.GetInt(message, "bridgeHeartbeatTimeoutSeconds", 30);
+            client.SendTimeoutMilliseconds = Math.Min(300, Math.Max(10, requestedHeartbeatTimeout)) * 1000;
+            if (!client.IsRenderer || !IsCompleteBridgeConfig(message))
+            {
+                client.Send(this.ActiveConfigJson(client));
+                return;
+            }
+
+            client.StoreDesiredConfig(message);
+            lock (this.configOwnerLock)
+            {
+                if (String.IsNullOrEmpty(this.configOwnerClientId)) this.configOwnerClientId = client.Id;
+                if (String.Equals(this.configOwnerClientId, client.Id, StringComparison.Ordinal))
+                {
+                    this.ApplyBridgeConfig(client, message);
+                }
+                else
+                {
+                    client.Send(this.ActiveConfigJson(client));
+                }
+            }
+        }
+
+        private static bool IsBetterConfigCandidate(BridgeClient candidate, BridgeClient current)
+        {
+            if (current == null) return true;
+            if (candidate.RendererVisible != current.RendererVisible) return candidate.RendererVisible;
+            if (candidate.RendererActiveAt != current.RendererActiveAt) return candidate.RendererActiveAt > current.RendererActiveAt;
+            return String.CompareOrdinal(candidate.Id, current.Id) < 0;
+        }
+
+        private void PromoteConfigOwner(string disconnectedClientId)
+        {
+            lock (this.configOwnerLock)
+            {
+                if (!String.Equals(this.configOwnerClientId, disconnectedClientId, StringComparison.Ordinal)) return;
+                this.configOwnerClientId = String.Empty;
+                BridgeClient next = null;
+                Dictionary<string, string> nextConfig = null;
+                foreach (BridgeClient candidate in this.clients.Values)
+                {
+                    if (!candidate.IsRenderer) continue;
+                    Dictionary<string, string> desired = candidate.GetDesiredConfig();
+                    if (desired == null || !IsCompleteBridgeConfig(desired)) continue;
+                    if (!IsBetterConfigCandidate(candidate, next)) continue;
+                    next = candidate;
+                    nextConfig = desired;
+                }
+                if (next == null) return;
+                this.configOwnerClientId = next.Id;
+                this.ApplyBridgeConfig(next, nextConfig);
+            }
+        }
+
+        private void StartClientLivenessSweep()
+        {
+            this.livenessTimer = new Timer(delegate { this.SweepClientLiveness(); }, null, 1000, 1000);
+        }
+
+        // Bridge-lifetime transport counters, small enough to sit on /health and the
+        // only way to tell "quiet" apart from "quietly dropping clients".
+        private long forcedDisconnects;
+        private long outputGaps;
+        private long replayedBytes;
+
+        private string TransportSnapshotJson()
+        {
+            long queuedBytes = 0;
+            long queueHighWaterMark = 0;
+            long heartbeatRttMs = 0;
+            int clientCount = 0;
+            foreach (BridgeClient client in this.clients.Values)
+            {
+                clientCount++;
+                queuedBytes += client.QueuedBytes;
+                queueHighWaterMark = Math.Max(queueHighWaterMark, client.QueueHighWaterMark);
+                heartbeatRttMs = Math.Max(heartbeatRttMs, client.HeartbeatRttMs);
+            }
+
+            return "{\"clients\":" + clientCount.ToString(CultureInfo.InvariantCulture)
+                + ",\"queuedBytes\":" + queuedBytes.ToString(CultureInfo.InvariantCulture)
+                + ",\"queueHighWaterMarkBytes\":" + queueHighWaterMark.ToString(CultureInfo.InvariantCulture)
+                + ",\"heartbeatRttMs\":" + heartbeatRttMs.ToString(CultureInfo.InvariantCulture)
+                + ",\"replayedBytes\":" + Interlocked.Read(ref this.replayedBytes).ToString(CultureInfo.InvariantCulture)
+                + ",\"outputGaps\":" + Interlocked.Read(ref this.outputGaps).ToString(CultureInfo.InvariantCulture)
+                + ",\"forcedDisconnects\":" + Interlocked.Read(ref this.forcedDisconnects).ToString(CultureInfo.InvariantCulture) + "}";
+        }
+
+        private void StopClientLivenessSweep()
+        {
+            Timer timer = this.livenessTimer;
+            this.livenessTimer = null;
+            if (timer != null) timer.Dispose();
+        }
+
+        /// <summary>
+        /// The server WebSocket API does not surface control-frame pongs, so renderer
+        /// liveness is proven with an application-level probe the renderer answers.
+        /// Only renderers are swept: an automation client may legitimately sit idle,
+        /// and it never agreed to answer probes.
+        /// </summary>
+        internal int SweepClientLiveness(DateTime? nowUtc = null)
+        {
+            int interval = Volatile.Read(ref this.heartbeatSeconds);
+            if (interval <= 0)
+            {
+                return 0;
+            }
+
+            DateTime now = nowUtc.HasValue ? nowUtc.Value : DateTime.UtcNow;
+            long windowTicks = TimeSpan.FromSeconds(interval).Ticks;
+            int removed = 0;
+
+            foreach (BridgeClient client in this.clients.Values)
+            {
+                if (!client.IsRenderer) continue;
+
+                if (client.TryClaimExpiredLivenessProbe(now.Ticks, windowTicks))
+                {
+                    this.Log("warn", "Dropping renderer " + client.Id + ": no heartbeat answer within " + interval + "s.");
+                    BridgeClient dropped;
+                    this.clients.TryRemove(client.Id, out dropped);
+                    client.Close();
+                    if (client.TryCountForcedDisconnect()) Interlocked.Increment(ref this.forcedDisconnects);
+                    removed++;
+                    continue;
+                }
+
+                if (client.HasRecentReceive(now.Ticks, windowTicks)) continue;
+                client.SendLivenessProbe("{\"type\":\"heartbeat\",\"nonce\":" + Json.Quote("probe-" + Guid.NewGuid().ToString("N")) + "}");
+            }
+
+            return removed;
+        }
+
+        // A reconnecting renderer reports the last sequence it saw and is handed a
+        // COMPLETE retained suffix or an explicit gap, never a partial screen.
+        private void ResumeSessionOutput(BridgeClient client, Dictionary<string, string> message)
+        {
+            string id = Json.Get(message, "id");
+            if (client.HasSeenSessionExit(id)) return;
+
+            // Anything still in the coalescing buffer belongs in the ring before the
+            // suffix is computed, or the replay would silently omit it.
+            this.FlushSessionOutput(id);
+
+            lock (this.sessionCatalogLock)
+            {
+                if (client.HasSeenSessionExit(id)) return;
+                TerminalSession session;
+                if (!this.sessions.TryGetValue(id, out session) || !this.CanAccessSession(client, session))
+                {
+                    client.Send("{\"type\":\"outputGap\",\"id\":" + Json.Quote(id)
+                        + ",\"reason\":\"unknown-session\",\"expected\":0,\"available\":0,\"seq\":0}");
+                    client.CompleteOutputResume(id);
+                    return;
+                }
+
+                long lastSeq;
+                if (!Int64.TryParse(Json.Get(message, "lastSeq"), NumberStyles.Integer, CultureInfo.InvariantCulture, out lastSeq) || lastSeq < 0)
+                {
+                    lastSeq = 0;
+                }
+
+                OutputReplayRing ring = this.outputReplays.GetOrAdd(id, delegate { return new OutputReplayRing(); });
+                lock (ring.Sync)
+                {
+                    long current = ring.Sequence;
+                    if (lastSeq >= current)
+                    {
+                        client.Send("{\"type\":\"outputResumed\",\"id\":" + Json.Quote(id)
+                            + ",\"seq\":" + current.ToString(CultureInfo.InvariantCulture) + ",\"replayedBytes\":0}");
+                        client.CompleteOutputResume(id);
+                        return;
+                    }
+
+                    long oldest = current + 1;
+                    StringBuilder builder = new StringBuilder();
+                    foreach (OutputChunk chunk in ring.Chunks)
+                    {
+                        if (chunk.Sequence < oldest) oldest = chunk.Sequence;
+                        if (chunk.Sequence > lastSeq) builder.Append(chunk.Data);
+                    }
+
+                    if (oldest > lastSeq + 1)
+                    {
+                        Interlocked.Increment(ref this.outputGaps);
+                        this.Log("warn", "Session " + id + " lost output " + (lastSeq + 1) + "-" + (oldest - 1) + " before a client could resume.");
+                        client.Send("{\"type\":\"outputGap\",\"id\":" + Json.Quote(id)
+                            + ",\"reason\":\"retention\",\"expected\":" + (lastSeq + 1).ToString(CultureInfo.InvariantCulture)
+                            + ",\"available\":" + oldest.ToString(CultureInfo.InvariantCulture)
+                            + ",\"seq\":" + current.ToString(CultureInfo.InvariantCulture) + "}");
+                        client.CompleteOutputResume(id);
+                        return;
+                    }
+
+                    string data = builder.ToString();
+                    int replayed = Encoding.UTF8.GetByteCount(data);
+                    Interlocked.Add(ref this.replayedBytes, replayed);
+                    client.Send("{\"type\":\"output\",\"id\":" + Json.Quote(id) + ",\"stream\":\"pty\",\"data\":" + Json.Quote(data)
+                        + ",\"seq\":" + current.ToString(CultureInfo.InvariantCulture) + ",\"replay\":true}");
+                    client.Send("{\"type\":\"outputResumed\",\"id\":" + Json.Quote(id)
+                        + ",\"seq\":" + current.ToString(CultureInfo.InvariantCulture)
+                        + ",\"replayedBytes\":" + replayed.ToString(CultureInfo.InvariantCulture) + "}");
+                    client.CompleteOutputResume(id);
+                }
+            }
         }
 
         private void SendSessionFrame(TerminalSession session, string message)
@@ -9757,8 +10372,46 @@ namespace MultiTerm.PowerShellBridge
             if (this.clients.TryGetValue(session.OwnerClientId, out owner)) owner.Send(message);
         }
 
+        private void SendSessionExitFrame(TerminalSession session, string message)
+        {
+            if (session.Ephemeral)
+            {
+                BridgeClient owner;
+                if (this.clients.TryGetValue(session.OwnerClientId, out owner))
+                {
+                    owner.MarkSessionExited(session.Id);
+                    owner.Send(message);
+                }
+                return;
+            }
+
+            OutputReplayRing ring = this.outputReplays.GetOrAdd(session.Id, delegate { return new OutputReplayRing(); });
+            lock (ring.Sync)
+            {
+                long oldest = ring.Chunks.Count > 0 ? ring.Chunks.Peek().Sequence : ring.Sequence + 1;
+                byte[] exitBytes = Encoding.UTF8.GetBytes(message);
+                byte[] gapBytes = Encoding.UTF8.GetBytes("{\"type\":\"outputGap\",\"id\":" + Json.Quote(session.Id)
+                    + ",\"reason\":\"session-exited\",\"expected\":0,\"available\":" + oldest.ToString(CultureInfo.InvariantCulture)
+                    + ",\"seq\":" + ring.Sequence.ToString(CultureInfo.InvariantCulture) + "}");
+                foreach (BridgeClient client in this.clients.Values)
+                {
+                    if (client.ShouldGateOutput(session.Id))
+                    {
+                        Interlocked.Increment(ref this.outputGaps);
+                        client.SendBytes(gapBytes);
+                        client.CompleteOutputResume(session.Id);
+                    }
+                    client.MarkSessionExited(session.Id);
+                    client.SendBytes(exitBytes);
+                }
+            }
+        }
+
         private void RemoveSessionOutputBatch(string id)
         {
+            OutputReplayRing ring;
+            this.outputReplays.TryRemove(id, out ring);
+
             OutputBatch batch;
             if (!this.outputBatches.TryRemove(id, out batch))
             {
@@ -10030,16 +10683,59 @@ namespace MultiTerm.PowerShellBridge
         }
     }
 
+    internal sealed class OutboundFrame
+    {
+        public OutboundFrame(byte[] bytes, TaskCompletionSource<bool> completion, bool livenessProbe)
+        {
+            this.Bytes = bytes;
+            this.Completion = completion;
+            this.LivenessProbe = livenessProbe;
+        }
+
+        public byte[] Bytes { get; private set; }
+
+        // Non-null only for the call sites that must not release pending work
+        // until the bytes have really reached the peer.
+        public TaskCompletionSource<bool> Completion { get; private set; }
+
+        public bool LivenessProbe { get; private set; }
+    }
+
     internal sealed class BridgeClient
     {
         private readonly object sendLock = new object();
+        private readonly object queueLock = new object();
+        private readonly object configLock = new object();
+        private readonly object resumeLock = new object();
+        private readonly ReaderWriterLockSlim modeLock = new ReaderWriterLockSlim();
+        private readonly HashSet<string> pendingOutputResumes = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> exitedSessions = new HashSet<string>(StringComparer.Ordinal);
+        private Dictionary<string, string> desiredConfig;
+        private readonly Queue<OutboundFrame> queue = new Queue<OutboundFrame>();
+        private readonly SemaphoreSlim signal = new SemaphoreSlim(0);
+        private bool writerStarted;
+        private bool writerStopped;
+        private bool writerRetireRequested;
+        private bool livenessProbeQueued;
+        private bool livenessProbeAnswered;
+        private bool closing;
+        private int forcedDisconnectCounted;
+        private Task writerTask;
+        private long queuedBytes;
+        private long queueHighWaterMark;
 
         public BridgeClient(string id, WebSocket socket)
         {
             this.Id = id;
             this.Socket = socket;
             this.SendTimeoutMilliseconds = 30000;
+            this.BacklogLimitBytes = DefaultBacklogKb * 1024L;
+            this.DropReason = "";
+            this.LastReceiveAt = DateTime.UtcNow.Ticks;
         }
+
+        // Mirrors the Node bridge: 0 selects the legacy synchronous send.
+        public const int DefaultBacklogKb = 4096;
 
         public string Id { get; private set; }
 
@@ -10053,14 +10749,428 @@ namespace MultiTerm.PowerShellBridge
 
         public int SendTimeoutMilliseconds { get; set; }
 
+        public long BacklogLimitBytes { get; private set; }
+
+        // Liveness is judged on what the peer actually sent. A successful send
+        // proves nothing: a half-open socket accepts bytes indefinitely.
+        public long LastReceiveAt { get; set; }
+
+        public long LastSendCompletedAt { get; set; }
+
+        public long LivenessProbeSentAt { get; set; }
+
+        public long HeartbeatRttMs { get; set; }
+
+        public bool ForcedDrop { get; private set; }
+
+        public string DropReason { get; private set; }
+
+        public void StoreDesiredConfig(Dictionary<string, string> value)
+        {
+            lock (this.configLock)
+            {
+                this.desiredConfig = new Dictionary<string, string>(value, StringComparer.Ordinal);
+            }
+        }
+
+        public Dictionary<string, string> GetDesiredConfig()
+        {
+            lock (this.configLock)
+            {
+                return this.desiredConfig == null
+                    ? null
+                    : new Dictionary<string, string>(this.desiredConfig, StringComparer.Ordinal);
+            }
+        }
+
+        public void InitializeOutputResumes(IEnumerable<string> sessionIds)
+        {
+            lock (this.resumeLock)
+            {
+                this.pendingOutputResumes.Clear();
+                foreach (string sessionId in sessionIds)
+                {
+                    this.exitedSessions.Remove(sessionId);
+                    this.pendingOutputResumes.Add(sessionId);
+                }
+            }
+        }
+
+        public void BeginOutputResume(string sessionId)
+        {
+            lock (this.resumeLock)
+            {
+                this.exitedSessions.Remove(sessionId);
+                this.pendingOutputResumes.Add(sessionId);
+            }
+        }
+
+        public void ForgetSessionExit(string sessionId)
+        {
+            lock (this.resumeLock) { this.exitedSessions.Remove(sessionId); }
+        }
+
+        public bool ShouldGateOutput(string sessionId)
+        {
+            lock (this.resumeLock) { return this.pendingOutputResumes.Contains(sessionId); }
+        }
+
+        public void CompleteOutputResume(string sessionId)
+        {
+            lock (this.resumeLock) { this.pendingOutputResumes.Remove(sessionId); }
+        }
+
+        public void MarkSessionExited(string sessionId)
+        {
+            lock (this.resumeLock)
+            {
+                this.pendingOutputResumes.Remove(sessionId);
+                this.exitedSessions.Add(sessionId);
+            }
+        }
+
+        public bool HasSeenSessionExit(string sessionId)
+        {
+            lock (this.resumeLock) { return this.exitedSessions.Contains(sessionId); }
+        }
+
+        public long QueuedBytes
+        {
+            get { lock (this.queueLock) { return this.queuedBytes; } }
+        }
+
+        public long QueueHighWaterMark
+        {
+            get { lock (this.queueLock) { return this.queueHighWaterMark; } }
+        }
+
+        public bool ConfigureBacklogLimitBytes(long value)
+        {
+            this.modeLock.EnterWriteLock();
+            try
+            {
+                if (value > 0)
+                {
+                    lock (this.queueLock)
+                    {
+                        this.BacklogLimitBytes = value;
+                        this.writerRetireRequested = false;
+                    }
+                    return true;
+                }
+
+                Task activeWriter;
+                lock (this.queueLock)
+                {
+                    this.writerRetireRequested = true;
+                    activeWriter = this.writerTask;
+                    if (activeWriter == null)
+                    {
+                        this.BacklogLimitBytes = 0;
+                        this.writerRetireRequested = false;
+                        return true;
+                    }
+                }
+
+                this.signal.Release();
+                try
+                {
+                    if (activeWriter.Wait(this.SendTimeoutMilliseconds)) return true;
+                }
+                catch { }
+
+                this.StopWriter("could not retire queued writer for legacy send mode");
+                return false;
+            }
+            finally
+            {
+                this.modeLock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>Accepts a message for delivery. True means queued, not delivered.</summary>
         public bool Send(string message)
+        {
+            return this.Enqueue(Encoding.UTF8.GetBytes(message), null, false);
+        }
+
+        /// <summary>Accepts bytes a caller already encoded once for the whole fan-out.</summary>
+        public bool SendBytes(byte[] bytes)
+        {
+            return this.Enqueue(bytes, null, false);
+        }
+
+        public bool SendLivenessProbe(string message)
+        {
+            lock (this.queueLock)
+            {
+                if (this.livenessProbeQueued || this.LivenessProbeSentAt > 0) return true;
+                this.livenessProbeQueued = true;
+            }
+            bool accepted = this.Enqueue(Encoding.UTF8.GetBytes(message), null, true);
+            if (!accepted)
+            {
+                lock (this.queueLock) { this.livenessProbeQueued = false; }
+            }
+            return accepted;
+        }
+
+        private void PublishLivenessProbeDelivery(bool delivered)
+        {
+            lock (this.queueLock)
+            {
+                this.livenessProbeQueued = false;
+                if (delivered && !this.livenessProbeAnswered)
+                {
+                    this.LivenessProbeSentAt = DateTime.UtcNow.Ticks;
+                }
+                else
+                {
+                    this.LivenessProbeSentAt = 0;
+                }
+                this.livenessProbeAnswered = false;
+            }
+        }
+
+        public void RecordReceiveComplete(long receivedAt, bool heartbeatReply)
+        {
+            lock (this.queueLock)
+            {
+                this.LastReceiveAt = receivedAt;
+                if (this.LivenessProbeSentAt > 0)
+                {
+                    if (heartbeatReply)
+                    {
+                        long elapsedTicks = receivedAt - this.LivenessProbeSentAt;
+                        this.HeartbeatRttMs = Math.Max(1, (elapsedTicks + TimeSpan.TicksPerMillisecond - 1) / TimeSpan.TicksPerMillisecond);
+                    }
+                    this.LivenessProbeSentAt = 0;
+                }
+                if (this.livenessProbeQueued) this.livenessProbeAnswered = true;
+            }
+        }
+
+        public bool HasRecentReceive(long nowTicks, long windowTicks)
+        {
+            lock (this.queueLock) { return nowTicks - this.LastReceiveAt < windowTicks; }
+        }
+
+        public bool TryClaimExpiredLivenessProbe(long nowTicks, long windowTicks)
+        {
+            lock (this.queueLock)
+            {
+                if (this.LivenessProbeSentAt <= 0 || nowTicks - this.LivenessProbeSentAt < windowTicks) return false;
+                this.LivenessProbeSentAt = 0;
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// True only after the peer really received the message. Welcome, openFolder
+        /// and openTerminal remove pending work on this result, so "accepted into
+        /// memory" is not good enough for them.
+        /// </summary>
+        public bool SendAcknowledged(string message)
+        {
+            return this.WaitForAcknowledged(this.SendAcknowledgedAsync(message));
+        }
+
+        public Task<bool> SendAcknowledgedAsync(string message)
+        {
+            TaskCompletionSource<bool> completion = new TaskCompletionSource<bool>();
+            if (!this.Enqueue(Encoding.UTF8.GetBytes(message), completion, false))
+            {
+                completion.TrySetResult(false);
+            }
+            return completion.Task;
+        }
+
+        public bool WaitForAcknowledged(Task<bool> delivery)
+        {
+            try
+            {
+                if (!delivery.Wait(this.SendTimeoutMilliseconds))
+                {
+                    this.StopWriter("acknowledged send exceeded the delivery deadline");
+                    return delivery.GetAwaiter().GetResult();
+                }
+                return delivery.Status == TaskStatus.RanToCompletion && delivery.Result;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool Enqueue(byte[] bytes, TaskCompletionSource<bool> completion, bool livenessProbe)
+        {
+            this.modeLock.EnterReadLock();
+            try
+            {
+                bool synchronous = false;
+                lock (this.queueLock)
+                {
+                    if (this.BacklogLimitBytes <= 0)
+                    {
+                        synchronous = true;
+                    }
+                    else
+                    {
+                        if (this.writerStopped || this.Socket.State != WebSocketState.Open)
+                        {
+                            return false;
+                        }
+                        // PTY bytes are never selectively discarded: removing an arbitrary
+                        // frame can strip an ANSI mode or cursor sequence and desynchronize
+                        // xterm permanently. The whole connection goes instead.
+                        if (this.queuedBytes + bytes.Length > this.BacklogLimitBytes)
+                        {
+                            this.StopWriter("queued output reached the "
+                                + (this.BacklogLimitBytes / 1024L).ToString(CultureInfo.InvariantCulture) + " KB ceiling");
+                            return false;
+                        }
+                        this.queue.Enqueue(new OutboundFrame(bytes, completion, livenessProbe));
+                        this.queuedBytes += bytes.Length;
+                        if (this.queuedBytes > this.queueHighWaterMark) this.queueHighWaterMark = this.queuedBytes;
+                        this.EnsureWriter();
+                    }
+                }
+
+                if (synchronous)
+                {
+                    bool delivered = this.SendSynchronously(bytes);
+                    if (livenessProbe) this.PublishLivenessProbeDelivery(delivered);
+                    if (completion != null) completion.TrySetResult(delivered);
+                    return delivered;
+                }
+
+                this.signal.Release();
+                return true;
+            }
+            finally
+            {
+                this.modeLock.ExitReadLock();
+            }
+        }
+
+        private void EnsureWriter()
+        {
+            if (this.writerStarted)
+            {
+                return;
+            }
+            this.writerStarted = true;
+            // A dedicated thread, not a pool thread: the loop parks on the signal
+            // and one wedged client must never consume a pool slot the other
+            // clients' sessions need.
+            this.writerTask = Task.Factory.StartNew(new Action(this.WriteLoop), TaskCreationOptions.LongRunning);
+        }
+
+        // Exactly one writer per client, so per-client ordering cannot invert the
+        // way concurrent flush timers could when every caller sent inline.
+        private void WriteLoop()
+        {
+            while (true)
+            {
+                this.signal.Wait();
+                OutboundFrame frame = null;
+                lock (this.queueLock)
+                {
+                    if (this.writerStopped) break;
+                    if (this.queue.Count > 0)
+                    {
+                        frame = this.queue.Dequeue();
+                        this.queuedBytes -= frame.Bytes.Length;
+                    }
+                    else if (this.writerRetireRequested)
+                    {
+                        this.BacklogLimitBytes = 0;
+                        this.writerRetireRequested = false;
+                        this.writerStarted = false;
+                        this.writerTask = null;
+                        break;
+                    }
+                }
+
+                if (frame == null) continue;
+
+                bool delivered = this.WriteFrame(frame);
+                if (frame.LivenessProbe) this.PublishLivenessProbeDelivery(delivered);
+                if (!delivered)
+                {
+                    this.StopWriter("send failed or exceeded the "
+                        + this.SendTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + " ms deadline");
+                    break;
+                }
+            }
+
+            this.FailPendingFrames();
+        }
+
+        private bool WriteFrame(OutboundFrame frame)
+        {
+            lock (this.sendLock)
+            {
+                try
+                {
+                    using (CancellationTokenSource timeout = new CancellationTokenSource(this.SendTimeoutMilliseconds))
+                    {
+                        this.Socket.SendAsync(new ArraySegment<byte>(frame.Bytes), WebSocketMessageType.Text, true, timeout.Token).GetAwaiter().GetResult();
+                    }
+                    this.LastSendCompletedAt = DateTime.UtcNow.Ticks;
+                    if (frame.Completion != null) frame.Completion.TrySetResult(true);
+                    return true;
+                }
+                catch
+                {
+                    // A cancelled send leaves the socket owning an unfinished write, so
+                    // waiting on it again would hang this client's writer forever.
+                    try { this.Socket.Abort(); }
+                    catch { }
+                    if (frame.Completion != null) frame.Completion.TrySetResult(false);
+                    return false;
+                }
+            }
+        }
+
+        private void StopWriter(string reason)
+        {
+            lock (this.queueLock)
+            {
+                if (this.writerStopped) return;
+                this.writerStopped = true;
+                this.DropReason = reason;
+                // An ordinary Close() also stops the writer; only a ceiling breach or
+                // a missed send deadline counts as the bridge forcing the client out.
+                this.ForcedDrop = !this.closing;
+            }
+            try { this.Socket.Abort(); }
+            catch { }
+            this.signal.Release();
+        }
+
+        private void FailPendingFrames()
+        {
+            lock (this.queueLock)
+            {
+                while (this.queue.Count > 0)
+                {
+                    OutboundFrame pending = this.queue.Dequeue();
+                    if (pending.Completion != null) pending.Completion.TrySetResult(false);
+                }
+                this.queuedBytes = 0;
+            }
+        }
+
+        // The pre-queue behaviour, kept reachable so a field regression in the
+        // writer can be escaped from the UI without a rollback build.
+        private bool SendSynchronously(byte[] bytes)
         {
             if (this.Socket.State != WebSocketState.Open)
             {
                 return false;
             }
 
-            byte[] bytes = Encoding.UTF8.GetBytes(message);
             lock (this.sendLock)
             {
                 if (this.Socket.State != WebSocketState.Open)
@@ -10084,6 +11194,10 @@ namespace MultiTerm.PowerShellBridge
 
         public void Close()
         {
+            this.closing = true;
+            this.StopWriter("client closed");
+            this.FailPendingFrames();
+
             try
             {
                 if (this.Socket.State == WebSocketState.Open || this.Socket.State == WebSocketState.CloseReceived)
@@ -10094,6 +11208,11 @@ namespace MultiTerm.PowerShellBridge
             catch { }
 
             try { this.Socket.Dispose(); } catch { }
+        }
+
+        public bool TryCountForcedDisconnect()
+        {
+            return Interlocked.CompareExchange(ref this.forcedDisconnectCounted, 1, 0) == 0;
         }
     }
 
@@ -10257,6 +11376,7 @@ namespace MultiTerm.PowerShellBridge
         private readonly object handleLock = new object();
         private FileStream inputStream;
         private FileStream outputStream;
+        private Task outputTask;
         private IntPtr pseudoConsole = IntPtr.Zero;
         private IntPtr processHandle = IntPtr.Zero;
         private IntPtr threadHandle = IntPtr.Zero;
@@ -10879,10 +11999,10 @@ namespace MultiTerm.PowerShellBridge
 
         private void StartOutputLoop()
         {
-            Task.Run(delegate
+            this.outputTask = Task.Run(delegate
             {
                 byte[] buffer = new byte[8192];
-                while (!this.exited)
+                while (true)
                 {
                     int count;
                     try
@@ -10923,6 +12043,9 @@ namespace MultiTerm.PowerShellBridge
                 }
 
                 this.exited = true;
+                this.ClosePseudoConsoleForOutputDrain();
+                Task output = this.outputTask;
+                try { if (output != null) output.GetAwaiter().GetResult(); } catch { }
                 this.DisposeHandles();
                 this.StopLog();
                 Action<int> handler = this.Exited;
@@ -10931,6 +12054,21 @@ namespace MultiTerm.PowerShellBridge
                     handler(unchecked((int)exitCode));
                 }
             });
+        }
+
+        private void ClosePseudoConsoleForOutputDrain()
+        {
+            IntPtr consoleToClose;
+            lock (this.handleLock)
+            {
+                consoleToClose = this.pseudoConsole;
+                this.pseudoConsole = IntPtr.Zero;
+            }
+            lock (this.inputLock)
+            {
+                try { if (this.inputStream != null) this.inputStream.Dispose(); } catch { }
+            }
+            if (consoleToClose != IntPtr.Zero) CloseConsoleSerialized(consoleToClose);
         }
 
         private void DisposeHandles()

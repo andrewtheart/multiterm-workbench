@@ -47,11 +47,92 @@ test.describe("MultiTerm Workbench UI", () => {
     await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.waitForFunction(() => Boolean(state.bridgeId));
     await page.evaluate(() => {
       closeAllTerminals();
       addTerminal();
     });
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
+  });
+
+  test("shifts the top fields left and customizes the New terminal button color", async () => {
+    const originalViewport = page.viewportSize();
+    const originalColor = await page.evaluate(() => state.settings.addTerminalButtonColor);
+    try {
+      await page.setViewportSize({ width: 1600, height: 900 });
+      const geometry = await page.evaluate(() => {
+        const rect = (selector) => {
+          const bounds = document.querySelector(selector).getBoundingClientRect();
+          return { bottom: bounds.bottom, height: bounds.height, left: bounds.left, right: bounds.right, top: bounds.top, width: bounds.width };
+        };
+        const icons = [...document.querySelectorAll(".topbar .action-cluster > .icon-button")].map((button) => {
+          const style = getComputedStyle(button);
+          const bounds = button.getBoundingClientRect();
+          return { background: style.backgroundColor, border: style.borderTopWidth, height: bounds.height, width: bounds.width };
+        });
+        return {
+          brand: rect(".brand"),
+          fields: [rect(".shell-field"), rect(".cwd-field"), rect(".search-field")],
+          icons
+        };
+      });
+      expect(geometry.fields[0].left - geometry.brand.right).toBeLessThan(18);
+      expect(geometry.fields[0].left).toBeGreaterThanOrEqual(geometry.brand.right);
+      expect(geometry.icons.every((icon) => icon.width === 40 && icon.height === 40)).toBe(true);
+      expect(geometry.icons.every((icon) => icon.border === "0px" && icon.background === "rgba(0, 0, 0, 0)")).toBe(true);
+
+      await expect(page.locator("#addTerminal")).toHaveCSS("background-color", "rgb(22, 119, 255)");
+      await page.locator("#addTerminal").click({ button: "right" });
+      const colorAction = page.getByRole("menuitem", { name: "Change button color…", exact: true });
+      await expect(colorAction).toBeVisible();
+      await colorAction.click();
+      const flyout = page.locator("#addTerminalColorFlyout");
+      await expect(flyout).toBeVisible();
+      await expect(page.locator("#addTerminalColorPlane")).toBeFocused();
+      const containment = await flyout.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { bottom: bounds.bottom, left: bounds.left, right: bounds.right, top: bounds.top, viewportHeight: innerHeight, viewportWidth: innerWidth };
+      });
+      expect(containment.left).toBeGreaterThanOrEqual(0);
+      expect(containment.top).toBeGreaterThanOrEqual(0);
+      expect(containment.right).toBeLessThanOrEqual(containment.viewportWidth);
+      expect(containment.bottom).toBeLessThanOrEqual(containment.viewportHeight);
+
+      await page.locator("#addTerminalColorHex").fill("#12AB34");
+      await expect(page.locator("#addTerminal")).toHaveCSS("background-color", "rgb(18, 171, 52)");
+      expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).addTerminalButtonColor)).toBe("#12AB34");
+      await page.locator("#addTerminalColorReset").click();
+      await expect(page.locator("#addTerminal")).toHaveCSS("background-color", "rgb(22, 119, 255)");
+
+      for (const viewport of [{ width: 1100, height: 760 }, { width: 390, height: 844 }]) {
+        await page.setViewportSize(viewport);
+        const responsive = await page.evaluate(() => {
+          const topbar = document.querySelector(".topbar").getBoundingClientRect();
+          const fields = [...document.querySelectorAll(".shell-field, .cwd-field, .search-field")]
+            .map((field) => field.getBoundingClientRect());
+          const visibleActions = [...document.querySelectorAll(".action-cluster > button")]
+            .filter((button) => getComputedStyle(button).display !== "none")
+            .map((button) => button.getBoundingClientRect());
+          return {
+            actionsInside: visibleActions.every((bounds) => bounds.left >= topbar.left + 1 && bounds.right <= topbar.right - 1),
+            fieldsInside: fields.every((bounds) => bounds.left >= topbar.left + 1 && bounds.right <= topbar.right - 1),
+            scrollWidth: document.documentElement.scrollWidth,
+            viewportWidth: innerWidth
+          };
+        });
+        expect(responsive.actionsInside).toBe(true);
+        expect(responsive.fieldsInside).toBe(true);
+        expect(responsive.scrollWidth).toBe(responsive.viewportWidth);
+      }
+    } finally {
+      await page.setViewportSize(originalViewport);
+      await page.evaluate((color) => {
+        state.settings.addTerminalButtonColor = color;
+        applySettings();
+        saveSettings();
+        closeAddTerminalColorFlyout();
+      }, originalColor);
+    }
   });
 
   test.afterAll(async () => {
@@ -538,6 +619,75 @@ test.describe("MultiTerm Workbench UI", () => {
     expect(typography.settingsTransform).toBe("uppercase");
     expect(typography.statusSize).toBe("12px");
     expect(typography.terminalSize).toBe(14);
+  });
+
+  test("shows each top-bar action tooltip in the reserved description lane", async () => {
+    const topbar = page.locator(".topbar");
+    const description = page.locator("#topBarActionDescription");
+    const about = page.locator("#aboutToggle");
+    const shortcuts = page.locator("#helpToggle");
+    const initialHeight = await topbar.evaluate((element) => element.getBoundingClientRect().height);
+    expect(initialHeight).toBeGreaterThanOrEqual(90);
+    await expect(description).toBeHidden();
+
+    const inspect = async (control) => {
+      await control.hover();
+      await expect(description).toBeVisible();
+      await expect(description).toHaveText(await control.getAttribute("title"));
+      return page.evaluate(({ controlSelector }) => {
+        const controlRect = document.querySelector(controlSelector).getBoundingClientRect();
+        const descriptionRect = document.querySelector("#topBarActionDescription").getBoundingClientRect();
+        const topbarRect = document.querySelector(".topbar").getBoundingClientRect();
+        return {
+          controlCenter: controlRect.left + controlRect.width / 2,
+          descriptionCenter: descriptionRect.left + descriptionRect.width / 2,
+          descriptionBottom: descriptionRect.bottom,
+          topbarBottom: topbarRect.bottom,
+          left: descriptionRect.left,
+          right: descriptionRect.right,
+          width: descriptionRect.width,
+          topbarWidth: topbarRect.width,
+          viewportWidth: window.innerWidth
+        };
+      }, { controlSelector: `#${await control.getAttribute("id")}` });
+    };
+
+    const aboutGeometry = await inspect(about);
+    const shortcutGeometry = await inspect(shortcuts);
+    expect(Math.abs(aboutGeometry.descriptionCenter - aboutGeometry.controlCenter)).toBeLessThan(2);
+    expect(Math.abs(shortcutGeometry.descriptionCenter - shortcutGeometry.controlCenter)).toBeLessThan(2);
+    expect(shortcutGeometry.descriptionCenter).toBeGreaterThan(aboutGeometry.descriptionCenter);
+    expect(shortcutGeometry.left).toBeGreaterThanOrEqual(8);
+    expect(shortcutGeometry.right).toBeLessThanOrEqual(shortcutGeometry.viewportWidth - 8);
+    expect(shortcutGeometry.width).toBeLessThan(shortcutGeometry.topbarWidth);
+    expect(shortcutGeometry.descriptionBottom).toBeLessThan(shortcutGeometry.topbarBottom);
+    expect(await topbar.evaluate((element) => element.getBoundingClientRect().height)).toBe(initialHeight);
+
+    await page.locator(".brand").hover();
+    await expect(description).toBeHidden();
+    await shortcuts.focus();
+    await expect(description).toHaveText(await shortcuts.getAttribute("title"));
+    await page.locator("#cwdInput").focus();
+    await expect(description).toBeHidden();
+    expect(await topbar.evaluate((element) => element.getBoundingClientRect().height)).toBe(initialHeight);
+
+    const originalViewport = page.viewportSize();
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobile = await page.evaluate(() => {
+      showTopBarActionDescription(document.querySelector("#aboutToggle"));
+      const descriptionRect = document.querySelector("#topBarActionDescription").getBoundingClientRect();
+      return {
+        left: descriptionRect.left,
+        right: descriptionRect.right,
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth
+      };
+    });
+    expect(mobile.left).toBeGreaterThanOrEqual(8);
+    expect(mobile.right).toBeLessThanOrEqual(382);
+    expect(mobile.scrollWidth).toBe(mobile.clientWidth);
+    await page.evaluate(() => hideTopBarActionDescription(document.querySelector("#aboutToggle")));
+    await page.setViewportSize(originalViewport);
   });
 
   test("status-bar font zoom buttons adjust font size", async () => {

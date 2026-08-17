@@ -100,6 +100,7 @@ function fakeClient() {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  server.__resetConfigOwnership();
   server.sessions.clear();
   server.clients.clear();
 });
@@ -293,6 +294,7 @@ describe("toSessionSummary", () => {
       cols: 80,
       cwd: "/tmp",
       id: "id1",
+      outputSeq: 0,
       pid: 4242,
       rows: 24,
       shell: "PowerShell 7",
@@ -1198,10 +1200,10 @@ describe("output coalescing", () => {
     server.setOutputCoalesceMs(0);
     expect(server.isOutputCoalesced()).toBe(false);
 
-    const session = { id: "s1", pendingOutput: [], outputTimer: null };
+    const session = { id: "s1", pendingOutput: [], outputTimer: null, outputSeq: 0, replay: [], replayBytes: 0 };
     server.queueSessionOutput(session, "hi");
 
-    expect(client.send).toHaveBeenCalledWith({ type: "output", id: "s1", stream: "pty", data: "hi" });
+    expect(client.send).toHaveBeenCalledWith({ type: "output", id: "s1", stream: "pty", data: "hi", seq: 1 });
     expect(session.pendingOutput).toEqual([]);
   });
 
@@ -1216,13 +1218,16 @@ describe("output coalescing", () => {
       id: "private-probe",
       ownerClient: owner,
       pendingOutput: [],
-      outputTimer: null
+      outputTimer: null,
+      outputSeq: 0,
+      replay: [],
+      replayBytes: 0
     };
 
     server.queueSessionOutput(session, "private cwd response");
 
     expect(owner.send).toHaveBeenCalledWith({
-      type: "output", id: "private-probe", stream: "pty", data: "private cwd response"
+      type: "output", id: "private-probe", stream: "pty", data: "private cwd response", seq: 1
     });
     expect(other.send).not.toHaveBeenCalled();
   });
@@ -1233,7 +1238,7 @@ describe("output coalescing", () => {
     server.clients.add(client);
     server.setOutputCoalesceMs(10);
 
-    const session = { id: "s1", pendingOutput: [], outputTimer: null };
+    const session = { id: "s1", pendingOutput: [], outputTimer: null, outputSeq: 0, replay: [], replayBytes: 0 };
     server.queueSessionOutput(session, "a");
     server.queueSessionOutput(session, "b");
     // A second chunk must reuse the armed timer rather than starting another.
@@ -1241,14 +1246,14 @@ describe("output coalescing", () => {
 
     vi.advanceTimersByTime(10);
     expect(client.send).toHaveBeenCalledTimes(1);
-    expect(client.send).toHaveBeenCalledWith({ type: "output", id: "s1", stream: "pty", data: "ab" });
+    expect(client.send).toHaveBeenCalledWith({ type: "output", id: "s1", stream: "pty", data: "ab", seq: 1 });
     expect(session.outputTimer).toBeNull();
   });
 
   it("flushing an empty buffer sends nothing", () => {
     const client = fakeClient();
     server.clients.add(client);
-    const session = { id: "s1", pendingOutput: [], outputTimer: null };
+    const session = { id: "s1", pendingOutput: [], outputTimer: null, outputSeq: 0, replay: [], replayBytes: 0 };
     server.flushSessionOutput(session);
     expect(client.send).not.toHaveBeenCalled();
   });
@@ -1270,10 +1275,20 @@ describe("output coalescing", () => {
 
   it("is reachable over the wire as a config message", () => {
     const client = fakeClient();
+    client.renderer = true;
     server.handleClientMessage(client, JSON.stringify({
       type: "config",
       outputCoalesceMs: 12,
-      bridgeHeartbeatTimeoutSeconds: 45
+      bridgeClientBacklogKb: 4096,
+      bridgeReplayBufferKb: 512,
+      bridgeHeartbeatSeconds: 30,
+      bridgeHeartbeatTimeoutSeconds: 45,
+      diagnosticRetentionDays: 14,
+      diagnosticRotationMb: 10,
+      diagnosticViewerEntries: 5000,
+      copilotLogViewerEnabled: false,
+      copilotLogInitialTailKb: 256,
+      copilotLogEnabledAt: 0
     }));
     expect(server.getOutputCoalesceMs()).toBe(12);
     expect(client.send).toHaveBeenCalledWith(expect.objectContaining({

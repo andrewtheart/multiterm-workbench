@@ -15,6 +15,7 @@ test.describe.configure({ mode: "serial" });
 test.describe("Enhancement milestone", () => {
   let context;
   let page;
+  let originalExternalTerminalFocus;
 
   const bridgeSessionCount = () => page.evaluate(() => new Promise((resolve, reject) => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -37,6 +38,13 @@ test.describe("Enhancement milestone", () => {
     await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.waitForFunction(() => Boolean(state.bridgeId));
+    originalExternalTerminalFocus = await page.evaluate(() => {
+      const value = state.settings.externalTerminalFocus;
+      state.settings.externalTerminalFocus = "never";
+      saveSettings();
+      return value;
+    });
     await page.evaluate(() => closeAllTerminals());
     await expect.poll(bridgeSessionCount, { timeout: 30000 }).toBe(0);
     await page.evaluate(() => addTerminal({ title: "Enhancement test" }));
@@ -45,7 +53,11 @@ test.describe("Enhancement milestone", () => {
   });
 
   test.afterAll(async () => {
-    await page.evaluate(() => closeAllTerminals());
+    await page.evaluate((externalTerminalFocus) => {
+      closeAllTerminals();
+      state.settings.externalTerminalFocus = externalTerminalFocus;
+      saveSettings();
+    }, originalExternalTerminalFocus);
     await stopRendererCoverage(page, "enhancements");
     await context.close();
   });
@@ -108,6 +120,11 @@ test.describe("Enhancement milestone", () => {
       const first = [...state.terminals.values()][0];
       first.cwd = "D:\\before";
       const second = addTerminal({ title: "CWD focus decoy" });
+      return { firstId: first.id, secondId: second.id };
+    });
+    await expect.poll(() => page.evaluate((id) => state.terminals.get(id)?.status, setup.secondId)).toBe("live");
+    await page.evaluate(({ firstId, secondId }) => {
+      const first = state.terminals.get(firstId);
       window.__cwdOriginalReadiness = terminalExecutionReadiness;
       window.__cwdOriginalSend = state.socket.send;
       window.__cwdReady = false;
@@ -128,9 +145,8 @@ test.describe("Enhancement milestone", () => {
         }
       };
       showContextMenu(20, 20, first, "");
-      setActiveTerminal(second.id);
-      return { firstId: first.id, secondId: second.id };
-    });
+      setActiveTerminal(secondId);
+    }, setup);
 
     await page.locator("#contextMenu .ctx-item", { hasText: "Change working directory" }).click();
     await expect(page.locator("#cwdChangeOverlay")).toBeVisible();
@@ -260,10 +276,29 @@ test.describe("Enhancement milestone", () => {
       await page.evaluate((id) => showContextMenu(20, 20, state.terminals.get(id), ""), terminalId);
       const input = page.locator('[data-customization-id="terminal.copilot-cwd"] .ctx-command-input');
       await input.fill(value);
+      await page.waitForTimeout(250);
+      await expect(input).toHaveValue(value);
       await input.press("Enter");
+      await expect(page.locator("#contextMenu")).toBeHidden();
+      await expect.poll(() => page.evaluate((id) => state.terminals.get(id)?.copilotCwd, terminalId)).toBe(value);
     };
     await submitCwd(setup.firstId, "D:\\first workspace");
     await submitCwd(setup.secondId, "C:\\second workspace");
+    const beforeReload = await page.evaluate(({ firstId, secondId }) => {
+      const snapshot = JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]");
+      return {
+        firstLive: state.terminals.get(firstId)?.copilotCwd,
+        firstSaved: snapshot.find((entry) => entry.id === firstId)?.copilotCwd,
+        secondLive: state.terminals.get(secondId)?.copilotCwd,
+        secondSaved: snapshot.find((entry) => entry.id === secondId)?.copilotCwd
+      };
+    }, setup);
+    expect(beforeReload).toEqual({
+      firstLive: "D:\\first workspace",
+      firstSaved: "D:\\first workspace",
+      secondLive: "C:\\second workspace",
+      secondSaved: "C:\\second workspace"
+    });
 
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -274,14 +309,24 @@ test.describe("Enhancement milestone", () => {
       showContextMenu(20, 20, state.terminals.get(id), "");
     }, setup.firstId);
     const cwdRow = page.locator('[data-customization-id="terminal.copilot-cwd"]');
-    await expect(cwdRow.locator(".ctx-command-input")).toHaveValue("D:\\first workspace");
-    await expect(cwdRow.locator(".ctx-command-suggestion")).toHaveText([
+    const cwdInput = cwdRow.locator(".ctx-command-input");
+    await expect(cwdInput).toHaveValue("D:\\first workspace");
+    await cwdInput.click();
+    const historyList = page.locator(".combobox-list:not([hidden])");
+    await expect(historyList.locator(".combobox-option-label")).toHaveText([
       "C:\\second workspace",
       "D:\\first workspace"
     ]);
-    await cwdRow.locator(".ctx-command-suggestion").first().click();
-    await expect(cwdRow.locator(".ctx-command-input")).toHaveValue("C:\\second workspace");
-    expect(await page.evaluate((id) => state.terminals.get(id).copilotCwd, setup.firstId)).toBe("D:\\first workspace");
+    const timestamps = historyList.locator(".combobox-option-detail");
+    await expect(timestamps).toHaveCount(2);
+    for (const timestamp of await timestamps.allTextContents()) {
+      expect(timestamp).toMatch(/[A-Z][a-z]{2} \d{1,2}, \d{4}.*\d{1,2}:\d{2}/);
+    }
+    await page.waitForTimeout(300);
+    await expect(historyList).toBeVisible();
+    await historyList.locator(".combobox-option").first().click();
+    await expect(page.locator("#contextMenu")).toBeHidden();
+    expect(await page.evaluate((id) => state.terminals.get(id).copilotCwd, setup.firstId)).toBe("C:\\second workspace");
 
     const persistence = await page.evaluate(({ firstId, secondId }) => {
       hideContextMenu();
@@ -300,10 +345,14 @@ test.describe("Enhancement milestone", () => {
       };
     }, setup);
     expect(persistence).toEqual({
-      first: "D:\\first workspace",
+      first: "C:\\second workspace",
       second: "C:\\second workspace",
-      history: ["C:\\second workspace", "D:\\first workspace"]
+      history: [
+        { path: "C:\\second workspace", usedAt: expect.any(String) },
+        { path: "D:\\first workspace", usedAt: expect.any(String) }
+      ]
     });
+    persistence.history.forEach((entry) => expect(Number.isNaN(Date.parse(entry.usedAt))).toBe(false));
 
     const capped = await page.evaluate((id) => {
       for (let index = 0; index < 12; index += 1) rememberCopilotCwd(`D:\\history-${index}`);
@@ -311,9 +360,28 @@ test.describe("Enhancement milestone", () => {
       return state.copilotCwdHistory;
     }, setup.firstId);
     expect(capped).toHaveLength(10);
-    expect(capped[0]).toBe("D:\\history-11");
-    expect(capped.at(-1)).toBe("D:\\history-2");
-    await expect(page.locator('[data-customization-id="terminal.copilot-cwd"] .ctx-command-suggestion')).toHaveCount(10);
+    expect(capped[0]).toMatchObject({ path: "D:\\history-11", usedAt: expect.any(String) });
+    expect(capped.at(-1)).toMatchObject({ path: "D:\\history-2", usedAt: expect.any(String) });
+    await page.locator('[data-customization-id="terminal.copilot-cwd"] .ctx-command-input').click();
+    await expect(page.locator(".combobox-list:not([hidden]) .combobox-option")).toHaveCount(10);
+
+    const migrated = await page.evaluate(() => {
+      localStorage.setItem("multiterm.copilotCwdHistory", JSON.stringify([
+        "D:\\legacy path",
+        { path: "C:\\timestamped", usedAt: "2026-08-15T12:34:00.000Z" }
+      ]));
+      state.copilotCwdHistory = loadCopilotCwdHistory();
+      return {
+        history: state.copilotCwdHistory,
+        stored: JSON.parse(localStorage.getItem("multiterm.copilotCwdHistory"))
+      };
+    });
+    expect(migrated.history).toEqual(migrated.stored);
+    expect(migrated.history).toEqual([
+      { path: "D:\\legacy path", usedAt: expect.any(String) },
+      { path: "C:\\timestamped", usedAt: "2026-08-15T12:34:00.000Z" }
+    ]);
+    expect(Number.isNaN(Date.parse(migrated.history[0].usedAt))).toBe(false);
     await page.evaluate((profile) => {
       hideContextMenu();
       localStorage.removeItem("multiterm.copilotCwdHistory");
@@ -456,28 +524,57 @@ test.describe("Enhancement milestone", () => {
   });
 
   test("Copilot context fields target the selected terminal", async () => {
-    const frames = await page.evaluate(async () => {
+    const result = await page.evaluate(async () => {
       const terminal = [...state.terminals.values()][0];
       const sent = [];
       const originalSend = state.socket.send;
+      const originalProviders = state.aiProviders;
+      const originalProvider = state.settings.aiSessionProvider;
       state.socket.send = (payload) => sent.push(JSON.parse(payload));
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        available: true,
+        interactiveAvailable: true,
+        models: [
+          { id: "gpt-test", name: "GPT Test", maxContextTokens: 128000 },
+          { id: "claude-test", name: "Claude Test", maxContextTokens: 200000 }
+        ]
+      }];
+      state.settings.aiSessionProvider = "copilot";
 
       showContextMenu(20, 20, terminal, "");
-      const model = document.querySelector('[data-customization-id="terminal.copilot-model"] input');
-      model.value = "gpt-test";
+      const model = document.querySelector('[data-customization-id="terminal.copilot-model"] .combobox-input');
+      model.focus();
+      const modelLabels = [...document.querySelectorAll(".combobox-list:not([hidden]) .combobox-option-label")]
+        .map((element) => element.textContent);
+      const modelGroups = [...document.querySelectorAll(".combobox-list:not([hidden]) .combobox-group")]
+        .map((element) => element.textContent);
+      model.value = "gpt";
+      model.dispatchEvent(new Event("input", { bubbles: true }));
       model.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
 
       showContextMenu(20, 20, terminal, "");
       const cwdField = document.querySelector('[data-customization-id="terminal.copilot-cwd"] input');
       cwdField.value = "D:\\work tree";
+      cwdField.dispatchEvent(new Event("input", { bubbles: true }));
       cwdField.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }));
 
       await new Promise((resolve) => setTimeout(resolve, 20));
       state.socket.send = originalSend;
-      return sent.filter((frame) => frame.type === "input" && frame.id === terminal.id);
+      state.aiProviders = originalProviders;
+      state.settings.aiSessionProvider = originalProvider;
+      return {
+        frames: sent.filter((frame) => frame.type === "input" && frame.id === terminal.id),
+        modelGroups,
+        modelLabels
+      };
     });
 
-    expect(frames.map((frame) => frame.data)
+    expect(result.modelLabels).toEqual(["Claude Test - 200K tokens", "GPT Test - 128K tokens"]);
+    expect(result.modelGroups).toEqual(["Anthropic Claude", "OpenAI GPT"]);
+    expect(result.frames.map((frame) => frame.data)
       .filter((data) => data === "\x15" || data.startsWith("/")))
       .toEqual(["\x15", "/model gpt-test\r", "\x15", "/cwd D:\\work tree\r"]);
   });

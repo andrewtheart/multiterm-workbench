@@ -38,8 +38,8 @@ describe("installed bridge security", () => {
     expect(bridgeScript).toContain("private const int MaxClients = 32;");
     expect(bridgeScript).toContain("private const int MaxSessions = 64;");
     expect(bridgeScript).toContain("this.clients.Count >= MaxClients");
-    // Both session entry points, plain and elevated.
-    expect(bridgeScript.match(/this\.sessions\.Count >= MaxSessions/g)).toHaveLength(2);
+    // Plain creation, elevation start, and post-UAC elevated adoption.
+    expect(bridgeScript.match(/this\.sessions\.Count >= MaxSessions/g)).toHaveLength(3);
   });
 
   it("applies browser security headers with a Help-only framing exception", () => {

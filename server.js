@@ -466,6 +466,107 @@ function unregisterInstance() {
   }
 }
 
+function probeRegisteredBridge(record, timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    let parsed;
+    const recordPort = Number(record?.port);
+    const recordPid = Number(record?.pid);
+    try {
+      parsed = new URL(String(record?.url || ""));
+    } catch {
+      resolve(null);
+      return;
+    }
+    const host = parsed.hostname === "[::1]" ? "::1" : parsed.hostname === "localhost" ? "127.0.0.1" : parsed.hostname;
+    if (record?.app !== "MultiTerm Workbench"
+        || parsed.protocol !== "http:"
+        || !["127.0.0.1", "::1"].includes(host)
+        || !Number.isSafeInteger(recordPort)
+        || recordPort < 1
+        || recordPort > 65535
+        || Number(parsed.port) !== recordPort
+        || !Number.isSafeInteger(recordPid)
+        || recordPid < 1) {
+      resolve(null);
+      return;
+    }
+
+    let body = "";
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const request = http.get({ host, port: recordPort, path: "/health", timeout: timeoutMs }, (response) => {
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (Buffer.byteLength(body, "utf8") > 64 * 1024) request.destroy(new Error("Bridge health response is too large."));
+      });
+      response.on("end", () => {
+        try {
+          const health = JSON.parse(body);
+          if (response.statusCode !== 200
+              || health.app !== "MultiTerm Workbench"
+              || Number(health.pid) !== recordPid
+              || Number(health.port) !== recordPort) {
+            finish(null);
+            return;
+          }
+          finish({
+            bridgeId: String(record.bridgeId || "Bridge").slice(0, 64),
+            bridgeType: record.bridgeType === "installed" ? "installed" : "electron",
+            current: recordPid === process.pid,
+            pid: recordPid,
+            port: recordPort,
+            rendererClients: Math.max(0, Number(health.rendererClients) || 0),
+            sessions: Math.max(0, Number(health.sessions) || 0),
+            startedAt: String(record.startedAt || "").slice(0, 64),
+            url: `http://${host.includes(":") ? `[${host}]` : host}:${recordPort}/`
+          });
+        } catch {
+          finish(null);
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("Bridge health check timed out.")));
+    request.on("error", () => finish(null));
+  });
+}
+
+async function discoverRegisteredBridges(directory = getInstanceDirectory(), fileSystem = fs) {
+  if (!directory) return [];
+  let entries;
+  try {
+    entries = fileSystem.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const probes = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    try {
+      const record = JSON.parse(fileSystem.readFileSync(path.join(directory, entry.name), "utf8"));
+      probes.push(probeRegisteredBridge(record));
+    } catch {
+      // Malformed and half-written records are not navigation candidates.
+    }
+  }
+  const bridges = (await Promise.all(probes)).filter(Boolean);
+  return bridges.sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+
+async function sendBridgeInstances(client, requestId, discover = discoverRegisteredBridges) {
+  let bridges = [];
+  try {
+    bridges = await discover();
+  } catch (error) {
+    console.warn(`[bridge] Could not discover bridge instances: ${error.message}`);
+  }
+  client.send({ type: "bridgeInstances", requestId, bridges });
+}
+
 // JavaScript dependencies are expressed as small capability objects rather than
 // nominal interfaces. Tests can provide the same one-method contract without
 // mutating process-wide module state.
@@ -479,6 +580,7 @@ function unregisterInstance() {
  * @property {(file: string, args: string[], options: object, callback: Function) => void} [execFile]
  * @property {(file: string, args: string[], options: object) => object} [spawnProcess]
  * @property {(message: object) => Promise<object>} [promptLibraryRequest]
+ * @property {() => Promise<object[]>} [discoverBridges]
  */
 /** @type {Readonly<SessionDependencies>} */
 const defaultSessionDependencies = Object.freeze({
@@ -565,7 +667,38 @@ const OUTPUT_COALESCE_DEFAULT_MS = 8;
 const BRIDGE_HEARTBEAT_TIMEOUT_MIN_SECONDS = 10;
 const BRIDGE_HEARTBEAT_TIMEOUT_MAX_SECONDS = 300;
 const BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS = 30;
+// Bridge-initiated WebSocket ping interval. 0 is an explicit "off" value, not a
+// clamp floor, so liveness sweeping can be disabled without a rebuild.
+const BRIDGE_HEARTBEAT_MIN_SECONDS = 5;
+const BRIDGE_HEARTBEAT_MAX_SECONDS = 600;
+const BRIDGE_HEARTBEAT_DEFAULT_SECONDS = 30;
+// A client is destroyed once it has been silent for this many intervals.
+const BRIDGE_HEARTBEAT_MISSED_LIMIT = 2;
+// Per-client outbound backlog ceiling. 0 restores the legacy synchronous send in
+// both bridges, so a regression in the queued writer is recoverable from the UI.
+// The maximum is deliberately modest: it is paid per client, so 16 MiB across the
+// 32-client ceiling already retains 512 MiB.
+const BRIDGE_CLIENT_BACKLOG_MIN_KB = 64;
+const BRIDGE_CLIENT_BACKLOG_MAX_KB = 16384;
+const BRIDGE_CLIENT_BACKLOG_DEFAULT_KB = 4096;
+// Per-session replay ring. 0 means "retain nothing", so a reconnect that missed
+// output is told about the gap instead of being handed a partial screen. The
+// maximum is paid per session, so 4 MiB across maxSessions already retains 256 MiB.
+const BRIDGE_REPLAY_BUFFER_MIN_KB = 16;
+const BRIDGE_REPLAY_BUFFER_MAX_KB = 4096;
+const BRIDGE_REPLAY_BUFFER_DEFAULT_KB = 512;
 let outputCoalesceMs = OUTPUT_COALESCE_DEFAULT_MS;
+let outputCoalesceTransitioning = false;
+let bridgeHeartbeatSeconds = BRIDGE_HEARTBEAT_DEFAULT_SECONDS;
+let bridgeClientBacklogKb = BRIDGE_CLIENT_BACKLOG_DEFAULT_KB;
+let bridgeReplayBufferKb = BRIDGE_REPLAY_BUFFER_DEFAULT_KB;
+let clientHeartbeatTimer = null;
+let clientHeartbeatEnabled = false;
+let configOwnerClientId = "";
+let activeBridgeConfig = null;
+// Bridge-lifetime transport counters. Small enough to sit on /health, and the
+// only way to tell "quiet" apart from "quietly dropping clients".
+const bridgeTransportCounters = { forcedDisconnects: 0, outputGaps: 0, replayedBytes: 0 };
 
 function isOutputCoalesced() {
   return outputCoalesceMs > 0;
@@ -576,8 +709,18 @@ function isOutputCoalesced() {
 // batching (or holding it for an unbounded time).
 function setOutputCoalesceMs(value) {
   const requested = Number(value);
+  const next = Number.isFinite(requested)
+    ? Math.min(OUTPUT_COALESCE_MAX_MS, Math.max(0, Math.round(requested)))
+    : OUTPUT_COALESCE_DEFAULT_MS;
+  if (next === 0 && outputCoalesceMs > 0) {
+    outputCoalesceTransitioning = true;
+    for (const session of sessions.values()) flushSessionOutput(session);
+    outputCoalesceMs = 0;
+    outputCoalesceTransitioning = false;
+    return outputCoalesceMs;
+  } else { void 0; }
   if (Number.isFinite(requested)) {
-    outputCoalesceMs = Math.min(OUTPUT_COALESCE_MAX_MS, Math.max(0, Math.round(requested)));
+    outputCoalesceMs = next;
   } else {
     outputCoalesceMs = OUTPUT_COALESCE_DEFAULT_MS;
   }
@@ -595,6 +738,434 @@ function normalizeBridgeHeartbeatTimeoutSeconds(value) {
     : BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS;
 }
 
+// Exactly 0 means "never ping"; anything else is clamped into the supported
+// range so a nonsense setting cannot disable liveness sweeping by accident.
+function normalizeBridgeHeartbeatSeconds(value) {
+  const requested = Number(value);
+  if (!Number.isFinite(requested)) {
+    return BRIDGE_HEARTBEAT_DEFAULT_SECONDS;
+  } else if (Math.round(requested) === 0) {
+    return 0;
+  } else {
+    return Math.min(BRIDGE_HEARTBEAT_MAX_SECONDS, Math.max(BRIDGE_HEARTBEAT_MIN_SECONDS, Math.round(requested)));
+  }
+}
+
+function getBridgeHeartbeatSeconds() {
+  return bridgeHeartbeatSeconds;
+}
+
+function setBridgeHeartbeatSeconds(value) {
+  bridgeHeartbeatSeconds = normalizeBridgeHeartbeatSeconds(value);
+  armClientHeartbeat();
+  return bridgeHeartbeatSeconds;
+}
+
+function isClientHeartbeatArmable() {
+  return clientHeartbeatEnabled && bridgeHeartbeatSeconds > 0;
+}
+
+function armClientHeartbeat() {
+  // clearInterval is a safe no-op for a null handle, so re-arming stays branch-free.
+  clearInterval(clientHeartbeatTimer);
+  clientHeartbeatTimer = null;
+  if (isClientHeartbeatArmable()) {
+    clientHeartbeatTimer = setInterval(sweepClientHeartbeats, bridgeHeartbeatSeconds * 1000);
+    clientHeartbeatTimer.unref();
+  } else { void 0; }
+  return clientHeartbeatTimer;
+}
+
+function startClientHeartbeat() {
+  clientHeartbeatEnabled = true;
+  return armClientHeartbeat();
+}
+
+function stopClientHeartbeat() {
+  clientHeartbeatEnabled = false;
+  return armClientHeartbeat();
+}
+
+// A write that succeeds proves only that the kernel accepted bytes, so liveness
+// is judged solely on pong frames the peer actually sent back.
+function pingClient(client) {
+  if (client.socket.destroyed) {
+    return false;
+  } else {
+    client.lastPingAt = Date.now();
+    client.socket.write(encodeFrame("", 0x9));
+    return true;
+  }
+}
+
+function dropClient(client, reason) {
+  bridgeTransportCounters.forcedDisconnects += 1;
+  console.warn(`[bridge] Dropping WebSocket client ${client.id}: ${reason}.`);
+  clients.delete(client);
+  releasePendingSessionExits(client);
+  client.socket.destroy();
+}
+
+// One unref'd timer for the whole bridge. A half-open socket otherwise holds a
+// slot of maxClients forever and keeps receiving every broadcast.
+function sweepClientHeartbeats(now = Date.now()) {
+  const intervalMs = bridgeHeartbeatSeconds * 1000;
+  if (intervalMs <= 0) {
+    return 0;
+  } else { void 0; }
+  let dropped = 0;
+  for (const client of [...clients]) {
+    if (client.lastPingAt > client.lastPongAt) {
+      if (now - client.lastPingAt >= intervalMs) {
+        dropped += 1;
+        dropClient(client, `no pong for ${BRIDGE_HEARTBEAT_MISSED_LIMIT} heartbeat intervals`);
+      } else {
+        // The outstanding ping still has the remainder of its answer window.
+      }
+    } else {
+      pingClient(client);
+    }
+  }
+  return dropped;
+}
+
+// Exactly 0 selects the legacy synchronous send: no FIFO, no drain handling.
+// Anything else is clamped into the supported range.
+function normalizeBridgeClientBacklogKb(value) {
+  const requested = Number(value);
+  if (!Number.isFinite(requested)) {
+    return BRIDGE_CLIENT_BACKLOG_DEFAULT_KB;
+  } else if (Math.round(requested) === 0) {
+    return 0;
+  } else {
+    return Math.min(BRIDGE_CLIENT_BACKLOG_MAX_KB, Math.max(BRIDGE_CLIENT_BACKLOG_MIN_KB, Math.round(requested)));
+  }
+}
+
+function getBridgeClientBacklogKb() {
+  return bridgeClientBacklogKb;
+}
+
+function setBridgeClientBacklogKb(value) {
+  bridgeClientBacklogKb = normalizeBridgeClientBacklogKb(value);
+  if (isClientBacklogBounded()) {
+    // Bounded mode keeps whatever is already queued, in order.
+  } else {
+    flushClientQueues();
+  }
+  return bridgeClientBacklogKb;
+}
+
+// Switching to the legacy synchronous send must not strand queued frames, or a
+// client would see later output overtake output that is still waiting.
+function flushClientQueues() {
+  for (const client of clients) {
+    while (client.queue.length > 0) {
+      const frame = client.queue.shift();
+      client.queuedBytes -= frame.length;
+      client.socket.write(frame);
+    }
+    client.backlogged = false;
+  }
+}
+
+function isClientBacklogBounded() {
+  return bridgeClientBacklogKb > 0;
+}
+
+function clientBacklogLimitBytes() {
+  return bridgeClientBacklogKb * 1024;
+}
+
+function hasQueuedFrames(client) {
+  return client.queue.length > 0;
+}
+
+// PTY bytes are never discarded: dropping an arbitrary frame can remove an ANSI
+// mode or cursor sequence and desynchronize xterm permanently. A client that
+// outruns its ceiling loses the whole connection instead, which the renderer
+// already knows how to recover from.
+function enqueueClientFrame(client, frame) {
+  if (client.queuedBytes + frame.length > clientBacklogLimitBytes()) {
+    dropClient(client, `queued output reached the ${bridgeClientBacklogKb} KB ceiling`);
+    return false;
+  } else { void 0; }
+  client.queue.push(frame);
+  client.queuedBytes += frame.length;
+  client.queueHighWaterMark = Math.max(client.queueHighWaterMark, client.queuedBytes);
+  return true;
+}
+
+// socket.write() returning false does not mean the write failed; the bytes were
+// accepted but nothing more should be written until "drain". Honouring it is
+// what keeps a stalled client from buffering the whole session in memory.
+function writeClientFrame(client, frame) {
+  client.backlogged = !client.socket.write(frame);
+  return true;
+}
+
+function sendClientFrame(client, frame) {
+  if (client.socket.destroyed) {
+    return false;
+  } else if (!isClientBacklogBounded()) {
+    client.socket.write(frame);
+    return true;
+  } else if (client.backlogged) {
+    return enqueueClientFrame(client, frame);
+  } else {
+    return writeClientFrame(client, frame);
+  }
+}
+
+// One FIFO per client in strict arrival order, so a backlogged client cannot see
+// control frames overtake the output they belong with.
+function drainClientQueue(client) {
+  client.backlogged = false;
+  while (hasQueuedFrames(client)) {
+    const frame = client.queue.shift();
+    client.queuedBytes -= frame.length;
+    writeClientFrame(client, frame);
+    if (client.backlogged) {
+      return client.queuedBytes;
+    } else { void 0; }
+  }
+  return client.queuedBytes;
+}
+
+function discardClientQueue(client) {
+  client.queue.length = 0;
+  client.queuedBytes = 0;
+  client.backlogged = false;
+}
+
+// A pong that answers no outstanding ping says nothing about round-trip time.
+function heartbeatRoundTrip(client, now) {
+  if (client.lastPingAt <= 0) {
+    return client.heartbeatRttMs;
+  } else {
+    const elapsedMs = Math.max(1, now - client.lastPingAt);
+    client.lastPingAt = 0;
+    return elapsedMs;
+  }
+}
+
+function clientCounterValue(value) {
+  return Number.isFinite(value) ? value : 0;
+}
+
+function bridgeTransportSnapshot() {
+  let queuedBytes = 0;
+  let queueHighWaterMarkBytes = 0;
+  let heartbeatRttMs = 0;
+  for (const client of clients) {
+    queuedBytes += clientCounterValue(client.queuedBytes);
+    queueHighWaterMarkBytes = Math.max(queueHighWaterMarkBytes, clientCounterValue(client.queueHighWaterMark));
+    heartbeatRttMs = Math.max(heartbeatRttMs, clientCounterValue(client.heartbeatRttMs));
+  }
+  return {
+    clients: clients.size,
+    queuedBytes,
+    queueHighWaterMarkBytes,
+    heartbeatRttMs,
+    replayedBytes: bridgeTransportCounters.replayedBytes,
+    outputGaps: bridgeTransportCounters.outputGaps,
+    forcedDisconnects: bridgeTransportCounters.forcedDisconnects
+  };
+}
+
+function __resetBridgeTransportCounters() {
+  bridgeTransportCounters.forcedDisconnects = 0;
+  bridgeTransportCounters.outputGaps = 0;
+  bridgeTransportCounters.replayedBytes = 0;
+}
+
+// Exactly 0 retains nothing, so a reconnect that missed output is told about the
+// gap rather than handed a partial screen.
+function normalizeBridgeReplayBufferKb(value) {
+  const requested = Number(value);
+  if (!Number.isFinite(requested)) {
+    return BRIDGE_REPLAY_BUFFER_DEFAULT_KB;
+  } else if (Math.round(requested) === 0) {
+    return 0;
+  } else {
+    return Math.min(BRIDGE_REPLAY_BUFFER_MAX_KB, Math.max(BRIDGE_REPLAY_BUFFER_MIN_KB, Math.round(requested)));
+  }
+}
+
+function getBridgeReplayBufferKb() {
+  return bridgeReplayBufferKb;
+}
+
+function setBridgeReplayBufferKb(value) {
+  bridgeReplayBufferKb = normalizeBridgeReplayBufferKb(value);
+  trimAllReplayRings();
+  return bridgeReplayBufferKb;
+}
+
+function replayBufferLimitBytes() {
+  return bridgeReplayBufferKb * 1024;
+}
+
+function trimAllReplayRings() {
+  for (const session of sessions.values()) {
+    trimReplayRing(session);
+  }
+}
+
+function isReplayOverBudget(session) {
+  return session.replayBytes > replayBufferLimitBytes() && session.replay.length > 0;
+}
+
+function trimReplayRing(session) {
+  while (isReplayOverBudget(session)) {
+    const dropped = session.replay.shift();
+    session.replayBytes -= dropped.bytes;
+  }
+  return session.replayBytes;
+}
+
+function retainSessionOutput(session, seq, data) {
+  const bytes = Buffer.byteLength(data, "utf8");
+  session.replay.push({ bytes, data, seq });
+  session.replayBytes += bytes;
+  return trimReplayRing(session);
+}
+
+// One monotonically increasing sequence per session. The renderer uses it to
+// tell a clean reconnect from one that lost bytes; it is a plain Number in both
+// the JSON payload and the C# bridge, with the usual 2^53 ceiling.
+function nextOutputSequence(session) {
+  session.outputSeq += 1;
+  return session.outputSeq;
+}
+
+function emitSessionOutput(session, data) {
+  const seq = nextOutputSequence(session);
+  retainSessionOutput(session, seq, data);
+  sendSessionFrame(session, { type: "output", id: session.id, stream: "pty", data, seq });
+}
+
+function oldestRetainedSequence(session) {
+  return session.replay.length > 0 ? session.replay[0].seq : session.outputSeq + 1;
+}
+
+function retainedSuffix(session, afterSeq) {
+  return session.replay.filter((entry) => entry.seq > afterSeq).map((entry) => entry.data).join("");
+}
+
+// A renderer that reconnects reports the last sequence it saw. It is handed a
+// COMPLETE retained suffix or an explicit gap: a partial screen must never be
+// presented as current.
+function resumeSessionOutput(client, message) {
+  const id = typeof message.id === "string" ? message.id : "";
+  if (client.exitedSessions?.has(id)) return; else { void 0; }
+  const session = sessions.get(id);
+  if (!canAccessSession(client, session)) {
+    client.send({ type: "outputGap", id, reason: "unknown-session", expected: 0, available: 0, seq: 0 });
+    completeOutputResume(client, id);
+    return;
+  } else { void 0; }
+
+  // Anything still sitting in the coalescing buffer belongs in the ring before
+  // the suffix is computed, or the replay would silently omit it.
+  flushSessionOutput(session);
+
+  const requested = Number(message.lastSeq);
+  const lastSeq = Number.isSafeInteger(requested) && requested >= 0 ? requested : 0;
+  const current = session.outputSeq;
+  if (lastSeq >= current) {
+    client.send({ type: "outputResumed", id, seq: current, replayedBytes: 0 });
+    completeOutputResume(client, id);
+    return;
+  } else { void 0; }
+
+  const oldest = oldestRetainedSequence(session);
+  if (oldest > lastSeq + 1) {
+    bridgeTransportCounters.outputGaps += 1;
+    console.warn(`[bridge] Session ${id} lost output ${lastSeq + 1}-${oldest - 1} before a client could resume.`);
+    client.send({ type: "outputGap", id, reason: "retention", expected: lastSeq + 1, available: oldest, seq: current });
+    completeOutputResume(client, id);
+    return;
+  } else { void 0; }
+
+  const data = retainedSuffix(session, lastSeq);
+  const replayedBytes = Buffer.byteLength(data, "utf8");
+  bridgeTransportCounters.replayedBytes += replayedBytes;
+  client.send({ type: "output", id, stream: "pty", data, seq: current, replay: true });
+  client.send({ type: "outputResumed", id, seq: current, replayedBytes });
+  completeOutputResume(client, id);
+}
+
+function completeOutputResume(client, sessionId) {
+  client.pendingOutputResumes?.delete(sessionId);
+  const session = sessions.get(sessionId);
+  if (!session?.exited || !session.pendingExitClients?.delete(client)) return; else { void 0; }
+  client.exitedSessions?.add(sessionId);
+  client.send(session.exitMessage);
+  if (session.pendingExitClients.size === 0) finalizeSessionExit(session);
+}
+
+function finalizeSessionExit(session) {
+  clearTimeout(session.exitResumeTimer);
+  session.exitResumeTimer = null;
+  session.pendingExitClients = null;
+  if (sessions.get(session.id) === session) sessions.delete(session.id); else { void 0; }
+  scheduleMemStats(1500);
+}
+
+function expirePendingSessionExit(session) {
+  if (!session.pendingExitClients) return; else { void 0; }
+  for (const client of [...session.pendingExitClients]) {
+    if (!clients.has(client)) {
+      session.pendingExitClients.delete(client);
+      continue;
+    } else { void 0; }
+    bridgeTransportCounters.outputGaps += 1;
+    client.send({
+      type: "outputGap",
+      id: session.id,
+      reason: "session-exited",
+      expected: 0,
+      available: oldestRetainedSequence(session),
+      seq: session.outputSeq
+    });
+    completeOutputResume(client, session.id);
+  }
+  if (session.pendingExitClients?.size === 0) finalizeSessionExit(session);
+}
+
+function releasePendingSessionExits(client) {
+  for (const session of sessions.values()) {
+    if (!session.pendingExitClients?.delete(client)) continue; else { void 0; }
+    if (session.pendingExitClients.size === 0) finalizeSessionExit(session);
+  }
+}
+
+function isRendererHandshake(rawUrl) {
+  try {
+    const renderer = new URL(String(rawUrl ?? ""), "http://127.0.0.1").searchParams.get("renderer");
+    if (renderer === "1") {
+      return true;
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+}
+
+function initialOutputResumes(rawUrl, sessionValues = sessions.values()) {
+  if (isRendererHandshake(rawUrl)) {
+    return new Set([...sessionValues].filter((session) => !session.ephemeral && !session.exited).map((session) => session.id));
+  } else {
+    return null;
+  }
+}
+
+function shouldGateSessionOutput(client, sessionId) {
+  return client.pendingOutputResumes instanceof Set && client.pendingOutputResumes.has(sessionId);
+}
+
 function applyClientConfig(
   client,
   message,
@@ -603,6 +1174,9 @@ function applyClientConfig(
 ) {
   const applied = setOutputCoalesceMs(message.outputCoalesceMs);
   const bridgeHeartbeatTimeoutSeconds = normalizeBridgeHeartbeatTimeoutSeconds(message.bridgeHeartbeatTimeoutSeconds);
+  const heartbeatSeconds = setBridgeHeartbeatSeconds(message.bridgeHeartbeatSeconds);
+  const clientBacklogKb = setBridgeClientBacklogKb(message.bridgeClientBacklogKb);
+  const replayBufferKb = setBridgeReplayBufferKb(message.bridgeReplayBufferKb);
   const diagnosticConfig = diagnostics.configure({
     retentionDays: message.diagnosticRetentionDays,
     rotationMb: message.diagnosticRotationMb,
@@ -613,17 +1187,114 @@ function applyClientConfig(
     initialTailKb: message.copilotLogInitialTailKb,
     enabledAt: message.copilotLogEnabledAt
   });
-  client.send({
-    type: "config",
+  activeBridgeConfig = {
     outputCoalesceMs: applied,
-    bridgeHeartbeatTimeoutSeconds,
+    bridgeHeartbeatSeconds: heartbeatSeconds,
+    bridgeClientBacklogKb: clientBacklogKb,
+    bridgeReplayBufferKb: replayBufferKb,
     diagnosticRetentionDays: diagnosticConfig.retentionDays,
     diagnosticRotationMb: diagnosticConfig.rotationMb,
     diagnosticViewerEntries: diagnosticConfig.viewerEntries,
     copilotLogViewerEnabled: copilotLogConfig.enabled,
     copilotLogInitialTailKb: copilotLogConfig.initialTailKb,
     copilotLogDirectory: copilotLogConfig.root
+  };
+  sendActiveClientConfig(client, bridgeHeartbeatTimeoutSeconds, diagnostics, copilotLogs);
+}
+
+const BRIDGE_GLOBAL_CONFIG_FIELDS = [
+  "outputCoalesceMs", "bridgeClientBacklogKb", "bridgeReplayBufferKb", "bridgeHeartbeatSeconds",
+  "diagnosticRetentionDays", "diagnosticRotationMb", "diagnosticViewerEntries",
+  "copilotLogViewerEnabled", "copilotLogInitialTailKb", "copilotLogEnabledAt"
+];
+
+function isCompleteBridgeConfig(message) {
+  return BRIDGE_GLOBAL_CONFIG_FIELDS.every((field) => Object.prototype.hasOwnProperty.call(message, field));
+}
+
+function currentBridgeConfig(diagnostics = runtimeDiagnostics, copilotLogs = copilotLogAggregator) {
+  if (activeBridgeConfig) return { ...activeBridgeConfig };
+  const diagnosticConfig = diagnostics.configure({});
+  const copilotLogConfig = copilotLogs.configure({});
+  return {
+    outputCoalesceMs,
+    bridgeHeartbeatSeconds,
+    bridgeClientBacklogKb,
+    bridgeReplayBufferKb,
+    diagnosticRetentionDays: diagnosticConfig.retentionDays,
+    diagnosticRotationMb: diagnosticConfig.rotationMb,
+    diagnosticViewerEntries: diagnosticConfig.viewerEntries,
+    copilotLogViewerEnabled: copilotLogConfig.enabled,
+    copilotLogInitialTailKb: copilotLogConfig.initialTailKb,
+    copilotLogDirectory: copilotLogConfig.root
+  };
+}
+
+function sendActiveClientConfig(
+  client,
+  heartbeatTimeoutSeconds = BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS,
+  diagnostics = runtimeDiagnostics,
+  copilotLogs = copilotLogAggregator
+) {
+  client.send({
+    type: "config",
+    ...currentBridgeConfig(diagnostics, copilotLogs),
+    bridgeHeartbeatTimeoutSeconds: heartbeatTimeoutSeconds,
+    configOwner: client.id === configOwnerClientId
   });
+}
+
+function handleClientConfig(
+  client,
+  message,
+  diagnostics = runtimeDiagnostics,
+  copilotLogs = copilotLogAggregator
+) {
+  const heartbeatTimeoutSeconds = normalizeBridgeHeartbeatTimeoutSeconds(message.bridgeHeartbeatTimeoutSeconds);
+  if (!client.renderer || !isCompleteBridgeConfig(message)) {
+    sendActiveClientConfig(client, heartbeatTimeoutSeconds, diagnostics, copilotLogs);
+    return false;
+  }
+
+  client.desiredConfig = { ...message };
+  if (!configOwnerClientId) configOwnerClientId = client.id;
+  if (configOwnerClientId === client.id) {
+    applyClientConfig(client, message, diagnostics, copilotLogs);
+    return true;
+  } else { void 0; }
+
+  sendActiveClientConfig(client, heartbeatTimeoutSeconds, diagnostics, copilotLogs);
+  return false;
+}
+
+function compareRendererConfigCandidates(left, right) {
+  if (left.rendererVisible !== right.rendererVisible) return left.rendererVisible ? -1 : 1;
+  if (left.rendererActiveAt !== right.rendererActiveAt) return right.rendererActiveAt - left.rendererActiveAt;
+  return String(left.id).localeCompare(String(right.id));
+}
+
+function promoteConfigOwner(disconnectedClientId) {
+  if (configOwnerClientId !== disconnectedClientId) return null;
+  configOwnerClientId = "";
+  const next = [...clients]
+    .filter((client) => client.renderer && client.desiredConfig && isCompleteBridgeConfig(client.desiredConfig))
+    .sort(compareRendererConfigCandidates)[0] || null;
+  if (next === null) {
+    return null;
+  } else {
+    configOwnerClientId = next.id;
+    applyClientConfig(next, next.desiredConfig);
+    return next;
+  }
+}
+
+function shouldEchoHeartbeat(message) {
+  return message.reply !== true;
+}
+
+function __resetConfigOwnership() {
+  configOwnerClientId = "";
+  activeBridgeConfig = null;
 }
 
 const DIAGNOSTIC_RECORD_FIELDS = [
@@ -806,19 +1477,34 @@ function hasOutputFlushTimer(session) {
 }
 
 function queueSessionOutput(session, data) {
-  if (isOutputCoalesced()) {
+  if (isOutputCoalesced() || outputCoalesceTransitioning) {
     session.pendingOutput.push(data);
     scheduleOutputFlush(session);
   } else {
-    sendSessionFrame(session, { type: "output", id: session.id, stream: "pty", data });
+    emitSessionOutput(session, data);
   }
 }
 
 function sendSessionFrame(session, message) {
   if (session.ephemeral) {
     session.ownerClient?.send(message);
+  } else if (message.type === "output") {
+    broadcastSessionOutput(session, message);
   } else {
     broadcast(message);
+  }
+}
+
+function broadcastSessionOutput(session, message) {
+  let frame;
+  for (const client of clients) {
+    if (shouldGateSessionOutput(client, session.id)) continue; else { void 0; }
+    if (canSendFrame(client)) {
+      frame = frame === undefined ? encodeFrame(JSON.stringify(message)) : frame;
+      client.sendFrame(frame);
+    } else {
+      client.send(message);
+    }
   }
 }
 
@@ -839,7 +1525,7 @@ function flushSessionOutput(session) {
   if (hasPendingOutput(session)) {
     const data = session.pendingOutput.join("");
     session.pendingOutput = [];
-    sendSessionFrame(session, { type: "output", id: session.id, stream: "pty", data });
+    emitSessionOutput(session, data);
   } else {
     // Timer raced a flush that already drained the buffer; nothing to send.
   }
@@ -1002,6 +1688,7 @@ const server = http.createServer((request, response) => {
       port: server.address()?.port || port,
       sessions: [...sessions.values()].filter((session) => !session.ephemeral).length,
       rendererClients: countRendererClients(),
+      transport: bridgeTransportSnapshot(),
       watchdogSuppressed,
       cwd: process.cwd()
     });
@@ -1260,8 +1947,19 @@ server.on("upgrade", (request, socket) => {
   ].join("\r\n"));
 
   const client = {
+    backlogged: false,
     buffer: Buffer.alloc(0),
     id: crypto.randomUUID(),
+    // Seeded at connect so a fresh client is never swept before it has been
+    // given its first ping to answer.
+    lastPongAt: Date.now(),
+    lastPingAt: 0,
+    heartbeatRttMs: 0,
+    exitedSessions: new Set(),
+    queue: [],
+    queuedBytes: 0,
+    queueHighWaterMark: 0,
+    pendingOutputResumes: initialOutputResumes(request.url),
     renderer: false,
     rendererActiveAt: 0,
     rendererVisible: false,
@@ -1272,11 +1970,13 @@ server.on("upgrade", (request, socket) => {
     // Writes bytes that have already been encoded. broadcast() builds one frame
     // for the whole fan-out and hands the same buffer to every client.
     sendFrame(frame) {
-      if (!socket.destroyed) {
-        socket.write(frame);
-      } else { void 0; }
+      return sendClientFrame(client, frame);
     }
   };
+
+  socket.on("drain", () => {
+    drainClientQueue(client);
+  });
 
   clients.add(client);
   client.send({
@@ -1289,7 +1989,7 @@ server.on("upgrade", (request, socket) => {
     copilotSetupScript,
     cwd: process.cwd(),
     currentUser: os.userInfo().username,
-    sessions: [...sessions.values()].filter((session) => !session.ephemeral).map(toSessionSummary),
+    sessions: [...sessions.values()].filter((session) => !session.ephemeral && !session.exited).map(toSessionSummary),
     // Electron owns its own window and profile, so it never borrows the user's browser.
     sharedBrowserProfile: false,
     openFolders: pendingOpenFolders.splice(0),
@@ -1324,6 +2024,9 @@ server.on("upgrade", (request, socket) => {
   });
   const removeClient = () => {
     clients.delete(client);
+    releasePendingSessionExits(client);
+    discardClientQueue(client);
+    promoteConfigOwner(client.id);
     releaseAutomationLease(client);
     for (const session of sessions.values()) {
       if (session.ephemeral && session.ownerClient === client) killSession(session.id);
@@ -1363,6 +2066,7 @@ function start(callback, overridePort, overrideHost) {
     } else { void 0; }
   });
   startMemStats();
+  startClientHeartbeat();
   return server;
 }
 
@@ -1660,6 +2364,16 @@ function readFrames(client, chunk, dependencies = defaultSessionDependencies) {
       // Non-ping frames continue through message dispatch.
     }
 
+    // The only application-observable proof that the peer is still alive. A
+    // successful write says nothing: a half-open socket accepts bytes forever.
+    if (opcode === 0xA) {
+      client.lastPongAt = Date.now();
+      client.heartbeatRttMs = heartbeatRoundTrip(client, client.lastPongAt);
+      continue;
+    } else {
+      // Non-pong frames continue through message dispatch.
+    }
+
     if (opcode === 0x1) {
       handleClientMessage(client, payload.toString("utf8"), dependencies);
     } else {
@@ -1698,6 +2412,13 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
     return;
   }
 
+  if (message.type === "resumeOutput") {
+    resumeSessionOutput(client, message);
+    return;
+  } else {
+    // Remaining messages use the shared protocol switch below.
+  }
+
   switch (message.type) {
     case "rendererPresence":
       client.renderer = true;
@@ -1706,6 +2427,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       watchdogSuppressed = false;
       break;
     case "heartbeat":
+      // A reply to a bridge-initiated probe must not be echoed, or the two
+      // sides would answer each other forever.
+      if (!shouldEchoHeartbeat(message)) break; else { void 0; }
       client.send({ type: "heartbeat", nonce: String(message.nonce || "").slice(0, 64) });
       break;
     case "aiProviderBootstrapConsumed":
@@ -1752,6 +2476,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "getAiUsage":
       client.send({ type: "aiUsage", usage: getAiUsageSnapshot() });
+      break;
+    case "listBridgeInstances":
+      void sendBridgeInstances(client, message.requestId, dependencies.discoverBridges || discoverRegisteredBridges);
       break;
     case "focusBridgeTerminal":
       client.send({
@@ -1868,7 +2595,7 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       requestMemStats(client);
       break;
     case "config":
-      applyClientConfig(
+      handleClientConfig(
         client,
         message,
         dependencies.diagnostics || runtimeDiagnostics,
@@ -2223,6 +2950,9 @@ function createSession(client, options, dependencies = defaultSessionDependencie
     logPath: null,
     pendingOutput: [],
     outputTimer: null,
+    outputSeq: 0,
+    replay: [],
+    replayBytes: 0,
     ownerClient: options.ephemeral === true ? client : null,
     promotedByClient: null,
     rows,
@@ -2251,21 +2981,60 @@ function createSession(client, options, dependencies = defaultSessionDependencie
   });
 
   terminal.onExit(({ exitCode, signal }) => {
-    session.exited = true;
-    flushSessionOutput(session);
-    closeLog(session);
-    expireTerminalMessagesForSession(id);
-    sessions.delete(id);
-    sendSessionFrame(session, { type: "exited", id, code: exitCode, signal });
-    scheduleMemStats(1500);
+    finishSessionLifecycle(session, exitCode, signal);
   });
 
+  publishSessionCreated(session, client);
+}
+
+function publishSessionCreated(session, client) {
   const created = { type: "created", ...toSessionSummary(session) };
+  for (const candidate of clients) {
+    candidate.exitedSessions?.delete(session.id);
+    if (candidate === client || session.ephemeral) continue; else { void 0; }
+    if (candidate.renderer || candidate.pendingOutputResumes instanceof Set) {
+      candidate.pendingOutputResumes ??= new Set();
+      candidate.pendingOutputResumes.add(session.id);
+    } else { void 0; }
+  }
+  client.exitedSessions?.delete(session.id);
   client.send(created);
-  // External automation clients (for example Yagu's visible update downloader) create sessions over
-  // their own WebSocket. Notify every other client so the new terminal appears in the open workbench UI.
-  if (!session.ephemeral) broadcast(created, client);
+  // External automation clients create sessions over their own WebSocket.
+  if (!session.ephemeral) broadcast(created, client); else { void 0; }
   scheduleMemStats(2000);
+}
+
+function finishSessionLifecycle(session, code, signal) {
+  if (session.exited) return false; else { void 0; }
+  session.exited = true;
+  flushSessionOutput(session);
+  closeLog(session);
+  expireTerminalMessagesForSession(session.id);
+  const exitMessage = { type: "exited", id: session.id, code, signal };
+  if (session.ephemeral) {
+    session.ownerClient?.exitedSessions?.add(session.id);
+    session.ownerClient?.send(exitMessage);
+    finalizeSessionExit(session);
+    return true;
+  } else { void 0; }
+  session.exitMessage = exitMessage;
+  session.pendingExitClients = new Set([...clients].filter((candidate) => shouldGateSessionOutput(candidate, session.id)));
+  for (const candidate of clients) {
+    if (!session.pendingExitClients.has(candidate)) {
+      candidate.exitedSessions?.add(session.id);
+      candidate.send(exitMessage);
+    } else { void 0; }
+  }
+  if (session.pendingExitClients.size === 0) {
+    finalizeSessionExit(session);
+  } else {
+    session.exitResumeTimer = setTimeout(
+      () => expirePendingSessionExit(session),
+      bridgeHeartbeatSeconds * BRIDGE_HEARTBEAT_MISSED_LIMIT * 1000
+    );
+    session.exitResumeTimer.unref();
+  }
+  return true;
 }
 
 function canAccessSession(client, session) {
@@ -4333,7 +5102,7 @@ function handleElevatedConnection(attempt, socket) {
     } else if (msg.type === "started") {
       attempt.settled = true;
       attempt.session = registerElevatedSession(attempt, socket, sendFrame, Number(msg.pid) || 0);
-      attempt.client.send({ type: "created", ...toSessionSummary(attempt.session) });
+      publishSessionCreated(attempt.session, attempt.client);
     } else if (msg.type === "output" && attempt.session) {
       const data = decodeElevationData(msg.data);
       attempt.session.keystrokesOut += data.length;
@@ -4404,6 +5173,9 @@ function registerElevatedSession(attempt, socket, sendFrame, pid) {
     logPath: null,
     pendingOutput: [],
     outputTimer: null,
+    outputSeq: 0,
+    replay: [],
+    replayBytes: 0,
     rows: attempt.rows,
     shell: attempt.label,
     startedAt: new Date().toISOString(),
@@ -4417,17 +5189,7 @@ function registerElevatedSession(attempt, socket, sendFrame, pid) {
 }
 
 function finishElevatedSession(session, code) {
-  if (session.exited) {
-    return;
-  } else {
-    session.exited = true;
-    flushSessionOutput(session);
-    closeLog(session);
-    expireTerminalMessagesForSession(session.id);
-    sessions.delete(session.id);
-    broadcast({ type: "exited", id: session.id, code, signal: null });
-    scheduleMemStats(1500);
-  }
+  finishSessionLifecycle(session, code, null);
 }
 
 // Tear down a failed elevation attempt exactly once and tell the client why.
@@ -4467,6 +5229,7 @@ function describeElevationError(detail) {
 
 function shutdown() {
   stopMemStats();
+  stopClientHeartbeat();
   stopPromptLibraryHost();
   const shutdownWaitMs = Math.max(
     SHUTDOWN_MAX_WAIT_MS,
@@ -4902,6 +5665,7 @@ function toSessionSummary(session) {
     cols: session.cols,
     cwd: session.cwd,
     id: session.id,
+    outputSeq: session.outputSeq || 0,
     pid: session.terminal.pid,
     rows: session.rows,
     shell: session.shell,
@@ -6883,6 +7647,9 @@ module.exports = {
     encodeFrame,
     handleClientMessage,
     countRendererClients,
+    discoverRegisteredBridges,
+    probeRegisteredBridge,
+    sendBridgeInstances,
     createSession,
     writeSession,
     renameSession,
@@ -6896,7 +7663,63 @@ module.exports = {
     setOutputCoalesceMs,
     getOutputCoalesceMs,
     normalizeBridgeHeartbeatTimeoutSeconds,
+    normalizeBridgeHeartbeatSeconds,
+    getBridgeHeartbeatSeconds,
+    setBridgeHeartbeatSeconds,
+    isClientHeartbeatArmable,
+    armClientHeartbeat,
+    startClientHeartbeat,
+    stopClientHeartbeat,
+    sweepClientHeartbeats,
+    pingClient,
+    dropClient,
+    normalizeBridgeClientBacklogKb,
+    getBridgeClientBacklogKb,
+    setBridgeClientBacklogKb,
+    isClientBacklogBounded,
+    clientBacklogLimitBytes,
+    enqueueClientFrame,
+    writeClientFrame,
+    sendClientFrame,
+    drainClientQueue,
+    discardClientQueue,
+    flushClientQueues,
+    heartbeatRoundTrip,
+    clientCounterValue,
+    bridgeTransportSnapshot,
+    __resetBridgeTransportCounters,
+    normalizeBridgeReplayBufferKb,
+    getBridgeReplayBufferKb,
+    setBridgeReplayBufferKb,
+    replayBufferLimitBytes,
+    trimReplayRing,
+    trimAllReplayRings,
+    isReplayOverBudget,
+    retainSessionOutput,
+    nextOutputSequence,
+    emitSessionOutput,
+    oldestRetainedSequence,
+    retainedSuffix,
+    resumeSessionOutput,
+    completeOutputResume,
+    publishSessionCreated,
+    finishSessionLifecycle,
+    finalizeSessionExit,
+    expirePendingSessionExit,
+    releasePendingSessionExits,
+    isRendererHandshake,
+    initialOutputResumes,
+    shouldGateSessionOutput,
+    broadcastSessionOutput,
     applyClientConfig,
+    BRIDGE_GLOBAL_CONFIG_FIELDS,
+    isCompleteBridgeConfig,
+    currentBridgeConfig,
+    sendActiveClientConfig,
+    handleClientConfig,
+    compareRendererConfigCandidates,
+    promoteConfigOwner,
+    __resetConfigOwnership,
     diagnosticRecordFromMessage,
     recordRuntimeDiagnostic,
     sendRuntimeDiagnostics,
@@ -6914,6 +7737,16 @@ module.exports = {
     BRIDGE_HEARTBEAT_TIMEOUT_MIN_SECONDS,
     BRIDGE_HEARTBEAT_TIMEOUT_MAX_SECONDS,
     BRIDGE_HEARTBEAT_TIMEOUT_DEFAULT_SECONDS,
+    BRIDGE_HEARTBEAT_MIN_SECONDS,
+    BRIDGE_HEARTBEAT_MAX_SECONDS,
+    BRIDGE_HEARTBEAT_DEFAULT_SECONDS,
+    BRIDGE_HEARTBEAT_MISSED_LIMIT,
+    BRIDGE_CLIENT_BACKLOG_MIN_KB,
+    BRIDGE_CLIENT_BACKLOG_MAX_KB,
+    BRIDGE_CLIENT_BACKLOG_DEFAULT_KB,
+    BRIDGE_REPLAY_BUFFER_MIN_KB,
+    BRIDGE_REPLAY_BUFFER_MAX_KB,
+    BRIDGE_REPLAY_BUFFER_DEFAULT_KB,
     killAllSessions,
     closeSessions,
     endSessionInput,

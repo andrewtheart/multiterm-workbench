@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
 const { _electron: electron, expect, test } = require("@playwright/test");
+const { closeElectronTestApp } = require("../support/electron-app-cleanup");
 
 test("toggles native fullscreen focus mode and restores the previous chrome", async () => {
   const repoRoot = path.resolve(__dirname, "..", "..");
@@ -21,12 +22,13 @@ test("toggles native fullscreen focus mode and restores the previous chrome", as
       cwd: repoRoot,
       env: {
         ...process.env,
+        LOCALAPPDATA: userDataDir,
         PORT: "3296",
         MULTITERM_UPDATE_REPO: "invalid/disabled"
       }
     });
     const page = await electronApp.firstWindow();
-    await expect(page).toHaveTitle("MultiTerm Workbench");
+    await expect(page).toHaveTitle(/^MultiTerm Workbench \(BRIDGE-\d+\)$/);
     await page.waitForFunction(() => document.querySelector("#statusConn")?.textContent === "Connected");
 
     await page.keyboard.press("F11");
@@ -50,7 +52,7 @@ test("toggles native fullscreen focus mode and restores the previous chrome", as
     await expect(page.locator("#fullscreenAddTerminal")).toBeHidden();
   } finally {
     try {
-      if (electronApp) await electronApp.close();
+      await closeElectronTestApp(electronApp);
     } finally {
       fs.rmSync(userDataDir, { force: true, recursive: true });
     }
@@ -71,6 +73,7 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
       cwd: repoRoot,
       env: {
         ...process.env,
+        LOCALAPPDATA: userDataDir,
         PORT: "3297",
         MULTITERM_UPDATE_REPO: "invalid/disabled"
       }
@@ -86,7 +89,7 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
       };
     });
     const page = await electronApp.firstWindow();
-    await expect(page).toHaveTitle("MultiTerm Workbench");
+    await expect(page).toHaveTitle(/^MultiTerm Workbench \(BRIDGE-\d+\)$/);
     await page.waitForFunction(() => document.querySelector("#statusConn")?.textContent === "Connected");
     await page.waitForFunction(() => Boolean(state.activeId && state.terminals.has(state.activeId)));
     const terminalId = await page.evaluate(() => state.activeId);
@@ -131,7 +134,7 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
     ).toBe(marker);
 
     await page.mouse.click(geometry.endX, geometry.y, { button: "right" });
-    const copy = page.locator("#contextMenu .ctx-item").filter({ hasText: /^CopyCtrl\+Shift\+C/ });
+    const copy = page.getByRole("menuitem", { name: /^Copy Ctrl\+C/ });
     await expect(copy).toBeVisible();
     await expect(copy).not.toHaveAttribute("aria-disabled", "true");
     await copy.click();
@@ -165,7 +168,7 @@ test("copies a physical TUI selection through Electron's native clipboard", asyn
       }
     } finally {
       try {
-        if (electronApp) await electronApp.close();
+        await closeElectronTestApp(electronApp);
       } finally {
         fs.rmSync(userDataDir, { force: true, recursive: true });
       }
@@ -188,6 +191,7 @@ test("pastes a copied Explorer file into a bracketed-paste TUI prompt", async ()
       cwd: repoRoot,
       env: {
         ...process.env,
+        LOCALAPPDATA: userDataDir,
         PORT: "3298",
         MULTITERM_UPDATE_REPO: "invalid/disabled"
       }
@@ -203,7 +207,7 @@ test("pastes a copied Explorer file into a bracketed-paste TUI prompt", async ()
       };
     });
     const page = await electronApp.firstWindow();
-    await expect(page).toHaveTitle("MultiTerm Workbench");
+    await expect(page).toHaveTitle(/^MultiTerm Workbench \(BRIDGE-\d+\)$/);
     await page.waitForFunction(() => document.querySelector("#statusConn")?.textContent === "Connected");
     childProcess.execFileSync("powershell.exe", [
       "-NoLogo",
@@ -275,7 +279,7 @@ test("pastes a copied Explorer file into a bracketed-paste TUI prompt", async ()
       }
     } finally {
       try {
-        if (electronApp) await electronApp.close();
+        await closeElectronTestApp(electronApp);
       } finally {
         fs.rmSync(userDataDir, { force: true, recursive: true });
         fs.rmSync(copiedDirectory, { force: true, recursive: true });
@@ -296,6 +300,7 @@ test("pastes a copied Snipping Tool image into a bracketed-paste TUI prompt", as
       cwd: repoRoot,
       env: {
         ...process.env,
+        LOCALAPPDATA: userDataDir,
         PORT: "3299",
         MULTITERM_UPDATE_REPO: "invalid/disabled"
       }
@@ -318,7 +323,7 @@ test("pastes a copied Snipping Tool image into a bracketed-paste TUI prompt", as
     ownsClipboard = true;
 
     const page = await electronApp.firstWindow();
-    await expect(page).toHaveTitle("MultiTerm Workbench");
+    await expect(page).toHaveTitle(/^MultiTerm Workbench \(BRIDGE-\d+\)$/);
     await page.waitForFunction(() => document.querySelector("#statusConn")?.textContent === "Connected");
 
     const pastedPath = await page.evaluate(() => window.multiterm.readClipboardText());
@@ -370,7 +375,7 @@ test("pastes a copied Snipping Tool image into a bracketed-paste TUI prompt", as
       }
     } finally {
       try {
-        if (electronApp) await electronApp.close();
+        await closeElectronTestApp(electronApp);
       } finally {
         fs.rmSync(userDataDir, { force: true, recursive: true });
       }

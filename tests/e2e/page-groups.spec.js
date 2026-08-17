@@ -175,6 +175,38 @@ test.describe("Page groups", () => {
     await expect(page.locator(".pager-group")).toHaveCount(0);
   });
 
+  test("opens a new page inside the empty group whose drop target was invoked", async () => {
+    const groupId = await page.evaluate(() => createPageGroup("Destination", [], { keepEmpty: true }));
+    const empty = page.locator(`[data-group-id="${groupId}"] .pager-group-empty`);
+    const dropZone = page.locator(`[data-group-id="${groupId}"] .pager-group-chips`);
+    await expect(empty).toHaveText("Drop pages here");
+
+    await dropZone.click({ button: "right" });
+    const open = page.getByRole("menuitem", { name: /^Open new page/ });
+    await expect(open).toBeVisible();
+    await open.click();
+
+    const created = await page.evaluate((targetGroupId) => {
+      const active = pageById(state.activePageId);
+      return {
+        activeId: active?.id,
+        activeGroupId: active?.groupId,
+        groupPages: pagesInGroup(targetGroupId).map((entry) => entry.id),
+        persisted: JSON.parse(localStorage.getItem("multiterm.pages") || "{}")
+      };
+    }, groupId);
+    expect(created.activeGroupId).toBe(groupId);
+    expect(created.groupPages).toEqual([created.activeId]);
+    expect(created.persisted.pages.find((entry) => entry.id === created.activeId)?.groupId).toBe(groupId);
+    await expect(page.locator(`[data-group-id="${groupId}"] .pager-chip.is-active`)).toHaveCount(1);
+    await expect(page.locator(`[data-group-id="${groupId}"] .pager-group-empty`)).toHaveCount(0);
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator(`[data-group-id="${groupId}"] .pager-chip.is-active`)).toHaveCount(1);
+    expect(await page.evaluate((targetGroupId) => pageById(state.activePageId)?.groupId === targetGroupId, groupId)).toBe(true);
+  });
+
   test("keeps the active page visible when its group is collapsed", async () => {
     const id = await page.evaluate(() => createPageGroup("Release", ["page-1", "page-2"]));
     await page.evaluate((groupId) => setPageGroupCollapsed(groupId, true), id);

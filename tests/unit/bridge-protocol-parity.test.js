@@ -20,7 +20,10 @@ function between(source, startMarker, endMarker) {
 
 function nodeMessageTypes() {
   const handler = between(nodeBridge, "function handleClientMessage(", "function createSession(");
-  return [...handler.matchAll(/case "([^"]+)":/g)].map((match) => match[1]).sort();
+  return [...new Set([
+    ...[...handler.matchAll(/case "([^"]+)":/g)].map((match) => match[1]),
+    ...[...handler.matchAll(/message\.type === "([^"]+)"/g)].map((match) => match[1])
+  ])].sort();
 }
 
 function installedMessageTypes() {

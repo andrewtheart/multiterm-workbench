@@ -35,7 +35,10 @@ const defaultSettings = {
   aiTitleProvider: "copilot",
   allowBridgeTerminalFocus: false,
   appTheme: "dark",
+  bridgeClientBacklogKb: 4096,
+  bridgeHeartbeatSeconds: 30,
   bridgeHeartbeatTimeoutSeconds: 30,
+  bridgeReplayBufferKb: 512,
   autoTitleSuggestions: true,
   titleSuggestionHistoryLimit: 500,
   // Opt-in: hiding Focus/Maximize until hover is a real trade against
@@ -51,6 +54,7 @@ const defaultSettings = {
   automationHistoryLimit: 200,
   automationOutputCaptureKb: 128,
   automationStepTimeoutMinutes: 30,
+  addTerminalButtonColor: "#1677FF",
   bellNotify: false,
   // Custom header background picks, newest first, so the quick picker can offer
   // them again instead of only remembering the most recent one.
@@ -81,6 +85,7 @@ const defaultSettings = {
   diagnosticRetentionDays: 14,
   diagnosticRotationMb: 10,
   diagnosticViewerEntries: 5000,
+  externalTerminalFocus: "ask",
   focusWidth: 65,
   fontFamily: "Cascadia Mono",
   fontSize: 14,
@@ -119,6 +124,8 @@ const defaultSettings = {
   scrollback: 20000,
   scrollbackInfinite: false,
   searchAcrossPages: true,
+  showBridgeIdInWindowTitle: true,
+  showVersionInWindowTitle: false,
   sidecarHidden: false,
   sidecarWidth: SIDECAR_WIDTH_BOUNDS.fallback,
   silenceSeconds: 10,
@@ -146,6 +153,8 @@ const HEADER_BACKGROUND_QUICK_COLORS = Object.freeze([
   "#1E242C", "#2F3B46", ...PANE_COLORS.map((color) => color.toUpperCase())
 ]);
 const HEADER_BACKGROUND_CUSTOM_LIMIT = 6;
+const ADD_TERMINAL_BUTTON_DEFAULT_COLOR = "#1677FF";
+const addTerminalColorState = { hue: 215, saturation: 91, value: 100 };
 let headerBackgroundTerminalId = null;
 let headerBackgroundReturnFocus = null;
 let headerBackgroundDraft = null;
@@ -195,6 +204,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   diagnosticRetentionDays: "diagnostics logs troubleshooting retention history days keep delete cleanup durable jsonl zero unlimited",
   diagnosticRotationMb: "diagnostics logs troubleshooting rotation file size megabytes mb durable jsonl zero disabled",
   diagnosticViewerEntries: "diagnostics logs troubleshooting viewer entries records history limit maximum durable jsonl zero all unlimited",
+  externalTerminalFocus: "external terminal focus foreground vscode visual studio explorer cli launch open folder",
   layoutMode: "arrangement arrange tiling tile panes splits split grid mosaic stack strip rail master carousel spotlight bento canvas automatic",
   pagerPlacement: "pages page tabs tab tabbar tab-bar navigation navigator pagebar page-bar pager position placement location dock docking top bottom left right side sidebar",
   sidecarWidth: "settings panel layout controls sidebar width resize horizontal wider narrower",
@@ -234,10 +244,15 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   searchAcrossPages: "search find filter across every all pages other page gather collect borrow reveal results matches global workspace scope",
   outputCoalesceMs: "performance output batching batch coalesce grouping bridge chunks messages latency throttle delay milliseconds pty",
   outputBacklogKb: "performance output buffer queue backlog burst memory ram renderer pending kilobytes kb",
+  bridgeClientBacklogKb: "performance bridge client backlog queue slow stalled memory disconnect legacy synchronous send kilobytes kb",
+  bridgeReplayBufferKb: "performance bridge replay reconnect retention history gap output recovery memory kilobytes kb",
+  bridgeHeartbeatSeconds: "performance bridge heartbeat interval liveness ping pong client disconnect off seconds",
   maxInstallerSizeMb: "updater update download installer package maximum max size limit ceiling security megabytes mb",
   pageCloseAction: "page pages close remove terminals sessions move relocate ask remember confirmation prompt",
   keepSessionsOnClose: "keep preserve survive terminals sessions shells processes bridge background detach close quit exit window alive",
   restoreSession: "restore reopen remember previous last session startup launch restart terminals workspace resume",
+  showBridgeIdInWindowTitle: "window title bar bridge id identifier bridge-xxx show hide electron browser",
+  showVersionInWindowTitle: "window title bar app version release append show hide electron browser",
   autoUpdateChecks: "automatic updates updater check releases versions upgrade background scheduled",
   updateCheckIntervalHours: "update frequency cadence schedule interval timer hours polling check updater",
   bellNotify: "bell beep ding sound terminal notification notifications alert alerts audible",
@@ -509,6 +524,13 @@ function terminalFontFamilyName(terminal) {
 
 const elements = {
   addTerminal: document.querySelector("#addTerminal"),
+  addTerminalColorFlyout: document.querySelector("#addTerminalColorFlyout"),
+  addTerminalColorHandle: document.querySelector("#addTerminalColorHandle"),
+  addTerminalColorHex: document.querySelector("#addTerminalColorHex"),
+  addTerminalColorHue: document.querySelector("#addTerminalColorHue"),
+  addTerminalColorPlane: document.querySelector("#addTerminalColorPlane"),
+  addTerminalColorPreview: document.querySelector("#addTerminalColorPreview"),
+  addTerminalColorReset: document.querySelector("#addTerminalColorReset"),
   aiCopilotSetup: document.querySelector("#aiCopilotSetup"),
   aiProvidersRefresh: document.querySelector("#aiProvidersRefresh"),
   aiSetupCopilotAction: document.querySelector("#aiSetupCopilotAction"),
@@ -865,6 +887,10 @@ const elements = {
   diagnosticRetentionDays: document.querySelector("#diagnosticRetentionDays"),
   diagnosticRotationMb: document.querySelector("#diagnosticRotationMb"),
   diagnosticViewerEntries: document.querySelector("#diagnosticViewerEntries"),
+  externalTerminalFocus: document.querySelector("#externalTerminalFocus"),
+  externalTerminalFocusDecline: document.querySelector("#externalTerminalFocusDecline"),
+  externalTerminalFocusEnable: document.querySelector("#externalTerminalFocusEnable"),
+  externalTerminalFocusOverlay: document.querySelector("#externalTerminalFocusOverlay"),
   cwdInput: document.querySelector("#cwdInput"),
   fitAll: document.querySelector("#fitAll"),
   focusWidth: document.querySelector("#focusWidth"),
@@ -946,6 +972,9 @@ const elements = {
   notifySilence: document.querySelector("#notifySilence"),
   outputBacklogKb: document.querySelector("#outputBacklogKb"),
   outputCoalesceMs: document.querySelector("#outputCoalesceMs"),
+  bridgeClientBacklogKb: document.querySelector("#bridgeClientBacklogKb"),
+  bridgeReplayBufferKb: document.querySelector("#bridgeReplayBufferKb"),
+  bridgeHeartbeatSeconds: document.querySelector("#bridgeHeartbeatSeconds"),
   automationOutputCaptureKb: document.querySelector("#automationOutputCaptureKb"),
   automationStepTimeoutMinutes: document.querySelector("#automationStepTimeoutMinutes"),
   bridgeHeartbeatTimeoutSeconds: document.querySelector("#bridgeHeartbeatTimeoutSeconds"),
@@ -1039,6 +1068,8 @@ const elements = {
   paneTemplate: document.querySelector("#paneTemplate"),
   resetLayout: document.querySelector("#resetLayout"),
   restoreSession: document.querySelector("#restoreSession"),
+  showBridgeIdInWindowTitle: document.querySelector("#showBridgeIdInWindowTitle"),
+  showVersionInWindowTitle: document.querySelector("#showVersionInWindowTitle"),
   rightClickAction: document.querySelector("#rightClickAction"),
   rightClickWarnOverlay: document.querySelector("#rightClickWarnOverlay"),
   rightClickWarnText: document.querySelector("#rightClickWarnText"),
@@ -1071,10 +1102,18 @@ const elements = {
   statusShortcutHint: document.querySelector("#statusShortcutHint"),
   bridgeIdentityCard: document.querySelector("#bridgeIdentityCard"),
   bridgeIdentityChoose: document.querySelector("#bridgeIdentityChoose"),
+  bridgeIdentityEmpty: document.querySelector("#bridgeIdentityEmpty"),
+  bridgeIdentityFrontend: document.querySelector("#bridgeIdentityFrontend"),
   bridgeIdentityId: document.querySelector("#bridgeIdentityId"),
+  bridgeIdentityList: document.querySelector("#bridgeIdentityList"),
   bridgeIdentityNote: document.querySelector("#bridgeIdentityNote"),
   bridgeIdentityFocus: document.querySelector("#bridgeIdentityFocus"),
   bridgeIdentityStatus: document.querySelector("#bridgeIdentityStatus"),
+  bridgeIdentityWarning: document.querySelector("#bridgeIdentityWarning"),
+  bridgeIdentityWarningCancel: document.querySelector("#bridgeIdentityWarningCancel"),
+  bridgeIdentityWarningConfirm: document.querySelector("#bridgeIdentityWarningConfirm"),
+  bridgeIdentityWarningText: document.querySelector("#bridgeIdentityWarningText"),
+  bridgeIdentityWarningTitle: document.querySelector("#bridgeIdentityWarningTitle"),
   statusAdmin: document.querySelector("#statusAdmin"),
   statusMem: document.querySelector("#statusMem"),
   statusMemText: document.querySelector("#statusMemText"),
@@ -1164,6 +1203,7 @@ const elements = {
   terminalNotesFlyoutSave: document.querySelector("#terminalNotesFlyoutSave"),
   terminalNotesFlyoutSubtitle: document.querySelector("#terminalNotesFlyoutSubtitle"),
   terminalTheme: document.querySelector("#terminalTheme"),
+  topBarActionDescription: document.querySelector("#topBarActionDescription"),
   themeToggle: document.querySelector("#themeToggle"),
   toastHost: document.querySelector("#toastHost"),
   toggleHeader: document.querySelector("#toggleHeader"),
@@ -1239,16 +1279,20 @@ function normalizeCopilotCwdEntry(value) {
   return entry && entry.length <= 8192 ? entry : "";
 }
 
-function normalizeCopilotCwdHistory(value) {
+function normalizeCopilotCwdHistory(value, fallbackUsedAt = new Date().toISOString()) {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
   const history = [];
   for (const candidate of value) {
-    const entry = normalizeCopilotCwdEntry(candidate);
-    const key = entry.toLocaleLowerCase();
-    if (!entry || seen.has(key)) continue;
+    const path = normalizeCopilotCwdEntry(typeof candidate === "string" ? candidate : candidate?.path);
+    const key = path.toLocaleLowerCase();
+    if (!path || seen.has(key)) continue;
+    const candidateTime = typeof candidate?.usedAt === "string" ? new Date(candidate.usedAt) : null;
+    const usedAt = candidateTime && !Number.isNaN(candidateTime.getTime())
+      ? candidateTime.toISOString()
+      : fallbackUsedAt;
     seen.add(key);
-    history.push(entry);
+    history.push({ path, usedAt });
     if (history.length === COPILOT_CWD_HISTORY_LIMIT) break;
   }
   return history;
@@ -1256,10 +1300,27 @@ function normalizeCopilotCwdHistory(value) {
 
 function loadCopilotCwdHistory() {
   try {
-    return normalizeCopilotCwdHistory(JSON.parse(localStorage.getItem(COPILOT_CWD_HISTORY_STORAGE_KEY) || "[]"));
+    const raw = JSON.parse(localStorage.getItem(COPILOT_CWD_HISTORY_STORAGE_KEY) || "[]");
+    const history = normalizeCopilotCwdHistory(raw);
+    if (JSON.stringify(raw) !== JSON.stringify(history)) {
+      localStorage.setItem(COPILOT_CWD_HISTORY_STORAGE_KEY, JSON.stringify(history));
+    }
+    return history;
   } catch {
     return [];
   }
+}
+
+function copilotCwdHistoryTimeLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time unavailable";
+  return date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  });
 }
 
 function normalizeTitleSuggestionHistory(value) {
@@ -1578,6 +1639,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindTitleSuggestionHistory();
   bindCopilotSessionTitlesFlyout();
   bindHeaderBackgroundFlyout();
+  bindAddTerminalColorFlyout();
   applyVersion();
   applySettings();
   enhanceComboboxes();
@@ -1590,9 +1652,11 @@ window.addEventListener("DOMContentLoaded", () => {
   bindContextMenu();
   bindHeaderBackgroundEditor();
   bindTopBarShortcutMenus();
+  bindTopBarActionDescriptions();
   bindRightClickWarning();
   bindCloseConfirm();
   bindPageCloseConfirm();
+  bindExternalTerminalFocusPrompt();
   bindUpdateConsent();
   bindAutoTitleNotice();
   bindUpdateDialog();
@@ -1745,6 +1809,9 @@ function bindControls() {
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
+  elements.externalTerminalFocus.value = normalizeExternalTerminalFocus(state.settings.externalTerminalFocus);
+  elements.showBridgeIdInWindowTitle.checked = Boolean(state.settings.showBridgeIdInWindowTitle);
+  elements.showVersionInWindowTitle.checked = Boolean(state.settings.showVersionInWindowTitle);
   elements.bellNotify.checked = state.settings.bellNotify;
   elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
@@ -1756,6 +1823,18 @@ function bindControls() {
   elements.searchAcrossPages.checked = state.settings.searchAcrossPages;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  state.settings.bridgeClientBacklogKb = clampBridgeClientBacklogKb(
+    state.settings.bridgeClientBacklogKb,
+    elements.bridgeClientBacklogKb
+  );
+  state.settings.bridgeReplayBufferKb = clampBridgeReplayBufferKb(
+    state.settings.bridgeReplayBufferKb,
+    elements.bridgeReplayBufferKb
+  );
+  state.settings.bridgeHeartbeatSeconds = clampBridgeHeartbeatSeconds(
+    state.settings.bridgeHeartbeatSeconds,
+    elements.bridgeHeartbeatSeconds
+  );
   state.settings.automationOutputCaptureKb = clampAutomationOutputCaptureKb(
     state.settings.automationOutputCaptureKb,
     elements.automationOutputCaptureKb
@@ -2013,6 +2092,9 @@ function bindControls() {
   bindSetting(elements.headerActionsRevealOnHover, "headerActionsRevealOnHover", "change", (_, element) => element.checked);
   bindSetting(elements.keepSessionsOnClose, "keepSessionsOnClose", "change", (_, element) => element.checked);
   bindSetting(elements.restoreSession, "restoreSession", "change", (_, element) => element.checked);
+  bindSetting(elements.externalTerminalFocus, "externalTerminalFocus", "change", normalizeExternalTerminalFocus);
+  bindSetting(elements.showBridgeIdInWindowTitle, "showBridgeIdInWindowTitle", "change", (_, element) => element.checked);
+  bindSetting(elements.showVersionInWindowTitle, "showVersionInWindowTitle", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
   bindSetting(elements.highlightInputPrompts, "highlightInputPrompts", "change", (_, element) => element.checked);
   bindSetting(elements.rightClickAction, "rightClickAction", "change", (value) => value);
@@ -2021,6 +2103,9 @@ function bindControls() {
   bindSetting(elements.scrollOnOutput, "scrollOnOutput", "change", (_, element) => element.checked);
   bindSetting(elements.outputCoalesceMs, "outputCoalesceMs", "change", clampOutputCoalesceMs);
   bindSetting(elements.outputBacklogKb, "outputBacklogKb", "change", clampOutputBacklogKb);
+  bindSetting(elements.bridgeClientBacklogKb, "bridgeClientBacklogKb", "change", clampBridgeClientBacklogKb);
+  bindSetting(elements.bridgeReplayBufferKb, "bridgeReplayBufferKb", "change", clampBridgeReplayBufferKb);
+  bindSetting(elements.bridgeHeartbeatSeconds, "bridgeHeartbeatSeconds", "change", clampBridgeHeartbeatSeconds);
   bindSetting(elements.automationOutputCaptureKb, "automationOutputCaptureKb", "change", clampAutomationOutputCaptureKb);
   bindSetting(elements.automationStepTimeoutMinutes, "automationStepTimeoutMinutes", "change", clampAutomationStepTimeoutMinutes);
   bindSetting(elements.bridgeHeartbeatTimeoutSeconds, "bridgeHeartbeatTimeoutSeconds", "change", clampBridgeHeartbeatTimeoutSeconds);
@@ -2182,7 +2267,8 @@ function bindSetting(element, key, eventName, transform) {
     if (key === "layout") {
       clearSnapLayout(false);
     }
-    if (key === "outputCoalesceMs" || key === "bridgeHeartbeatTimeoutSeconds" || key === "copilotLogViewerEnabled"
+    if (key === "outputCoalesceMs" || key === "bridgeClientBacklogKb" || key === "bridgeReplayBufferKb"
+      || key === "bridgeHeartbeatSeconds" || key === "bridgeHeartbeatTimeoutSeconds" || key === "copilotLogViewerEnabled"
       || key === "copilotLogInitialTailKb" || key === "diagnosticRetentionDays"
         || key === "diagnosticRotationMb" || key === "diagnosticViewerEntries") {
       if (key === "diagnosticViewerEntries") {
@@ -2218,6 +2304,9 @@ function sendBridgeConfig() {
   sendBridge({
     type: "config",
     outputCoalesceMs: Number(state.settings.outputCoalesceMs),
+    bridgeClientBacklogKb: Number(state.settings.bridgeClientBacklogKb),
+    bridgeReplayBufferKb: Number(state.settings.bridgeReplayBufferKb),
+    bridgeHeartbeatSeconds: Number(state.settings.bridgeHeartbeatSeconds),
     bridgeHeartbeatTimeoutSeconds: Number(state.settings.bridgeHeartbeatTimeoutSeconds),
     diagnosticRetentionDays: diagnostics.retentionDays,
     diagnosticRotationMb: diagnostics.rotationMb,
@@ -2227,6 +2316,34 @@ function sendBridgeConfig() {
     copilotLogEnabledAt: Number(state.copilotLogEnabledAt)
   });
   window.multiterm?.configureDiagnostics?.(diagnostics)?.catch?.(() => {});
+}
+
+const BRIDGE_GLOBAL_CONTROL_FIELDS = Object.freeze({
+  outputCoalesceMs: "outputCoalesceMs",
+  bridgeClientBacklogKb: "bridgeClientBacklogKb",
+  bridgeReplayBufferKb: "bridgeReplayBufferKb",
+  bridgeHeartbeatSeconds: "bridgeHeartbeatSeconds",
+  diagnosticRetentionDays: "diagnosticRetentionDays",
+  diagnosticRotationMb: "diagnosticRotationMb",
+  diagnosticViewerEntries: "diagnosticViewerEntries",
+  copilotLogInitialTailKb: "copilotLogInitialTailKb"
+});
+
+function reconcileBridgeConfig(message) {
+  const owner = message.configOwner !== false;
+  for (const [field, elementName] of Object.entries(BRIDGE_GLOBAL_CONTROL_FIELDS)) {
+    const element = elements[elementName];
+    if (!element || message[field] === undefined) continue;
+    element.value = String(message[field]);
+    element.dataset.configOwner = String(owner);
+    element.title = owner ? "" : "Active value is controlled by another MultiTerm window.";
+  }
+  if (elements.copilotLogViewerEnabled && message.copilotLogViewerEnabled !== undefined) {
+    elements.copilotLogViewerEnabled.checked = message.copilotLogViewerEnabled === true;
+    elements.copilotLogViewerEnabled.dataset.configOwner = String(owner);
+    elements.copilotLogViewerEnabled.title = owner ? "" : "Active value is controlled by another MultiTerm window.";
+  }
+  return owner;
 }
 
 function sendCommunicationConfig() {
@@ -2243,6 +2360,9 @@ function sendCommunicationConfig() {
 // the value in force.
 const OUTPUT_COALESCE_MS_BOUNDS = { min: 0, max: 100, fallback: 8 };
 const OUTPUT_BACKLOG_KB_BOUNDS = { min: 64, max: 65536, fallback: 1024 };
+const BRIDGE_CLIENT_BACKLOG_KB_BOUNDS = { min: 64, max: 16384, fallback: 4096 };
+const BRIDGE_REPLAY_BUFFER_KB_BOUNDS = { min: 16, max: 4096, fallback: 512 };
+const BRIDGE_HEARTBEAT_SECONDS_BOUNDS = { min: 5, max: 600, fallback: 30 };
 const AUTOMATION_OUTPUT_CAPTURE_KB_BOUNDS = { min: 16, max: 512, fallback: 128 };
 const AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS = { min: 1, max: 1440, fallback: 30 };
 const BRIDGE_HEARTBEAT_TIMEOUT_SECONDS_BOUNDS = { min: 10, max: 300, fallback: 30 };
@@ -2273,6 +2393,14 @@ function clampSettingNumber(value, element, bounds) {
   const next = Number.isFinite(requested)
     ? Math.min(bounds.max, Math.max(bounds.min, Math.round(requested)))
     : bounds.fallback;
+  element.value = next;
+  return next;
+}
+
+function clampSpecialZeroSetting(value, element, bounds) {
+  const requested = Number(value);
+  const rounded = Number.isFinite(requested) ? Math.round(requested) : bounds.fallback;
+  const next = rounded === 0 ? 0 : Math.min(bounds.max, Math.max(bounds.min, rounded));
   element.value = next;
   return next;
 }
@@ -2357,6 +2485,18 @@ function clampOutputCoalesceMs(value, element) {
 
 function clampOutputBacklogKb(value, element) {
   return clampSettingNumber(value, element, OUTPUT_BACKLOG_KB_BOUNDS);
+}
+
+function clampBridgeClientBacklogKb(value, element) {
+  return clampSpecialZeroSetting(value, element, BRIDGE_CLIENT_BACKLOG_KB_BOUNDS);
+}
+
+function clampBridgeReplayBufferKb(value, element) {
+  return clampSpecialZeroSetting(value, element, BRIDGE_REPLAY_BUFFER_KB_BOUNDS);
+}
+
+function clampBridgeHeartbeatSeconds(value, element) {
+  return clampSpecialZeroSetting(value, element, BRIDGE_HEARTBEAT_SECONDS_BOUNDS);
 }
 
 function clampAutomationOutputCaptureKb(value, element) {
@@ -2553,6 +2693,7 @@ function setAiSelectOptions(select, choices, selectedValue) {
     option.value = choice.value;
     option.textContent = choice.label;
     option.disabled = Boolean(choice.disabled);
+    if (choice.detail) option.dataset.detail = choice.detail;
     if (!choice.group) {
       currentGroup = null;
       nodes.push(option);
@@ -2822,7 +2963,7 @@ function connectBridge(locationProtocol = window.location.protocol) {
   state.reconnectTimer = null;
 
   const protocol = locationProtocol === "https:" ? "wss:" : "ws:";
-  const url = `${protocol}//${window.location.host}/ws`;
+  const url = `${protocol}//${window.location.host}/ws?renderer=1`;
   const reconnecting = state.reconnectAttempts > 0;
   log.info("bridge", `${reconnecting ? "Reconnecting" : "Connecting"} to ${url}`);
   const socket = new WebSocket(url);
@@ -2837,7 +2978,7 @@ function connectBridge(locationProtocol = window.location.protocol) {
     state.socketReady = true;
     state.bridgeLastMessageAt = Date.now();
     state.reconnectAttempts = 0;
-    setBridgeStatus("Bridge connected", "online");
+    setBridgeStatus(bridgeConnectedStatusText(), "online");
     log.info("bridge", wasReconnecting ? "WebSocket reconnected" : "WebSocket connected");
     announceRendererPresence();
     sendBridgeConfig();
@@ -2919,7 +3060,14 @@ function scheduleReconnect() {
 
 function handleBridgeMessage(message) {
   if (message.type === "heartbeat") {
-    if (message.nonce === state.bridgeHeartbeatNonce) state.bridgeHeartbeatNonce = "";
+    if (message.nonce === state.bridgeHeartbeatNonce) {
+      state.bridgeHeartbeatNonce = "";
+    } else {
+      // An unsolicited probe. The installed bridge cannot observe WebSocket
+      // pongs, so it asks directly; answering is what keeps a hidden window
+      // alive, because our own heartbeat timer only runs while visible.
+      sendBridge({ type: "heartbeat", nonce: message.nonce, reply: true });
+    }
     return;
   }
 
@@ -3054,6 +3202,11 @@ function handleBridgeMessage(message) {
     return;
   }
 
+  if (message.type === "bridgeInstances") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
   if (message.type === "sessionPromoted") {
     resolveBridgeRequest(message, message);
     return;
@@ -3078,6 +3231,7 @@ function handleBridgeMessage(message) {
     state.copilotSetupScript = typeof message.copilotSetupScript === "string" ? message.copilotSetupScript : "";
     state.hostUser = typeof message.currentUser === "string" ? message.currentUser.trim() : state.hostUser;
     warnAboutSharedBrowserProfile(message.sharedBrowserProfile === true);
+    updateBridgeIdentityPresentation();
     renderBridgeIdentity();
     const known = new Set();
     const openFolders = Array.isArray(message.openFolders)
@@ -3106,6 +3260,7 @@ function handleBridgeMessage(message) {
             const savedMeta = savedMetadata.get(session.id) || null;
             const restored = addTerminal({ reattach: true, session, savedMeta });
             if (savedMeta?.minimized && restored) minimizeTerminal(restored.id);
+            if (restored) requestTerminalOutputReplay(restored);
           }
         }
       });
@@ -3173,8 +3328,12 @@ function handleBridgeMessage(message) {
   }
 
   if (message.type === "created") {
-    const terminal = state.terminals.get(message.id);
-    if (!terminal) return;
+    let terminal = state.terminals.get(message.id);
+    if (!terminal) {
+      terminal = addTerminal({ reattach: true, session: message });
+      if (!terminal) return;
+      requestTerminalOutputReplay(terminal);
+    }
     terminal.cwd = message.cwd;
     terminal.pid = message.pid;
     terminal.tmux = message.tmux || terminal.tmux;
@@ -3286,8 +3445,21 @@ function handleBridgeMessage(message) {
   if (message.type === "output") {
     const terminal = state.terminals.get(message.id);
     if (terminal) {
+      if (Number.isSafeInteger(message.seq)) terminal.lastOutputSeq = message.seq;
       enqueueTerminalOutput(terminal, message.data);
     }
+    return;
+  }
+
+  if (message.type === "outputResumed") {
+    const terminal = state.terminals.get(message.id);
+    if (terminal && Number.isSafeInteger(message.seq)) terminal.lastOutputSeq = message.seq;
+    return;
+  }
+
+  if (message.type === "outputGap") {
+    const terminal = state.terminals.get(message.id);
+    if (terminal) markTerminalDesynchronized(terminal, message);
     return;
   }
 
@@ -3347,6 +3519,7 @@ function handleBridgeMessage(message) {
 
   if (message.type === "config") {
     if (typeof message.copilotLogDirectory === "string") state.copilotLogDirectory = message.copilotLogDirectory;
+    reconcileBridgeConfig(message);
     log.debug("bridge", "Bridge output batching applied", { outputCoalesceMs: message.outputCoalesceMs });
     return;
   }
@@ -3385,6 +3558,15 @@ function handleBridgeMessage(message) {
       sessions: [],
       totals: {}
     });
+    return;
+  }
+
+  if (message.type === "error" && /Unsupported message type:\s*listBridgeInstances/i.test(message.message || "")) {
+    resolveBridgeRequestByType("listBridgeInstances", { type: "bridgeInstances", bridges: [] });
+    if (!elements.bridgeIdentityCard.hidden) {
+      elements.bridgeIdentityEmpty.hidden = false;
+      elements.bridgeIdentityEmpty.textContent = "Bridge switching requires an updated bridge.";
+    }
     return;
   }
 
@@ -3432,14 +3614,13 @@ function handleBridgeMessage(message) {
 
 function openFolderInNewTerminal(folder) {
   if (typeof folder !== "string" || !folder.trim()) return null;
-  // The request came from Explorer or VS Code, so the window that answers it has
-  // to come forward or the click looks like it did nothing.
-  focusAppWindow();
-  return addTerminal({
+  const terminal = addTerminal({
     reveal: true,
     runStartup: true,
     cwd: folder.trim()
   });
+  handleExternalTerminalAdded(terminal);
+  return terminal;
 }
 
 function normalizeExternalTerminalLaunch(value) {
@@ -3468,7 +3649,6 @@ function normalizeExternalTerminalLaunch(value) {
 function openExternalTerminal(value) {
   const launch = normalizeExternalTerminalLaunch(value);
   if (!launch) return null;
-  focusAppWindow();
   const copilotLogKey = launch.assistantType === "copilot" ? createAiSessionId() : "";
   const assistantCommand = launch.assistantType
     ? buildAiAssistantCommand({
@@ -3497,6 +3677,7 @@ function openExternalTerminal(value) {
     claimAiSessionId(terminal, copilotLogKey);
     registerCopilotLogTerminal(copilotLogKey, terminal);
   }
+  handleExternalTerminalAdded(terminal);
   return terminal;
 }
 
@@ -3518,7 +3699,50 @@ function reattachExistingSession(terminal, session) {
   updateTerminalSearchVisibility(terminal);
   scheduleFit(terminal);
   scheduleTerminalConnections();
+  requestTerminalOutputReplay(terminal);
   log.info("session", `Session reattached: ${terminal.titleInput.value}`, { id: terminal.id, pid: session.pid });
+}
+
+// An existing pane resumes after its last rendered frame. A pane rebuilt from
+// welcome starts at zero, so it receives the retained screen history or an
+// explicit gap instead of treating an empty screen as current.
+function requestTerminalOutputReplay(terminal) {
+  sendBridge({ type: "resumeOutput", id: terminal.id, lastSeq: terminal.lastOutputSeq });
+}
+
+// An incomplete terminal screen must never be presented as current: xterm has
+// applied only part of a byte stream, so modes and the cursor can be anywhere.
+function markTerminalDesynchronized(terminal, message) {
+  terminal.desynchronized = true;
+  if (Number.isSafeInteger(message.seq)) terminal.lastOutputSeq = message.seq;
+  terminal.pane.classList.add("is-desynchronized");
+  terminal.desyncElement.hidden = false;
+  writelnTerminal(terminal, "");
+  writelnTerminal(terminal, "\x1b[33mOutput was lost while this terminal was disconnected; the screen above is incomplete.\x1b[0m");
+  log.warn("session", `Session output gap: ${terminal.titleInput.value}`, {
+    id: terminal.id,
+    expected: message.expected,
+    available: message.available
+  });
+}
+
+function clearTerminalDesynchronized(terminal) {
+  terminal.desynchronized = false;
+  terminal.pane.classList.remove("is-desynchronized");
+  terminal.desyncElement.hidden = true;
+}
+
+function resolveTerminalDesynchronized(terminal, action) {
+  if (action === "clear") {
+    clearTerminal(terminal.id);
+    return true;
+  } else if (action === "restart") {
+    restartSession(terminal.id);
+    clearTerminalDesynchronized(terminal);
+    return true;
+  } else {
+    return false;
+  }
 }
 
 // A terminal that was live before the drop but is absent from the bridge's
@@ -3612,6 +3836,7 @@ function addTerminal(options = {}) {
   const titleGenerate = pane.querySelector(".pane-title-generate");
   const titleReview = pane.querySelector(".pane-title-review");
   const status = pane.querySelector(".pane-status");
+  const desync = pane.querySelector(".pane-desync");
   const term = new Terminal({
     allowProposedApi: true,
     allowTransparency: false,
@@ -3756,6 +3981,9 @@ function addTerminal(options = {}) {
     startedAt: session.startedAt || null,
     status: options.reattach ? "live" : "starting",
     statusElement: status,
+    desyncElement: desync,
+    desynchronized: false,
+    lastOutputSeq: 0,
     term,
     titleDisplay,
     titleGenerate,
@@ -5058,6 +5286,11 @@ function runHeaderAction(terminal, action, anchor = null) {
 }
 
 function bindPaneControls(terminal) {
+  terminal.desyncElement.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-desync]");
+    if (button) resolveTerminalDesynchronized(terminal, button.dataset.desync);
+  });
+
   terminal.titleInput.addEventListener("change", () => {
     commitTerminalTitle(terminal, terminal.titleInput.value, true, "manual");
   });
@@ -7748,6 +7981,46 @@ function focusAppWindow() {
   window.focus();
 }
 
+function normalizeExternalTerminalFocus(value) {
+  return value === "always" || value === "never" ? value : "ask";
+}
+
+function closeExternalTerminalFocusPrompt() {
+  if (!elements.externalTerminalFocusOverlay) return;
+  elements.externalTerminalFocusOverlay.classList.remove("is-open");
+  window.setTimeout(() => { elements.externalTerminalFocusOverlay.hidden = true; }, 150);
+}
+
+function chooseExternalTerminalFocus(value) {
+  state.settings.externalTerminalFocus = normalizeExternalTerminalFocus(value);
+  elements.externalTerminalFocus.value = state.settings.externalTerminalFocus;
+  elements.externalTerminalFocus._combo?.sync?.();
+  saveSettings();
+  closeExternalTerminalFocusPrompt();
+}
+
+function openExternalTerminalFocusPrompt() {
+  if (!elements.externalTerminalFocusOverlay || !elements.externalTerminalFocusOverlay.hidden) return;
+  elements.externalTerminalFocusOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.externalTerminalFocusOverlay.classList.add("is-open");
+    elements.externalTerminalFocusEnable.focus();
+  });
+}
+
+function handleExternalTerminalAdded(terminal) {
+  const preference = normalizeExternalTerminalFocus(state.settings.externalTerminalFocus);
+  if (!terminal || preference === "never") return;
+  focusAppWindow();
+  if (preference === "ask") openExternalTerminalFocusPrompt();
+}
+
+function bindExternalTerminalFocusPrompt() {
+  if (!elements.externalTerminalFocusOverlay) return;
+  elements.externalTerminalFocusDecline.addEventListener("click", () => chooseExternalTerminalFocus("never"));
+  elements.externalTerminalFocusEnable.addEventListener("click", () => chooseExternalTerminalFocus("always"));
+}
+
 function focusNotifiedTerminal(terminal) {
   focusAppWindow();
   if (!terminal || !state.terminals.has(terminal.id)) return;
@@ -8894,6 +9167,10 @@ const batchTaskRunners = {
 function applySettings() {
   if (deferDuringBatch("applySettings")) return;
   applyAppTheme();
+  const addTerminalColor = normalizeTerminalColor(state.settings.addTerminalButtonColor) || ADD_TERMINAL_BUTTON_DEFAULT_COLOR;
+  state.settings.addTerminalButtonColor = addTerminalColor;
+  document.documentElement.style.setProperty("--add-terminal-color", addTerminalColor);
+  updateWindowTitle();
   document.body.classList.toggle("header-hidden", state.settings.headerHidden);
   document.body.classList.toggle("sidecar-hidden", state.settings.sidecarHidden);
   applySidecarWidth(state.settings.sidecarWidth);
@@ -9010,6 +9287,45 @@ function updateStatusBar() {
 
 // The status label is the only place the bridge is visible, so it carries the id
 // that identifies which terminal window is serving this window.
+const bridgeIdentityInstances = { bridges: [], generation: 0, pending: null, warningReturnFocus: null };
+let bridgeIdentityNavigate = (url) => window.location.assign(url);
+
+function normalizeBridgeIdentityInstance(value) {
+  if (!value || typeof value !== "object") return null;
+  try {
+    const url = new URL(String(value.url || ""));
+    const host = url.hostname === "[::1]" ? "::1" : url.hostname;
+    const port = Number(value.port);
+    if (url.protocol !== "http:"
+        || !["127.0.0.1", "localhost", "::1"].includes(host)
+        || !Number.isSafeInteger(port)
+        || port < 1
+        || port > 65535
+        || Number(url.port) !== port) return null;
+    return {
+      bridgeId: String(value.bridgeId || "Bridge").slice(0, 64),
+      bridgeType: value.bridgeType === "installed" ? "installed" : "electron",
+      current: value.current === true,
+      port,
+      rendererClients: Math.max(0, Number(value.rendererClients) || 0),
+      sessions: Math.max(0, Number(value.sessions) || 0),
+      url: `${url.protocol}//${url.host}/`
+    };
+  } catch {
+    return null;
+  }
+}
+
+function bridgeFrontendText(count) {
+  if (count === 1) return "Frontend connected";
+  if (count > 1) return `${count} frontends connected`;
+  return "No frontend";
+}
+
+function occupiedBridgeFrontendText(count) {
+  return count === 1 ? "a frontend connected" : `${count} frontends connected`;
+}
+
 function renderBridgeIdentity() {
   if (!elements.bridgeIdentityCard) {
     return;
@@ -9019,14 +9335,97 @@ function renderBridgeIdentity() {
   elements.statusConn.title = identifier ? `Bridge ${identifier}` : "";
   const focusable = Boolean(identifier) && state.canFocusBridgeTerminal && state.socketReady;
   elements.bridgeIdentityFocus.disabled = !focusable;
-  const canChooseBridge = typeof window.multiterm?.chooseBridgeNow === "function";
-  elements.bridgeIdentityChoose.hidden = !canChooseBridge;
-  elements.bridgeIdentityChoose.disabled = !canChooseBridge;
+  const nativeChooser = typeof window.multiterm?.chooseBridgeNow === "function";
+  elements.bridgeIdentityChoose.hidden = !state.socketReady;
+  elements.bridgeIdentityChoose.disabled = !state.socketReady;
+  elements.bridgeIdentityChoose.textContent = nativeChooser ? "Open bridge chooser..." : "Refresh bridge list";
   elements.bridgeIdentityNote.textContent = !identifier
     ? "This bridge did not report an id."
     : state.canFocusBridgeTerminal
       ? "Served by the terminal window titled with this id."
       : "This bridge does not run in its own terminal window.";
+}
+
+function renderBridgeIdentityInstances() {
+  if (!elements.bridgeIdentityList) return;
+  const current = bridgeIdentityInstances.bridges.find((bridge) => bridge.current)
+    || bridgeIdentityInstances.bridges.find((bridge) => bridge.bridgeId === state.bridgeId);
+  const currentClients = current?.rendererClients ?? (state.socketReady ? 1 : 0);
+  elements.bridgeIdentityFrontend.querySelector("span").textContent = bridgeFrontendText(currentClients);
+
+  elements.bridgeIdentityList.textContent = "";
+  const alternatives = bridgeIdentityInstances.bridges.filter((bridge) => !bridge.current && bridge.bridgeId !== state.bridgeId);
+  elements.bridgeIdentityEmpty.hidden = alternatives.length > 0;
+  elements.bridgeIdentityEmpty.textContent = alternatives.length > 0 ? "" : "No other live bridges found.";
+  const interactive = typeof window.multiterm?.chooseBridgeNow !== "function";
+  for (const bridge of alternatives) {
+    const row = document.createElement(interactive ? "button" : "div");
+    if (interactive) row.type = "button";
+    row.className = `bridge-identity-option${bridge.rendererClients > 0 ? " has-frontend" : ""}`;
+    const icon = document.createElement("i");
+    icon.dataset.lucide = bridge.rendererClients > 0 ? "monitor-check" : "monitor-off";
+    const copy = document.createElement("span");
+    copy.className = "bridge-identity-option-copy";
+    const name = document.createElement("strong");
+    name.textContent = bridge.bridgeId;
+    const detail = document.createElement("small");
+    detail.textContent = `${bridge.bridgeType === "installed" ? "Installed" : "Electron"} · port ${bridge.port} · ${bridge.sessions} session${bridge.sessions === 1 ? "" : "s"}`;
+    copy.append(name, detail);
+    const occupancy = document.createElement("span");
+    occupancy.className = "bridge-identity-option-state";
+    occupancy.textContent = bridgeFrontendText(bridge.rendererClients);
+    row.append(icon, copy, occupancy);
+    if (interactive) row.addEventListener("click", () => requestBridgeIdentitySwitch(bridge, row));
+    elements.bridgeIdentityList.append(row);
+  }
+  refreshIcons(elements.bridgeIdentityCard);
+}
+
+async function refreshBridgeIdentityInstances({ focusFirst = false } = {}) {
+  const generation = ++bridgeIdentityInstances.generation;
+  elements.bridgeIdentityEmpty.hidden = false;
+  elements.bridgeIdentityEmpty.textContent = "Looking for other bridges...";
+  const response = await requestBridge({ type: "listBridgeInstances" }, { timeout: 6000 });
+  if (generation !== bridgeIdentityInstances.generation || elements.bridgeIdentityCard.hidden) return false;
+  bridgeIdentityInstances.bridges = (Array.isArray(response?.bridges) ? response.bridges : [])
+    .map(normalizeBridgeIdentityInstance)
+    .filter(Boolean);
+  renderBridgeIdentityInstances();
+  if (focusFirst) elements.bridgeIdentityList.querySelector("button")?.focus({ preventScroll: true });
+  return true;
+}
+
+function connectBridgeIdentityInstance(bridge) {
+  if (!bridge) return false;
+  setBridgeIdentityStatus(`Connecting to ${bridge.bridgeId}...`, "");
+  bridgeIdentityNavigate(bridge.url);
+  return true;
+}
+
+function requestBridgeIdentitySwitch(bridge, returnFocus = null) {
+  if (!bridge || bridge.current) return false;
+  if (bridge.rendererClients <= 0) return connectBridgeIdentityInstance(bridge);
+  bridgeIdentityInstances.pending = bridge;
+  bridgeIdentityInstances.warningReturnFocus = returnFocus;
+  elements.bridgeIdentityWarningTitle.textContent = `${bridge.bridgeId} already has ${occupiedBridgeFrontendText(bridge.rendererClients)}`;
+  elements.bridgeIdentityWarningText.textContent = `Connecting this window will make ${bridge.rendererClients + 1} frontends share its ${bridge.sessions} terminal session${bridge.sessions === 1 ? "" : "s"}.`;
+  elements.bridgeIdentityWarning.hidden = false;
+  elements.bridgeIdentityWarningConfirm.focus({ preventScroll: true });
+  return false;
+}
+
+function closeBridgeIdentityWarning({ restoreFocus = false } = {}) {
+  const returnFocus = bridgeIdentityInstances.warningReturnFocus;
+  bridgeIdentityInstances.pending = null;
+  bridgeIdentityInstances.warningReturnFocus = null;
+  elements.bridgeIdentityWarning.hidden = true;
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+
+function confirmBridgeIdentitySwitch() {
+  const bridge = bridgeIdentityInstances.pending;
+  closeBridgeIdentityWarning();
+  return connectBridgeIdentityInstance(bridge);
 }
 
 // Without a Chromium browser the bridge cannot hand the UI a private profile, so
@@ -9058,20 +9457,42 @@ function setBridgeIdentityStatus(text, tone) {
   }
 }
 
+const BRIDGE_IDENTITY_CLOSE_DELAY_MS = 180;
+let bridgeIdentityCloseTimer = 0;
+
+function cancelBridgeIdentityClose() {
+  window.clearTimeout(bridgeIdentityCloseTimer);
+  bridgeIdentityCloseTimer = 0;
+}
+
 function openBridgeIdentityCard() {
+  cancelBridgeIdentityClose();
   if (!elements.bridgeIdentityCard) {
     return;
   }
   renderBridgeIdentity();
   elements.bridgeIdentityCard.hidden = false;
+  closeBridgeIdentityWarning();
+  void refreshBridgeIdentityInstances();
 }
 
 function closeBridgeIdentityCard() {
+  cancelBridgeIdentityClose();
+  bridgeIdentityInstances.generation += 1;
+  closeBridgeIdentityWarning();
   if (!elements.bridgeIdentityCard) {
     return;
   }
   elements.bridgeIdentityCard.hidden = true;
   setBridgeIdentityStatus("", "");
+}
+
+function scheduleBridgeIdentityClose() {
+  cancelBridgeIdentityClose();
+  bridgeIdentityCloseTimer = window.setTimeout(() => {
+    bridgeIdentityCloseTimer = 0;
+    closeBridgeIdentityCard();
+  }, BRIDGE_IDENTITY_CLOSE_DELAY_MS);
 }
 
 async function requestBridgeTerminalFocus() {
@@ -9103,7 +9524,7 @@ async function requestBridgeTerminalFocus() {
 
 async function chooseAnotherBridge() {
   const choose = window.multiterm?.chooseBridgeNow;
-  if (typeof choose !== "function") return false;
+  if (typeof choose !== "function") return refreshBridgeIdentityInstances({ focusFirst: true });
   elements.bridgeIdentityChoose.disabled = true;
   elements.bridgeIdentityFocus.disabled = true;
   setBridgeIdentityStatus("Looking for other bridges...", "");
@@ -9129,7 +9550,9 @@ function bindBridgeIdentityCard() {
     return;
   }
   wrap.addEventListener("pointerenter", openBridgeIdentityCard);
-  wrap.addEventListener("pointerleave", closeBridgeIdentityCard);
+  wrap.addEventListener("pointerleave", scheduleBridgeIdentityClose);
+  elements.bridgeIdentityCard.addEventListener("pointerenter", cancelBridgeIdentityClose);
+  elements.bridgeIdentityCard.addEventListener("pointerleave", scheduleBridgeIdentityClose);
   elements.statusConn.addEventListener("focus", openBridgeIdentityCard);
   wrap.addEventListener("focusout", (event) => {
     if (!wrap.contains(event.relatedTarget)) {
@@ -9138,6 +9561,8 @@ function bindBridgeIdentityCard() {
   });
   elements.bridgeIdentityFocus.addEventListener("click", requestBridgeTerminalFocus);
   elements.bridgeIdentityChoose.addEventListener("click", chooseAnotherBridge);
+  elements.bridgeIdentityWarningCancel.addEventListener("click", () => closeBridgeIdentityWarning({ restoreFocus: true }));
+  elements.bridgeIdentityWarningConfirm.addEventListener("click", confirmBridgeIdentitySwitch);
 }
 
 function updateFontZoomControls() {
@@ -9464,6 +9889,22 @@ function setBridgeStatus(text, tone) {
   elements.bridgeStatus.dataset.tone = tone;
 }
 
+function bridgeConnectedStatusText() {
+  return `Bridge connected${state.bridgeId ? ` (${state.bridgeId})` : ""}`;
+}
+
+function updateWindowTitle() {
+  const parts = ["MultiTerm Workbench"];
+  if (state.settings.showBridgeIdInWindowTitle && state.bridgeId) parts.push(`(${state.bridgeId})`);
+  if (state.settings.showVersionInWindowTitle) parts.push(`v${APP_VERSION}`);
+  document.title = parts.join(" ");
+}
+
+function updateBridgeIdentityPresentation() {
+  if (state.socketReady) setBridgeStatus(bridgeConnectedStatusText(), "online");
+  updateWindowTitle();
+}
+
 // Every reading costs the bridge a ~1s Win32_Process query, so the status bar
 // asks for one only while the user is actually looking at the memory chip.
 // Hover (or keyboard focus) opens the readout and starts a slow refresh loop;
@@ -9587,6 +10028,7 @@ function formatBytes(bytes) {
 function loadSettings() {
   try {
     const settings = { ...defaultSettings, ...JSON.parse(localStorage.getItem("multiterm.settings") || "{}") };
+    settings.externalTerminalFocus = normalizeExternalTerminalFocus(settings.externalTerminalFocus);
     settings.headerActionDragScope = normalizeHeaderActionDragScope(settings.headerActionDragScope);
     settings.headerActionShortcuts = normalizeHeaderActionShortcuts(settings.headerActionShortcuts);
     settings.headerActionsInMenu = normalizeHeaderActionsInMenu(settings.headerActionsInMenu);
@@ -17470,6 +17912,8 @@ function setActivePage(id, options = {}) {
   if (options.focus !== false && onPage.length > 0 && (!active || !isOnActivePage(active))) {
     setActiveTerminal(onPage[0].id);
     if (options.focusTerm !== false) onPage[0].term.focus();
+  } else if (options.focus !== false && onPage.length === 0) {
+    focusWorkspaceBackground();
   }
 
   // Layout and zoom can be overridden per page, so both are re-resolved here.
@@ -18330,10 +18774,11 @@ function togglePagerPanel() {
   applyPagerPlacement();
 }
 
-function showPagerPlacementMenu(x, y) {
+function showPagerPlacementMenu(x, y, options = {}) {
   const current = normalizedPagerPlacement();
+  const groupId = options.groupId && pageGroupById(options.groupId) ? options.groupId : null;
   renderContextMenu([
-    { label: "Open new page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage() },
+    { label: "Open new page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage({ groupId }) },
     { label: "Create new group", icon: "folder-plus", run: startEmptyPageGroupCreation },
     { separator: true },
     { label: "Move pages to top", icon: "panel-top", shortcutId: "pager.move-top", disabled: current === "top", run: () => setPagerPlacement("top") },
@@ -18956,7 +19401,10 @@ function bindPager() {
       const groupHeader = event.target.closest("[data-group-toggle]");
       const group = groupHeader ? pageGroupById(groupHeader.dataset.groupToggle) : null;
       if (group) showPageGroupMenu(group, event.clientX, event.clientY);
-      else if (!event.target.closest("button")) showPagerPlacementMenu(event.clientX, event.clientY);
+      else if (!event.target.closest("button")) {
+        const groupBand = event.target.closest("[data-group-id]");
+        showPagerPlacementMenu(event.clientX, event.clientY, { groupId: groupBand?.dataset.groupId || null });
+      }
       return;
     }
     const page = pageById(chip.dataset.pageId);
@@ -19212,6 +19660,9 @@ function syncControlsFromSettings() {
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
+  elements.externalTerminalFocus.value = normalizeExternalTerminalFocus(state.settings.externalTerminalFocus);
+  elements.showBridgeIdInWindowTitle.checked = Boolean(state.settings.showBridgeIdInWindowTitle);
+  elements.showVersionInWindowTitle.checked = Boolean(state.settings.showVersionInWindowTitle);
   elements.bellNotify.checked = state.settings.bellNotify;
   elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
@@ -19222,6 +19673,18 @@ function syncControlsFromSettings() {
   elements.scrollOnOutput.checked = state.settings.scrollOnOutput;
   elements.outputCoalesceMs.value = state.settings.outputCoalesceMs;
   elements.outputBacklogKb.value = state.settings.outputBacklogKb;
+  state.settings.bridgeClientBacklogKb = clampBridgeClientBacklogKb(
+    state.settings.bridgeClientBacklogKb,
+    elements.bridgeClientBacklogKb
+  );
+  state.settings.bridgeReplayBufferKb = clampBridgeReplayBufferKb(
+    state.settings.bridgeReplayBufferKb,
+    elements.bridgeReplayBufferKb
+  );
+  state.settings.bridgeHeartbeatSeconds = clampBridgeHeartbeatSeconds(
+    state.settings.bridgeHeartbeatSeconds,
+    elements.bridgeHeartbeatSeconds
+  );
   state.settings.automationOutputCaptureKb = clampAutomationOutputCaptureKb(
     state.settings.automationOutputCaptureKb,
     elements.automationOutputCaptureKb
@@ -21540,6 +22003,31 @@ function dequeueTerminalCommand(terminal, id) {
     id,
     closeArtifacts: false
   });
+}
+
+function submitInlineQueueCommand(terminal, rawCommand, execute = false) {
+  if (!artifactTerminalIsAvailable(terminal) || terminal.status !== "live") {
+    toast("That terminal is not ready yet.", "info", 2200);
+    return false;
+  }
+  const command = safeTerminalCommand(rawCommand);
+  if (!command) {
+    toast(
+      sanitizeTerminalCommand(rawCommand)
+        ? `Commands are limited to ${MAX_TERMINAL_COMMAND_LENGTH} characters.`
+        : "Enter a command or prompt.",
+      "info",
+      1800
+    );
+    return false;
+  }
+  if (!pasteIntoSpecificTerminal(terminal, command)) {
+    toast("Bridge unavailable; the command was not staged.", "error", 2400);
+    return false;
+  }
+  if (execute) scheduleTerminalEnter(terminal);
+  focusTerminalAfterQueueInsert(terminal, { closeArtifacts: false });
+  return true;
 }
 
 function openTerminalArtifacts(terminalId = null, { draftText = null, noteId = null } = {}) {
@@ -24673,6 +25161,7 @@ function refreshTopBarShortcutHints() {
     const aria = bindings.map(globalShortcutAria).filter(Boolean).join(" ");
     if (aria) button.setAttribute("aria-keyshortcuts", aria);
     else button.removeAttribute("aria-keyshortcuts");
+    if (topBarDescriptionTarget === button) showTopBarActionDescription(button);
   }
 }
 
@@ -24740,9 +25229,10 @@ function focusGlobalShortcutAction(actionId, captureIndex = null) {
 function showTopBarShortcutMenu(event, action) {
   event.preventDefault();
   event.stopPropagation();
+  const button = event.currentTarget;
   const bindings = globalShortcutBindings(action.id);
   const primary = bindings[0];
-  renderContextMenu([
+  const items = [
     { label: action.label, info: true, title: bindings.map(formatGlobalShortcut).join(" / ") || "Not assigned" },
     {
       label: primary ? `Change primary shortcut (${formatGlobalShortcut(primary)})` : "Set primary shortcut",
@@ -24751,8 +25241,121 @@ function showTopBarShortcutMenu(event, action) {
     },
     { label: "Add another shortcut", icon: "plus", run: () => focusGlobalShortcutAction(action.id, -1) },
     { label: "Open in Keyboard Shortcuts", icon: "list", run: () => focusGlobalShortcutAction(action.id) }
-  ]);
-  showBuiltContextMenu(event.clientX, event.clientY, { returnFocus: event.currentTarget });
+  ];
+  if (action.id === "terminal.new") {
+    items.splice(1, 0, {
+      label: "Change button color…",
+      icon: "palette",
+      run: () => openAddTerminalColorFlyout(button)
+    });
+  }
+  renderContextMenu(items);
+  showBuiltContextMenu(event.clientX, event.clientY, { returnFocus: button });
+}
+
+function setAddTerminalColorControls(color, picker = terminalColorToHsv(color)) {
+  const normalized = normalizeTerminalColor(color) || ADD_TERMINAL_BUTTON_DEFAULT_COLOR;
+  addTerminalColorState.hue = picker.hue;
+  addTerminalColorState.saturation = picker.saturation;
+  addTerminalColorState.value = picker.value;
+  elements.addTerminalColorHex.value = normalized;
+  elements.addTerminalColorHex.removeAttribute("aria-invalid");
+  elements.addTerminalColorHue.value = String(Math.round(picker.hue));
+  elements.addTerminalColorFlyout.style.setProperty("--add-terminal-picker-hue", String(picker.hue));
+  elements.addTerminalColorHandle.style.left = `${picker.saturation}%`;
+  elements.addTerminalColorHandle.style.top = `${100 - picker.value}%`;
+  elements.addTerminalColorPreview.style.background = normalized;
+  elements.addTerminalColorPlane.setAttribute(
+    "aria-valuetext",
+    `Saturation ${Math.round(picker.saturation)}%, brightness ${Math.round(picker.value)}%`
+  );
+}
+
+function commitAddTerminalButtonColor(color, picker = null) {
+  const normalized = normalizeTerminalColor(color);
+  elements.addTerminalColorHex.setAttribute("aria-invalid", String(!normalized));
+  if (!normalized) return false;
+  state.settings.addTerminalButtonColor = normalized;
+  document.documentElement.style.setProperty("--add-terminal-color", normalized);
+  setAddTerminalColorControls(normalized, picker || terminalColorToHsv(normalized));
+  saveSettings();
+  return true;
+}
+
+function positionAddTerminalColorFlyout(anchor) {
+  const flyout = elements.addTerminalColorFlyout;
+  if (!flyout || !anchor?.isConnected || flyout.hidden) return;
+  const anchorRect = anchor.getBoundingClientRect();
+  const rect = flyout.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - rect.width - 8, anchorRect.right - rect.width));
+  const below = anchorRect.bottom + 7;
+  const top = below + rect.height <= window.innerHeight - 8
+    ? below
+    : Math.max(8, anchorRect.top - rect.height - 7);
+  flyout.style.left = `${Math.round(left)}px`;
+  flyout.style.top = `${Math.round(top)}px`;
+}
+
+function openAddTerminalColorFlyout(anchor = elements.addTerminal) {
+  const color = normalizeTerminalColor(state.settings.addTerminalButtonColor) || ADD_TERMINAL_BUTTON_DEFAULT_COLOR;
+  setAddTerminalColorControls(color);
+  elements.addTerminalColorFlyout.hidden = false;
+  refreshIcons(elements.addTerminalColorFlyout);
+  positionAddTerminalColorFlyout(anchor);
+  elements.addTerminalColorPlane.focus({ preventScroll: true });
+}
+
+function closeAddTerminalColorFlyout({ restoreFocus = false } = {}) {
+  if (!elements.addTerminalColorFlyout) return;
+  elements.addTerminalColorFlyout.hidden = true;
+  if (restoreFocus) elements.addTerminal.focus({ preventScroll: true });
+}
+
+function bindAddTerminalColorFlyout() {
+  if (!elements.addTerminalColorFlyout) return;
+  const updateFromPoint = (clientX, clientY) => {
+    const rect = elements.addTerminalColorPlane.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    addTerminalColorState.saturation = Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100));
+    addTerminalColorState.value = 100 - Math.min(100, Math.max(0, ((clientY - rect.top) / rect.height) * 100));
+    commitAddTerminalButtonColor(terminalHsvToColor(addTerminalColorState), { ...addTerminalColorState });
+  };
+  elements.addTerminalColorPlane.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    elements.addTerminalColorPlane.setPointerCapture(event.pointerId);
+    updateFromPoint(event.clientX, event.clientY);
+  });
+  elements.addTerminalColorPlane.addEventListener("pointermove", (event) => {
+    if (elements.addTerminalColorPlane.hasPointerCapture(event.pointerId)) updateFromPoint(event.clientX, event.clientY);
+  });
+  elements.addTerminalColorPlane.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const amount = event.shiftKey ? 5 : 1;
+    if (event.key === "ArrowLeft") addTerminalColorState.saturation = Math.max(0, addTerminalColorState.saturation - amount);
+    if (event.key === "ArrowRight") addTerminalColorState.saturation = Math.min(100, addTerminalColorState.saturation + amount);
+    if (event.key === "ArrowDown") addTerminalColorState.value = Math.max(0, addTerminalColorState.value - amount);
+    if (event.key === "ArrowUp") addTerminalColorState.value = Math.min(100, addTerminalColorState.value + amount);
+    commitAddTerminalButtonColor(terminalHsvToColor(addTerminalColorState), { ...addTerminalColorState });
+  });
+  elements.addTerminalColorHue.addEventListener("input", () => {
+    addTerminalColorState.hue = headerGradientControlValue(elements.addTerminalColorHue.value, 0, 359, 0);
+    commitAddTerminalButtonColor(terminalHsvToColor(addTerminalColorState), { ...addTerminalColorState });
+  });
+  elements.addTerminalColorHex.addEventListener("input", () => commitAddTerminalButtonColor(elements.addTerminalColorHex.value));
+  elements.addTerminalColorReset.addEventListener("click", () => commitAddTerminalButtonColor(ADD_TERMINAL_BUTTON_DEFAULT_COLOR));
+  document.addEventListener("pointerdown", (event) => {
+    if (elements.addTerminalColorFlyout.hidden || elements.addTerminalColorFlyout.contains(event.target)) return;
+    closeAddTerminalColorFlyout();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || elements.addTerminalColorFlyout.hidden) return;
+    event.preventDefault();
+    closeAddTerminalColorFlyout({ restoreFocus: true });
+  });
+  window.addEventListener("resize", () => {
+    if (!elements.addTerminalColorFlyout.hidden) positionAddTerminalColorFlyout(elements.addTerminal);
+  });
 }
 
 function bindTopBarShortcutMenus() {
@@ -24761,6 +25364,56 @@ function bindTopBarShortcutMenus() {
     if (!button) continue;
     button.addEventListener("contextmenu", (event) => showTopBarShortcutMenu(event, action));
   }
+}
+
+let topBarDescriptionTarget = null;
+
+function positionTopBarActionDescription(target) {
+  const description = elements.topBarActionDescription;
+  const topbar = description?.closest(".topbar");
+  if (!description || !topbar || !target?.isConnected || description.hidden) return;
+  const topbarRect = topbar.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  const maximumWidth = Math.max(0, topbarRect.width - 24);
+  const descriptionWidth = Math.min(maximumWidth, description.scrollWidth);
+  const halfWidth = descriptionWidth / 2;
+  const center = targetRect.left + (targetRect.width / 2) - topbarRect.left;
+  const left = Math.max(12 + halfWidth, Math.min(center, topbarRect.width - 12 - halfWidth));
+  description.style.left = `${left}px`;
+}
+
+function showTopBarActionDescription(target) {
+  const description = elements.topBarActionDescription;
+  if (!description || !target) return;
+  const text = target.getAttribute("title") || target.getAttribute("aria-label") || "";
+  if (!text) return;
+  topBarDescriptionTarget = target;
+  description.textContent = text;
+  description.hidden = false;
+  positionTopBarActionDescription(target);
+}
+
+function hideTopBarActionDescription(target) {
+  const description = elements.topBarActionDescription;
+  if (!description || topBarDescriptionTarget !== target) return;
+  if (target.matches(":hover") || document.activeElement === target) return;
+  topBarDescriptionTarget = null;
+  description.hidden = true;
+  description.textContent = "";
+}
+
+function bindTopBarActionDescriptions() {
+  const cluster = elements.topBarActionDescription?.closest(".topbar")?.querySelector(".action-cluster");
+  if (!cluster) return;
+  for (const control of cluster.querySelectorAll("button[title]")) {
+    control.addEventListener("pointerenter", () => showTopBarActionDescription(control));
+    control.addEventListener("pointerleave", () => hideTopBarActionDescription(control));
+    control.addEventListener("focus", () => showTopBarActionDescription(control));
+    control.addEventListener("blur", () => hideTopBarActionDescription(control));
+  }
+  window.addEventListener("resize", () => {
+    if (topBarDescriptionTarget) positionTopBarActionDescription(topBarDescriptionTarget);
+  });
 }
 
 function persistGlobalShortcutOverrides(overrides) {
@@ -26118,7 +26771,8 @@ function bindContextMenu() {
   document.addEventListener("pointerdown", (event) => {
     if (!elements.contextMenu.hidden
       && !elements.contextMenu.contains(event.target)
-      && !elements.contextSubmenu.contains(event.target)) {
+      && !elements.contextSubmenu.contains(event.target)
+      && !openCombo?.ownsScrollTarget(event.target)) {
       hideContextMenu();
     }
   });
@@ -26257,7 +26911,13 @@ function buildCommandQueueMenuItem(terminal) {
     icon: "list-ordered",
     shortcutId: "terminal.command-queue",
     title: "Insert a queued command, or open the queue manager",
-    submenu: submenu.length ? submenu : [{ info: true, icon: "inbox", label: "No queued commands" }],
+    submenu: submenu.length ? submenu : [{
+      commandInput: true,
+      icon: "terminal",
+      label: "New command",
+      placeholder: "Type a command...",
+      run: (value, execute) => submitInlineQueueCommand(terminal, value, execute)
+    }],
     run: () => openTerminalArtifacts(terminal.id)
   };
 }
@@ -26276,6 +26936,9 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const isZoomed = state.zoomedId === terminal.id;
   const assistantName = aiAssistantName();
   const assistantAvailable = aiAssistantAvailable();
+  const assistantProvider = aiProviderById(state.settings.aiSessionProvider);
+  const assistantModelChoices = aiModelChoices(assistantProvider?.models || [])
+    .filter((choice) => choice.value);
   const runYolo = aiYoloMenuToggle();
   const worktreeYolo = aiYoloMenuToggle();
   const resumeYolo = aiYoloMenuToggle();
@@ -26364,16 +27027,25 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     },
     ...buildCopilotRemoteMenuItem(terminal),
     {
-      input: true,
+      combobox: true,
       label: `${assistantName} model`,
       icon: "bot",
       customizationId: "terminal.copilot-model",
-      disabled: !assistantAvailable,
-      placeholder: "model name",
+      disabled: !assistantAvailable || assistantModelChoices.length === 0,
+      choices: [
+        {
+          value: "",
+          label: assistantModelChoices.length > 0 ? "Choose a model..." : "No models discovered",
+          disabled: true
+        },
+        ...assistantModelChoices
+      ],
+      minListWidth: 340,
       run: (value) => sendTerminalSlashCommand(terminal, "model", value)
     },
     {
-      input: true,
+      combobox: true,
+      allowCustom: true,
       label: state.settings.aiSessionProvider === "claude"
         ? "Claude add directory"
         : state.settings.aiSessionProvider === "copilot"
@@ -26384,7 +27056,15 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       disabled: !assistantAvailable,
       placeholder: terminal.cwd || "path",
       value: terminal.copilotCwd || terminal.cwd || "",
-      suggestions: state.copilotCwdHistory,
+      choices: [
+        { value: "", label: "Recent directories", disabled: true },
+        ...state.copilotCwdHistory.map((entry) => ({
+          value: entry.path,
+          label: entry.path,
+          detail: copilotCwdHistoryTimeLabel(entry.usedAt)
+        }))
+      ],
+      minListWidth: 480,
       run: (value) => sendCopilotCwd(terminal, value)
     },
     { group: "Appearance", groupId: "appearance" },
@@ -26424,8 +27104,11 @@ function sendTerminalSlashDirective(terminal, command, rawValue = "") {
   return sendBridge({ type: "input", id: terminal.id, data: `/${command}${value ? ` ${value}` : ""}\r` });
 }
 
-function rememberCopilotCwd(value) {
-  state.copilotCwdHistory = normalizeCopilotCwdHistory([value, ...state.copilotCwdHistory]);
+function rememberCopilotCwd(value, usedAt = new Date().toISOString()) {
+  state.copilotCwdHistory = normalizeCopilotCwdHistory([
+    { path: value, usedAt },
+    ...state.copilotCwdHistory
+  ], usedAt);
   localStorage.setItem(COPILOT_CWD_HISTORY_STORAGE_KEY, JSON.stringify(state.copilotCwdHistory));
 }
 
@@ -27375,6 +28058,7 @@ let ctxEditingSectionId = null;
 let ctxNewSectionId = null;
 let ctxShowHiddenItems = false;
 let ctxSuppressCustomizationClick = false;
+let ctxDynamicCombos = [];
 
 // A submenu-parent row (currently just "Command queue") hangs a second panel off
 // its right edge on hover. These track that panel's rows, keyboard highlight and
@@ -27391,6 +28075,11 @@ function runContextMenuAction(run, ...args) {
   hideContextMenu();
   if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
   run(...args);
+}
+
+function destroyContextMenuComboboxes() {
+  for (const combo of ctxDynamicCombos) combo.destroy?.();
+  ctxDynamicCombos = [];
 }
 
 function contextShortcutActionLabel(actionId) {
@@ -27923,6 +28612,7 @@ function renderContextMenu(items, {
     ctxShortcutEditing = false;
     ctxShortcutStatus = "";
   }
+  destroyContextMenuComboboxes();
   elements.contextMenu.innerHTML = "";
   elements.contextMenu.classList.toggle("is-grouped", grouped);
   elements.contextMenu.classList.toggle("has-search", searchable);
@@ -28198,6 +28888,39 @@ function renderContextMenu(items, {
     const icon = document.createElement("i");
     icon.setAttribute("data-lucide", item.icon);
     el.append(icon);
+
+    if (item.combobox && !item.customizationHidden) {
+      el.classList.add("ctx-input-row");
+      el.setAttribute("role", "presentation");
+      const field = document.createElement("label");
+      field.className = "ctx-command-field";
+      const caption = document.createElement("span");
+      caption.textContent = item.label;
+      const select = document.createElement("select");
+      select.className = "ctx-command-select";
+      select.disabled = Boolean(item.disabled);
+      if (item.minListWidth) select.dataset.comboMinWidth = String(item.minListWidth);
+      select.setAttribute("aria-label", item.label);
+      setAiSelectOptions(select, item.choices || [], item.value || "");
+      select.addEventListener("change", () => {
+        const value = select.value;
+        if (value) window.setTimeout(() => runContextMenuAction(item.run, value), 0);
+      });
+      field.append(caption, select);
+      el.append(field);
+      if (customizationDragHandle) el.append(customizationDragHandle);
+      itemContainer.append(el);
+      enhanceSelect(select, {
+        allowCustom: Boolean(item.allowCustom),
+        inputValue: item.value || "",
+        onCustom: (value) => runContextMenuAction(item.run, value)
+      });
+      select._combo.input.classList.add("ctx-command-input");
+      select._combo.input.disabled = Boolean(item.disabled);
+      select._combo.wrap.classList.add("ctx-context-combobox");
+      ctxDynamicCombos.push(select._combo);
+      continue;
+    }
 
     if (item.input && !item.customizationHidden) {
       el.classList.add("ctx-input-row");
@@ -28526,6 +29249,53 @@ function renderContextSubmenu(items) {
     icon.setAttribute("data-lucide", item.icon);
     el.append(icon);
 
+    if (item.commandInput) {
+      el.classList.add("ctx-inline-command");
+      el.setAttribute("role", "presentation");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "ctx-inline-command-input";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.placeholder = item.placeholder || "";
+      input.setAttribute("aria-label", item.label || "New command");
+      let execute = false;
+      const mode = document.createElement("button");
+      mode.type = "button";
+      mode.className = "ctx-inline-command-mode";
+      mode.textContent = "Stage";
+      mode.setAttribute("aria-pressed", "false");
+      mode.title = "Stage without running";
+      mode.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        execute = !execute;
+        mode.textContent = execute ? "Run" : "Stage";
+        mode.setAttribute("aria-pressed", String(execute));
+        mode.title = execute ? "Stage and run" : "Stage without running";
+        input.focus({ preventScroll: true });
+      });
+      input.addEventListener("click", (event) => event.stopPropagation());
+      input.addEventListener("pointerdown", (event) => event.stopPropagation());
+      input.addEventListener("keydown", (event) => {
+        event.stopPropagation();
+        if (event.key === "Enter" && !event.isComposing) {
+          event.preventDefault();
+          const value = input.value.trim();
+          if (value) runContextMenuAction(item.run, value, execute);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          hideContextMenu();
+        }
+      });
+      el.append(input, mode);
+      el.addEventListener("click", () => input.focus({ preventScroll: true }));
+      el.addEventListener("pointerenter", () => setSubmenuFocus(subFocusables.indexOf(el)));
+      subFocusables.push(el);
+      menu.append(el);
+      continue;
+    }
+
     const label = document.createElement("span");
     label.className = "ctx-label ctx-submenu-label";
     label.textContent = item.label;
@@ -28684,7 +29454,7 @@ function moveContextFocus(delta) {
 function onContextMenuKeydown(event) {
   if (elements.contextMenu.hidden) return;
   if (event.target instanceof Element
-    && event.target.closest(".ctx-command-input, .ctx-command-suggestion, .ctx-customization-control, .ctx-group-title.is-editable")) return;
+    && event.target.closest(".ctx-command-input, .ctx-command-suggestion, .ctx-inline-command-input, .ctx-inline-command-mode, .ctx-customization-control, .ctx-group-title.is-editable")) return;
   const key = event.key;
   const stop = () => {
     event.preventDefault();
@@ -29010,6 +29780,7 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false, r
 
 function hideContextMenu() {
   hideContextSubmenu();
+  destroyContextMenuComboboxes();
   if (!elements.contextMenu.hidden) {
     ctxSearchFocusRequest += 1;
     elements.contextMenu.hidden = true;
@@ -29128,6 +29899,14 @@ function enhanceComboboxes() {
   }
   window.addEventListener("scroll", (event) => {
     if (openCombo?.ownsScrollTarget(event.target)) return;
+    if (!elements.contextMenu.hidden
+        && openCombo?.wrap
+        && elements.contextMenu.contains(openCombo.wrap)
+        && event.target instanceof Node
+        && elements.contextMenu.contains(event.target)) {
+      openCombo.reposition();
+      return;
+    }
     openCombo?.close();
   }, true);
   window.addEventListener("resize", () => openCombo?.close());
@@ -29138,12 +29917,15 @@ function refreshComboboxes() {
   for (const select of comboSelects) select._combo?.sync();
 }
 
-function enhanceSelect(select) {
+function enhanceSelect(select, configuration = {}) {
   const wrap = document.createElement("div");
   wrap.className = "combobox";
   const showsLayoutGlyph = select === elements.layoutMode;
   const showsOptionIcon = [...select.options].some((option) => option.dataset.icon);
   const showsFontFace = select.dataset.fontSelector === "true";
+  const minimumListWidth = Math.max(0, Number(select.dataset.comboMinWidth) || 0);
+  const allowsCustom = configuration.allowCustom === true;
+  let customValue = allowsCustom ? String(configuration.inputValue || "") : "";
   if (showsLayoutGlyph) wrap.classList.add("layout-mode-combobox");
   if (showsOptionIcon) wrap.classList.add("option-icon-combobox");
   if (showsFontFace) wrap.classList.add("font-face-combobox");
@@ -29183,7 +29965,7 @@ function enhanceSelect(select) {
   if (selectedGlyph) wrap.append(selectedGlyph);
   wrap.append(chevron);
 
-  const box = { open: false, index: 0, items: [] };
+  const box = { open: false, index: 0, items: [], navigated: false };
 
   const currentLabel = () => {
     const opt = select.options[select.selectedIndex];
@@ -29194,8 +29976,10 @@ function enhanceSelect(select) {
     const r = input.getBoundingClientRect();
     const height = Math.min(264, list.scrollHeight || 264);
     const spaceBelow = window.innerHeight - r.bottom;
-    list.style.left = `${r.left}px`;
-    list.style.width = `${r.width}px`;
+    const width = Math.min(window.innerWidth - 16, Math.max(r.width, minimumListWidth));
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    list.style.left = `${left}px`;
+    list.style.width = `${width}px`;
     if (spaceBelow < height + 12 && r.top > spaceBelow) {
       list.style.top = `${Math.max(8, r.top - 4 - height)}px`;
     } else {
@@ -29206,6 +29990,7 @@ function enhanceSelect(select) {
   const render = (filter) => {
     const query = (filter || "").toLowerCase();
     box.items = [...select.options].filter((o) => !o.disabled && (!query || o.textContent.toLowerCase().includes(query)));
+    box.navigated = false;
     list.innerHTML = "";
 
     if (box.items.length === 0) {
@@ -29245,12 +30030,16 @@ function enhanceSelect(select) {
       label.textContent = o.textContent;
       if (showsFontFace) label.style.fontFamily = o.dataset.fontStack || fontStacks[o.value] || "inherit";
       li.append(label);
+      if (o.dataset.detail) {
+        const detail = document.createElement("span");
+        detail.className = "combobox-option-detail";
+        detail.textContent = o.dataset.detail;
+        li.append(detail);
+      }
       li.setAttribute("role", "option");
       li.setAttribute("aria-selected", String(o.value === select.value));
-      li.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        choose(o);
-      });
+      li.addEventListener("mousedown", (event) => event.preventDefault());
+      li.addEventListener("click", () => choose(o));
       list.append(li);
     });
     if (showsOptionIcon) refreshIcons(list);
@@ -29267,17 +30056,27 @@ function enhanceSelect(select) {
 
   const move = (delta) => {
     if (box.items.length === 0) return;
+    box.navigated = true;
     box.index = (box.index + delta + box.items.length) % box.items.length;
     highlight();
   };
 
   function choose(option) {
+    if (option) customValue = option.value;
     if (option && select.value !== option.value) {
       select.value = option.value;
       select.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    close();
+    window.setTimeout(close, 0);
   }
+
+  const chooseCustom = () => {
+    const value = input.value.trim();
+    if (!value) return;
+    customValue = value;
+    close();
+    configuration.onCustom?.(value);
+  };
 
   const open = () => {
     if (box.open) return;
@@ -29289,6 +30088,7 @@ function enhanceSelect(select) {
     list.hidden = false;
     render("");
     positionList();
+    if (allowsCustom && customValue) input.value = customValue;
     input.select();
   };
 
@@ -29304,7 +30104,7 @@ function enhanceSelect(select) {
 
   const sync = () => {
     if (!box.open) {
-      input.value = currentLabel();
+      input.value = allowsCustom && customValue ? customValue : currentLabel();
       if (showsFontFace) {
         const selected = select.options[select.selectedIndex];
         input.style.fontFamily = selected?.dataset.fontStack || fontStacks[select.value] || "inherit";
@@ -29331,7 +30131,10 @@ function enhanceSelect(select) {
   input.addEventListener("pointerdown", () => {
     if (!box.open) open();
   });
-  input.addEventListener("input", () => render(input.value));
+  input.addEventListener("input", () => {
+    if (allowsCustom) customValue = input.value;
+    render(input.value);
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -29341,7 +30144,8 @@ function enhanceSelect(select) {
       move(-1);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      choose(box.items[box.index]);
+      if (allowsCustom && !box.navigated) chooseCustom();
+      else choose(box.items[box.index]);
     } else if (event.key === "Escape") {
       event.preventDefault();
       close();
@@ -29357,8 +30161,17 @@ function enhanceSelect(select) {
 
   const api = {
     close,
+    destroy: () => {
+      close();
+      list.remove();
+      if (select._combo === api) select._combo = null;
+    },
+    input,
+    list,
     ownsScrollTarget: (target) => target === list || target instanceof Node && list.contains(target),
-    sync
+    reposition: positionList,
+    sync,
+    wrap
   };
   select._combo = api;
   sync();

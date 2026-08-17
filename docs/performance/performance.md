@@ -37,8 +37,8 @@ The current design reduces that work in layers:
 The main limitations are:
 
 - there is no end-to-end backpressure from xterm to the PTY;
-- the installed C# bridge now honors the same configurable output coalescing,
-  but it does not yet reuse one encoded frame across clients;
+- both bridges bound each client's outbound backlog and disconnect only the
+  client that exceeds its configured ceiling;
 - `backgroundThrottling: false` preserves output consumption at the cost of
   background CPU and power;
 - high scrollback, large output buffers, and many panes can still consume
@@ -82,16 +82,17 @@ The renderer is shared, but the bridge hot paths differ.
 | Bridge | [`server.js`](../../server.js) under system Node | Embedded C# in [`Start-MultiTerm.ps1`](../../Start-MultiTerm.ps1) |
 | PTY | native `node-pty` over ConPTY | direct ConPTY P/Invoke |
 | Bridge output coalescing | Configurable, default 8 ms, range 0-100 ms | Same renderer-controlled setting and final-output flush ordering |
-| Broadcast encoding | One JSON/WebSocket frame reused across clients | Encodes and waits per client |
+| Broadcast encoding | One JSON/WebSocket frame reused across clients | One UTF-8 byte buffer reused across per-client writer queues |
 | Renderer batching | Shared rAF/hidden-timer pipeline | Same shared renderer |
 | Memory/status sampling | PowerShell CIM subprocess | Native process enumeration/sampling |
 | Teardown | Shell exit, Ctrl+C, second exit, force fallback; 150 ms stagger | Same staged sequence; host waits for session exit before closing its listener |
 | Bridge recovery | Electron supervisor restarts the Node bridge and reuses a compatible detached bridge | Owning launcher and optional per-user watchdog monitor bridge lifetime |
 
-The installed bridge avoids node-pty's native ABI and teardown bugs and now
-coalesces burst output before WebSocket dispatch. It still performs encoding and
-synchronous send work per client, so one slow client can extend a broadcast loop.
-Protocol features and performance behavior must be checked in both implementations.
+The installed bridge avoids node-pty's native ABI and teardown bugs, coalesces
+burst output, encodes a broadcast once, and hands that buffer to one bounded
+writer queue per client. A slow client can no longer block healthy fanout.
+Protocol features and performance behavior must still be checked in both
+implementations.
 
 The optional watchdog polls only registered bridge records and their small
 `/health` payloads. It does not inspect terminal output or sit in the PTY path.
@@ -156,10 +157,11 @@ last output bytes -> exited
 Never move exit broadcast ahead of `flushSessionOutput`; doing so causes the
 renderer to mark a session dead before its final prompt/error text arrives.
 
-The setting is bridge-global, not per client or per session. The most recent
-client `config` message sets the value for all sessions. Multiple clients with
-different preferences can therefore overwrite one another; this is a known
-configuration-ownership gap.
+The setting is bridge-global, not per client or per session. The first renderer
+with a complete configuration owns the active values. Other renderers retain
+their desired values but display the owner's active values; when the owner
+disconnects, the most recently active visible renderer is promoted
+deterministically.
 
 ### Stage 2: encode once, write many
 
@@ -522,8 +524,11 @@ not over static mock content.
 
 | Control | Default | Range/effective cap | Tradeoff |
 | --- | ---: | ---: | --- |
-| Output batching | 8 ms | 0-100 ms | Lower latency versus more JSON/events; Node bridge only and bridge-global |
+| Output batching | 8 ms | 0-100 ms | Lower latency versus more JSON/events; bridge-global |
 | Output buffer | 1,024 KiB | 64-65,536 KiB per pane | Earlier drains/lower retained queue versus smoother bursts/more memory |
+| Bridge client backlog | 4,096 KiB | 0 or 64-16,384 KiB per client | Bounds a slow client's retained output; 0 restores legacy synchronous sending |
+| Bridge replay buffer | 512 KiB | 0 or 16-4,096 KiB per session | Reconnect recovery versus retained memory; 0 retains nothing and reports gaps |
+| Bridge heartbeat interval | 30 s | 0 or 5-600 s | Faster half-open client removal versus probe traffic; 0 disables bridge-initiated checks |
 | Scrollback | 20,000 lines | 1-1,000,000 | Search/history versus memory and rebuild cost |
 | Infinite scrollback | Off | 1,000,000 lines | Large but bounded history |
 | WebGL contexts | 12 | Fixed source constant | Faster preferred panes versus Chromium context safety |
@@ -542,6 +547,14 @@ not over static mock content.
   browser event and serialization pressure.
 - Lower the output buffer when memory retention matters more than burst smoothing.
   Raise it only after observing frequent immediate drains and acceptable memory.
+- Size the bridge client backlog as a per-client cost: its worst-case retained
+  memory is the selected value multiplied by up to 32 clients. Use 0 only as a
+  diagnostic escape hatch because it restores head-of-line blocking behavior.
+- Size the replay buffer as a per-session cost: its worst-case retained memory is
+  the selected value multiplied by up to 64 sessions. A smaller ring increases
+  the chance that a reconnect produces an explicit output-gap warning.
+- Keep heartbeat checks enabled unless another monitor owns client-liveness
+  detection. Disabling them lets a half-open client retain a connection slot.
 - Reduce scrollback before increasing process memory limits.
 - Leave the WebGL budget below the browser's unmodified context cap.
 - Compare Node and installed bridge behavior before attributing a renderer stall

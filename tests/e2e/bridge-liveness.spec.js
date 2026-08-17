@@ -18,8 +18,33 @@ test.describe("Bridge liveness recovery", () => {
     expect(await page.evaluate(() => state.bridgeLastMessageAt)).toBeGreaterThan(0);
   });
 
-  test("ignores an unsupported heartbeat response from an older bridge", async ({ page }) => {
+  // The installed bridge cannot observe WebSocket pongs, so it probes directly.
+  // Answering is what keeps a hidden window alive: our own heartbeat timer only
+  // runs while the document is visible.
+  test("answers a bridge-initiated liveness probe without disturbing its own heartbeat", async ({ page }) => {
     const result = await page.evaluate(() => {
+      const frames = [];
+      const realSend = state.socket.send.bind(state.socket);
+      state.socket.send = (payload) => {
+        frames.push(JSON.parse(payload));
+        return realSend(payload);
+      };
+      state.bridgeHeartbeatNonce = "mine";
+      handleBridgeMessage({ type: "heartbeat", nonce: "probe-from-bridge" });
+      const afterProbe = state.bridgeHeartbeatNonce;
+      handleBridgeMessage({ type: "heartbeat", nonce: "mine" });
+      const afterOwn = state.bridgeHeartbeatNonce;
+      state.socket.send = realSend;
+      return { frames, afterProbe, afterOwn };
+    });
+
+    expect(result.frames).toEqual([{ type: "heartbeat", nonce: "probe-from-bridge", reply: true }]);
+    // A probe must not be mistaken for the answer we were waiting for.
+    expect(result.afterProbe).toBe("mine");
+    expect(result.afterOwn).toBe("");
+  });
+
+  test("ignores an unsupported heartbeat response from an older bridge", async ({ page }) => {    const result = await page.evaluate(() => {
       const before = elements.bridgeStatus.textContent;
       handleBridgeMessage({ type: "error", message: "Unsupported message type: heartbeat" });
       return {

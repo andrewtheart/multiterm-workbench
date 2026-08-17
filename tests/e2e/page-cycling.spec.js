@@ -76,15 +76,16 @@ test.describe("Ctrl+Tab page cycling", () => {
     await page.keyboard.press("Control+Tab");
     const firstPress = await page.evaluate(() => ({
       page: activePage().name,
-      focusedTerminalTextarea: document.activeElement?.classList.contains("xterm-helper-textarea") || false
+      focusedWorkspace: document.activeElement === elements.stage
     }));
-    expect(firstPress).toEqual({ page: "Page 2", focusedTerminalTextarea: true });
+    expect(firstPress).toEqual({ page: "Page 2", focusedWorkspace: true });
 
     await page.keyboard.press("Control+Tab");
     expect(await activePageName()).toBe("Page 3");
     // Wraps rather than stopping at the end of the list.
     await page.keyboard.press("Control+Tab");
     expect(await activePageName()).toBe("Page 1");
+    await expect(page.locator(".xterm-helper-textarea").first()).toBeFocused();
 
     // The chord must never reach the terminal as a literal tab.
     const typed = await page.evaluate(() => {

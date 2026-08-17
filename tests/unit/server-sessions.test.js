@@ -32,7 +32,12 @@ function makeTerminal(pid = 4321) {
 }
 
 function fakeClient() {
-  return { send: vi.fn() };
+  return {
+    exitedSessions: new Set(),
+    id: `client-${Math.random()}`,
+    send: vi.fn(),
+    socket: { destroy: vi.fn(), destroyed: false }
+  };
 }
 
 let sessionDependencies;
@@ -47,6 +52,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
   server.__resetTeardownSchedule();
+  server.setBridgeHeartbeatSeconds(server.BRIDGE_HEARTBEAT_DEFAULT_SECONDS);
   server.sessions.clear();
   server.clients.clear();
 });
@@ -72,6 +78,148 @@ describe("createSession", () => {
     terminal.fire("exit", { exitCode: 0, signal: 0 });
     expect(server.sessions.has("session01")).toBe(false);
     expect(observer.send).toHaveBeenCalledWith(expect.objectContaining({ type: "exited", id: "session01", code: 0 }));
+  });
+
+  it("replays final output before exiting a handshake-gated renderer", () => {
+    const creator = fakeClient();
+    const renderer = fakeClient();
+    renderer.pendingOutputResumes = new Set(["session06"]);
+    server.clients.add(renderer);
+    server.createSession(creator, { id: "session06" }, sessionDependencies);
+    renderer.send.mockClear();
+
+    terminal.fire("data", "final output");
+    terminal.fire("exit", { exitCode: 7, signal: 0 });
+
+    expect(server.sessions.has("session06")).toBe(true);
+    expect(renderer.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: "exited" }));
+    server.resumeSessionOutput(renderer, { id: "session06", lastSeq: 0 });
+
+    expect(renderer.send.mock.calls.map(([message]) => message.type)).toEqual([
+      "output", "outputResumed", "exited"
+    ]);
+    expect(renderer.send.mock.calls[0][0]).toEqual(expect.objectContaining({ data: "final output", replay: true }));
+    expect(renderer.send.mock.calls[2][0]).toEqual(expect.objectContaining({ code: 7 }));
+    expect(server.sessions.has("session06")).toBe(false);
+    const callsAfterExit = renderer.send.mock.calls.length;
+    server.resumeSessionOutput(renderer, { id: "session06", lastSeq: 0 });
+    expect(renderer.send).toHaveBeenCalledTimes(callsAfterExit);
+  });
+
+  it("gates an existing renderer before publishing another client's session", () => {
+    const creator = fakeClient();
+    const renderer = fakeClient();
+    renderer.renderer = true;
+    renderer.pendingOutputResumes = new Set();
+    server.clients.add(renderer);
+
+    server.createSession(creator, { id: "session10" }, sessionDependencies);
+
+    expect(renderer.pendingOutputResumes.has("session10")).toBe(true);
+    expect(renderer.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "session10" }));
+  });
+
+  it("uses the shared lifecycle for elevated session publication and exit", () => {
+    const owner = fakeClient();
+    const renderer = fakeClient();
+    renderer.renderer = true;
+    renderer.pendingOutputResumes = new Set();
+    server.clients.add(renderer);
+    const session = {
+      id: "elevated01",
+      title: "Administrator",
+      shell: "PowerShell 7",
+      cwd: process.cwd(),
+      cols: 120,
+      rows: 30,
+      startedAt: new Date().toISOString(),
+      terminal: { pid: 777 },
+      elevated: true,
+      exited: false,
+      pendingOutput: [],
+      outputTimer: null,
+      outputSeq: 0,
+      replay: [],
+      replayBytes: 0
+    };
+    server.sessions.set(session.id, session);
+
+    server.publishSessionCreated(session, owner);
+    server.finishSessionLifecycle(session, 0, null);
+
+    expect(renderer.send.mock.calls.map(([message]) => message.type)).toEqual(["created"]);
+    server.resumeSessionOutput(renderer, { id: session.id, lastSeq: 0 });
+    expect(renderer.send.mock.calls.map(([message]) => message.type)).toEqual(["created", "outputResumed", "exited"]);
+    expect(server.sessions.has(session.id)).toBe(false);
+  });
+
+  it("reports an exit gap when a renderer never completes its replay handshake", () => {
+    vi.useFakeTimers();
+    server.setBridgeHeartbeatSeconds(server.BRIDGE_HEARTBEAT_MIN_SECONDS);
+    const creator = fakeClient();
+    const connected = fakeClient();
+    const vanished = fakeClient();
+    connected.pendingOutputResumes = new Set(["session07"]);
+    vanished.pendingOutputResumes = new Set(["session07"]);
+    server.clients.add(connected);
+    server.clients.add(vanished);
+    server.createSession(creator, { id: "session07" }, sessionDependencies);
+    connected.send.mockClear();
+    vanished.send.mockClear();
+
+    terminal.fire("exit", { exitCode: 8, signal: 0 });
+    server.clients.delete(vanished);
+    vi.advanceTimersByTime(server.BRIDGE_HEARTBEAT_MIN_SECONDS * 2 * 1000);
+
+    expect(connected.send.mock.calls.map(([message]) => message.type)).toEqual(["outputGap", "exited"]);
+    expect(connected.send.mock.calls[0][0]).toEqual(expect.objectContaining({ reason: "session-exited" }));
+    expect(vanished.send).not.toHaveBeenCalled();
+    expect(server.sessions.has("session07")).toBe(false);
+    expect(() => server.expirePendingSessionExit({ pendingExitClients: null })).not.toThrow();
+  });
+
+  it("releases an exited replay tombstone when its gated renderer disconnects", () => {
+    const creator = fakeClient();
+    const renderer = fakeClient();
+    renderer.pendingOutputResumes = new Set(["session08"]);
+    server.clients.add(renderer);
+    server.createSession(creator, { id: "session08" }, sessionDependencies);
+    terminal.fire("exit", { exitCode: 0, signal: 0 });
+    server.sessions.set("unrelated", { id: "unrelated" });
+
+    server.dropClient(renderer, "test disconnect");
+
+    expect(renderer.socket.destroy).toHaveBeenCalledOnce();
+    expect(server.sessions.has("session08")).toBe(false);
+    expect(server.sessions.has("unrelated")).toBe(true);
+  });
+
+  it("does not remove a replacement session during stale exit finalization", () => {
+    const replacement = { id: "replacement" };
+    server.sessions.set(replacement.id, replacement);
+
+    server.finalizeSessionExit({
+      id: replacement.id,
+      exitResumeTimer: null,
+      pendingExitClients: new Set()
+    });
+
+    expect(server.sessions.get(replacement.id)).toBe(replacement);
+  });
+
+  it("sends an ephemeral session exit only to its owner", () => {
+    const owner = fakeClient();
+    const observer = fakeClient();
+    server.clients.add(observer);
+    server.createSession(owner, { id: "session09", ephemeral: true }, sessionDependencies);
+    owner.send.mockClear();
+    observer.send.mockClear();
+
+    terminal.fire("exit", { exitCode: 9, signal: 0 });
+
+    expect(owner.send).toHaveBeenCalledWith(expect.objectContaining({ type: "exited", code: 9 }));
+    expect(observer.send).not.toHaveBeenCalled();
+    expect(server.sessions.has("session09")).toBe(false);
   });
 
   it("rejects a duplicate id", () => {

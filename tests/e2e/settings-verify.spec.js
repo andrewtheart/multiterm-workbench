@@ -240,6 +240,12 @@ test.describe("Settings panel verification", () => {
   });
 
   test("performance settings", async () => {
+    const performanceGroup = page.getByRole("button", { name: "Performance", exact: true });
+    if (await performanceGroup.getAttribute("aria-expanded") !== "true") await performanceGroup.click();
+    await expect(page.locator("#bridgeClientBacklogKb")).toBeVisible();
+    await expect(page.locator("#bridgeReplayBufferKb")).toBeVisible();
+    await expect(page.locator("#bridgeHeartbeatSeconds")).toBeVisible();
+
     // Batching window: reaches state, is pushed to the bridge as a `config`
     // frame, and out-of-range typing is folded back into the field on screen.
     const sent = [];
@@ -275,6 +281,43 @@ test.describe("Settings panel verification", () => {
 
     await set("#outputBacklogKb", "1024", "change");
     expect(await page.evaluate(() => outputBacklogLimitBytes())).toBe(1024 * 1024);
+
+    await set("#bridgeClientBacklogKb", "2048", "change");
+    expect(await setting("bridgeClientBacklogKb")).toBe(2048);
+    expect(sent).toContainEqual(expect.objectContaining({ type: "config", bridgeClientBacklogKb: 2048 }));
+
+    await set("#bridgeClientBacklogKb", "1", "change");
+    expect(await setting("bridgeClientBacklogKb")).toBe(64);
+    expect(await page.locator("#bridgeClientBacklogKb").inputValue()).toBe("64");
+
+    await set("#bridgeClientBacklogKb", "0", "change");
+    expect(await setting("bridgeClientBacklogKb")).toBe(0);
+    expect(sent).toContainEqual(expect.objectContaining({ type: "config", bridgeClientBacklogKb: 0 }));
+    await set("#bridgeClientBacklogKb", "4096", "change");
+
+    await set("#bridgeReplayBufferKb", "256", "change");
+    expect(await setting("bridgeReplayBufferKb")).toBe(256);
+    expect(sent).toContainEqual(expect.objectContaining({ type: "config", bridgeReplayBufferKb: 256 }));
+
+    await set("#bridgeReplayBufferKb", "1", "change");
+    expect(await setting("bridgeReplayBufferKb")).toBe(16);
+    expect(await page.locator("#bridgeReplayBufferKb").inputValue()).toBe("16");
+
+    await set("#bridgeReplayBufferKb", "0", "change");
+    expect(await setting("bridgeReplayBufferKb")).toBe(0);
+    await set("#bridgeReplayBufferKb", "512", "change");
+
+    await set("#bridgeHeartbeatSeconds", "45", "change");
+    expect(await setting("bridgeHeartbeatSeconds")).toBe(45);
+    expect(sent).toContainEqual(expect.objectContaining({ type: "config", bridgeHeartbeatSeconds: 45 }));
+
+    await set("#bridgeHeartbeatSeconds", "1", "change");
+    expect(await setting("bridgeHeartbeatSeconds")).toBe(5);
+    expect(await page.locator("#bridgeHeartbeatSeconds").inputValue()).toBe("5");
+
+    await set("#bridgeHeartbeatSeconds", "0", "change");
+    expect(await setting("bridgeHeartbeatSeconds")).toBe(0);
+    await set("#bridgeHeartbeatSeconds", "30", "change");
 
     await set("#automationOutputCaptureKb", "256", "change");
     expect(await setting("automationOutputCaptureKb")).toBe(256);
@@ -354,6 +397,70 @@ test.describe("Settings panel verification", () => {
     await set("#maxInstallerSizeMb", "not-a-number", "change");
     expect(await setting("maxInstallerSizeMb")).toBe(256);
     expect(await page.locator("#maxInstallerSizeMb").inputValue()).toBe("256");
+  });
+
+  test("persists bridge transport settings across reload", async () => {
+    const previous = await page.evaluate(() => ({
+      bridgeClientBacklogKb: state.settings.bridgeClientBacklogKb,
+      bridgeReplayBufferKb: state.settings.bridgeReplayBufferKb,
+      bridgeHeartbeatSeconds: state.settings.bridgeHeartbeatSeconds
+    }));
+
+    await set("#bridgeClientBacklogKb", "1024", "change");
+    await set("#bridgeReplayBufferKb", "128", "change");
+    await set("#bridgeHeartbeatSeconds", "15", "change");
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    expect(await setting("bridgeClientBacklogKb")).toBe(1024);
+    expect(await setting("bridgeReplayBufferKb")).toBe(128);
+    expect(await setting("bridgeHeartbeatSeconds")).toBe(15);
+    await expect(page.locator("#bridgeClientBacklogKb")).toHaveValue("1024");
+    await expect(page.locator("#bridgeReplayBufferKb")).toHaveValue("128");
+    await expect(page.locator("#bridgeHeartbeatSeconds")).toHaveValue("15");
+
+    await set("#bridgeClientBacklogKb", String(previous.bridgeClientBacklogKb), "change");
+    await set("#bridgeReplayBufferKb", String(previous.bridgeReplayBufferKb), "change");
+    await set("#bridgeHeartbeatSeconds", String(previous.bridgeHeartbeatSeconds), "change");
+    await page.evaluate(() => syncControlsFromSettings());
+    await expect(page.locator("#bridgeClientBacklogKb")).toHaveValue(String(previous.bridgeClientBacklogKb));
+    await expect(page.locator("#bridgeReplayBufferKb")).toHaveValue(String(previous.bridgeReplayBufferKb));
+    await expect(page.locator("#bridgeHeartbeatSeconds")).toHaveValue(String(previous.bridgeHeartbeatSeconds));
+  });
+
+  test("shows active bridge values when another renderer owns configuration", async () => {
+    const desired = await page.evaluate(() => ({
+      bridgeClientBacklogKb: state.settings.bridgeClientBacklogKb,
+      bridgeReplayBufferKb: state.settings.bridgeReplayBufferKb,
+      bridgeHeartbeatSeconds: state.settings.bridgeHeartbeatSeconds
+    }));
+
+    await page.evaluate(() => handleBridgeMessage({
+      type: "config",
+      configOwner: false,
+      outputCoalesceMs: 17,
+      bridgeClientBacklogKb: 2048,
+      bridgeReplayBufferKb: 128,
+      bridgeHeartbeatSeconds: 45,
+      diagnosticRetentionDays: 21,
+      diagnosticRotationMb: 12,
+      diagnosticViewerEntries: 4000,
+      copilotLogViewerEnabled: false,
+      copilotLogInitialTailKb: 128
+    }));
+
+    await expect(page.locator("#bridgeClientBacklogKb")).toHaveValue("2048");
+    await expect(page.locator("#bridgeReplayBufferKb")).toHaveValue("128");
+    await expect(page.locator("#bridgeHeartbeatSeconds")).toHaveValue("45");
+    await expect(page.locator("#bridgeClientBacklogKb")).toHaveAttribute("data-config-owner", "false");
+    await expect(page.locator("#bridgeClientBacklogKb")).toHaveAttribute("title", /another MultiTerm window/);
+    expect(await page.evaluate(() => ({
+      bridgeClientBacklogKb: state.settings.bridgeClientBacklogKb,
+      bridgeReplayBufferKb: state.settings.bridgeReplayBufferKb,
+      bridgeHeartbeatSeconds: state.settings.bridgeHeartbeatSeconds
+    }))).toEqual(desired);
+
+    await page.evaluate(() => syncControlsFromSettings());
   });
 
   test("AI title settings", async () => {
@@ -1335,6 +1442,27 @@ test.describe("Settings panel verification", () => {
       await set(sel, !before, "change");
       expect(await setting(key), `${key}`).toBe(!before);
     }
+
+    await set("#externalTerminalFocus", "never", "change");
+    expect(await setting("externalTerminalFocus")).toBe("never");
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).externalTerminalFocus)).toBe("never");
+    await set("#externalTerminalFocus", "ask", "change");
+
+    const bridgeId = await page.evaluate(() => state.bridgeId);
+    const appVersion = await page.evaluate(() => APP_VERSION);
+    await set("#showBridgeIdInWindowTitle", true, "change");
+    await set("#showVersionInWindowTitle", false, "change");
+    await expect(page).toHaveTitle(`MultiTerm Workbench (${bridgeId})`);
+    await set("#showVersionInWindowTitle", true, "change");
+    await expect(page).toHaveTitle(`MultiTerm Workbench (${bridgeId}) v${appVersion}`);
+    await set("#showBridgeIdInWindowTitle", false, "change");
+    await expect(page).toHaveTitle(`MultiTerm Workbench v${appVersion}`);
+    expect(await page.evaluate(() => {
+      const settings = JSON.parse(localStorage.getItem("multiterm.settings"));
+      return [settings.showBridgeIdInWindowTitle, settings.showVersionInWindowTitle];
+    })).toEqual([false, true]);
+    await set("#showBridgeIdInWindowTitle", true, "change");
+    await set("#showVersionInWindowTitle", false, "change");
 
     await set("#silenceSeconds", "20", "change");
     expect(await setting("silenceSeconds")).toBe(20);

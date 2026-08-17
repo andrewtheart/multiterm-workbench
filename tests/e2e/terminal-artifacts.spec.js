@@ -904,7 +904,7 @@ test.describe("Command queue context submenu", () => {
     await expect(submenu).toBeHidden();
   });
 
-  test("shows an inert empty-state row when nothing is queued", async ({ page }) => {
+  test("stages an inline command without Enter when nothing is queued", async ({ page }) => {
     await reset(page);
     await page.locator(".terminal-screen").first().click({ button: "right" });
     await page.locator("#contextMenu .ctx-item", { hasText: "Command queue" }).hover();
@@ -913,10 +913,73 @@ test.describe("Command queue context submenu", () => {
     await expect(submenu).toBeVisible();
     const rows = submenu.locator(".ctx-item");
     await expect(rows).toHaveCount(1);
-    await expect(rows.first()).toHaveText("No queued commands");
-    // The placeholder is presentational, never a menuitem.
-    await expect(rows.first()).toHaveClass(/ctx-info/);
     await expect(rows.first()).toHaveAttribute("role", "presentation");
+    const input = rows.first().locator(".ctx-inline-command-input");
+    const mode = rows.first().locator(".ctx-inline-command-mode");
+    await expect(input).toHaveAttribute("placeholder", "Type a command...");
+    await expect(mode).toHaveText("Stage");
+    await expect(mode).toHaveAttribute("aria-pressed", "false");
+
+    const frames = await captureInputFrames(page, async () => {
+      await input.fill("Write-Host staged-inline");
+      await input.press("Enter");
+    });
+    expect(frames).toEqual([{
+      type: "input",
+      id: expect.any(String),
+      data: "Write-Host staged-inline"
+    }]);
+    expect(frames[0].data).not.toMatch(/[\r\n]$/);
+    expect(await page.evaluate(() =>
+      Object.values(state.terminalArtifacts.terminals).flatMap((record) => record.queue).length
+    )).toBe(0);
+  });
+
+  test("runs an inline command with the shell Enter sequence", async ({ page }) => {
+    await reset(page);
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Command queue" }).hover();
+
+    const submenu = page.locator("#contextSubmenu");
+    const input = submenu.locator(".ctx-inline-command-input");
+    const mode = submenu.locator(".ctx-inline-command-mode");
+    await mode.click();
+    await expect(mode).toHaveText("Run");
+    await expect(mode).toHaveAttribute("aria-pressed", "true");
+
+    const frames = await captureInputFrames(page, async () => {
+      await input.fill("Write-Host run-inline");
+      await input.press("Enter");
+      await page.waitForTimeout(150);
+    });
+    expect(frames).toEqual([
+      { type: "input", id: expect.any(String), data: "Write-Host run-inline" },
+      { type: "input", id: expect.any(String), data: "\r" }
+    ]);
+  });
+
+  test("runs an inline Copilot prompt with the negotiated TUI Enter sequence", async ({ page }) => {
+    await reset(page);
+    await page.evaluate(() => {
+      const terminal = state.terminals.get(state.activeId) || [...state.terminals.values()][0];
+      terminal.aiAssistantTuiProvider = "copilot";
+    });
+    await page.locator(".terminal-screen").first().click({ button: "right" });
+    await page.locator("#contextMenu .ctx-item", { hasText: "Command queue" }).hover();
+
+    const submenu = page.locator("#contextSubmenu");
+    const input = submenu.locator(".ctx-inline-command-input");
+    await submenu.locator(".ctx-inline-command-mode").click();
+
+    const frames = await captureInputFrames(page, async () => {
+      await input.fill("Summarize the current failure");
+      await input.press("Enter");
+      await page.waitForTimeout(150);
+    });
+    expect(frames).toEqual([
+      { type: "input", id: expect.any(String), data: "Summarize the current failure" },
+      { type: "input", id: expect.any(String), data: "\x1b[13u" }
+    ]);
   });
 
   test("opens the submenu with ArrowRight and runs the focused row with Enter", async ({ page }) => {

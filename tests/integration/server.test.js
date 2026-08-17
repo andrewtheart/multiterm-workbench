@@ -44,7 +44,9 @@ function fakeSocket(remoteAddress = "127.0.0.1") {
   return {
     remoteAddress,
     destroyed: false,
-    write: vi.fn(),
+    // A real net.Socket reports whether the caller may keep writing; the bridge
+    // honours that value to bound a slow client's backlog.
+    write: vi.fn(() => true),
     end: vi.fn(),
     destroy: vi.fn(function destroy() { this.destroyed = true; }),
     on: vi.fn((event, cb) => { listeners[event] = cb; }),
@@ -105,6 +107,16 @@ describe("HTTP server", () => {
     expect(body.ok).toBe(true);
     expect(body).toHaveProperty("sessions");
     expect(body).toHaveProperty("rendererClients");
+    // The watchdog reads the top-level fields; the transport block is additive.
+    expect(body.transport).toEqual({
+      clients: expect.any(Number),
+      queuedBytes: expect.any(Number),
+      queueHighWaterMarkBytes: expect.any(Number),
+      heartbeatRttMs: expect.any(Number),
+      replayedBytes: expect.any(Number),
+      outputGaps: expect.any(Number),
+      forcedDisconnects: expect.any(Number)
+    });
   });
 
   it("serves the index page", async () => {
@@ -840,7 +852,7 @@ describe("elevated (administrator) terminal", () => {
     // buffer is drained).
     socket.feed({ type: "output", data: app.encodeElevationData("hello world") });
     app.flushSessionOutput(app.sessions.get("admin-term-1"));
-    expect(observer.send).toHaveBeenCalledWith({ type: "output", id: "admin-term-1", stream: "pty", data: "hello world" });
+    expect(observer.send).toHaveBeenCalledWith({ type: "output", id: "admin-term-1", stream: "pty", data: "hello world", seq: expect.any(Number) });
 
     // Output while logging is enabled also writes to the log stream.
     const logStream = { write: vi.fn() };

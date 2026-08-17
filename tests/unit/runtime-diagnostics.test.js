@@ -17,6 +17,8 @@ describe("runtime diagnostic storage", () => {
   });
 
   afterEach(() => {
+    server.__resetConfigOwnership();
+    server.clients.clear();
     fs.rmSync(directory, { force: true, recursive: true });
   });
 
@@ -127,11 +129,14 @@ describe("runtime diagnostic storage", () => {
         root: path.join(directory, "Copilot")
       })
     };
-    const client = { send: vi.fn() };
+    const client = { id: "renderer", renderer: true, send: vi.fn() };
 
     server.handleClientMessage(client, JSON.stringify({
       type: "config",
       outputCoalesceMs: 12,
+      bridgeClientBacklogKb: 4096,
+      bridgeReplayBufferKb: 512,
+      bridgeHeartbeatSeconds: 30,
       diagnosticRetentionDays: 30,
       diagnosticRotationMb: 20,
       diagnosticViewerEntries: 100,

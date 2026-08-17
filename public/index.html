@@ -132,6 +132,7 @@
             </button>
           </div>
         </div>
+        <output id="topBarActionDescription" class="topbar-action-description" aria-live="polite" hidden></output>
       </header>
 
       <div id="broadcastBar" class="broadcast-bar" hidden>
@@ -537,6 +538,21 @@
             </label>
 
             <label class="control-row">
+              <span title="Maximum queued output retained for each bridge client before that client is disconnected. 0 restores the legacy synchronous send path.">Bridge client backlog (KB)</span>
+              <input id="bridgeClientBacklogKb" type="number" min="0" max="16384" step="64" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Newest output retained per terminal for reconnect replay. 0 retains nothing and reports a visible output gap after missed output.">Bridge replay buffer (KB)</span>
+              <input id="bridgeReplayBufferKb" type="number" min="0" max="4096" step="16" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How often the bridge proves connected clients are alive. A client that misses two intervals is disconnected. 0 disables bridge-initiated liveness checks.">Bridge heartbeat interval (seconds)</span>
+              <input id="bridgeHeartbeatSeconds" type="number" min="0" max="600" step="5" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
               <span title="Newest output retained for each completed automation step and available to output-match conditions. This also bounds Copilot events.jsonl reads.">Automation output capture (KB)</span>
               <input id="automationOutputCaptureKb" type="number" min="16" max="512" step="16" inputmode="numeric">
             </label>
@@ -594,6 +610,22 @@
             <label class="toggle-row">
               <input id="restoreSession" type="checkbox">
               <span>Restore last session</span>
+            </label>
+            <label class="toggle-row">
+              <input id="showBridgeIdInWindowTitle" type="checkbox">
+              <span title="Appends the active BRIDGE-xxx identifier to the browser or Electron window title. The bridge status inside the app always keeps showing its id.">Show bridge ID in window title</span>
+            </label>
+            <label class="toggle-row">
+              <input id="showVersionInWindowTitle" type="checkbox">
+              <span title="Appends the current MultiTerm version to the browser or Electron window title.">Append version to window title</span>
+            </label>
+            <label class="control-row">
+              <span title="Controls whether MultiTerm comes to the foreground after VS Code, Visual Studio, File Explorer, or the MultiTerm CLI adds a terminal.">External terminal focus</span>
+              <select id="externalTerminalFocus">
+                <option value="ask">Ask after the first focus</option>
+                <option value="always">Always focus MultiTerm</option>
+                <option value="never">Never focus MultiTerm</option>
+              </select>
             </label>
             <label class="control-row">
               <span>When closing a page with terminals</span>
@@ -887,9 +919,23 @@
           <div class="bridge-identity-card" id="bridgeIdentityCard" role="dialog" aria-modal="false" aria-labelledby="bridgeIdentityId" hidden>
             <div class="bridge-identity-id" id="bridgeIdentityId">BRIDGE-???</div>
             <p class="bridge-identity-note" id="bridgeIdentityNote">This window is served by its own MultiTerm bridge.</p>
+            <div class="bridge-identity-frontend" id="bridgeIdentityFrontend">
+              <i data-lucide="monitor-check"></i>
+              <span>Frontend connected</span>
+            </div>
+            <div class="bridge-identity-list" id="bridgeIdentityList" aria-label="Other bridges"></div>
+            <p class="bridge-identity-empty" id="bridgeIdentityEmpty">Looking for other bridges...</p>
             <div class="bridge-identity-actions">
               <button type="button" class="bridge-identity-action" id="bridgeIdentityFocus">Show bridge terminal</button>
               <button type="button" class="bridge-identity-action" id="bridgeIdentityChoose" hidden>Connect to another bridge...</button>
+            </div>
+            <div class="bridge-identity-warning" id="bridgeIdentityWarning" role="alert" hidden>
+              <strong id="bridgeIdentityWarningTitle">Frontend already connected</strong>
+              <p id="bridgeIdentityWarningText"></p>
+              <div class="bridge-identity-warning-actions">
+                <button type="button" id="bridgeIdentityWarningCancel">Cancel</button>
+                <button type="button" id="bridgeIdentityWarningConfirm">Connect anyway</button>
+              </div>
             </div>
             <p class="bridge-identity-status" id="bridgeIdentityStatus" role="status" hidden></p>
           </div>
@@ -1697,6 +1743,20 @@
         </section>
         <div class="confirm-actions ai-setup-actions">
           <button id="aiSetupSave" type="button" class="confirm-proceed">Save and continue</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="externalTerminalFocusOverlay" class="palette-overlay" hidden>
+      <div class="palette external-terminal-focus" role="dialog" aria-modal="true" aria-labelledby="externalTerminalFocusTitle" aria-describedby="externalTerminalFocusText">
+        <div class="confirm-head">
+          <i data-lucide="mouse-pointer-click"></i>
+          <h2 id="externalTerminalFocusTitle">Focus MultiTerm for external terminals?</h2>
+        </div>
+        <p id="externalTerminalFocusText" class="confirm-body">A terminal was added by another application, so MultiTerm came to the foreground. Should it focus itself automatically when VS Code, Visual Studio, File Explorer, or the MultiTerm CLI adds terminals in the future?</p>
+        <div class="confirm-actions">
+          <button id="externalTerminalFocusDecline" type="button" class="confirm-cancel">Don’t focus</button>
+          <button id="externalTerminalFocusEnable" type="button" class="confirm-proceed">Focus automatically</button>
         </div>
       </div>
     </div>
@@ -2630,6 +2690,28 @@
       </footer>
     </div>
 
+    <div id="addTerminalColorFlyout" class="add-terminal-color-flyout" role="dialog" aria-modal="false" aria-labelledby="addTerminalColorTitle" hidden>
+      <div class="add-terminal-color-head">
+        <i data-lucide="palette"></i>
+        <div>
+          <h2 id="addTerminalColorTitle">Terminal button color</h2>
+          <p>24-bit color</p>
+        </div>
+      </div>
+      <div id="addTerminalColorPlane" class="add-terminal-color-plane" role="slider" tabindex="0" aria-label="Button color saturation and brightness" aria-valuemin="0" aria-valuemax="100">
+        <span id="addTerminalColorHandle" class="add-terminal-color-handle" aria-hidden="true"></span>
+      </div>
+      <label class="add-terminal-color-hue-row">
+        <span>Hue</span>
+        <input id="addTerminalColorHue" type="range" min="0" max="359" step="1" value="215" aria-label="Button color hue">
+      </label>
+      <div class="add-terminal-color-value-row">
+        <span id="addTerminalColorPreview" aria-hidden="true"></span>
+        <label><span>Hex</span><input id="addTerminalColorHex" type="text" value="#1677FF" maxlength="7" spellcheck="false" autocomplete="off"></label>
+      </div>
+      <button id="addTerminalColorReset" type="button" class="secondary-action">Use default blue</button>
+    </div>
+
     <div id="headerBackgroundFlyout" class="header-background-flyout" role="dialog" aria-modal="false" aria-labelledby="headerBackgroundFlyoutTitle" hidden>
       <div class="header-background-flyout-head">
         <i data-lucide="palette"></i>
@@ -2783,6 +2865,12 @@
           </form>
         </div>
         <span class="pane-status">starting</span>
+        <div class="pane-desync" role="status" hidden>
+          <i data-lucide="triangle-alert"></i>
+          <span class="pane-desync-text">Output was lost while this terminal was disconnected, so the screen below is incomplete.</span>
+          <button type="button" class="pane-desync-btn" data-desync="clear">Clear screen</button>
+          <button type="button" class="pane-desync-btn" data-desync="restart">Restart session</button>
+        </div>
         <div class="pane-find" hidden>
           <i data-lucide="search"></i>
           <input class="pane-find-input" type="text" spellcheck="false" autocomplete="off" placeholder="Find" aria-label="Find in terminal">

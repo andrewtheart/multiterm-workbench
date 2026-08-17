@@ -131,4 +131,170 @@ test.describe("Bridge auto-reconnect", () => {
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
     expect(pageErrors, "no uncaught errors across reconnect churn").toEqual([]);
   });
+
+  test("replays the output produced while the socket was down", async () => {
+    const id = await freshLiveTerminal();
+    const marker = `MTGAP${Date.now().toString(36).toUpperCase()}`;
+
+    // Drop the socket, produce output that only the bridge can see, then let the
+    // renderer reconnect and resume from the sequence it last received.
+    await page.evaluate(() => state.socket.close());
+    await expect.poll(socketReady).toBe(false);
+    await page.evaluate(
+      ([terminalId, text]) =>
+        new Promise((resolve) => {
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const probe = new WebSocket(`${protocol}//${window.location.host}/ws`);
+          probe.addEventListener("open", () => {
+            probe.send(JSON.stringify({ type: "input", id: terminalId, data: `Write-Output '${text}'\r` }));
+            setTimeout(() => {
+              probe.close();
+              resolve();
+            }, 1500);
+          });
+        }),
+      [id, marker]
+    );
+
+    await expect.poll(socketReady, { timeout: 15000 }).toBe(true);
+    await expect.poll(
+      () =>
+        page.evaluate((terminalId) => {
+          const terminal = state.terminals.get(terminalId);
+          if (!terminal) return "";
+          const buffer = terminal.term.buffer.active;
+          let text = "";
+          for (let row = 0; row < buffer.length; row += 1) {
+            text += `${buffer.getLine(row)?.translateToString(true) ?? ""}\n`;
+          }
+          return text;
+        }, id),
+      { timeout: 20000 }
+    ).toContain(marker);
+
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).lastOutputSeq, id)).toBeGreaterThan(0);
+    await expect(page.locator(`.terminal-pane[data-id="${id}"] .pane-desync`)).toBeHidden();
+  });
+
+  test("replays existing output into a pane rebuilt in a second window", async () => {
+    const id = await freshLiveTerminal();
+    const marker = `MTFRESH${Date.now().toString(36).toUpperCase()}`;
+    await page.evaluate(([terminalId, text]) => {
+      sendBridge({ type: "input", id: terminalId, data: `Write-Output '${text}'\r` });
+    }, [id, marker]);
+
+    const secondPage = await context.newPage();
+    try {
+      await startRendererCoverage(secondPage);
+      await secondPage.goto("/");
+      await expect(secondPage.locator("#statusConn")).toHaveText("Connected");
+      await expect.poll(
+        () => secondPage.evaluate((terminalId) => {
+          const terminal = state.terminals.get(terminalId);
+          if (!terminal) return "";
+          const buffer = terminal.term.buffer.active;
+          let text = "";
+          for (let row = 0; row < buffer.length; row += 1) {
+            text += `${buffer.getLine(row)?.translateToString(true) ?? ""}\n`;
+          }
+          return text;
+        }, id),
+        { timeout: 20000 }
+      ).toContain(marker);
+      await expect(secondPage.locator(`.terminal-pane[data-id="${id}"] .pane-desync`)).toBeHidden();
+    } finally {
+      await stopRendererCoverage(secondPage, "bridge-reconnect-fresh-window");
+      await secondPage.close();
+    }
+  });
+
+  test("adds a session created by another already-connected window", async () => {
+    await freshLiveTerminal();
+    const secondPage = await context.newPage();
+    try {
+      await startRendererCoverage(secondPage);
+      await secondPage.goto("/");
+      await expect(secondPage.locator("#statusConn")).toHaveText("Connected");
+      const id = await page.evaluate(() => addTerminal().id);
+      await expect.poll(() => statusOf(id), { timeout: 15000 }).toBe("live");
+      await expect.poll(
+        () => secondPage.evaluate((terminalId) => state.terminals.get(terminalId)?.status ?? null, id),
+        { timeout: 15000 }
+      ).toBe("live");
+
+      const marker = `MTFOREIGN${Date.now().toString(36).toUpperCase()}`;
+      await page.evaluate(([terminalId, text]) => {
+        sendBridge({ type: "input", id: terminalId, data: `Write-Output '${text}'\r` });
+      }, [id, marker]);
+      await expect.poll(
+        () => secondPage.evaluate((terminalId) => {
+          const terminal = state.terminals.get(terminalId);
+          if (!terminal) return "";
+          const buffer = terminal.term.buffer.active;
+          let text = "";
+          for (let row = 0; row < buffer.length; row += 1) {
+            text += `${buffer.getLine(row)?.translateToString(true) ?? ""}\n`;
+          }
+          return text;
+        }, id),
+        { timeout: 20000 }
+      ).toContain(marker);
+    } finally {
+      await stopRendererCoverage(secondPage, "bridge-reconnect-foreign-created");
+      await secondPage.close();
+    }
+  });
+
+  test("marks a pane desynchronized and offers recovery when replay is impossible", async () => {
+    const id = await freshLiveTerminal();
+
+    // A gap the bridge cannot bridge: the renderer is told, and must never
+    // present the incomplete screen as current.
+    await page.evaluate((terminalId) => {
+      handleBridgeMessage({
+        type: "outputGap",
+        id: terminalId,
+        reason: "retention",
+        expected: 5,
+        available: 40,
+        seq: 120
+      });
+    }, id);
+
+    const notice = page.locator(`.terminal-pane[data-id="${id}"] .pane-desync`);
+    await expect(notice).toBeVisible();
+    await expect(page.locator(`.terminal-pane[data-id="${id}"]`)).toHaveClass(/is-desynchronized/);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).lastOutputSeq, id)).toBe(120);
+
+    await notice.locator('[data-desync="clear"]').click();
+    await expect(notice).toBeVisible();
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).desynchronized, id)).toBe(true);
+  });
+
+  test("keeps the incomplete screen marked until restart resolves it", async () => {
+    const id = await freshLiveTerminal();
+    await page.evaluate((terminalId) => {
+      handleBridgeMessage({ type: "outputGap", id: terminalId, reason: "retention", expected: 1, available: 9, seq: 9 });
+    }, id);
+
+    const notice = page.locator(`.terminal-pane[data-id="${id}"] .pane-desync`);
+    await expect(notice).toBeVisible();
+    expect(await page.evaluate((terminalId) => resolveTerminalDesynchronized(state.terminals.get(terminalId), "dismiss"), id)).toBe(false);
+    await expect(notice).toBeVisible();
+    await expect(page.locator(`.terminal-pane[data-id="${id}"]`)).toHaveClass(/is-desynchronized/);
+    await notice.locator('[data-desync="restart"]').click();
+    // Restarting replaces the pane with a fresh session, so the old id is gone.
+    await expect.poll(() => statusOf(id), { timeout: 20000 }).toBeNull();
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await expect(page.locator(".pane-desync:visible")).toHaveCount(0);
+  });
+
+  test("ignores gap and resume frames for a terminal this window does not hold", async () => {
+    await freshLiveTerminal();
+    await page.evaluate(() => {
+      handleBridgeMessage({ type: "outputGap", id: "no-such-session", expected: 1, available: 2, seq: 2 });
+      handleBridgeMessage({ type: "outputResumed", id: "no-such-session", seq: 4, replayedBytes: 0 });
+    });
+    await expect(page.locator(".pane-desync:visible")).toHaveCount(0);
+  });
 });

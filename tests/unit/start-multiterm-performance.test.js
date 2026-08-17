@@ -13,8 +13,11 @@ describe("PowerShell bridge output performance", () => {
   it("honors the renderer's configurable output batching setting", () => {
     expect(bridgeScript).toContain('else if (type == "config")');
     expect(bridgeScript).toContain('Json.GetInt(message, "outputCoalesceMs", 8)');
-    expect(bridgeScript).toContain("Math.Min(100, Math.Max(0, requested))");
-    expect(bridgeScript).toContain('client.Send("{\\"type\\":\\"config\\",\\"outputCoalesceMs\\":"');
+    expect(bridgeScript).toContain('this.SetOutputCoalesceMs(Json.GetInt(message, "outputCoalesceMs", 8));');
+    expect(bridgeScript).toContain("private readonly ReaderWriterLockSlim outputCoalesceLock = new ReaderWriterLockSlim();");
+    expect(bridgeScript).toContain("if (next == 0 && this.outputCoalesceMs > 0)");
+    expect(bridgeScript).toContain("foreach (string sessionId in this.outputBatches.Keys) this.FlushSessionOutput(sessionId);");
+    expect(bridgeScript).toContain("client.Send(this.ActiveConfigJson(client));");
   });
 
   it("bounds client sends with the visible bridge response timeout", () => {
@@ -27,9 +30,9 @@ describe("PowerShell bridge output performance", () => {
   });
 
   it("queues output once and flushes it before every exit broadcast", () => {
-    expect(bridgeScript.match(/this\.QueueSessionOutput\(id, data\);/g)).toHaveLength(2);
-    expect(bridgeScript.match(/this\.FlushSessionOutput\(id\);[\s\S]{0,500}this\.(?:Broadcast|SendSessionFrame)\(/g)).toHaveLength(2);
-    expect(bridgeScript.match(/this\.RemoveSessionOutputBatch\(id\);/g)).toHaveLength(2);
+    expect(bridgeScript.match(/this\.QueueSessionOutput\(id, data\);/g)).toHaveLength(1);
+    expect(bridgeScript.match(/this\.FlushSessionOutput\(id\);[\s\S]{0,500}this\.(?:Broadcast|SendSession(?:Exit)?Frame)\(/g)).toHaveLength(1);
+    expect(bridgeScript.match(/this\.RemoveSessionOutputBatch\(id\);/g)).toHaveLength(1);
     expect(bridgeScript).toContain("this.outputBatches.TryRemove(id, out batch)");
     expect(bridgeScript).toContain("new Timer(delegate { this.FlushSessionOutput(id); }, null, delay, Timeout.Infinite)");
     expect(bridgeScript).toContain("private void SendSessionFrame(TerminalSession session, string message)");
@@ -37,5 +40,29 @@ describe("PowerShell bridge output performance", () => {
     expect(bridgeScript).toContain("this.CloseEphemeralSessions(client.Id);");
     expect(bridgeScript).toContain("this.clients.TryGetValue(session.OwnerClientId, out owner)");
     expect(bridgeScript).toContain("if (delay <= 0)");
+  });
+
+  it("holds the catalog lock while claiming and publishing a batch", () => {
+    const flush = bridgeScript.match(/private void FlushSessionOutput[\s\S]*?private void BroadcastOutput/);
+    expect(flush).toBeTruthy();
+    expect(flush[0]).toMatch(/lock \(this\.sessionCatalogLock\)[\s\S]*?lock \(batch\.Sync\)[\s\S]*?if \(data != null\) this\.BroadcastOutput\(id, data\);/);
+    expect(flush[0].indexOf("lock (this.sessionCatalogLock)"))
+      .toBeLessThan(flush[0].indexOf("lock (batch.Sync)"));
+    expect(flush[0].indexOf("lock (batch.Sync)"))
+      .toBeLessThan(flush[0].indexOf("this.BroadcastOutput(id, data)"));
+  });
+
+  it("drains the ConPTY output task before raising the exit event", () => {
+    const output = bridgeScript.match(/private void StartOutputLoop[\s\S]*?private void DisposeHandles/);
+    expect(output).toBeTruthy();
+    expect(output[0]).toContain("this.outputTask = Task.Run");
+    expect(output[0]).toContain("while (true)");
+    expect(output[0]).toContain("this.ClosePseudoConsoleForOutputDrain();");
+    expect(output[0]).toContain("output.GetAwaiter().GetResult()");
+    expect(output[0]).not.toContain("output.Wait(");
+    expect(output[0].indexOf("output.GetAwaiter().GetResult()"))
+      .toBeLessThan(output[0].indexOf("Action<int> handler = this.Exited"));
+    expect(output[0].indexOf("this.DisposeHandles()"))
+      .toBeLessThan(output[0].indexOf("Action<int> handler = this.Exited"));
   });
 });
