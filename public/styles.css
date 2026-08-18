@@ -643,6 +643,17 @@ body:not(.header-hidden) .chrome-controls #toggleHeader {
   box-shadow: none;
 }
 
+/* Top-bar glyphs run 20% larger than the 16px app default. The buttons keep
+   their size, so the bar height and spacing are unchanged. */
+.topbar .action-cluster > button svg {
+  height: 19.2px;
+  width: 19.2px;
+}
+
+.topbar .action-cluster > .help-doc-toggle .help-doc-glyph {
+  font-size: 20.4px;
+}
+
 #addTerminal {
   background: var(--add-terminal-color, #1677ff);
   border-color: var(--add-terminal-color, #1677ff);
@@ -2875,6 +2886,60 @@ body.header-hidden .status-hint kbd,
   outline: none;
 }
 
+.copilot-session-card.is-selected {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-raised));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.copilot-session-choice {
+  align-items: stretch;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.copilot-session-choice .copilot-session-card {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* min-height/padding reset: the base button rule would otherwise force 38px. */
+.copilot-session-select {
+  align-items: center;
+  align-self: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: transparent;
+  display: inline-flex;
+  flex: 0 0 16px;
+  height: 16px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+  width: 16px;
+}
+
+.copilot-session-select::after {
+  content: "\2713";
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.copilot-session-select[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-primary);
+}
+
+.copilot-session-select:hover,
+.copilot-session-select:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
 .copilot-session-main {
   display: grid;
   gap: 6px;
@@ -3039,6 +3104,120 @@ body.header-hidden .status-hint kbd,
 .copilot-resume-more {
   justify-self: center;
   margin: 4px auto;
+}
+
+.copilot-resume-selection-bar {
+  align-items: center;
+  background: var(--surface-high);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  padding: 10px 20px;
+}
+
+.copilot-resume-selection-bar > span {
+  color: var(--text-soft);
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.copilot-resume-selection-bar button {
+  min-height: 34px;
+}
+
+.copilot-resume-review {
+  display: grid;
+  gap: 12px;
+  min-height: 280px;
+  overflow: hidden;
+  padding: 16px 20px 18px;
+}
+
+.copilot-resume-review-head {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.copilot-resume-review-head h3 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.copilot-resume-review-head p,
+.copilot-resume-review-head > span,
+.copilot-resume-review-status {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 3px 0 0;
+}
+
+.copilot-resume-review-list {
+  display: grid;
+  gap: 9px;
+  max-height: 50vh;
+  overflow: auto;
+  padding: 2px;
+}
+
+.copilot-resume-review-row {
+  align-items: end;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(220px, 1.4fr);
+  padding: 11px 12px;
+}
+
+.copilot-resume-review-session,
+.copilot-resume-review-cwd {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.copilot-resume-review-session strong {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-resume-review-session span,
+.copilot-resume-review-cwd > span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.copilot-resume-review-cwd input {
+  font-family: var(--mono);
+  font-size: 11px;
+  min-height: 34px;
+  min-width: 0;
+  width: 100%;
+}
+
+.copilot-resume-review-cwd input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.copilot-resume-review-status {
+  min-height: 16px;
+}
+
+.copilot-resume-review-status[data-tone="error"] {
+  color: var(--danger);
+}
+
+.copilot-resume-review-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
 }
 
 .copilot-resume-tabs {
@@ -3217,6 +3396,32 @@ body.header-hidden .status-hint kbd,
 .copilot-resume-notice[hidden],
 .copilot-resume-remote-foot[hidden] {
   display: none;
+}
+
+@media (max-width: 600px) {
+  .copilot-resume-selection-bar {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr auto;
+  }
+
+  .copilot-resume-selection-bar > span,
+  .copilot-resume-selection-bar .primary-action {
+    grid-column: 1 / -1;
+  }
+
+  .copilot-resume-review-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .copilot-resume-review-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .copilot-resume-review-actions button {
+    width: 100%;
+  }
 }
 
 /* ---------------- Working directory dialog --------------- */
@@ -4230,20 +4435,24 @@ body.header-hidden .status-hint kbd,
 
 .tui-search-list {
   display: grid;
-  gap: 4px;
+  gap: 9px;
   max-height: 420px;
   overflow: auto;
 }
 
 .tui-search-row {
+  align-items: stretch;
   background: var(--surface-low);
   border: 1px solid transparent;
   border-radius: var(--radius-xs);
   display: grid;
   font-family: var(--mono);
   font-size: 11.5px;
-  gap: 1px;
-  padding: 6px 10px;
+  gap: 4px;
+  grid-auto-rows: minmax(min-content, auto);
+  line-height: 1.45;
+  min-height: 78px;
+  padding: 10px 12px;
   text-align: left;
 }
 
@@ -4255,6 +4464,7 @@ body.header-hidden .status-hint kbd,
 
 .tui-search-line {
   color: var(--text);
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4262,6 +4472,7 @@ body.header-hidden .status-hint kbd,
 
 .tui-search-context {
   color: var(--muted);
+  display: block;
   opacity: 0.75;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4330,7 +4541,7 @@ body.header-hidden .status-hint kbd,
 
 .workspace-empty-title {
   color: var(--text);
-  font-size: 14px;
+  font-size: 16.1px;
   font-weight: 650;
   margin: 0;
 }
@@ -6437,6 +6648,116 @@ button.shortcut-binding.is-capturing {
   gap: 8px;
 }
 
+.header-font-fields {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) 150px;
+}
+
+.header-font-fields label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.header-font-fields label > span,
+.header-background-modes legend,
+.header-solid-panel h3 {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.header-font-fields select,
+.header-font-fields input {
+  min-height: 36px;
+  min-width: 0;
+  width: 100%;
+}
+
+.header-background-modes {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.header-background-modes legend {
+  margin-bottom: 7px;
+}
+
+.header-background-modes > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.header-background-modes button {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--muted);
+  display: inline-flex;
+  font-weight: 620;
+  gap: 8px;
+  justify-content: center;
+  min-height: 40px;
+}
+
+.header-background-modes button:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.header-background-modes button:last-child {
+  border-left: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.header-background-modes button[aria-pressed="true"] {
+  background: var(--primary-container);
+  box-shadow: 0 0 0 1px var(--primary) inset;
+  color: var(--text);
+  position: relative;
+  z-index: 1;
+}
+
+.header-background-modes svg {
+  height: 16px;
+  width: 16px;
+}
+
+.header-gradient-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.header-gradient-panel[hidden],
+.header-solid-panel[hidden] {
+  display: none;
+}
+
+.header-solid-panel h3 {
+  margin: 0 0 8px;
+}
+
+.header-solid-palette {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(8, minmax(38px, 1fr));
+}
+
+.header-solid-swatch {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  min-height: 44px;
+  padding: 0;
+  width: 100%;
+}
+
+.header-solid-swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--surface-high), 0 0 0 4px var(--primary);
+}
+
 .header-gradient-types {
   border: 0;
   margin: 0;
@@ -6830,6 +7151,14 @@ button.shortcut-binding.is-capturing {
 
   .header-gradient-geometry {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .header-font-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .header-solid-palette {
+    grid-template-columns: repeat(2, minmax(48px, 1fr));
   }
 
   .header-gradient-stop {
@@ -12718,7 +13047,8 @@ body.is-pane-resizing {
   border-radius: var(--radius-xs);
   box-sizing: border-box;
   color: var(--text);
-  font-size: var(--title-font-scale);
+  font-family: var(--pane-title-font-family, inherit);
+  font-size: var(--pane-title-font-size, var(--title-font-scale));
   font-weight: 550;
   max-width: 180px;
   min-height: 28px;
@@ -12744,7 +13074,8 @@ body.is-pane-resizing {
   box-sizing: border-box;
   color: var(--text);
   display: block;
-  font-size: var(--title-font-scale);
+  font-family: var(--pane-title-font-family, inherit);
+  font-size: var(--pane-title-font-size, var(--title-font-scale));
   font-weight: 550;
   line-height: 28px;
   overflow: hidden;
@@ -12963,13 +13294,26 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
   width: 15px;
 }
 
+/* Copilot's composer has no selection of its own, so MultiTerm paints one. */
+.pane-composer-selection {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 12;
+}
+
+.pane-composer-selection-band {
+  background: color-mix(in srgb, var(--primary) 45%, transparent);
+  border-radius: 2px;
+  position: absolute;
+}
+
+.pane-scroll-top,
 .pane-scroll-bottom {
   align-items: center;
   background: var(--surface-high);
   border: 1px solid var(--border);
   border-radius: 50%;
-  /* Clears the pid pill, which owns the bottom-right corner at bottom: 8px. */
-  bottom: 36px;
   color: var(--muted);
   display: inline-flex;
   height: 28px;
@@ -12986,11 +13330,25 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
   z-index: 14;
 }
 
+.pane-scroll-top {
+  /* Clears the queue button, which owns the top-right corner at top: 10px. */
+  top: 54px;
+}
+
+.pane-scroll-bottom {
+  /* Copilot panes override the inset so the chevron lands on the end of the
+     TUI's own scroll track; otherwise it clears the pid pill at bottom: 8px. */
+  bottom: var(--pane-scroll-bottom-inset, 36px);
+}
+
 /* Declared before :hover so the hover rule, at equal specificity, still wins. */
+.pane-scroll-top.is-scrolled-down,
 .pane-scroll-bottom.is-scrolled-up {
   opacity: 0.72;
 }
 
+.pane-scroll-top:hover,
+.pane-scroll-top:focus-visible,
 .pane-scroll-bottom:hover,
 .pane-scroll-bottom:focus-visible {
   background: var(--primary-container);
@@ -13000,10 +13358,12 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
 }
 
 /* Generic alternate-screen apps hide this; Copilot supplies its own scroll path. */
+.pane-scroll-top[hidden],
 .pane-scroll-bottom[hidden] {
   display: none;
 }
 
+.pane-scroll-top svg,
 .pane-scroll-bottom svg {
   height: 15px;
   pointer-events: none;

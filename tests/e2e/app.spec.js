@@ -68,11 +68,19 @@ test.describe("MultiTerm Workbench UI", () => {
         const icons = [...document.querySelectorAll(".topbar .action-cluster > .icon-button")].map((button) => {
           const style = getComputedStyle(button);
           const bounds = button.getBoundingClientRect();
-          return { background: style.backgroundColor, border: style.borderTopWidth, height: bounds.height, width: bounds.width };
+          const glyph = button.querySelector("svg")?.getBoundingClientRect();
+          return {
+            background: style.backgroundColor,
+            border: style.borderTopWidth,
+            glyphWidth: glyph ? Math.round(glyph.width * 10) / 10 : 0,
+            height: bounds.height,
+            width: bounds.width
+          };
         });
         return {
           brand: rect(".brand"),
           fields: [rect(".shell-field"), rect(".cwd-field"), rect(".search-field")],
+          helpGlyphSize: getComputedStyle(document.querySelector("#helpDocToggle .help-doc-glyph")).fontSize,
           icons
         };
       });
@@ -80,6 +88,9 @@ test.describe("MultiTerm Workbench UI", () => {
       expect(geometry.fields[0].left).toBeGreaterThanOrEqual(geometry.brand.right);
       expect(geometry.icons.every((icon) => icon.width === 40 && icon.height === 40)).toBe(true);
       expect(geometry.icons.every((icon) => icon.border === "0px" && icon.background === "rgba(0, 0, 0, 0)")).toBe(true);
+      // Top-bar glyphs are 20% larger than the 16px app default, without resizing their buttons.
+      expect(geometry.icons.filter((icon) => icon.glyphWidth > 0).every((icon) => icon.glyphWidth === 19.2)).toBe(true);
+      expect(geometry.helpGlyphSize).toBe("20.4px");
 
       await expect(page.locator("#addTerminal")).toHaveCSS("background-color", "rgb(22, 119, 255)");
       await page.locator("#addTerminal").click({ button: "right" });

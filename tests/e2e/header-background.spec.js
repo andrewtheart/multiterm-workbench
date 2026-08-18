@@ -197,6 +197,19 @@ test.describe("Terminal header backgrounds", () => {
           const rect = element.getBoundingClientRect();
           return { left: rect.left, right: rect.right };
         });
+      const body = document.querySelector(".header-background-body");
+      const bodyRect = body.getBoundingClientRect();
+      const overflowing = [...body.querySelectorAll("*")]
+        .filter((element) => element.getClientRects().length > 0 && !element.classList.contains("ripple"))
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            selector: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${element.className ? `.${String(element.className).trim().replace(/\s+/g, ".")}` : ""}`,
+            left: Math.round(rect.left - bodyRect.left),
+            right: Math.round(rect.right - bodyRect.right)
+          };
+        })
+        .filter((entry) => entry.left < 0 || entry.right > 0);
       return {
         bottom: dialogRect.bottom,
         left: dialogRect.left,
@@ -204,13 +217,15 @@ test.describe("Terminal header backgrounds", () => {
         top: dialogRect.top,
         bodyClientWidth: document.querySelector(".header-background-body").clientWidth,
         bodyScrollWidth: document.querySelector(".header-background-body").scrollWidth,
-        controls
+        controls,
+        overflowing
       };
     });
     expect(containment.left).toBeGreaterThanOrEqual(0);
     expect(containment.top).toBeGreaterThanOrEqual(0);
     expect(containment.right).toBeLessThanOrEqual(390);
     expect(containment.bottom).toBeLessThanOrEqual(720);
+    expect(containment.overflowing).toEqual([]);
     expect(containment.bodyScrollWidth).toBeLessThanOrEqual(containment.bodyClientWidth);
     expect(containment.controls.every((control) => (
       control.left >= containment.left && control.right <= containment.right

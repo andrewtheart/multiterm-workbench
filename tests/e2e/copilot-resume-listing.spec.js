@@ -56,6 +56,7 @@ test.describe("Copilot resume listing", () => {
       if (!elements.assistantRestoreOverlay.hidden) closeAssistantRestoreDialog({ forget: false });
     });
     await page.evaluate(() => closeAllTerminals());
+    await expect(page.locator(".terminal-pane")).toHaveCount(0, { timeout: 30000 });
     await page.evaluate(() => addTerminal());
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
     await page.evaluate(() => {
@@ -378,6 +379,901 @@ test.describe("Copilot resume listing", () => {
       closeCopilotResume();
     });
     await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+  });
+
+  test("selects multiple sessions, reviews editable CWDs, and opens the validated batch", async () => {
+    await page.evaluate(({ first, second }) => {
+      window.__multiResumeOriginalRequestBridge = requestBridge;
+      window.__multiResumeOriginalResume = resumeCopilotSession;
+      window.__multiResumeOpened = [];
+      requestBridge = async (message, options) => {
+        if (message.type === "listCopilotSessions") return { sessions: [first, second], message: "" };
+        if (message.type === "validateDirectory") {
+          return { type: "directoryValidation", valid: true, path: `${message.path}-validated` };
+        }
+        return window.__multiResumeOriginalRequestBridge(message, options);
+      };
+      window.__multiResumeStubbedRequestBridge = requestBridge;
+      resumeCopilotSession = async (session, options) => {
+        window.__multiResumeOpened.push({ key: session.key, options });
+        return true;
+      };
+      openCopilotResume(null, { newTerminal: true });
+    }, { first: CLI_SESSION, second: EXTERNAL_CLI_SESSION });
+
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await page.locator("#copilotResumeOriginAll").click();
+    const firstEntry = page.locator(".copilot-session-entry", { hasText: "Native CLI history" });
+    const secondEntry = page.locator(".copilot-session-entry", { hasText: "External CLI in same folder" });
+    const firstCard = firstEntry.locator(".copilot-session-card");
+    const firstSelect = firstEntry.locator(".copilot-session-select");
+    const secondSelect = secondEntry.locator(".copilot-session-select");
+    // The card itself must still be the resume control, not a selection toggle.
+    await expect(firstCard).toHaveAttribute("aria-label", /^Resume Native CLI history/);
+    await expect(firstSelect).toHaveAttribute("aria-label", /^Select Native CLI history/);
+    await firstSelect.click();
+    await secondSelect.click();
+    await expect(firstSelect).toHaveAttribute("aria-pressed", "true");
+    await expect(secondSelect).toHaveAttribute("aria-pressed", "true");
+    await expect(firstSelect).toHaveAttribute("aria-label", /^Deselect Native CLI history/);
+    await expect(firstCard).toHaveClass(/is-selected/);
+    await expect(page.locator("#copilotResumeSelectionCount")).toHaveText("2 sessions selected");
+
+    // The base button rule's 38px min-height must not inflate the checkbox.
+    expect(await firstSelect.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      return { width: Math.round(box.width), height: Math.round(box.height) };
+    })).toEqual({ width: 16, height: 16 });
+
+    await page.locator("#copilotResumeSelectionReview").click();
+    await expect(page.locator("#copilotResumeReview")).toBeVisible();
+    await expect(page.locator("#copilotResumeList")).toBeHidden();
+    await expect(page.locator(".copilot-resume-review-row")).toHaveCount(2);
+    const firstCwd = page.getByLabel("Working directory for Native CLI history");
+    const secondCwd = page.getByLabel("Working directory for External CLI in same folder");
+    await expect(firstCwd).toHaveValue(CLI_SESSION.cwd);
+    await expect(secondCwd).toHaveValue(EXTERNAL_CLI_SESSION.cwd);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const containment = await page.locator("#copilotResumeReview").evaluate((review) => {
+      const dialog = review.closest(".copilot-resume").getBoundingClientRect();
+      const controls = [...review.querySelectorAll("button, input")]
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right };
+        });
+      return {
+        clientWidth: review.clientWidth,
+        controls,
+        dialogLeft: dialog.left,
+        dialogRight: dialog.right,
+        scrollWidth: review.scrollWidth
+      };
+    });
+    expect(containment.scrollWidth).toBeLessThanOrEqual(containment.clientWidth);
+    expect(containment.controls.every((control) => (
+      control.left >= containment.dialogLeft && control.right <= containment.dialogRight
+    ))).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    await secondCwd.fill("");
+    await page.locator("#copilotResumeReviewOpen").click();
+    await expect(secondCwd).toHaveAttribute("aria-invalid", "true");
+    await expect(page.locator("#copilotResumeReviewStatus")).toContainText("Fix the highlighted");
+    expect(await page.evaluate(() => window.__multiResumeOpened)).toEqual([]);
+    await expect(page.locator("#copilotResumeReviewOpen")).toBeEnabled();
+
+    // A bridge that never answers must not be reported as a missing folder.
+    await page.evaluate(() => {
+      window.__multiResumeSilent = true;
+      requestBridge = async (message, options) => (message.type === "validateDirectory" && window.__multiResumeSilent
+        ? null
+        : window.__multiResumeStubbedRequestBridge(message, options));
+    });
+    await secondCwd.fill("D:\\edited-session-folder");
+    await page.locator("#copilotResumeReviewOpen").click();
+    await expect(page.locator("#copilotResumeReviewStatus")).toContainText("bridge");
+    await expect(page.locator("#copilotResumeReviewStatus")).not.toContainText("Fix the highlighted");
+    expect(await page.evaluate(() => window.__multiResumeOpened)).toEqual([]);
+    await page.evaluate(() => {
+      window.__multiResumeSilent = false;
+    });
+
+    await page.locator("#copilotResumeReviewOpen").click();
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+    const opened = await page.evaluate(() => window.__multiResumeOpened);
+    expect(opened).toEqual([
+      { key: CLI_SESSION.key, options: { batch: true, confirmedCwd: `${CLI_SESSION.cwd}-validated` } },
+      { key: EXTERNAL_CLI_SESSION.key, options: { batch: true, confirmedCwd: "D:\\edited-session-folder-validated" } }
+    ]);
+
+    await page.evaluate(() => {
+      requestBridge = window.__multiResumeOriginalRequestBridge;
+      resumeCopilotSession = window.__multiResumeOriginalResume;
+      delete window.__multiResumeOriginalRequestBridge;
+      delete window.__multiResumeStubbedRequestBridge;
+      delete window.__multiResumeOriginalResume;
+      delete window.__multiResumeOpened;
+      delete window.__multiResumeSilent;
+    });
+  });
+
+  test("recovers a signed-out Copilot picker interactively and resumes it after setup", async () => {
+    await page.evaluate((session) => {
+      window.__signedOutOriginalProviders = state.aiProviders;
+      window.__signedOutOriginalSetup = startCopilotGuidedSetup;
+      window.__signedOutOriginalRequestBridge = requestBridge;
+      window.__signedOutContinuation = null;
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        available: false,
+        authenticated: false,
+        cliInstalled: true,
+        interactiveAvailable: false,
+        interactiveStatus: "Sign in required",
+        models: []
+      }];
+      startCopilotGuidedSetup = (options) => {
+        window.__signedOutContinuation = options;
+        return true;
+      };
+      requestBridge = async (message, options) => message.type === "listCopilotSessions"
+        ? { sessions: [session], message: "" }
+        : window.__signedOutOriginalRequestBridge(message, options);
+      syncAiSessionControls();
+      window.__signedOutToolbarDisabled = elements.copilotSessionsToggle.disabled;
+      window.__signedOutInitialOpen = openCopilotResume(null, { newTerminal: true });
+    }, CLI_SESSION);
+
+    const recovery = await page.evaluate(() => ({
+      disabled: window.__signedOutToolbarDisabled,
+      initialOpen: window.__signedOutInitialOpen,
+      origin: window.__signedOutContinuation?.origin,
+      closeSetup: window.__signedOutContinuation?.closeSetup,
+      hasContinuation: typeof window.__signedOutContinuation?.onReady === "function"
+    }));
+    expect(recovery).toEqual({
+      disabled: false,
+      initialOpen: true,
+      origin: "the session picker",
+      closeSetup: false,
+      hasContinuation: true
+    });
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+
+    await page.evaluate(() => {
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        available: true,
+        authenticated: true,
+        cliInstalled: true,
+        interactiveAvailable: true,
+        titleAvailable: true,
+        models: [{ id: "auto", name: "Auto", efforts: [] }]
+      }];
+      window.__signedOutContinuation.onReady();
+    });
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+    await expect(page.locator(".copilot-session-card")).toContainText("Native CLI history");
+
+    await page.evaluate(() => {
+      closeCopilotResume();
+      state.aiProviders = window.__signedOutOriginalProviders;
+      startCopilotGuidedSetup = window.__signedOutOriginalSetup;
+      requestBridge = window.__signedOutOriginalRequestBridge;
+      syncAiSessionControls();
+      delete window.__signedOutOriginalProviders;
+      delete window.__signedOutOriginalSetup;
+      delete window.__signedOutOriginalRequestBridge;
+      delete window.__signedOutContinuation;
+      delete window.__signedOutToolbarDisabled;
+      delete window.__signedOutInitialOpen;
+    });
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+  });
+
+  test("brings the suspended picker back when Copilot setup is abandoned", async () => {
+    await page.evaluate((session) => {
+      window.__abandonOriginalProviders = state.aiProviders;
+      window.__abandonOriginalSetup = startCopilotGuidedSetup;
+      window.__abandonOriginalRequestBridge = requestBridge;
+      window.__abandonOptions = null;
+      state.aiProviders = [{
+        id: "copilot",
+        name: "GitHub Copilot",
+        available: false,
+        authenticated: false,
+        cliInstalled: true,
+        interactiveAvailable: false,
+        models: []
+      }];
+      startCopilotGuidedSetup = (options) => {
+        window.__abandonOptions = options;
+        return true;
+      };
+      requestBridge = async (message, options) => (message.type === "listCopilotSessions"
+        ? { sessions: [session], message: "" }
+        : window.__abandonOriginalRequestBridge(message, options));
+      copilotResume.provider = "copilot";
+      copilotResume.newTerminal = true;
+      copilotResume.sessions = [session];
+      copilotResume.suspended = false;
+      copilotResume.view = "list";
+      elements.copilotResumeOverlay.hidden = false;
+      elements.copilotResumeOverlay.classList.add("is-open");
+      void resumeCopilotSession(session);
+    }, CLI_SESSION);
+
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+    expect(await page.evaluate(() => ({
+      origin: window.__abandonOptions?.origin,
+      hasAbandon: typeof window.__abandonOptions?.onAbandon === "function"
+    }))).toEqual({ origin: "resuming that session", hasAbandon: true });
+
+    // Closing the setup terminal must not strand the picker off screen.
+    await page.evaluate(() => window.__abandonOptions.onAbandon());
+    await expect(page.locator("#copilotResumeOverlay")).toBeVisible();
+
+    await page.evaluate(() => {
+      closeCopilotResume();
+      state.aiProviders = window.__abandonOriginalProviders;
+      startCopilotGuidedSetup = window.__abandonOriginalSetup;
+      requestBridge = window.__abandonOriginalRequestBridge;
+      syncAiSessionControls();
+      delete window.__abandonOriginalProviders;
+      delete window.__abandonOriginalSetup;
+      delete window.__abandonOriginalRequestBridge;
+      delete window.__abandonOptions;
+    });
+    await expect(page.locator("#copilotResumeOverlay")).toBeHidden();
+  });
+
+  test("handles selection cancellation, stale catalog entries, and partial batch failures", async () => {
+    const result = await page.evaluate(async ({ first, second }) => {
+      const original = {
+        generation: copilotResume.generation,
+        newTerminal: copilotResume.newTerminal,
+        provider: copilotResume.provider,
+        requestBridge,
+        resumeCopilotSession,
+        scope: copilotResume.scope,
+        sessions: copilotResume.sessions,
+        stateCwd: state.cwd,
+        inputCwd: elements.cwdInput.value,
+        view: copilotResume.view
+      };
+      const withNoCwd = { ...second, cwd: "", key: `${second.key}:no-cwd`, name: "Session without a folder" };
+      try {
+        copilotResume.newTerminal = true;
+        copilotResume.provider = "copilot";
+        copilotResume.scope = "local";
+        copilotResume.sessions = [first, withNoCwd];
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+
+        state.cwd = "D:\\state-folder";
+        elements.cwdInput.value = "D:\\input-folder";
+        const cwdFallbacks = [
+          copilotResumeDefaultCwd({ cwd: "D:\\session-folder" }),
+          copilotResumeDefaultCwd({ cwd: "" })
+        ];
+        state.cwd = "";
+        cwdFallbacks.push(copilotResumeDefaultCwd({ cwd: "" }));
+        elements.cwdInput.value = "";
+        cwdFallbacks.push(copilotResumeDefaultCwd({ cwd: "" }));
+
+        copilotResume.newTerminal = false;
+        const unavailable = toggleCopilotResumeSelection(first);
+        copilotResume.newTerminal = true;
+        const missingKey = toggleCopilotResumeSelection({ ...first, key: "" });
+        const selected = toggleCopilotResumeSelection(first);
+        const deselected = toggleCopilotResumeSelection(first);
+
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        setCopilotResumeView("review");
+        clearCopilotResumeSelection();
+        const clearedView = copilotResume.view;
+        setCopilotResumeView("not-a-view");
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const normalizedView = copilotResume.view;
+        const emptyReview = openCopilotResumeReview();
+        const wrongViewOpen = await openSelectedCopilotSessions();
+
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedKeys.add(withNoCwd.key);
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        copilotResume.selectedCwds.set(withNoCwd.key, "D:\\chosen-folder");
+        setCopilotResumeView("review");
+        const noCwdLabel = elements.copilotResumeReviewList
+          .querySelector(`[data-session-key="${withNoCwd.key}"] label span`)?.textContent;
+
+        let requestCount = 0;
+        requestBridge = async (message, options) => {
+          if (message.type !== "validateDirectory") return original.requestBridge(message, options);
+          requestCount += 1;
+          return { type: "directoryValidation", valid: true, path: `${message.path}-checked` };
+        };
+        resumeCopilotSession = async (session) => session.key === first.key;
+        const partial = await openSelectedCopilotSessions();
+        const partialState = {
+          partial,
+          remaining: [...copilotResume.selectedKeys],
+          status: elements.copilotResumeReviewStatus.textContent,
+          tone: elements.copilotResumeReviewStatus.dataset.tone,
+          requests: requestCount
+        };
+
+        copilotResume.provider = "claude";
+        copilotResume.scope = "local";
+        copilotResume.suspended = false;
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedKeys.add("stale-session");
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        copilotResume.selectedCwds.set("stale-session", "D:\\stale");
+        elements.copilotResumeOverlay.hidden = false;
+        requestBridge = async (message, options) => message.type === "listClaudeSessions"
+          ? { sessions: [first], message: "" }
+          : original.requestBridge(message, options);
+        await refreshCopilotSessions();
+        const retainedKeys = [...copilotResume.selectedKeys];
+
+        return {
+          clearedView,
+          cwdFallbacks,
+          deselected,
+          emptyReview,
+          missingKey,
+          noCwdLabel,
+          normalizedView,
+          partialState,
+          retainedKeys,
+          selected,
+          unavailable,
+          wrongViewOpen
+        };
+      } finally {
+        requestBridge = original.requestBridge;
+        resumeCopilotSession = original.resumeCopilotSession;
+        copilotResume.generation = original.generation;
+        copilotResume.newTerminal = original.newTerminal;
+        copilotResume.provider = original.provider;
+        copilotResume.scope = original.scope;
+        copilotResume.sessions = original.sessions;
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.view = original.view;
+        copilotResume.suspended = false;
+        state.cwd = original.stateCwd;
+        elements.cwdInput.value = original.inputCwd;
+        closeCopilotResume();
+      }
+    }, { first: CLI_SESSION, second: EXTERNAL_CLI_SESSION });
+
+    expect(result).toEqual({
+      clearedView: "list",
+      cwdFallbacks: ["D:\\session-folder", "D:\\state-folder", "D:\\input-folder", ""],
+      deselected: true,
+      emptyReview: false,
+      missingKey: false,
+      noCwdLabel: "Working directory (session did not record one)",
+      normalizedView: "list",
+      partialState: {
+        partial: false,
+        remaining: [`${EXTERNAL_CLI_SESSION.key}:no-cwd`],
+        status: "1 session could not be opened. Review and retry.",
+        tone: "error",
+        requests: 2
+      },
+      retainedKeys: [CLI_SESSION.key],
+      selected: true,
+      unavailable: false,
+      wrongViewOpen: false
+    });
+  });
+
+  test("restores suspended pickers after recovery and cancels stale batch work", async () => {
+    const result = await page.evaluate(async ({ local, remote }) => {
+      const original = {
+        addTerminal,
+        buildAiAssistantCommand,
+        closeCopilotResume,
+        copilotCliRecoveryNeeded,
+        generation: copilotResume.generation,
+        newTerminal: copilotResume.newTerminal,
+        openResumeCwdChange,
+        provider: copilotResume.provider,
+        recoverCopilotCliForAction,
+        registerCopilotLogTerminal,
+        requestBridge,
+        restoreCopilotResume,
+        resumeCopilotSession,
+        scope: copilotResume.scope,
+        sessions: copilotResume.sessions,
+        suspendCopilotResume,
+        terminalId: copilotResume.terminalId,
+        view: copilotResume.view
+      };
+      const recoveries = [];
+      let recoveryNeeded = true;
+      let restored = 0;
+      let suspended = 0;
+      try {
+        copilotCliRecoveryNeeded = () => recoveryNeeded;
+        recoverCopilotCliForAction = (onReady, options) => {
+          recoveries.push({ onReady, options });
+          return false;
+        };
+        restoreCopilotResume = () => { restored += 1; };
+        suspendCopilotResume = () => { suspended += 1; };
+        closeCopilotResume = () => {};
+        addTerminal = () => ({ id: "recovery-terminal" });
+        registerCopilotLogTerminal = () => {};
+        buildAiAssistantCommand = () => "copilot";
+        openResumeCwdChange = () => false;
+
+        copilotResume.newTerminal = true;
+        copilotResume.provider = "copilot";
+        copilotResume.scope = "local";
+        copilotResume.sessions = [local];
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.selectedKeys.add(local.key);
+        copilotResume.selectedCwds.set(local.key, local.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        const selectedRecovery = await openSelectedCopilotSessions();
+        const remoteRecovery = connectToRemoteCopilotSession(remote);
+        const pickerRecovery = openCopilotRemotePicker();
+        const resumeRecovery = await resumeCopilotSession(local);
+
+        recoveryNeeded = false;
+        copilotResume.selectedKeys.clear();
+        copilotResume.newTerminal = false;
+        copilotResume.terminalId = null;
+        for (const recovery of recoveries) recovery.onReady();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        copilotResume.newTerminal = true;
+        copilotResume.terminalId = null;
+        copilotResume.provider = "copilot";
+        copilotResume.sessions = [local];
+        copilotResume.selectedKeys.add(local.key);
+        copilotResume.selectedCwds.set(local.key, local.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        let cancelMode = "validation";
+        requestBridge = async (message, options) => {
+          if (message.type !== "validateDirectory") return original.requestBridge(message, options);
+          if (cancelMode === "validation") copilotResume.generation += 1;
+          return { valid: true, path: message.path };
+        };
+        resumeCopilotSession = async () => {
+          if (cancelMode === "opening") copilotResume.generation += 1;
+          return true;
+        };
+        const cancelledValidation = await openSelectedCopilotSessions();
+
+        copilotResume.selectedKeys.add(local.key);
+        copilotResume.selectedCwds.set(local.key, local.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        cancelMode = "opening";
+        const cancelledOpening = await openSelectedCopilotSessions();
+
+        resumeCopilotSession = original.resumeCopilotSession;
+        copilotResume.provider = "copilot";
+        copilotResume.newTerminal = true;
+        buildAiAssistantCommand = () => "";
+        const missingCommand = await resumeCopilotSession(local, { confirmedCwd: local.cwd });
+
+        buildAiAssistantCommand = () => "claude";
+        copilotResume.provider = "claude";
+        const claudeNoFolder = await resumeCopilotSession({ ...local, source: "claude", cwd: "" }, {
+          confirmedCwd: "D:\\chosen"
+        });
+        requestBridge = async (message, options) => message.type === "validateDirectory"
+          ? { valid: false, error: "missing" }
+          : original.requestBridge(message, options);
+        const claudeMissingFolder = await resumeCopilotSession({ ...local, source: "claude" }, {
+          confirmedCwd: "D:\\chosen"
+        });
+
+        copilotResume.provider = "copilot";
+        requestBridge = async (message, options) => message.type === "prepareCopilotSessionContext"
+          ? { error: "context unavailable" }
+          : original.requestBridge(message, options);
+        const importFailure = await resumeCopilotSession({ ...local, source: "vscode" }, {
+          confirmedCwd: "D:\\chosen"
+        });
+        requestBridge = async (message, options) => {
+          if (message.type === "prepareCopilotSessionContext") {
+            copilotResume.generation += 1;
+            return { contextPath: "D:\\context.md" };
+          }
+          return original.requestBridge(message, options);
+        };
+        const staleImport = await resumeCopilotSession({ ...local, source: "vscode" }, {
+          confirmedCwd: "D:\\chosen"
+        });
+
+        return {
+          cancelledOpening,
+          cancelledValidation,
+          claudeMissingFolder,
+          claudeNoFolder,
+          importFailure,
+          missingCommand,
+          origins: recoveries.map((entry) => entry.options.origin),
+          pickerRecovery,
+          remoteRecovery,
+          restored,
+          resumeRecovery,
+          selectedRecovery,
+          staleImport,
+          suspended
+        };
+      } finally {
+        addTerminal = original.addTerminal;
+        buildAiAssistantCommand = original.buildAiAssistantCommand;
+        closeCopilotResume = original.closeCopilotResume;
+        copilotCliRecoveryNeeded = original.copilotCliRecoveryNeeded;
+        openResumeCwdChange = original.openResumeCwdChange;
+        recoverCopilotCliForAction = original.recoverCopilotCliForAction;
+        registerCopilotLogTerminal = original.registerCopilotLogTerminal;
+        requestBridge = original.requestBridge;
+        restoreCopilotResume = original.restoreCopilotResume;
+        resumeCopilotSession = original.resumeCopilotSession;
+        suspendCopilotResume = original.suspendCopilotResume;
+        copilotResume.generation = original.generation;
+        copilotResume.newTerminal = original.newTerminal;
+        copilotResume.provider = original.provider;
+        copilotResume.scope = original.scope;
+        copilotResume.sessions = original.sessions;
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.terminalId = original.terminalId;
+        copilotResume.view = original.view;
+        original.closeCopilotResume();
+      }
+    }, {
+      local: CLI_SESSION,
+      remote: {
+        id: "7f72d94a-e3c4-4e57-a8df-9f920809f9f2",
+        key: "remote:7f72d94a-e3c4-4e57-a8df-9f920809f9f2",
+        localId: "3818ca4d-66ba-49ef-9a68-56192d4c04ce",
+        name: "Remote task",
+        source: "remote",
+        state: "idle",
+        steerable: true
+      }
+    });
+
+    expect(result).toMatchObject({
+      cancelledOpening: false,
+      cancelledValidation: false,
+      claudeMissingFolder: false,
+      claudeNoFolder: false,
+      importFailure: false,
+      missingCommand: false,
+      origins: [
+        "opening the selected sessions",
+        "connecting to that remote session",
+        "the remote session picker",
+        "resuming that session"
+      ],
+      pickerRecovery: false,
+      remoteRecovery: false,
+      resumeRecovery: false,
+      selectedRecovery: false,
+      staleImport: false,
+      suspended: 4
+    });
+    expect(result.restored).toBeGreaterThanOrEqual(8);
+  });
+
+  test("restores review focus, switches scope, and completes local and imported resumes", async () => {
+    const result = await page.evaluate(async ({ local, editor }) => {
+      const original = {
+        buildAiAssistantCommand,
+        closeCopilotResume,
+        generation: copilotResume.generation,
+        newTerminal: copilotResume.newTerminal,
+        openCopilotSessionTerminal,
+        provider: copilotResume.provider,
+        refreshCopilotSessions,
+        requestBridge,
+        scope: copilotResume.scope,
+        sessions: copilotResume.sessions,
+        suspended: copilotResume.suspended,
+        view: copilotResume.view
+      };
+      const launches = [];
+      let closes = 0;
+      let refreshes = 0;
+      try {
+        copilotResume.newTerminal = true;
+        copilotResume.provider = "copilot";
+        copilotResume.scope = "local";
+        copilotResume.sessions = [local];
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.selectedKeys.add(local.key);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        syncCopilotResumeView();
+        copilotResume.suspended = true;
+        restoreCopilotResume();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const reviewFocused = document.activeElement === elements.copilotResumeReviewList.querySelector("input");
+        elements.copilotResumeReviewBack.click();
+
+        refreshCopilotSessions = () => { refreshes += 1; };
+        const sameScope = setCopilotResumeScope("local");
+        const changedScope = setCopilotResumeScope("remote");
+
+        copilotResume.scope = "local";
+        copilotResume.newTerminal = true;
+        copilotResume.provider = "copilot";
+        closeCopilotResume = () => { closes += 1; };
+        buildAiAssistantCommand = (options) => `command:${options.resumeId || options.sessionId || "none"}`;
+        openCopilotSessionTerminal = (...args) => {
+          launches.push(args);
+          return { id: `launch-${launches.length}` };
+        };
+        requestBridge = async (message, options) => {
+          if (message.type === "validateDirectory") return { valid: true, path: message.path };
+          if (message.type === "prepareCopilotSessionContext") return { contextPath: "D:\\context.md" };
+          return original.requestBridge(message, options);
+        };
+        const localSingle = await resumeCopilotSession(local, { confirmedCwd: local.cwd });
+        const localBatch = await resumeCopilotSession(local, { batch: true, confirmedCwd: local.cwd });
+        const importedSingle = await resumeCopilotSession(editor, { confirmedCwd: "D:\\import" });
+        const importedBatch = await resumeCopilotSession(editor, { batch: true, confirmedCwd: "D:\\import" });
+
+        buildAiAssistantCommand = () => "";
+        const noCommandBatch = await resumeCopilotSession(local, { batch: true, confirmedCwd: local.cwd });
+        buildAiAssistantCommand = () => "claude";
+        copilotResume.provider = "claude";
+        const claudeNoFolderBatch = await resumeCopilotSession({ ...local, source: "claude", cwd: "" }, {
+          batch: true,
+          confirmedCwd: "D:\\chosen"
+        });
+        requestBridge = async (message, options) => message.type === "validateDirectory"
+          ? { valid: false, error: "missing" }
+          : original.requestBridge(message, options);
+        const claudeMissingBatch = await resumeCopilotSession({ ...local, source: "claude" }, {
+          batch: true,
+          confirmedCwd: "D:\\chosen"
+        });
+        copilotResume.provider = "copilot";
+        requestBridge = async (message, options) => message.type === "prepareCopilotSessionContext"
+          ? { error: "missing context" }
+          : original.requestBridge(message, options);
+        const importFailureBatch = await resumeCopilotSession(editor, {
+          batch: true,
+          confirmedCwd: "D:\\import"
+        });
+
+        return {
+          changedScope,
+          claudeMissingBatch,
+          claudeNoFolderBatch,
+          closes,
+          importFailureBatch,
+          importedBatch,
+          importedSingle,
+          launchCount: launches.length,
+          localBatch,
+          localSingle,
+          noCommandBatch,
+          refreshes,
+          reviewFocused,
+          sameScope
+        };
+      } finally {
+        buildAiAssistantCommand = original.buildAiAssistantCommand;
+        closeCopilotResume = original.closeCopilotResume;
+        openCopilotSessionTerminal = original.openCopilotSessionTerminal;
+        refreshCopilotSessions = original.refreshCopilotSessions;
+        requestBridge = original.requestBridge;
+        copilotResume.generation = original.generation;
+        copilotResume.newTerminal = original.newTerminal;
+        copilotResume.provider = original.provider;
+        copilotResume.scope = original.scope;
+        copilotResume.sessions = original.sessions;
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.suspended = original.suspended;
+        copilotResume.view = original.view;
+        original.closeCopilotResume();
+      }
+    }, { local: CLI_SESSION, editor: EDITOR_SESSION });
+
+    expect(result).toEqual({
+      changedScope: true,
+      claudeMissingBatch: false,
+      claudeNoFolderBatch: false,
+      closes: 2,
+      importFailureBatch: false,
+      importedBatch: true,
+      importedSingle: true,
+      launchCount: 4,
+      localBatch: true,
+      localSingle: true,
+      noCommandBatch: false,
+      refreshes: 1,
+      reviewFocused: true,
+      sameScope: false
+    });
+  });
+
+  test("handles missing review controls, all-failed batches, and accepted recovery launches", async () => {
+    const result = await page.evaluate(async ({ first, second, remote }) => {
+      const original = {
+        closeCopilotResume,
+        copilotCliRecoveryNeeded,
+        generation: copilotResume.generation,
+        newTerminal: copilotResume.newTerminal,
+        provider: copilotResume.provider,
+        recoverCopilotCliForAction,
+        requestBridge,
+        resumeCopilotSession,
+        scope: copilotResume.scope,
+        sessions: copilotResume.sessions,
+        suspended: copilotResume.suspended,
+        view: copilotResume.view
+      };
+      let closes = 0;
+      const recoveries = [];
+      try {
+        copilotResume.newTerminal = true;
+        copilotResume.provider = "copilot";
+        copilotResume.scope = "local";
+        copilotResume.sessions = [first, second];
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedKeys.add(second.key);
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        copilotResume.selectedCwds.set(second.key, second.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        elements.copilotResumeReviewList.querySelector(`[data-session-key="${second.key}"]`)?.remove();
+        let validation = 0;
+        requestBridge = async (message, options) => {
+          if (message.type !== "validateDirectory") return original.requestBridge(message, options);
+          validation += 1;
+          return validation === 1 ? { valid: false, error: "invalid folder" } : null;
+        };
+        const invalidWithoutEveryInput = await openSelectedCopilotSessions();
+
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedCwds.set(first.key, "");
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        elements.copilotResumeReviewList.replaceChildren();
+        const emptyWithoutInput = await openSelectedCopilotSessions();
+
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        elements.copilotResumeReviewList.replaceChildren();
+        requestBridge = async (message, options) => message.type === "validateDirectory"
+          ? { valid: true, path: `${message.path}-without-input` }
+          : original.requestBridge(message, options);
+        resumeCopilotSession = async () => true;
+        const validWithoutInput = await openSelectedCopilotSessions();
+
+        closeCopilotResume = () => { closes += 1; };
+        requestBridge = async (message, options) => message.type === "validateDirectory"
+          ? { valid: true, path: message.path }
+          : original.requestBridge(message, options);
+        resumeCopilotSession = async () => true;
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        const singleSuccess = await openSelectedCopilotSessions();
+
+        resumeCopilotSession = async () => false;
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedKeys.add(second.key);
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        copilotResume.selectedCwds.set(second.key, second.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        const allFailed = await openSelectedCopilotSessions();
+        const allFailedStatus = elements.copilotResumeReviewStatus.textContent;
+
+        copilotCliRecoveryNeeded = () => true;
+        recoverCopilotCliForAction = (onReady, options) => {
+          recoveries.push(options.origin);
+          return true;
+        };
+        resumeCopilotSession = original.resumeCopilotSession;
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.selectedKeys.add(first.key);
+        copilotResume.selectedCwds.set(first.key, first.cwd);
+        copilotResume.view = "review";
+        renderCopilotResumeReview();
+        const selectedAccepted = await openSelectedCopilotSessions();
+        const remoteAccepted = connectToRemoteCopilotSession(remote);
+        const pickerAccepted = openCopilotRemotePicker();
+
+        copilotResume.suspended = true;
+        copilotResume.view = "review";
+        elements.copilotResumeReviewList.replaceChildren();
+        restoreCopilotResume();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        return {
+          allFailed,
+          allFailedStatus,
+          closes,
+          emptyWithoutInput,
+          invalidWithoutEveryInput,
+          pickerAccepted,
+          recoveries,
+          remoteAccepted,
+          selectedAccepted,
+          singleSuccess,
+          validWithoutInput
+        };
+      } finally {
+        closeCopilotResume = original.closeCopilotResume;
+        copilotCliRecoveryNeeded = original.copilotCliRecoveryNeeded;
+        recoverCopilotCliForAction = original.recoverCopilotCliForAction;
+        requestBridge = original.requestBridge;
+        resumeCopilotSession = original.resumeCopilotSession;
+        copilotResume.generation = original.generation;
+        copilotResume.newTerminal = original.newTerminal;
+        copilotResume.provider = original.provider;
+        copilotResume.scope = original.scope;
+        copilotResume.sessions = original.sessions;
+        copilotResume.selectedKeys.clear();
+        copilotResume.selectedCwds.clear();
+        copilotResume.suspended = original.suspended;
+        copilotResume.view = original.view;
+        original.closeCopilotResume();
+      }
+    }, {
+      first: CLI_SESSION,
+      second: EXTERNAL_CLI_SESSION,
+      remote: {
+        id: "7f72d94a-e3c4-4e57-a8df-9f920809f9f2",
+        key: "remote:7f72d94a-e3c4-4e57-a8df-9f920809f9f2",
+        name: "Remote task",
+        source: "remote",
+        state: "idle",
+        steerable: true
+      }
+    });
+
+    expect(result).toEqual({
+      allFailed: false,
+      allFailedStatus: "2 sessions could not be opened. Review and retry.",
+      closes: 1,
+      emptyWithoutInput: false,
+      invalidWithoutEveryInput: false,
+      pickerAccepted: false,
+      recoveries: ["opening the selected sessions", "connecting to that remote session", "the remote session picker"],
+      remoteAccepted: false,
+      selectedAccepted: false,
+      singleSuccess: true,
+      validWithoutInput: true
+    });
   });
 
   test("classifies recovered session identities and guards resume filters", async () => {

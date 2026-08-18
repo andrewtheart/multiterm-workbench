@@ -281,4 +281,87 @@ test.describe("Run in a worktree dialog", () => {
     expect(urlClaude.id).toBe("");
     expect(urlClaude.frames.some((frame) => String(frame.data || "").includes("claude"))).toBe(true);
   });
+
+  test("suspends the worktree dialog while Copilot setup owns the action", async ({ page }) => {
+    await open(page);
+    const result = await page.evaluate(async () => {
+      const original = {
+        copilotCliRecoveryNeeded,
+        provider: state.settings.aiSessionProvider,
+        recoverCopilotCliForAction
+      };
+      const recoveries = [];
+      let recoveryNeeded = true;
+      try {
+        state.settings.aiSessionProvider = "copilot";
+        copilotCliRecoveryNeeded = () => recoveryNeeded;
+        recoverCopilotCliForAction = (onReady, options) => {
+          recoveries.push({ onReady, options });
+          return false;
+        };
+
+        closeWorktreeDialog();
+        elements.worktreeOverlay.hidden = true;
+        const deferredOpen = openWorktreeDialog({ openInNewTerminal: true });
+        const openOrigin = recoveries[0].options.origin;
+        recoveryNeeded = false;
+        recoveries[0].onReady();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const openedAfterRecovery = !elements.worktreeOverlay.hidden;
+
+        recoveryNeeded = true;
+        const deferredCreate = await createWorktreeAndRun();
+        const hiddenDuringRecovery = elements.worktreeOverlay.hidden;
+        const createOrigin = recoveries[1].options.origin;
+        const restoredAfterStartFailure = !elements.worktreeOverlay.hidden;
+        suspendWorktreeDialog();
+        recoveries[1].options.onAbandon();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const restoredAfterAbandon = !elements.worktreeOverlay.hidden;
+
+        recoverCopilotCliForAction = (onReady, options) => {
+          recoveries.push({ onReady, options });
+          return true;
+        };
+        const acceptedCreate = await createWorktreeAndRun();
+        const hiddenAfterAcceptedStart = elements.worktreeOverlay.hidden;
+
+        recoveryNeeded = false;
+        elements.worktreeNameInput.value = "";
+        recoveries[1].onReady();
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+
+        return {
+          createOrigin,
+          acceptedCreate,
+          deferredCreate,
+          deferredOpen,
+          hiddenDuringRecovery,
+          hiddenAfterAcceptedStart,
+          openOrigin,
+          openedAfterRecovery,
+          restoredAfterAbandon,
+          restoredAfterStartFailure
+        };
+      } finally {
+        copilotCliRecoveryNeeded = original.copilotCliRecoveryNeeded;
+        recoverCopilotCliForAction = original.recoverCopilotCliForAction;
+        state.settings.aiSessionProvider = original.provider;
+        closeWorktreeDialog();
+      }
+    });
+
+    expect(result).toEqual({
+      acceptedCreate: false,
+      createOrigin: "the worktree launch",
+      deferredCreate: false,
+      deferredOpen: false,
+      hiddenDuringRecovery: false,
+      hiddenAfterAcceptedStart: true,
+      openOrigin: "the worktree dialog",
+      openedAfterRecovery: true,
+      restoredAfterAbandon: true,
+      restoredAfterStartFailure: true
+    });
+  });
 });

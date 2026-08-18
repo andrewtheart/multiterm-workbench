@@ -112,6 +112,50 @@ test.describe("Surface context menu", () => {
     await expect(menu.locator(".ctx-item", { hasText: "Split (duplicate)" })).toHaveCount(0);
   });
 
+  test("keeps setup-recoverable assistant actions available in both menus", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await trimPanes(page, 1);
+    await page.evaluate(() => {
+      window.__recoverableMenuProfile = {
+        provider: state.settings.aiSessionProvider,
+        providers: state.aiProviders
+      };
+      state.settings.aiSessionProvider = "copilot";
+      state.aiProviders = [{
+        id: "copilot",
+        authenticated: false,
+        available: false,
+        cliInstalled: true,
+        interactiveAvailable: false,
+        titleAvailable: false,
+        models: []
+      }];
+    });
+
+    const assertRecoverable = async (menu) => {
+      const worktree = menu.locator(".ctx-item", { hasText: /Run GitHub Copilot in a worktree/ }).first();
+      const resume = menu.locator(".ctx-item", { hasText: /Resume GitHub Copilot session/ }).first();
+      await expect(worktree).toBeVisible();
+      await expect(resume).toBeVisible();
+      await expect(worktree).toBeEnabled();
+      await expect(resume).toBeEnabled();
+      await expect(worktree).toHaveAttribute("title", /Sign in to Copilot CLI, then continue to the worktree dialog/);
+      await expect(resume).toHaveAttribute("title", /Sign in to Copilot CLI, then open the session picker/);
+    };
+
+    await assertRecoverable(await openTerminalMenu(page));
+    await page.keyboard.press("Escape");
+    await assertRecoverable(await openSurfaceMenu(page));
+    await page.evaluate(() => {
+      hideContextMenu();
+      const profile = window.__recoverableMenuProfile;
+      state.settings.aiSessionProvider = profile.provider;
+      state.aiProviders = profile.providers;
+      delete window.__recoverableMenuProfile;
+    });
+  });
+
   const stubStatisticsReplies = (page) => page.evaluate(() => {
     const socket = state.socket;
     const originalSend = state.socket.send.bind(state.socket);

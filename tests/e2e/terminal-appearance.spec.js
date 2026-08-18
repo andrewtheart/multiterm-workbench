@@ -21,6 +21,12 @@ async function reset(page) {
       terminalHeaderBackground: cloneHeaderBackground(state.settings.terminalHeaderBackground)
     };
     closeAllTerminals();
+  });
+  await expect.poll(async () => {
+    await page.evaluate(() => closeAllTerminals());
+    return page.locator(".terminal-pane").count();
+  }, { timeout: 30000 }).toBe(0);
+  await page.evaluate(() => {
     addTerminal({ title: "Appearance one" });
     addTerminal({ title: "Appearance two" });
   });
@@ -214,7 +220,115 @@ test.describe("Terminal appearance editor", () => {
     expect(header.terminals.every((terminal) => terminal.override === null && terminal.css.includes("conic-gradient"))).toBe(true);
   });
 
-  test("keeps the blade, preview, RGB channels, and actions contained on mobile", async ({ page }) => {
+  test("applies a solid header palette color and title typography to one terminal", async ({ page }) => {
+    await reset(page);
+    const ids = await page.evaluate(() => [...state.terminals.keys()]);
+    await openAppearance(page);
+    await expect(page.locator("#terminalAppearanceTabTerminal")).toContainText("Body");
+    await page.locator("#terminalAppearanceTabHeader").click();
+
+    const solidMode = page.locator('[data-header-background-mode="solid"]');
+    const gradientMode = page.locator('[data-header-background-mode="gradient"]');
+    await expect(gradientMode).toHaveAttribute("aria-pressed", "true");
+    await solidMode.click();
+    await expect(solidMode).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("#headerSolidPanel")).toBeVisible();
+    await expect(page.locator("#headerGradientPanel")).toBeHidden();
+    await expect(page.locator("#headerSolidPalette .header-solid-swatch")).toHaveCount(8);
+    await gradientMode.click();
+    await expect(page.locator("#headerGradientPanel")).toBeVisible();
+    await expect(page.locator("#headerSolidPanel")).toBeHidden();
+    await solidMode.click();
+
+    const swatch = page.locator('[data-header-solid-color="#7CA8F6"]');
+    await swatch.click();
+    await page.locator("#headerAppearanceFontFamily").selectOption("Consolas");
+    await page.locator("#headerAppearanceFontSize").fill("99");
+    await expect(page.locator("#headerAppearanceFontSize")).toHaveValue("20");
+    await page.locator("#headerAppearanceFontSize").fill("");
+    await expect.poll(() => page.evaluate(() => headerBackgroundDraft.fontSize)).toBe(0);
+    await page.locator("#headerAppearanceFontSize").fill("18");
+    await expect(page.locator("#headerBackgroundPreview")).toHaveCSS("background-color", "rgb(124, 168, 246)");
+    await expect(page.locator("#headerBackgroundPreview .header-background-preview-title")).toHaveCSS("font-size", "18px");
+    await expect(page.locator("#headerBackgroundPreview .header-background-preview-title")).toHaveCSS("font-family", /Consolas/i);
+    await expect.poll(() => page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      const bar = terminal.pane.querySelector(".pane-bar");
+      const title = terminal.pane.querySelector(".pane-title-display");
+      return {
+        background: getComputedStyle(bar).backgroundColor,
+        familyIncludesConsolas: getComputedStyle(title).fontFamily.includes("Consolas"),
+        size: getComputedStyle(title).fontSize
+      };
+    }, ids[0])).toEqual({ background: "rgb(124, 168, 246)", familyIncludesConsolas: true, size: "18px" });
+
+    await page.locator("#headerBackgroundCancel").click();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeHidden();
+    const cancelled = await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      const bar = terminal.pane.querySelector(".pane-bar");
+      return {
+        background: bar.style.getPropertyValue("--pane-bar-custom-bg"),
+        definition: terminal.headerBackground,
+        family: bar.style.getPropertyValue("--pane-title-font-family"),
+        size: bar.style.getPropertyValue("--pane-title-font-size")
+      };
+    }, ids[0]);
+    expect(cancelled).toEqual({ background: "", definition: null, family: "", size: "" });
+
+    await page.evaluate((id) => openHeaderBackgroundEditor(state.terminals.get(id)), ids[0]);
+    await solidMode.click();
+    await swatch.click();
+    await page.locator("#headerAppearanceFontFamily").selectOption("Consolas");
+    await page.locator("#headerAppearanceFontSize").fill("18");
+    await page.locator("#headerBackgroundApply").click();
+    await page.locator("#terminalAppearanceApplyTerminal").click();
+
+    const applied = await page.evaluate(([firstId, secondId]) => {
+      const first = state.terminals.get(firstId);
+      const second = state.terminals.get(secondId);
+      const firstBar = first.pane.querySelector(".pane-bar");
+      const secondBar = second.pane.querySelector(".pane-bar");
+      const snapshot = JSON.parse(localStorage.getItem("multiterm.lastSession") || "[]")
+        .find((entry) => entry.id === firstId);
+      return {
+        definition: first.headerBackground,
+        first: {
+          background: firstBar.style.getPropertyValue("--pane-bar-custom-bg"),
+          family: firstBar.style.getPropertyValue("--pane-title-font-family"),
+          size: firstBar.style.getPropertyValue("--pane-title-font-size")
+        },
+        second: {
+          background: secondBar.style.getPropertyValue("--pane-bar-custom-bg"),
+          family: secondBar.style.getPropertyValue("--pane-title-font-family"),
+          size: secondBar.style.getPropertyValue("--pane-title-font-size")
+        },
+        snapshot: snapshot?.headerBackground
+      };
+    }, ids);
+    expect(applied.definition).toMatchObject({
+      mode: "solid",
+      color: "#7CA8F6",
+      fontFamily: "Consolas",
+      fontSize: 18
+    });
+    expect(applied.first.background).toBe("#7CA8F6");
+    expect(applied.first.family).toContain("Consolas");
+    expect(applied.first.size).toBe("18px");
+    expect(applied.second).toEqual({ background: "", family: "", size: "" });
+    expect(applied.snapshot).toEqual(applied.definition);
+
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect.poll(() => page.evaluate((id) => state.terminals.get(id)?.headerBackground, ids[0])).toMatchObject({
+      mode: "solid",
+      color: "#7CA8F6",
+      fontFamily: "Consolas",
+      fontSize: 18
+    });
+  });
+
+  test("keeps Body and Header controls contained on mobile", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await reset(page);
     await page.evaluate(() => openTerminalAppearanceEditor([...state.terminals.values()][0]));
@@ -243,6 +357,33 @@ test.describe("Terminal appearance editor", () => {
     expect(containment.contentScrollWidth).toBeLessThanOrEqual(containment.contentClientWidth);
     expect(containment.visibleControls.every((control) => (
       control.left >= containment.dialog.left && control.right <= containment.dialog.right
+    ))).toBe(true);
+
+    await page.locator("#terminalAppearanceTabHeader").click();
+    await page.locator('[data-header-background-mode="solid"]').click();
+    await expect(page.locator("#headerSolidPanel")).toBeVisible();
+    await expect(page.locator("#headerSolidPalette .header-solid-swatch")).toHaveCount(8);
+    const headerContainment = await page.evaluate(() => {
+      const dialog = document.querySelector(".terminal-appearance-dialog");
+      const content = document.querySelector(".terminal-appearance-content");
+      const dialogRect = dialog.getBoundingClientRect();
+      const visibleControls = [...dialog.querySelectorAll("button, input, select")]
+        .filter((element) => element.getClientRects().length > 0)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { left: rect.left, right: rect.right };
+        });
+      return {
+        contentClientWidth: content.clientWidth,
+        contentScrollWidth: content.scrollWidth,
+        dialogLeft: dialogRect.left,
+        dialogRight: dialogRect.right,
+        visibleControls
+      };
+    });
+    expect(headerContainment.contentScrollWidth).toBeLessThanOrEqual(headerContainment.contentClientWidth);
+    expect(headerContainment.visibleControls.every((control) => (
+      control.left >= headerContainment.dialogLeft && control.right <= headerContainment.dialogRight
     ))).toBe(true);
   });
 
@@ -362,6 +503,126 @@ test.describe("Terminal appearance editor", () => {
     expect(result.clamped).toBe("#FF8000");
     expect(result.missingAppearanceTargets).toEqual([undefined, undefined]);
     expect(result.settingsFontCountWithoutAppearanceSelect).toBe(20);
+  });
+
+  test("normalizes header modes and ignores control events after the draft closes", async ({ page }) => {
+    await reset(page);
+    const result = await page.evaluate(() => {
+      const originalFontSelect = elements.headerAppearanceFontFamily;
+      const originalDraft = headerBackgroundDraft;
+      const validStop = { color: "#123456", opacity: 100, position: 25 };
+      try {
+        const invalid = [
+          normalizeHeaderBackground(null),
+          normalizeHeaderBackground([]),
+          normalizeHeaderBackground({ mode: "gradient", stops: [validStop] }),
+          normalizeHeaderBackground({ mode: "solid", color: "bad", stops: [] })
+        ];
+        const solid = normalizeHeaderBackground({
+          mode: "solid",
+          color: "#abcdef",
+          fontFamily: "missing",
+          fontSize: 999,
+          stops: [null, { color: "bad", position: 50 }]
+        });
+        const fromStop = normalizeHeaderBackground({
+          mode: "solid",
+          color: "",
+          fontSize: -4,
+          stops: [validStop, { color: "#654321", opacity: "bad", position: "bad" }]
+        });
+
+        const terminal = [...state.terminals.values()][0];
+        headerBackgroundTerminalId = terminal.id;
+        state.settings.terminalHeaderBackground = normalizeHeaderBackground({
+          mode: "solid",
+          color: "#112233",
+          fontFamily: "",
+          stops: []
+        });
+        terminal.headerBackground = normalizeHeaderBackground({
+          mode: "solid",
+          color: "#334455",
+          fontFamily: "Consolas",
+          fontSize: 18,
+          stops: []
+        });
+        terminalAppearanceScope = "all";
+        loadTerminalAppearanceDraft();
+        const globalDraftFont = headerBackgroundDraft.fontFamily;
+        const globalFontStyle = elements.headerAppearanceFontFamily.style.fontFamily;
+        terminalAppearanceScope = "terminal";
+        loadTerminalAppearanceDraft();
+        const terminalDraftFont = headerBackgroundDraft.fontFamily;
+        const terminalFontStyle = elements.headerAppearanceFontFamily.style.fontFamily;
+        const terminalFontSizeValue = elements.headerAppearanceFontSize.value;
+        terminal.headerBackground = null;
+        loadTerminalAppearanceDraft();
+        const inheritedDraftColor = headerBackgroundDraft.color;
+        elements.headerAppearanceFontFamily.value = "";
+        elements.headerAppearanceFontFamily.dispatchEvent(new Event("change", { bubbles: true }));
+        const clearedFontStyle = elements.headerAppearanceFontFamily.style.fontFamily;
+
+        elements.headerAppearanceFontFamily = null;
+        populateFontSelectors();
+        elements.headerAppearanceFontFamily = originalFontSelect;
+
+        headerBackgroundDraft = null;
+        renderHeaderSolidPalette();
+        syncHeaderBackgroundMode();
+        document.querySelector("[data-header-background-mode]").click();
+        elements.headerSolidPalette.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        const detachedSwatch = document.createElement("button");
+        detachedSwatch.dataset.headerSolidColor = "#7CA8F6";
+        elements.headerSolidPalette.append(detachedSwatch);
+        detachedSwatch.click();
+        elements.headerAppearanceFontFamily.dispatchEvent(new Event("change", { bubbles: true }));
+        elements.headerAppearanceFontSize.value = "18";
+        elements.headerAppearanceFontSize.dispatchEvent(new Event("input", { bubbles: true }));
+
+        return {
+          clearedFontStyle,
+          fromStop,
+          globalDraftFont,
+          globalFontStyle,
+          inheritedDraftColor,
+          invalid,
+          paletteCount: elements.headerSolidPalette.children.length,
+          solid,
+          terminalDraftFont,
+          terminalFontSizeValue,
+          terminalFontStyle
+        };
+      } finally {
+        elements.headerAppearanceFontFamily = originalFontSelect;
+        headerBackgroundDraft = originalDraft;
+      }
+    });
+
+    expect(result.invalid).toEqual([null, null, null, null]);
+    expect(result.solid).toMatchObject({
+      color: "#ABCDEF",
+      fontFamily: "",
+      fontSize: 20,
+      mode: "solid",
+      stops: [
+        { color: "#ABCDEF", opacity: 100, position: 0 },
+        { color: "#ABCDEF", opacity: 100, position: 100 }
+      ]
+    });
+    expect(result.fromStop).toMatchObject({
+      color: "#654321",
+      fontSize: 0,
+      mode: "solid"
+    });
+    expect(result.globalFontStyle).toBe("");
+    expect(result.globalDraftFont).toBe("");
+    expect(result.terminalFontStyle).toContain("Consolas");
+    expect(result.terminalDraftFont).toBe("Consolas");
+    expect(result.terminalFontSizeValue).toBe("18");
+    expect(result.inheritedDraftColor).toBe("#112233");
+    expect(result.clearedFontStyle).toBe("");
+    expect(result.paletteCount).toBe(1);
   });
 
   test("handles picker events, validation, reset scopes, missing terminals, and focus wrapping", async ({ page }) => {

@@ -209,6 +209,60 @@ test.describe("Assistant session restore", () => {
     await expect(page.locator("#assistantRestoreOverlay")).toBeHidden();
   });
 
+  test("guides an interactive Copilot restore and submits only checked rows", async ({ page }) => {
+    await ready(page);
+    const result = await page.evaluate(async () => {
+      const rows = [
+        { id: "gone-copilot", title: "Copilot task", cwd: "D:\\one", provider: "copilot", shell: "pwsh" },
+        { id: "gone-claude", title: "Claude task", cwd: "D:\\two", provider: "claude", shell: "pwsh" }
+      ];
+      const original = {
+        copilotCliRecoveryNeeded,
+        recoverCopilotCliForAction,
+        restoreAssistantSessions
+      };
+      let continuation = null;
+      const submitted = [];
+      try {
+        copilotCliRecoveryNeeded = () => true;
+        recoverCopilotCliForAction = (onReady, options) => {
+          continuation = { onReady, options };
+          return true;
+        };
+        const started = await restoreAssistantSessions(rows, { interactive: true });
+        restoreAssistantSessions = async (chosen, options) => {
+          submitted.push({ chosen, options });
+        };
+        continuation.onReady();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        openAssistantRestoreDialog(rows);
+        const boxes = elements.assistantRestoreList.querySelectorAll("input[type=checkbox]");
+        boxes[1].checked = false;
+        elements.assistantRestoreConfirm.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return {
+          origin: continuation.options.origin,
+          started,
+          submitted
+        };
+      } finally {
+        copilotCliRecoveryNeeded = original.copilotCliRecoveryNeeded;
+        recoverCopilotCliForAction = original.recoverCopilotCliForAction;
+        restoreAssistantSessions = original.restoreAssistantSessions;
+        closeAssistantRestoreDialog({ forget: false });
+      }
+    });
+
+    expect(result.started).toBe(true);
+    expect(result.origin).toBe("restoring your assistant sessions");
+    expect(result.submitted).toEqual([
+      { chosen: expect.arrayContaining([expect.objectContaining({ id: "gone-copilot" })]), options: { interactive: true } },
+      { chosen: [expect.objectContaining({ id: "gone-copilot" })], options: { interactive: true } }
+    ]);
+    expect(result.submitted[0].chosen).toHaveLength(2);
+  });
+
   // The record is bridge-side and machine-level, so anything left here makes a
   // LATER spec file open the restore dialog, whose overlay swallows its clicks.
   test.afterAll(async ({ browser }) => {

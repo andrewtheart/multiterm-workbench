@@ -15,6 +15,12 @@ async function reset(page) {
     state.automations = automationApi.normalizeStore(null, state.settings.automationHistoryLimit);
     state.automationStudio.editingId = null;
     if (!elements.automationOverlay.hidden) closeAutomationStudio({ restoreFocus: false });
+  });
+  await expect.poll(async () => {
+    await page.evaluate(() => closeAllTerminals());
+    return page.locator(".terminal-pane").count();
+  }, { timeout: 30000 }).toBe(0);
+  await page.evaluate(() => {
     addTerminal({ title: "Tests" });
   });
   await expect(page.locator(".terminal-pane")).toHaveCount(1);
@@ -1603,5 +1609,78 @@ test.describe("Automation Studio", () => {
       delete window.__automationOriginalReadiness;
       delete window.__automationOriginalSend;
     });
+  });
+
+  test("records an unavailable Copilot run and hands Run now to guided setup", async ({ page }) => {
+    const result = await page.evaluate(() => {
+      const original = {
+        closeAutomationStudio,
+        copilotCliRecoveryNeeded,
+        readAutomationEditorRule,
+        recoverCopilotCliForAction,
+        runAutomationRule
+      };
+      const rule = automationApi.normalizeRule({
+        actions: [{ command: "Review the release", id: "action-recovery", targetName: "Tests" }],
+        enabled: true,
+        id: "automation-recovery",
+        name: "Copilot recovery run",
+        type: "copilot",
+        trigger: { intervalMinutes: 60, mode: "interval" }
+      });
+      let closed = 0;
+      let recovery = null;
+      const retried = [];
+      try {
+        copilotCliRecoveryNeeded = () => true;
+        const manual = runAutomationRule(rule, { manual: true });
+        const scheduled = runAutomationRule(rule);
+        const failures = state.automations.history
+          .filter((entry) => entry.automationId === rule.id && entry.status === "failed")
+          .map((entry) => entry.detail);
+
+        readAutomationEditorRule = () => null;
+        elements.automationRunNow.click();
+        readAutomationEditorRule = () => rule;
+        closeAutomationStudio = () => { closed += 1; };
+        recoverCopilotCliForAction = (onReady, options) => {
+          recovery = { onReady, options };
+          return true;
+        };
+        runAutomationRule = (value, options) => {
+          retried.push({ id: value.id, options });
+          return 1;
+        };
+        elements.automationRunNow.click();
+        recovery.onReady();
+        copilotCliRecoveryNeeded = () => false;
+        elements.automationRunNow.click();
+        return {
+          closed,
+          failures,
+          manual,
+          origin: recovery.options.origin,
+          retried,
+          scheduled
+        };
+      } finally {
+        closeAutomationStudio = original.closeAutomationStudio;
+        copilotCliRecoveryNeeded = original.copilotCliRecoveryNeeded;
+        readAutomationEditorRule = original.readAutomationEditorRule;
+        recoverCopilotCliForAction = original.recoverCopilotCliForAction;
+        runAutomationRule = original.runAutomationRule;
+      }
+    });
+
+    expect(result.manual).toBe(0);
+    expect(result.scheduled).toBe(0);
+    expect(result.closed).toBe(1);
+    expect(result.origin).toBe("the automation run");
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures.every((detail) => detail.includes("GitHub Copilot CLI is not ready"))).toBe(true);
+    expect(result.retried).toEqual([
+      { id: "automation-recovery", options: { manual: true } },
+      { id: "automation-recovery", options: { manual: true } }
+    ]);
   });
 });

@@ -147,6 +147,7 @@ const HEADER_GRADIENT_TYPES = new Set(["linear", "radial", "conic"]);
 const HEADER_GRADIENT_SHAPES = new Set(["circle", "ellipse"]);
 const HEADER_GRADIENT_MAX_STOPS = 8;
 const HEADER_GRADIENT_FALLBACK_COLOR = "#1E242C";
+const HEADER_FONT_SIZE_BOUNDS = Object.freeze({ min: 9, max: 20 });
 // One-click palette for the header quick picker: two neutrals for a subtle
 // tint, then the pane label accents so both cues can share a hue.
 const HEADER_BACKGROUND_QUICK_COLORS = Object.freeze([
@@ -765,6 +766,8 @@ const elements = {
   headerBackgroundPreview: document.querySelector("#headerBackgroundPreview"),
   headerBackgroundReset: document.querySelector("#headerBackgroundReset"),
   headerBackgroundSubtitle: document.querySelector("#headerBackgroundSubtitle"),
+  headerAppearanceFontFamily: document.querySelector("#headerAppearanceFontFamily"),
+  headerAppearanceFontSize: document.querySelector("#headerAppearanceFontSize"),
   headerGradientAddStop: document.querySelector("#headerGradientAddStop"),
   headerGradientAngle: document.querySelector("#headerGradientAngle"),
   headerGradientAngleRow: document.querySelector("#headerGradientAngleRow"),
@@ -775,10 +778,13 @@ const elements = {
   headerGradientCenterY: document.querySelector("#headerGradientCenterY"),
   headerGradientCenterYRow: document.querySelector("#headerGradientCenterYRow"),
   headerGradientCenterYValue: document.querySelector("#headerGradientCenterYValue"),
+  headerGradientPanel: document.querySelector("#headerGradientPanel"),
   headerGradientShape: document.querySelector("#headerGradientShape"),
   headerGradientShapeRow: document.querySelector("#headerGradientShapeRow"),
   headerGradientStopList: document.querySelector("#headerGradientStopList"),
   headerGradientStopsCount: document.querySelector("#headerGradientStopsCount"),
+  headerSolidPalette: document.querySelector("#headerSolidPalette"),
+  headerSolidPanel: document.querySelector("#headerSolidPanel"),
   terminalAppearanceApplyAll: document.querySelector("#terminalAppearanceApplyAll"),
   terminalAppearanceApplyChoices: document.querySelector("#terminalAppearanceApplyChoices"),
   terminalAppearanceApplyTerminal: document.querySelector("#terminalAppearanceApplyTerminal"),
@@ -828,12 +834,24 @@ const elements = {
   copilotResumeOriginMultiTerm: document.querySelector("#copilotResumeOriginMultiTerm"),
   copilotResumeOriginOther: document.querySelector("#copilotResumeOriginOther"),
   copilotResumeProjectFilter: document.querySelector("#copilotResumeProjectFilter"),
+  copilotResumeReview: document.querySelector("#copilotResumeReview"),
+  copilotResumeReviewBack: document.querySelector("#copilotResumeReviewBack"),
+  copilotResumeReviewCount: document.querySelector("#copilotResumeReviewCount"),
+  copilotResumeReviewList: document.querySelector("#copilotResumeReviewList"),
+  copilotResumeReviewOpen: document.querySelector("#copilotResumeReviewOpen"),
+  copilotResumeReviewStatus: document.querySelector("#copilotResumeReviewStatus"),
   copilotResumeSearch: document.querySelector("#copilotResumeSearch"),
+  copilotResumeSelectionBar: document.querySelector("#copilotResumeSelectionBar"),
+  copilotResumeSelectionClear: document.querySelector("#copilotResumeSelectionClear"),
+  copilotResumeSelectionCount: document.querySelector("#copilotResumeSelectionCount"),
+  copilotResumeSelectionReview: document.querySelector("#copilotResumeSelectionReview"),
   copilotResumeSourceFilter: document.querySelector("#copilotResumeSourceFilter"),
   copilotResumeStatus: document.querySelector("#copilotResumeStatus"),
+  copilotResumeSummary: document.querySelector("#copilotResumeSummary"),
   copilotResumeTabLocal: document.querySelector("#copilotResumeTabLocal"),
   copilotResumeTabRemote: document.querySelector("#copilotResumeTabRemote"),
   copilotResumeTabs: document.querySelector("#copilotResumeTabs"),
+  copilotResumeToolbar: document.querySelector("#copilotResumeToolbar"),
   copilotResumeUpdatedFilter: document.querySelector("#copilotResumeUpdatedFilter"),
   copilotSessionsToggle: document.querySelector("#copilotSessionsToggle"),
   copilotSessionTitlesFlyout: document.querySelector("#copilotSessionTitlesFlyout"),
@@ -1242,6 +1260,21 @@ function populateFontSelectors() {
     }
     select.value = selected;
     select.style.fontFamily = fontStacks[selected];
+  }
+  if (elements.headerAppearanceFontFamily) {
+    elements.headerAppearanceFontFamily.replaceChildren();
+    const inherited = document.createElement("option");
+    inherited.value = "";
+    inherited.textContent = "App font (default)";
+    elements.headerAppearanceFontFamily.append(inherited);
+    for (const [name, stack] of FONT_CATALOG) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      option.dataset.fontStack = stack;
+      option.style.fontFamily = stack;
+      elements.headerAppearanceFontFamily.append(option);
+    }
   }
 }
 
@@ -1880,7 +1913,10 @@ function bindControls() {
     }
   });
   elements.copilotResumeClose.addEventListener("click", closeCopilotResume);
-  elements.copilotResumeRefresh.addEventListener("click", refreshCopilotSessions);
+  elements.copilotResumeRefresh.addEventListener("click", () => {
+    clearCopilotResumeSelection();
+    refreshCopilotSessions();
+  });
   elements.copilotResumeAiSearch.addEventListener("click", searchCopilotSessionsWithAi);
   elements.copilotResumeTabLocal.addEventListener("click", () => setCopilotResumeScope("local"));
   elements.copilotResumeTabRemote.addEventListener("click", () => setCopilotResumeScope("remote"));
@@ -1891,6 +1927,10 @@ function bindControls() {
     control.addEventListener("change", applyCopilotResumeFilterControls);
   }
   elements.copilotResumePicker.addEventListener("click", openCopilotRemotePicker);
+  elements.copilotResumeSelectionClear.addEventListener("click", clearCopilotResumeSelection);
+  elements.copilotResumeSelectionReview.addEventListener("click", openCopilotResumeReview);
+  elements.copilotResumeReviewBack.addEventListener("click", () => setCopilotResumeView("list"));
+  elements.copilotResumeReviewOpen.addEventListener("click", openSelectedCopilotSessions);
   elements.copilotResumeConnect.addEventListener("click", () => connectToRemoteCopilotSessionId(elements.copilotResumeConnectId.value));
   elements.copilotResumeConnectId.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
@@ -1984,7 +2024,7 @@ function bindControls() {
   elements.aboutOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.aboutOverlay) closeAbout();
   });
-  elements.aiCopilotSetup.addEventListener("click", startCopilotGuidedSetup);
+  elements.aiCopilotSetup.addEventListener("click", () => startCopilotGuidedSetup());
   elements.aiProvidersRefresh.addEventListener("click", () => refreshAiProviders());
   elements.shortcutsClose.addEventListener("click", closeShortcuts);
   elements.shortcutsPrint.addEventListener("click", () => window.print());
@@ -2667,6 +2707,12 @@ function aiProviderStatusFor(provider, kind) {
   return kind === "session" && provider.interactiveStatus
     ? provider.interactiveStatus
     : provider.status || "This provider has not been detected as available.";
+}
+
+function copilotCliRecoveryNeeded() {
+  const provider = aiProviderById("copilot");
+  return provider?.interactiveAvailable === false
+    && (provider.cliInstalled === false || provider.authenticated === false);
 }
 
 function aiTitleModel() {
@@ -4044,7 +4090,8 @@ function addTerminal(options = {}) {
   bindTerminalSelectionHandling(terminal);
   registerCwdTracking(terminal);
   registerModifiedKeyReporting(terminal);
-  bindScrollToBottomControl(terminal);
+  bindTerminalScrollControls(terminal);
+  bindComposerSelection(terminal);
 
   term.onData((data) => {
     if (!data) return;
@@ -4207,6 +4254,8 @@ function bindTerminalKeyHandling(terminal) {
       terminal.ctrlCCount = 0;
       terminal.ctrlCLastAt = 0;
     }
+
+    if (handleComposerSelectionKey(terminal, event)) return;
 
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyA") {
       event.preventDefault();
@@ -6060,7 +6109,14 @@ async function reviewLostAssistantSessions(liveIds) {
   openAssistantRestoreDialog(lost);
 }
 
-async function restoreAssistantSessions(rows) {
+async function restoreAssistantSessions(rows, { interactive = false } = {}) {
+  // Guided setup installs the CLI, so only offer it when the user asked for this.
+  if (interactive && rows.some((row) => row?.provider === "copilot") && copilotCliRecoveryNeeded()) {
+    return recoverCopilotCliForAction(
+      () => restoreAssistantSessions(rows, { interactive }),
+      { origin: "restoring your assistant sessions" }
+    );
+  }
   // The record cannot hold the CLI's own session id, so match the newest
   // catalog entry for that folder and genuinely resume it.
   const catalogs = new Map();
@@ -6191,7 +6247,7 @@ function bindAssistantRestoreDialog() {
       .map((box) => assistantSessionRecord.lost[Number(box.dataset.index)])
       .filter(Boolean);
     closeAssistantRestoreDialog({ forget: false });
-    restoreAssistantSessions(chosen);
+    restoreAssistantSessions(chosen, { interactive: true });
   });
   elements.assistantRestoreDismiss.addEventListener("click", () => closeAssistantRestoreDialog());
   elements.assistantRestoreClose.addEventListener("click", () => closeAssistantRestoreDialog());
@@ -8692,9 +8748,11 @@ function terminalHistoryMatches(terminal, query) {
 
 const TUI_JUMP_MAX_STEPS = 80;
 const TUI_SCROLL_SETTLE_MS = 90;
-const TUI_SCROLL_TO_BOTTOM_BATCH_STEPS = 4;
-const TUI_SCROLL_TO_BOTTOM_SETTLE_MS = 45;
-const TUI_SCROLL_TO_BOTTOM_CONFIRM_MS = 120;
+const TUI_EDGE_SCROLL_BATCH_STEPS = 8;
+const TUI_EDGE_SCROLL_SETTLE_MS = 30;
+// A busy TUI can repaint well after it consumed the burst, so keep the passive
+// confirmation window generous enough not to read that lag as an edge.
+const TUI_EDGE_SCROLL_CONFIRM_MS = 120;
 
 function tuiHistoryMatchLines(terminal, query) {
   const needle = normalizeSearchText(query);
@@ -8733,21 +8791,21 @@ function tuiScrollStep(terminal, direction) {
   sendBridge({ type: "input", id: terminal.id, data: direction === "up" ? "\u001b[5~" : "\u001b[6~" });
 }
 
-async function scrollTuiToBottom(terminal) {
+async function scrollTuiToEdge(terminal, direction) {
   if (!terminal) return { ok: false, reason: "That terminal is no longer available." };
   terminal.term.focus();
   let previous = terminalVisibleText(terminal);
   let movedSteps = 0;
   for (let sentSteps = 0; sentSteps < TUI_JUMP_MAX_STEPS;) {
-    const batchSteps = Math.min(TUI_SCROLL_TO_BOTTOM_BATCH_STEPS, TUI_JUMP_MAX_STEPS - sentSteps);
-    for (let index = 0; index < batchSteps; index += 1) tuiScrollStep(terminal, "down");
+    const batchSteps = Math.min(TUI_EDGE_SCROLL_BATCH_STEPS, TUI_JUMP_MAX_STEPS - sentSteps);
+    for (let index = 0; index < batchSteps; index += 1) tuiScrollStep(terminal, direction);
     sentSteps += batchSteps;
-    await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_TO_BOTTOM_SETTLE_MS); });
+    await new Promise((resolve) => { window.setTimeout(resolve, TUI_EDGE_SCROLL_SETTLE_MS); });
     let current = terminalVisibleText(terminal);
     if (current === previous) {
       // A busy TUI may repaint after the quick sample. Confirm passively instead
-      // of sending another burst and mistaking delayed output for the bottom.
-      await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_TO_BOTTOM_CONFIRM_MS); });
+      // of sending another burst and mistaking delayed output for an edge.
+      await new Promise((resolve) => { window.setTimeout(resolve, TUI_EDGE_SCROLL_CONFIRM_MS); });
       current = terminalVisibleText(terminal);
       if (current === previous) return { ok: true, steps: movedSteps };
     }
@@ -8755,6 +8813,14 @@ async function scrollTuiToBottom(terminal) {
     movedSteps = sentSteps;
   }
   return { ok: true, steps: movedSteps };
+}
+
+function scrollTuiToBottom(terminal) {
+  return scrollTuiToEdge(terminal, "down");
+}
+
+function scrollTuiToTop(terminal) {
+  return scrollTuiToEdge(terminal, "up");
 }
 
 async function jumpToTuiMatch(terminal, query) {
@@ -8771,8 +8837,8 @@ async function jumpToTuiMatch(terminal, query) {
     tuiScrollStep(terminal, "up");
     await new Promise((resolve) => { window.setTimeout(resolve, TUI_SCROLL_SETTLE_MS); });
     if (terminalVisibleText(terminal).includes(needle)) {
-      terminal.tuiScrolledUp = true;
-      syncScrollToBottomControl(terminal);
+      terminal.tuiScrollEdge = "middle";
+      syncTerminalScrollControls(terminal);
       searchTerminalPane(terminal, query);
       return { ok: true, steps: step };
     }
@@ -12155,10 +12221,13 @@ const copilotResume = {
   remoteMessage: "",
   remoteSource: "",
   scope: "local",
+  selectedCwds: new Map(),
+  selectedKeys: new Set(),
   sessions: [],
   silent: false,
   suspended: false,
   terminalId: null,
+  view: "list",
   yolo: true,
   expandedNotes: new Set(),
   filters: { origin: "multiterm", source: "cli", project: "all", updated: "any" },
@@ -12166,6 +12235,218 @@ const copilotResume = {
 };
 
 const COPILOT_SESSION_NOTE_PREVIEW_CHARS = 260;
+
+function copilotResumeAllowsMultiple() {
+  return copilotResume.newTerminal && copilotResume.scope === "local";
+}
+
+function selectedCopilotSessions() {
+  return copilotResume.sessions.filter((session) => copilotResume.selectedKeys.has(session.key));
+}
+
+function copilotResumeDefaultCwd(session) {
+  return String(session?.cwd || state.cwd || elements.cwdInput.value || "").trim();
+}
+
+function syncCopilotResumeSelectionBar() {
+  const count = copilotResume.selectedKeys.size;
+  const visible = copilotResumeAllowsMultiple() && count > 0 && copilotResume.view === "list";
+  elements.copilotResumeSelectionBar.hidden = !visible;
+  elements.copilotResumeSelectionCount.textContent = `${count} session${count === 1 ? "" : "s"} selected`;
+  elements.copilotResumeSelectionReview.querySelector("span").textContent = count === 1
+    ? "Review selected"
+    : `Review ${count} selected`;
+}
+
+function clearCopilotResumeSelection() {
+  copilotResume.selectedKeys.clear();
+  copilotResume.selectedCwds.clear();
+  if (copilotResume.view === "review") setCopilotResumeView("list");
+  else renderCopilotSessions();
+}
+
+function toggleCopilotResumeSelection(session) {
+  if (!copilotResumeAllowsMultiple() || !session?.key) return false;
+  if (copilotResume.selectedKeys.has(session.key)) {
+    copilotResume.selectedKeys.delete(session.key);
+    copilotResume.selectedCwds.delete(session.key);
+  } else {
+    copilotResume.selectedKeys.add(session.key);
+    copilotResume.selectedCwds.set(session.key, copilotResumeDefaultCwd(session));
+  }
+  renderCopilotSessions();
+  return true;
+}
+
+function syncCopilotResumeView() {
+  const review = copilotResume.view === "review";
+  const remote = copilotResume.scope === "remote";
+  elements.copilotResumeReview.hidden = !review;
+  elements.copilotResumeToolbar.hidden = review;
+  elements.copilotResumeFilters.hidden = review || remote;
+  elements.copilotResumeSummary.hidden = review;
+  elements.copilotResumeList.hidden = review;
+  elements.copilotResumeTabs.hidden = review || !copilotResumeSupportsRemote();
+  elements.copilotResumeRemoteFoot.hidden = review || !remote;
+  if (review) elements.copilotResumeNotice.hidden = true;
+  syncCopilotResumeSelectionBar();
+}
+
+function setCopilotResumeView(view) {
+  copilotResume.view = view === "review" ? "review" : "list";
+  if (copilotResume.view === "review") renderCopilotResumeReview();
+  syncCopilotResumeScope();
+  if (copilotResume.view === "list") {
+    window.requestAnimationFrame(() => elements.copilotResumeSearch.focus());
+  }
+}
+
+function renderCopilotResumeReview() {
+  const sessions = selectedCopilotSessions();
+  elements.copilotResumeReviewList.replaceChildren();
+  elements.copilotResumeReviewCount.textContent = `${sessions.length} selected`;
+  elements.copilotResumeReviewStatus.textContent = "";
+  elements.copilotResumeReviewOpen.disabled = sessions.length === 0;
+  for (const session of sessions) {
+    const row = document.createElement("article");
+    row.className = "copilot-resume-review-row";
+    row.dataset.sessionKey = session.key;
+    const summary = document.createElement("div");
+    summary.className = "copilot-resume-review-session";
+    const title = document.createElement("strong");
+    title.textContent = copilotSessionTitle(session);
+    const meta = document.createElement("span");
+    meta.textContent = `${copilotSourceLabel(session.source)} · ${session.id.slice(0, 8)}`;
+    summary.append(title, meta);
+    const field = document.createElement("label");
+    field.className = "copilot-resume-review-cwd";
+    const label = document.createElement("span");
+    label.textContent = session.cwd ? "Working directory" : "Working directory (session did not record one)";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.spellcheck = false;
+    input.autocomplete = "off";
+    input.value = copilotResume.selectedCwds.get(session.key) ?? copilotResumeDefaultCwd(session);
+    input.placeholder = "Enter a folder for the new terminal";
+    input.setAttribute("aria-label", `Working directory for ${copilotSessionTitle(session)}`);
+    input.addEventListener("input", () => {
+      copilotResume.selectedCwds.set(session.key, input.value);
+      input.removeAttribute("aria-invalid");
+      input.removeAttribute("title");
+      elements.copilotResumeReviewStatus.textContent = "";
+    });
+    field.append(label, input);
+    row.append(summary, field);
+    elements.copilotResumeReviewList.append(row);
+  }
+}
+
+function openCopilotResumeReview() {
+  if (!copilotResumeAllowsMultiple() || copilotResume.selectedKeys.size === 0) return false;
+  setCopilotResumeView("review");
+  window.requestAnimationFrame(() => elements.copilotResumeReviewList.querySelector("input")?.focus());
+  return true;
+}
+
+async function openSelectedCopilotSessions() {
+  const sessions = selectedCopilotSessions();
+  if (copilotResume.view !== "review" || sessions.length === 0) return false;
+  if (copilotResume.provider === "copilot" && copilotCliRecoveryNeeded()) {
+    suspendCopilotResume();
+    const started = recoverCopilotCliForAction(() => {
+      restoreCopilotResume();
+      void openSelectedCopilotSessions();
+    }, { origin: "opening the selected sessions", onAbandon: restoreCopilotResume });
+    if (!started) restoreCopilotResume();
+    return false;
+  }
+  const generation = copilotResume.generation;
+  const reviewRowInput = (session) => [...elements.copilotResumeReviewList.querySelectorAll(".copilot-resume-review-row")]
+    .find((candidate) => candidate.dataset.sessionKey === session.key)
+    ?.querySelector("input");
+  elements.copilotResumeReviewBack.disabled = true;
+  elements.copilotResumeReviewOpen.disabled = true;
+  elements.copilotResumeReviewStatus.removeAttribute("data-tone");
+
+  try {
+    const validated = new Map();
+    let validationFailure = "";
+    for (const [index, session] of sessions.entries()) {
+      const input = reviewRowInput(session);
+      const requestedPath = String(copilotResume.selectedCwds.get(session.key) || "").trim();
+      elements.copilotResumeReviewStatus.textContent = `Checking working directory ${index + 1} of ${sessions.length}...`;
+      if (!requestedPath) {
+        input?.setAttribute("aria-invalid", "true");
+        if (input) input.title = "Enter a working directory.";
+        validationFailure = validationFailure || "Fix the highlighted working directories before opening sessions.";
+        continue;
+      }
+      const response = await requestBridge({
+        type: "validateDirectory",
+        path: requestedPath,
+        shell: "powershell",
+        distro: ""
+      }, { timeout: 20000 });
+      if (generation !== copilotResume.generation) return false;
+      if (!response?.valid || !response.path) {
+        // A missing response means the bridge never answered, which says nothing
+        // about the folder.
+        const reason = response?.error || bridgeSilenceReason("checked");
+        input?.setAttribute("aria-invalid", "true");
+        if (input) input.title = reason;
+        validationFailure = response ? validationFailure || "Fix the highlighted working directories before opening sessions." : reason;
+        continue;
+      }
+      validated.set(session.key, response.path);
+      if (input) {
+        input.removeAttribute("aria-invalid");
+        input.removeAttribute("title");
+      }
+    }
+    if (validationFailure) {
+      elements.copilotResumeReviewStatus.dataset.tone = "error";
+      elements.copilotResumeReviewStatus.textContent = validationFailure;
+      elements.copilotResumeReviewList.querySelector('[aria-invalid="true"]')?.focus();
+      return false;
+    }
+
+    for (const session of sessions) {
+      const normalizedPath = validated.get(session.key);
+      copilotResume.selectedCwds.set(session.key, normalizedPath);
+      const input = reviewRowInput(session);
+      if (input) input.value = normalizedPath;
+    }
+
+    const failed = [];
+    for (const [index, session] of sessions.entries()) {
+      elements.copilotResumeReviewStatus.textContent = `Opening session ${index + 1} of ${sessions.length}...`;
+      const opened = await resumeCopilotSession(session, {
+        batch: true,
+        confirmedCwd: validated.get(session.key)
+      });
+      if (opened) {
+        copilotResume.selectedKeys.delete(session.key);
+        copilotResume.selectedCwds.delete(session.key);
+      } else {
+        failed.push(session);
+      }
+      // Closing the picker mid-batch must not keep spawning terminals.
+      if (generation !== copilotResume.generation) return false;
+    }
+    if (failed.length === 0) {
+      closeCopilotResume();
+      toast(`Opened ${sessions.length} assistant session${sessions.length === 1 ? "" : "s"}`, "success", 2400);
+      return true;
+    }
+    renderCopilotResumeReview();
+    elements.copilotResumeReviewStatus.dataset.tone = "error";
+    elements.copilotResumeReviewStatus.textContent = `${failed.length} session${failed.length === 1 ? "" : "s"} could not be opened. Review and retry.`;
+    return false;
+  } finally {
+    elements.copilotResumeReviewBack.disabled = false;
+    elements.copilotResumeReviewOpen.disabled = false;
+  }
+}
 
 // Notes are linked by the id MultiTerm minted for the session. Sessions started
 // before that existed, or started outside MultiTerm, have no id to match, so they
@@ -12274,6 +12555,12 @@ function openCopilotResume(terminal = null, {
     toast("Choose an interactive AI assistant in Settings first", "warn", 2800);
     return false;
   }
+  if (provider === "copilot" && copilotCliRecoveryNeeded()) {
+    return recoverCopilotCliForAction(
+      () => openCopilotResume(terminal, { newTerminal, yolo }),
+      { origin: "the session picker" }
+    );
+  }
   copilotResume.terminalId = terminal?.id || null;
   copilotResume.newTerminal = Boolean(newTerminal);
   copilotResume.provider = provider;
@@ -12282,10 +12569,13 @@ function openCopilotResume(terminal = null, {
   copilotResume.aiQuery = "";
   copilotResume.aiSearching = false;
   copilotResume.sessions = [];
+  copilotResume.selectedKeys.clear();
+  copilotResume.selectedCwds.clear();
   copilotResume.suspended = false;
   copilotResume.scope = "local";
   copilotResume.remoteSource = "";
   copilotResume.remoteMessage = "";
+  copilotResume.view = "list";
   copilotResume.filters = provider === "copilot"
     ? { origin: "multiterm", source: "cli", project: "all", updated: "any" }
     : { origin: "all", source: "all", project: "all", updated: "any" };
@@ -12342,7 +12632,8 @@ function restoreCopilotResume() {
   elements.copilotResumeOverlay.hidden = false;
   window.requestAnimationFrame(() => {
     elements.copilotResumeOverlay.classList.add("is-open");
-    elements.copilotResumeSearch.focus();
+    if (copilotResume.view === "review") elements.copilotResumeReviewList.querySelector("input")?.focus();
+    else elements.copilotResumeSearch.focus();
   });
 }
 
@@ -12371,6 +12662,7 @@ function syncCopilotResumeScope() {
   elements.copilotResumeNotice.hidden = !showNotice;
   elements.copilotResumeNotice.textContent = showNotice ? copilotResume.remoteMessage : "";
   syncCopilotResumeFilters();
+  syncCopilotResumeView();
 }
 
 function copilotSessionProject(session) {
@@ -12454,6 +12746,9 @@ function setCopilotResumeScope(scope) {
   const next = scope === "remote" && copilotResumeSupportsRemote() ? "remote" : "local";
   if (copilotResume.scope === next) return false;
   copilotResume.scope = next;
+  copilotResume.selectedKeys.clear();
+  copilotResume.selectedCwds.clear();
+  copilotResume.view = "list";
   copilotResume.visibleLimit = COPILOT_SESSION_PAGE_SIZE;
   clearCopilotAiSearch();
   syncCopilotResumeScope();
@@ -12815,6 +13110,12 @@ async function refreshCopilotSessions() {
       .filter(Boolean);
     if (editorSources && sessions.length === 0 && copilotResume.sessions.length > 0) return false;
     copilotResume.sessions = sessions;
+    const availableKeys = new Set(sessions.map((session) => session.key));
+    for (const key of copilotResume.selectedKeys) {
+      if (availableKeys.has(key)) continue;
+      copilotResume.selectedKeys.delete(key);
+      copilotResume.selectedCwds.delete(key);
+    }
     return true;
   };
 
@@ -12970,9 +13271,12 @@ function renderCopilotSessions() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "copilot-session-card";
+    const selectable = copilotResumeAllowsMultiple() && !blocked;
+    const selected = selectable && copilotResume.selectedKeys.has(session.key);
     button.setAttribute("aria-label", session.source === "remote"
       ? `Connect to ${copilotSessionTitle(session)}`
       : `Resume ${copilotSessionTitle(session)}`);
+    button.classList.toggle("is-selected", selected);
     if (blocked) {
       button.setAttribute("aria-disabled", "true");
       button.title = blocked;
@@ -13063,7 +13367,22 @@ function renderCopilotSessions() {
     button.addEventListener("focus", () => openCopilotSessionTitlesFlyout(session, button));
     button.addEventListener("blur", scheduleCopilotSessionTitlesClose);
     entry.addEventListener("contextmenu", (event) => showCopilotSessionContextMenu(event, session, button));
-    entry.append(button);
+    if (selectable) {
+      // Selection needs its own target so a plain card click still resumes.
+      const choice = document.createElement("div");
+      choice.className = "copilot-session-choice";
+      const select = document.createElement("button");
+      select.type = "button";
+      select.className = "copilot-session-select";
+      select.setAttribute("aria-pressed", String(selected));
+      select.setAttribute("aria-label", `${selected ? "Deselect" : "Select"} ${copilotSessionTitle(session)}`);
+      select.title = selected ? "Remove from the selection" : "Select to open several sessions at once";
+      select.addEventListener("click", () => toggleCopilotResumeSelection(session));
+      choice.append(select, button);
+      entry.append(choice);
+    } else {
+      entry.append(button);
+    }
     const worktree = copilotSessionWorktree(session);
     if (worktree) {
       entry.classList.add("has-worktree-actions");
@@ -13112,6 +13431,7 @@ function renderCopilotSessions() {
         ? `${shown.length} shown, ${filtered.length} matching filters, ${copilotResume.sessions.length} total`
         : `${shown.length} of ${copilotResume.sessions.length} resumable session${copilotResume.sessions.length === 1 ? "" : "s"}`;
   }
+  syncCopilotResumeSelectionBar();
 }
 
 function clearCopilotAiSearch() {
@@ -13209,6 +13529,15 @@ function connectToRemoteCopilotSession(session) {
     toast(blocked, "warn", 3600);
     return false;
   }
+  if (copilotCliRecoveryNeeded()) {
+    suspendCopilotResume();
+    const started = recoverCopilotCliForAction(() => {
+      restoreCopilotResume();
+      connectToRemoteCopilotSession(session);
+    }, { origin: "connecting to that remote session", onAbandon: restoreCopilotResume });
+    if (!started) restoreCopilotResume();
+    return false;
+  }
   const command = buildAiAssistantCommand({ provider: "copilot", connectId: id, yolo: copilotResume.yolo });
   if (!command) {
     toast("GitHub Copilot is not installed and signed in", "error", 2800);
@@ -13246,8 +13575,13 @@ function connectToRemoteCopilotSessionId(rawValue) {
 // The CLI's own picker is the fallback whenever GitHub's list is unavailable or
 // the wanted session is not in it.
 function openCopilotRemotePicker() {
-  if (!aiProviderAvailableFor(aiProviderById("copilot"), "session")) {
-    toast("GitHub Copilot is not installed and signed in", "error", 2800);
+  if (copilotCliRecoveryNeeded()) {
+    suspendCopilotResume();
+    const started = recoverCopilotCliForAction(() => {
+      restoreCopilotResume();
+      openCopilotRemotePicker();
+    }, { origin: "the remote session picker", onAbandon: restoreCopilotResume });
+    if (!started) restoreCopilotResume();
     return false;
   }
   closeCopilotResume();
@@ -13263,12 +13597,21 @@ function openCopilotRemotePicker() {
   return true;
 }
 
-async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
+async function resumeCopilotSession(session, { batch = false, confirmedCwd = "" } = {}) {
   const id = String(session?.id || "");
   const provider = copilotResume.provider;
   const terminal = state.terminals.get(copilotResume.terminalId);
   if (!COPILOT_RESUME_ID_PATTERN.test(id) || (!copilotResume.newTerminal && !terminal)) {
     toast(`That terminal or ${aiAssistantName(provider)} session is no longer available`, "warn", 2400);
+    return false;
+  }
+  if (!batch && provider === "copilot" && copilotCliRecoveryNeeded()) {
+    suspendCopilotResume();
+    const started = recoverCopilotCliForAction(() => {
+      restoreCopilotResume();
+      void resumeCopilotSession(session, { confirmedCwd });
+    }, { origin: "resuming that session", onAbandon: restoreCopilotResume });
+    if (!started) restoreCopilotResume();
     return false;
   }
   if (copilotResume.newTerminal && !confirmedCwd) {
@@ -13277,12 +13620,12 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
   if (copilotResume.newTerminal && (session.source === "cli" || session.source === "claude")) {
     const command = buildAiAssistantCommand({ provider, resumeId: id, yolo: copilotResume.yolo });
     if (!command) {
-      restoreCopilotResume();
+      if (!batch) restoreCopilotResume();
       return false;
     }
     if (provider === "claude" && !session.cwd) {
       toast("Claude cannot resume because its saved project folder is unavailable", "error", 3600);
-      restoreCopilotResume();
+      if (!batch) restoreCopilotResume();
       return false;
     }
     let launchCwd = session.cwd || confirmedCwd;
@@ -13297,14 +13640,14 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
         launchCwd = original.path;
       } else if (provider === "claude") {
         toast("Claude cannot resume because its original project folder is unavailable", "error", 3600);
-        restoreCopilotResume();
+        if (!batch) restoreCopilotResume();
         return false;
       } else {
         launchCwd = confirmedCwd;
       }
     }
     const relocate = sameHostDirectory(launchCwd, confirmedCwd) ? null : { path: confirmedCwd, provider };
-    closeCopilotResume();
+    if (!batch) closeCopilotResume();
     openCopilotSessionTerminal(session, command, launchCwd, provider, relocate, id);
     return true;
   }
@@ -13318,13 +13661,13 @@ async function resumeCopilotSession(session, { confirmedCwd = "" } = {}) {
     if (generation !== copilotResume.generation) return false;
     if (!response?.contextPath || response.error) {
       toast(response?.error || "Could not import that Copilot session", "error", 3200);
-      restoreCopilotResume();
+      if (!batch) restoreCopilotResume();
       return false;
     }
     const source = copilotSourceLabel(session.source);
     const prompt = `Continue the imported ${source} Copilot session. Read the context file at ${response.contextPath} first, continue from where it stopped, and ask what to do next if the final task is unclear.`;
     const sessionId = createAiSessionId();
-    closeCopilotResume();
+    if (!batch) closeCopilotResume();
     openCopilotSessionTerminal(
       session,
       buildAiAssistantCommand({ provider: "copilot", sessionId, initialPrompt: prompt, yolo: copilotResume.yolo }),
@@ -14841,6 +15184,13 @@ function updateMaximizeButton(terminal) {
 // stands in. Powers "Open folder" and "New terminal here".
 function scrollableCopilotTuiActive(terminal) {
   if (terminal?.term?.buffer?.active?.type !== "alternate") return false;
+  return copilotTuiPainted(terminal);
+}
+
+// Current Copilot CLI paints its TUI in the normal buffer, so placement cues
+// must not require the alternate screen the way the scroll driver does.
+function copilotTuiPainted(terminal) {
+  if (!terminal?.term) return false;
   if (terminal.aiAssistantTuiProvider) return terminal.aiAssistantTuiProvider === "copilot";
   const lines = activeBufferLines(terminal);
   const provider = promptDetector.aiAssistantTuiProvider(lines)
@@ -14849,60 +15199,374 @@ function scrollableCopilotTuiActive(terminal) {
   return provider === "copilot";
 }
 
-function syncScrollToBottomControl(terminal) {
-  const button = terminal.pane.querySelector(".pane-scroll-bottom");
-  if (!button) return;
+// Copilot draws its composer as a bordered box pinned to the last rows, so its
+// scroll track stops above it. Long borders are the only reliable marker.
+const COPILOT_COMPOSER_BORDER = /[\u2500\u2501\u2504\u2505\u2508\u2509\u2550\u2580\u2584]{8,}/;
+const COPILOT_COMPOSER_MAX_ROWS = 10;
+const COPILOT_COMPOSER_FALLBACK_ROWS = 4;
+const COPILOT_SCROLL_INSET_INTERVAL_MS = 150;
+
+function copilotComposerRows(terminal) {
   const buffer = terminal.term.buffer.active;
-  const copilotTui = scrollableCopilotTuiActive(terminal);
-  button.hidden = buffer.type === "alternate" && !copilotTui;
-  const label = copilotTui ? "Scroll Copilot to the bottom" : "Scroll this terminal to the bottom";
-  button.title = label;
-  button.setAttribute("aria-label", label);
-  if (!copilotTui) terminal.tuiScrolledUp = false;
-  const away = copilotTui ? terminal.tuiScrolledUp === true : buffer.viewportY < buffer.baseY;
-  button.classList.toggle("is-scrolled-up", away);
+  const lastRow = buffer.viewportY + terminal.term.rows - 1;
+  const limit = Math.min(COPILOT_COMPOSER_MAX_ROWS, terminal.term.rows);
+  let rows = 0;
+  for (let offset = 0; offset < limit; offset += 1) {
+    const line = buffer.getLine(lastRow - offset);
+    if (line && COPILOT_COMPOSER_BORDER.test(line.translateToString(true))) rows = offset + 1;
+  }
+  return rows || COPILOT_COMPOSER_FALLBACK_ROWS;
 }
 
-function bindScrollToBottomControl(terminal) {
-  const button = terminal.pane.querySelector(".pane-scroll-bottom");
-  if (!button) return;
+// Parks the down chevron on the end of Copilot's own scroll track instead of
+// the pane floor. Throttled because onRender fires per output frame.
+function syncCopilotScrollInset(terminal) {
+  const now = Date.now();
+  if (terminal.copilotScrollInsetAt && now - terminal.copilotScrollInsetAt < COPILOT_SCROLL_INSET_INTERVAL_MS) return;
+  terminal.copilotScrollInsetAt = now;
+  const screen = terminal.pane.querySelector(".xterm-screen");
+  const container = terminal.pane.querySelector(".terminal-screen");
+  if (!screen || !container || terminal.term.rows < 1) return;
+  const screenRect = screen.getBoundingClientRect();
+  if (screenRect.height < 1) return;
+  const cellHeight = screenRect.height / terminal.term.rows;
+  const floorGap = container.getBoundingClientRect().bottom - screenRect.bottom;
+  const inset = Math.round(floorGap + copilotComposerRows(terminal) * cellHeight);
+  terminal.pane.style.setProperty("--pane-scroll-bottom-inset", `${Math.max(inset, 0)}px`);
+}
 
-  button.addEventListener("click", async (event) => {
-    event.preventDefault();
-    if (terminal.tuiScrollToBottomActive) return;
-    if (scrollableCopilotTuiActive(terminal)) {
-      terminal.tuiScrollToBottomActive = true;
-      button.setAttribute("aria-busy", "true");
-      try {
-        await scrollTuiToBottom(terminal);
-        terminal.tuiScrolledUp = false;
-      } finally {
-        terminal.tuiScrollToBottomActive = false;
-        button.removeAttribute("aria-busy");
-        syncScrollToBottomControl(terminal);
+function clearCopilotScrollInset(terminal) {
+  terminal.copilotScrollInsetAt = 0;
+  terminal.pane.style.removeProperty("--pane-scroll-bottom-inset");
+}
+
+/* ---------------- Copilot composer selection --------------- */
+
+// Copilot's composer has no selection of its own -- it discards the Shift bit on
+// arrow keys -- so MultiTerm keeps a virtual selection: the head tracks
+// Copilot's real cursor and the highlight is drawn here. Positions are linear
+// indices over the composer's content cells so ranges survive line wrapping.
+const COMPOSER_EDGE_GLYPHS = "\u2503\u2502\u257b\u2579\u2551";
+
+function copilotComposerRegion(terminal) {
+  if (!terminal?.term || !copilotTuiPainted(terminal)) return null;
+  const { term } = terminal;
+  const buffer = term.buffer.active;
+  const lastRow = buffer.viewportY + term.rows - 1;
+  const borders = [];
+  const limit = Math.min(COPILOT_COMPOSER_MAX_ROWS, term.rows);
+  for (let offset = 0; offset < limit; offset += 1) {
+    const line = buffer.getLine(lastRow - offset);
+    if (line && COPILOT_COMPOSER_BORDER.test(line.translateToString(true))) borders.push(offset);
+  }
+  if (borders.length < 2) return null;
+  const bottomOffset = borders[0];
+  const topOffset = borders[borders.length - 1];
+  if (topOffset - bottomOffset < 2) return null;
+
+  const rows = [];
+  for (let offset = topOffset - 1; offset > bottomOffset; offset -= 1) {
+    const screenRow = term.rows - 1 - offset;
+    const line = buffer.getLine(buffer.viewportY + screenRow);
+    if (!line) continue;
+    let start = 0;
+    const first = line.getCell(0)?.getChars() ?? "";
+    if (first && COMPOSER_EDGE_GLYPHS.includes(first)) start += 1;
+    // An unwritten cell reads as "" rather than " ", so accept both as padding.
+    const padding = line.getCell(start)?.getChars() ?? "";
+    if (padding === " " || padding === "") start += 1;
+    let end = start;
+    for (let x = line.length - 1; x >= start; x -= 1) {
+      if ((line.getCell(x)?.getChars() ?? "").trim()) {
+        end = x + 1;
+        break;
       }
-    } else {
-      terminal.term.scrollToBottom();
-      terminal.term.focus();
-      syncScrollToBottomControl(terminal);
     }
+    // Trailing spaces are real composer text, so the cursor marks the true end.
+    if (buffer.cursorY === screenRow) end = Math.max(end, buffer.cursorX);
+    rows.push({ row: screenRow, start, end: Math.max(end, start) });
+  }
+  return rows.length > 0 ? { rows } : null;
+}
+
+function composerLength(region) {
+  return region.rows.reduce((total, row) => total + (row.end - row.start), 0);
+}
+
+function composerIndexAt(region, screenRow, x) {
+  let index = 0;
+  for (const row of region.rows) {
+    const width = row.end - row.start;
+    if (row.row === screenRow) return index + Math.min(Math.max(x, row.start), row.end) - row.start;
+    index += width;
+  }
+  return -1;
+}
+
+function composerCursorIndex(terminal, region) {
+  const buffer = terminal.term.buffer.active;
+  return composerIndexAt(region, buffer.cursorY, buffer.cursorX);
+}
+
+function composerSelectionRange(selection) {
+  return {
+    from: Math.min(selection.anchor, selection.head),
+    to: Math.max(selection.anchor, selection.head)
+  };
+}
+
+function composerSelectionLayer(terminal) {
+  let layer = terminal.screen.querySelector(".pane-composer-selection");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "pane-composer-selection";
+    layer.setAttribute("aria-hidden", "true");
+    terminal.screen.append(layer);
+  }
+  return layer;
+}
+
+function renderComposerSelection(terminal) {
+  const layer = composerSelectionLayer(terminal);
+  const selection = terminal.composerSelection;
+  const region = selection ? copilotComposerRegion(terminal) : null;
+  if (!selection || !region) {
+    layer.replaceChildren();
+    return;
+  }
+  const { from, to } = composerSelectionRange(selection);
+  const screen = terminal.pane.querySelector(".xterm-screen");
+  if (!screen || to <= from) {
+    layer.replaceChildren();
+    return;
+  }
+  const screenRect = screen.getBoundingClientRect();
+  const hostRect = terminal.screen.getBoundingClientRect();
+  const cellWidth = screenRect.width / terminal.term.cols;
+  const cellHeight = screenRect.height / terminal.term.rows;
+  const offsetLeft = screenRect.left - hostRect.left;
+  const offsetTop = screenRect.top - hostRect.top;
+
+  const rects = [];
+  let index = 0;
+  for (const row of region.rows) {
+    const width = row.end - row.start;
+    const rowStart = index;
+    index += width;
+    const rowFrom = Math.max(from, rowStart);
+    const rowTo = Math.min(to, rowStart + width);
+    if (rowTo <= rowFrom) continue;
+    const startX = row.start + (rowFrom - rowStart);
+    const rect = document.createElement("div");
+    rect.className = "pane-composer-selection-band";
+    rect.style.left = `${offsetLeft + startX * cellWidth}px`;
+    rect.style.top = `${offsetTop + row.row * cellHeight}px`;
+    rect.style.width = `${(rowTo - rowFrom) * cellWidth}px`;
+    rect.style.height = `${cellHeight}px`;
+    rects.push(rect);
+  }
+  layer.replaceChildren(...rects);
+}
+
+function clearComposerSelection(terminal) {
+  if (!terminal.composerSelection) return false;
+  terminal.composerSelection = null;
+  renderComposerSelection(terminal);
+  return true;
+}
+
+function deleteComposerSelection(terminal, region, selection) {
+  const { from, to } = composerSelectionRange(selection);
+  const length = to - from;
+  const total = composerLength(region);
+  const cursor = composerCursorIndex(terminal, region);
+  clearComposerSelection(terminal);
+  if (length < 1) return false;
+  // Select-all leaves Copilot's cursor wherever it was, so overshoot to the end
+  // first; the composer clamps there and backspaces then remove a known range.
+  const data = selection.mode === "all"
+    ? "\u001b[C".repeat(total) + "\u007f".repeat(length)
+    : cursor === from
+      ? "\u001b[3~".repeat(length)
+      : "\u007f".repeat(length);
+  sendBridge({ type: "input", id: terminal.id, data });
+  return true;
+}
+
+function composerText(terminal, region) {
+  const buffer = terminal.term.buffer.active;
+  return region.rows
+    .map((row) => buffer.getLine(buffer.viewportY + row.row)?.translateToString(true, row.start, row.end) ?? "")
+    .join("");
+}
+
+function selectAllComposerText(terminal) {
+  const region = copilotComposerRegion(terminal);
+  if (!region) return false;
+  const length = composerLength(region);
+  // An empty composer has nothing to select, so leave the cue off entirely.
+  if (length < 1 || !composerText(terminal, region).trim()) {
+    clearComposerSelection(terminal);
+    return false;
+  }
+  terminal.composerSelection = { mode: "all", anchor: 0, head: length };
+  renderComposerSelection(terminal);
+  return true;
+}
+
+// Returns true when the key was consumed on behalf of the composer.
+function handleComposerSelectionKey(terminal, event) {
+  const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
+  const arrow = event.key === "ArrowLeft" || event.key === "ArrowRight";
+
+  if (plain && event.shiftKey && arrow) {
+    const region = copilotComposerRegion(terminal);
+    if (!region) return false;
+    const cursor = composerCursorIndex(terminal, region);
+    if (cursor < 0) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!terminal.composerSelection || terminal.composerSelection.mode !== "cursor") {
+      terminal.composerSelection = { mode: "cursor", anchor: cursor, head: cursor };
+    }
+    // The head follows Copilot's own cursor, updated from onCursorMove.
+    sendBridge({ type: "input", id: terminal.id, data: event.key === "ArrowLeft" ? "\u001b[D" : "\u001b[C" });
+    return true;
+  }
+
+  if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyA") {
+    if (!copilotComposerRegion(terminal)) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    selectAllComposerText(terminal);
+    return true;
+  }
+
+  const selection = terminal.composerSelection;
+  if (selection && plain && !event.shiftKey && (event.key === "Delete" || event.key === "Backspace")) {
+    const region = copilotComposerRegion(terminal);
+    if (!region) {
+      clearComposerSelection(terminal);
+      return false;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    deleteComposerSelection(terminal, region, selection);
+    return true;
+  }
+
+  if (!["Shift", "Control", "Alt", "Meta"].includes(event.key)) clearComposerSelection(terminal);
+  return false;
+}
+
+function bindComposerSelection(terminal) {
+  terminal.term.onCursorMove(() => {
+    const selection = terminal.composerSelection;
+    if (!selection) return;
+    if (selection.mode !== "cursor") {
+      renderComposerSelection(terminal);
+      return;
+    }
+    const region = copilotComposerRegion(terminal);
+    if (!region) {
+      clearComposerSelection(terminal);
+      return;
+    }
+    const cursor = composerCursorIndex(terminal, region);
+    if (cursor >= 0) selection.head = cursor;
+    renderComposerSelection(terminal);
   });
+  terminal.term.onRender(() => {
+    if (terminal.composerSelection) renderComposerSelection(terminal);
+  });
+  terminal.term.textarea?.addEventListener("blur", () => clearComposerSelection(terminal));
+}
+
+function syncTerminalScrollControls(terminal) {
+  const topButton = terminal.pane.querySelector(".pane-scroll-top");
+  const bottomButton = terminal.pane.querySelector(".pane-scroll-bottom");
+  if (!topButton || !bottomButton) return;
+  const buffer = terminal.term.buffer.active;
+  const copilotTui = scrollableCopilotTuiActive(terminal);
+  if (copilotTuiPainted(terminal)) syncCopilotScrollInset(terminal);
+  else clearCopilotScrollInset(terminal);
+  const hidden = buffer.type === "alternate" && !copilotTui;
+  topButton.hidden = hidden;
+  bottomButton.hidden = hidden;
+  const subject = copilotTui ? "Copilot" : "this terminal";
+  topButton.title = `Scroll ${subject} to the top`;
+  topButton.setAttribute("aria-label", `Scroll ${subject} to the top`);
+  bottomButton.title = `Scroll ${subject} to the bottom`;
+  bottomButton.setAttribute("aria-label", `Scroll ${subject} to the bottom`);
+  if (!copilotTui) terminal.tuiScrollEdge = "";
+  const tuiEdge = terminal.tuiScrollEdge || "bottom";
+  const awayFromTop = copilotTui ? tuiEdge !== "top" : buffer.viewportY > 0;
+  const awayFromBottom = copilotTui ? tuiEdge !== "bottom" : buffer.viewportY < buffer.baseY;
+  topButton.classList.toggle("is-scrolled-down", awayFromTop);
+  bottomButton.classList.toggle("is-scrolled-up", awayFromBottom);
+}
+
+function bindTerminalScrollControls(terminal) {
+  const controls = [
+    {
+      button: terminal.pane.querySelector(".pane-scroll-top"),
+      edge: "top",
+      scrollTui: scrollTuiToTop,
+      scrollTerminal: () => terminal.term.scrollToTop()
+    },
+    {
+      button: terminal.pane.querySelector(".pane-scroll-bottom"),
+      edge: "bottom",
+      scrollTui: scrollTuiToBottom,
+      scrollTerminal: () => terminal.term.scrollToBottom()
+    }
+  ];
+  if (controls.some(({ button }) => !button)) return;
+
+  for (const control of controls) {
+    control.button.addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (terminal.tuiScrollActive) return;
+      if (scrollableCopilotTuiActive(terminal)) {
+        terminal.tuiScrollActive = true;
+        control.button.setAttribute("aria-busy", "true");
+        try {
+          await control.scrollTui(terminal);
+          terminal.tuiScrollEdge = control.edge;
+        } finally {
+          terminal.tuiScrollActive = false;
+          control.button.removeAttribute("aria-busy");
+          syncTerminalScrollControls(terminal);
+        }
+      } else {
+        control.scrollTerminal();
+        terminal.term.focus();
+        syncTerminalScrollControls(terminal);
+      }
+    });
+  }
   terminal.pane.addEventListener("wheel", (event) => {
-    if (event.deltaY >= 0 || !scrollableCopilotTuiActive(terminal)) return;
-    terminal.tuiScrolledUp = true;
-    syncScrollToBottomControl(terminal);
+    if (event.deltaY === 0 || !scrollableCopilotTuiActive(terminal)) return;
+    // Scrolling further into the edge the pane already sits at moves nothing,
+    // so only the opposite direction proves it left that edge.
+    const edge = terminal.tuiScrollEdge || "bottom";
+    if (event.deltaY < 0 ? edge === "top" : edge === "bottom") return;
+    terminal.tuiScrollEdge = "middle";
+    syncTerminalScrollControls(terminal);
   }, true);
   // Keep the pointer out of xterm's mouse-reporting path; a TUI that owns the
   // mouse would otherwise receive a click at these coordinates.
-  for (const name of ["mousedown", "pointerdown", "contextmenu"]) {
-    button.addEventListener(name, (event) => event.stopPropagation());
+  for (const { button } of controls) {
+    for (const name of ["mousedown", "pointerdown", "contextmenu"]) {
+      button.addEventListener(name, (event) => event.stopPropagation());
+    }
   }
-  terminal.term.buffer.onBufferChange(() => syncScrollToBottomControl(terminal));
+  terminal.term.buffer.onBufferChange(() => syncTerminalScrollControls(terminal));
   // onScroll covers the user moving the viewport; onRender covers new output
   // arriving underneath while they stay scrolled up.
-  terminal.term.onScroll(() => syncScrollToBottomControl(terminal));
-  terminal.term.onRender(() => syncScrollToBottomControl(terminal));
-  syncScrollToBottomControl(terminal);
+  terminal.term.onScroll(() => syncTerminalScrollControls(terminal));
+  terminal.term.onRender(() => syncTerminalScrollControls(terminal));
+  syncTerminalScrollControls(terminal);
 }
 
 function registerCwdTracking(terminal) {
@@ -15690,6 +16354,12 @@ function openWorktreeDialog({
   returnFocus = document.activeElement,
   yolo = state.settings.aiSessionYolo
 } = {}) {
+  if (state.settings.aiSessionProvider === "copilot" && copilotCliRecoveryNeeded()) {
+    return recoverCopilotCliForAction(
+      () => openWorktreeDialog({ terminalId, openInNewTerminal, returnFocus, yolo }),
+      { origin: "the worktree dialog" }
+    );
+  }
   const terminal = terminalId ? state.terminals.get(terminalId) : null;
   worktreeDialog.terminalId = terminal ? terminalId : null;
   worktreeDialog.openInNewTerminal = openInNewTerminal || !terminal;
@@ -15762,7 +16432,28 @@ function worktreeBranchName() {
   return elements.worktreeNameInput.value.trim();
 }
 
+function suspendWorktreeDialog() {
+  worktreeDialog.inspectGeneration += 1;
+  window.clearTimeout(worktreeDialog.inspectTimer);
+  elements.worktreeOverlay.classList.remove("is-open");
+  elements.worktreeOverlay.hidden = true;
+}
+
+function restoreWorktreeDialog() {
+  elements.worktreeOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.worktreeOverlay.classList.add("is-open"));
+}
+
 async function createWorktreeAndRun() {
+  if (state.settings.aiSessionProvider === "copilot" && copilotCliRecoveryNeeded()) {
+    suspendWorktreeDialog();
+    const started = recoverCopilotCliForAction(() => {
+      restoreWorktreeDialog();
+      void createWorktreeAndRun();
+    }, { origin: "the worktree launch", onAbandon: restoreWorktreeDialog });
+    if (!started) restoreWorktreeDialog();
+    return false;
+  }
   const helpers = worktreeHelpers();
   if (!helpers) return;
   const name = elements.worktreeNameInput.value.trim();
@@ -16731,7 +17422,7 @@ function cwdSessionQueryEligible(session = cwdChange.resumeSession) {
     && copilotResume.provider === "copilot"
     && session?.source === "cli"
     && COPILOT_RESUME_ID_PATTERN.test(String(session.id || ""))
-    && aiProviderAvailableFor(aiProviderById("copilot"), "session");
+    && (aiProviderAvailableFor(aiProviderById("copilot"), "session") || copilotCliRecoveryNeeded());
 }
 
 function cwdSessionQueryTerminal() {
@@ -16861,7 +17552,20 @@ function startCwdSessionQuery({ retry = false } = {}) {
   if (!cwdSessionQueryEligible(session) || cwdChange.queryBusy) return false;
   if (retry) discardCwdSessionQuery();
   if (!buildAiAssistantCommand({ provider: "copilot", resumeId: session.id, yolo: copilotResume.yolo })) {
-    setCwdChangeStatus("GitHub Copilot is not installed and signed in.", "error");
+    if (!copilotCliRecoveryNeeded()) {
+      setCwdChangeStatus("GitHub Copilot is not installed and signed in.", "error");
+      return false;
+    }
+    const captured = session;
+    closeCwdChange({ restoreResume: false });
+    const started = recoverCopilotCliForAction(() => {
+      restoreCopilotResume();
+      if (openResumeCwdChange(captured)) startCwdSessionQuery({ retry: true });
+    }, { origin: "the working-directory query", onAbandon: restoreCopilotResume });
+    if (!started) {
+      restoreCopilotResume();
+      setCwdChangeStatus("GitHub Copilot setup could not start.", "error");
+    }
     return false;
   }
   const token = `MULTITERM_CWD_${createAiSessionId().replace(/-/g, "").toUpperCase()}`;
@@ -19738,6 +20442,7 @@ function cyclePaneColor(terminal) {
 
 function normalizeHeaderBackground(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const mode = value.mode === "solid" ? "solid" : "gradient";
   const type = HEADER_GRADIENT_TYPES.has(value.type) ? value.type : "linear";
   const rawAngle = Number(value.angle);
   const angle = Number.isFinite(rawAngle) ? ((Math.round(rawAngle) % 360) + 360) % 360 : 135;
@@ -19764,8 +20469,21 @@ function normalizeHeaderBackground(value) {
         .slice(0, HEADER_GRADIENT_MAX_STOPS)
         .sort((left, right) => left.position - right.position)
     : [];
-  if (stops.length < 2) return null;
-  return { type, angle, centerX, centerY, shape, stops };
+  const color = normalizeTerminalColor(value.color) || stops[0]?.color || "";
+  if (mode === "gradient" && stops.length < 2) return null;
+  if (mode === "solid" && !color) return null;
+  if (mode === "solid" && stops.length < 2) {
+    stops.push(
+      { color, opacity: 100, position: 0 },
+      { color, opacity: 100, position: 100 }
+    );
+  }
+  const fontFamily = normalizeTerminalFontFamily(value.fontFamily);
+  const rawFontSize = Number(value.fontSize);
+  const fontSize = Number.isFinite(rawFontSize) && rawFontSize > 0
+    ? Math.min(HEADER_FONT_SIZE_BOUNDS.max, Math.max(HEADER_FONT_SIZE_BOUNDS.min, Math.round(rawFontSize)))
+    : 0;
+  return { mode, color, fontFamily, fontSize, type, angle, centerX, centerY, shape, stops };
 }
 
 function cloneHeaderBackground(value) {
@@ -19788,6 +20506,7 @@ function headerGradientStopCss(stop) {
 function headerBackgroundCss(value) {
   const background = normalizeHeaderBackground(value);
   if (!background) return "";
+  if (background.mode === "solid") return background.color;
   const stops = background.stops.map(headerGradientStopCss).join(", ");
   const center = `${background.centerX}% ${background.centerY}%`;
   if (background.type === "radial") return `radial-gradient(${background.shape} at ${center}, ${stops})`;
@@ -19798,12 +20517,17 @@ function headerBackgroundCss(value) {
 function paintTerminalHeaderBackground(terminal, value) {
   const bar = terminal?.pane?.querySelector(".pane-bar");
   if (!bar) return;
-  const background = headerBackgroundCss(value);
+  const definition = normalizeHeaderBackground(value);
+  const background = headerBackgroundCss(definition);
   // Feed the stylesheet's custom property instead of the inline background
   // shorthand; the elevated and awaiting-input rules must keep overriding a
   // decorative gradient so those cues can never be styled away.
   if (background) bar.style.setProperty("--pane-bar-custom-bg", background);
   else bar.style.removeProperty("--pane-bar-custom-bg");
+  if (definition?.fontFamily) bar.style.setProperty("--pane-title-font-family", fontStacks[definition.fontFamily]);
+  else bar.style.removeProperty("--pane-title-font-family");
+  if (definition?.fontSize) bar.style.setProperty("--pane-title-font-size", `${definition.fontSize}px`);
+  else bar.style.removeProperty("--pane-title-font-size");
 }
 
 function applyTerminalHeaderBackground(terminal) {
@@ -19979,6 +20703,13 @@ function loadTerminalAppearanceDraft() {
   headerBackgroundDraft = cloneHeaderBackground(
     terminalAppearanceScope === "all" ? state.settings.terminalHeaderBackground : terminal?.headerBackground || state.settings.terminalHeaderBackground
   ) || defaultHeaderBackground(terminal);
+  elements.headerAppearanceFontFamily.value = headerBackgroundDraft.fontFamily;
+  elements.headerAppearanceFontFamily.style.fontFamily = "";
+  if (headerBackgroundDraft.fontFamily) {
+    elements.headerAppearanceFontFamily.style.fontFamily = fontStacks[headerBackgroundDraft.fontFamily];
+  }
+  elements.headerAppearanceFontSize.value = headerBackgroundDraft.fontSize ? String(headerBackgroundDraft.fontSize) : "";
+  syncHeaderBackgroundMode();
   syncHeaderGradientGeometry();
   renderHeaderGradientStops();
   updateTerminalAppearancePreview();
@@ -19991,7 +20722,7 @@ function setTerminalAppearanceTab(tab, { focus = false } = {}) {
   elements.terminalHeaderAppearancePanel.hidden = !header;
   elements.terminalAppearanceTabTerminal.setAttribute("aria-selected", String(!header));
   elements.terminalAppearanceTabHeader.setAttribute("aria-selected", String(header));
-  elements.headerBackgroundReset.querySelector("span").textContent = header ? "Use default header" : "Use default terminal";
+  elements.headerBackgroundReset.querySelector("span").textContent = header ? "Use default header" : "Use default body";
   setTerminalAppearanceApplyChoices(false);
   if (focus) (header ? elements.terminalAppearanceTabHeader : elements.terminalAppearanceTabTerminal).focus();
 }
@@ -20045,6 +20776,10 @@ function defaultHeaderBackground(terminal) {
   // stays a visible gradient on light themes as well as dark ones.
   const average = [1, 3, 5].reduce((total, offset) => total + Number.parseInt(base.slice(offset, offset + 2), 16), 0) / 3;
   return {
+    mode: "gradient",
+    color: base,
+    fontFamily: "",
+    fontSize: 0,
     type: "linear",
     angle: 135,
     centerX: 50,
@@ -20073,10 +20808,41 @@ function interpolateHeaderGradientColor(left, right, ratio) {
 function updateHeaderBackgroundPreview() {
   if (!headerBackgroundDraft) return;
   elements.headerBackgroundPreview.style.background = headerBackgroundCss(headerBackgroundDraft);
+  const title = elements.headerBackgroundPreview.querySelector(".header-background-preview-title");
+  title.style.fontFamily = headerBackgroundDraft.fontFamily ? fontStacks[headerBackgroundDraft.fontFamily] : "";
+  title.style.fontSize = headerBackgroundDraft.fontSize ? `${headerBackgroundDraft.fontSize}px` : "";
   // Mirror the draft onto the real header too. The dialog swatch can only ever
   // approximate the pane, so the pane itself is the honest preview; the draft
   // is not committed to the terminal until Apply.
   paintTerminalHeaderBackground(state.terminals.get(headerBackgroundTerminalId), headerBackgroundDraft);
+}
+
+function renderHeaderSolidPalette() {
+  elements.headerSolidPalette.replaceChildren();
+  if (!headerBackgroundDraft) return;
+  for (const color of HEADER_BACKGROUND_QUICK_COLORS) {
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "header-solid-swatch";
+    swatch.dataset.headerSolidColor = color;
+    swatch.style.background = color;
+    swatch.title = color;
+    swatch.setAttribute("aria-label", `Solid header color ${color}`);
+    swatch.setAttribute("aria-pressed", String(headerBackgroundDraft.mode === "solid" && headerBackgroundDraft.color === color));
+    elements.headerSolidPalette.append(swatch);
+  }
+}
+
+function syncHeaderBackgroundMode() {
+  if (!headerBackgroundDraft) return;
+  const solid = headerBackgroundDraft.mode === "solid";
+  for (const button of elements.headerBackgroundOverlay.querySelectorAll("[data-header-background-mode]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.headerBackgroundMode === headerBackgroundDraft.mode));
+  }
+  elements.headerSolidPanel.hidden = !solid;
+  elements.headerGradientPanel.hidden = solid;
+  renderHeaderSolidPalette();
+  updateHeaderBackgroundPreview();
 }
 
 function syncHeaderGradientGeometry() {
@@ -20335,7 +21101,7 @@ function applyHeaderBackgroundEditor() {
   if (terminalAppearanceTab === "header") {
     const background = cloneHeaderBackground(headerBackgroundDraft);
     if (!background) {
-      toast("Header background needs at least two valid color stops", "warn", 2600);
+      toast("Choose a valid header background", "warn", 2600);
       return;
     }
     if (terminalAppearanceScope === "all") {
@@ -20423,10 +21189,12 @@ function bindHeaderBackgroundEditor() {
   // leaving a half-built dialog on screen.
   const required = [
     "headerBackgroundApply", "headerBackgroundCancel", "headerBackgroundClose", "headerBackgroundPreview",
-    "headerBackgroundReset", "headerBackgroundSubtitle", "headerGradientAddStop", "headerGradientAngle",
+    "headerAppearanceFontFamily", "headerAppearanceFontSize", "headerBackgroundReset", "headerBackgroundSubtitle",
+    "headerGradientAddStop", "headerGradientAngle", "headerGradientPanel",
     "headerGradientAngleRow", "headerGradientAngleValue", "headerGradientCenterX", "headerGradientCenterXRow",
     "headerGradientCenterXValue", "headerGradientCenterY", "headerGradientCenterYRow", "headerGradientCenterYValue",
     "headerGradientShape", "headerGradientShapeRow", "headerGradientStopList", "headerGradientStopsCount",
+    "headerSolidPalette", "headerSolidPanel",
     "terminalAppearanceApplyAll", "terminalAppearanceApplyChoices", "terminalAppearanceApplyTerminal",
     "terminalAppearanceBackgroundB", "terminalAppearanceBackgroundExpand", "terminalAppearanceBackgroundG",
     "terminalAppearanceBackgroundHandle", "terminalAppearanceBackgroundHex", "terminalAppearanceBackgroundHue",
@@ -20493,6 +21261,45 @@ function bindHeaderBackgroundEditor() {
       setTerminalAppearanceTab(terminalAppearanceTab === "header" ? "terminal" : "header", { focus: true });
     });
   }
+  for (const button of elements.headerBackgroundOverlay.querySelectorAll("[data-header-background-mode]")) {
+    button.addEventListener("click", () => {
+      if (!headerBackgroundDraft) return;
+      headerBackgroundDraft.mode = button.dataset.headerBackgroundMode === "solid" ? "solid" : "gradient";
+      syncHeaderBackgroundMode();
+    });
+  }
+  elements.headerSolidPalette.addEventListener("click", (event) => {
+    const swatch = event.target.closest("[data-header-solid-color]");
+    if (!swatch || !headerBackgroundDraft) return;
+    headerBackgroundDraft.mode = "solid";
+    headerBackgroundDraft.color = swatch.dataset.headerSolidColor;
+    syncHeaderBackgroundMode();
+  });
+  elements.headerAppearanceFontFamily.addEventListener("change", () => {
+    if (!headerBackgroundDraft) return;
+    headerBackgroundDraft.fontFamily = normalizeTerminalFontFamily(elements.headerAppearanceFontFamily.value);
+    elements.headerAppearanceFontFamily.style.fontFamily = headerBackgroundDraft.fontFamily
+      ? fontStacks[headerBackgroundDraft.fontFamily]
+      : "";
+    updateHeaderBackgroundPreview();
+  });
+  const commitHeaderFontSize = () => {
+    if (!headerBackgroundDraft) return;
+    if (elements.headerAppearanceFontSize.value === "") {
+      headerBackgroundDraft.fontSize = 0;
+    } else {
+      headerBackgroundDraft.fontSize = headerGradientControlValue(
+        elements.headerAppearanceFontSize.value,
+        HEADER_FONT_SIZE_BOUNDS.min,
+        HEADER_FONT_SIZE_BOUNDS.max,
+        0
+      );
+      elements.headerAppearanceFontSize.value = String(headerBackgroundDraft.fontSize);
+    }
+    updateHeaderBackgroundPreview();
+  };
+  elements.headerAppearanceFontSize.addEventListener("input", commitHeaderFontSize);
+  elements.headerAppearanceFontSize.addEventListener("change", commitHeaderFontSize);
   for (const button of elements.headerBackgroundOverlay.querySelectorAll("[data-header-gradient-type]")) {
     button.addEventListener("click", () => {
       if (!headerBackgroundDraft) return;
@@ -22991,7 +23798,13 @@ function bindAutomationStudio() {
   elements.automationDelete.addEventListener("click", deleteAutomationEditor);
   elements.automationRunNow.addEventListener("click", () => {
     const rule = readAutomationEditorRule(state.automations.rules.find((item) => item.id === state.automationStudio.editingId));
-    if (rule) runAutomationRule(rule, { manual: true });
+    if (!rule) return;
+    if (rule.type === "copilot" && copilotCliRecoveryNeeded()) {
+      closeAutomationStudio();
+      recoverCopilotCliForAction(() => runAutomationRule(rule, { manual: true }), { origin: "the automation run" });
+      return;
+    }
+    runAutomationRule(rule, { manual: true });
   });
   elements.automationHistoryLimit.addEventListener("change", () => {
     const value = Number(elements.automationHistoryLimit.value);
@@ -23573,6 +24386,12 @@ function advanceAutomationRun(run) {
 function runAutomationRule(rule, options = {}) {
   const normalized = automationApi.normalizeRule(rule);
   if (!normalized) return 0;
+  if (normalized.type === "copilot" && copilotCliRecoveryNeeded()) {
+    const reason = `GitHub Copilot CLI is not ready. ${copilotSetupPrompt().action}.`;
+    addAutomationHistory("failed", normalized.name, reason, normalized.id);
+    if (options.manual) toast(reason, "warn", 3200);
+    return 0;
+  }
   const run = {
     id: createId(),
     occurrenceAt: options.occurrenceAt || new Date().toISOString(),
@@ -26936,6 +27755,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
   const isZoomed = state.zoomedId === terminal.id;
   const assistantName = aiAssistantName();
   const assistantAvailable = aiAssistantAvailable();
+  const assistantRecoverable = state.settings.aiSessionProvider === "copilot" && copilotCliRecoveryNeeded();
   const assistantProvider = aiProviderById(state.settings.aiSessionProvider);
   const assistantModelChoices = aiModelChoices(assistantProvider?.models || [])
     .filter((choice) => choice.value);
@@ -27009,8 +27829,10 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       shortcutId: "terminal.copilot-worktree",
       title: assistantAvailable
         ? `Creates an isolated worktree and starts ${assistantName} in it`
-        : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
-      disabled: !assistantAvailable,
+        : assistantRecoverable
+          ? `${copilotSetupPrompt().action}, then continue to the worktree dialog`
+          : `${assistantName} is unavailable. Choose an installed provider in Settings.`,
+      disabled: !assistantAvailable && !assistantRecoverable,
       toggle: worktreeYolo,
       run: () => openWorktreeDialog({ terminalId: terminal.id, yolo: worktreeYolo.checked })
     },
@@ -27020,8 +27842,10 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
       shortcutId: "terminal.copilot-resume",
       title: assistantAvailable
         ? `Choose a local ${assistantName} session and resume it`
-        : `${assistantName} is unavailable. Choose an installed, signed-in provider in Settings.`,
-      disabled: !assistantAvailable,
+        : assistantRecoverable
+          ? `${copilotSetupPrompt().action}, then open the session picker`
+          : `${assistantName} is unavailable. Choose an installed provider in Settings.`,
+      disabled: !assistantAvailable && !assistantRecoverable,
       toggle: resumeYolo,
       run: () => openCopilotResume(terminal, { yolo: resumeYolo.checked })
     },
@@ -27438,6 +28262,7 @@ function buildSurfaceContextMenu() {
   const invokedTerminalId = state.activeId;
   const runYolo = aiYoloMenuToggle();
   const worktreeYolo = aiYoloMenuToggle();
+  const assistantRecoverable = state.settings.aiSessionProvider === "copilot" && copilotCliRecoveryNeeded();
 
   renderContextMenu([
     { label: "New terminal", ...shortcutHint("terminal.new"), icon: "plus", run: () => newTerminal({ cwd: here || undefined }) },
@@ -27461,8 +28286,10 @@ function buildSurfaceContextMenu() {
       icon: "git-branch",
       title: aiAssistantAvailable()
         ? `Creates an isolated worktree and starts ${aiAssistantName()} in a new terminal`
-        : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
-      disabled: !aiAssistantAvailable(),
+        : assistantRecoverable
+          ? `${copilotSetupPrompt().action}, then continue to the worktree dialog`
+          : `${aiAssistantName()} is unavailable. Choose an installed provider in Settings.`,
+      disabled: !aiAssistantAvailable() && !assistantRecoverable,
       toggle: worktreeYolo,
       run: () => openWorktreeDialog({ openInNewTerminal: true, yolo: worktreeYolo.checked })
     },
@@ -27477,8 +28304,10 @@ function buildSurfaceContextMenu() {
       icon: "history",
       title: aiAssistantAvailable()
         ? `Choose a local ${aiAssistantName()} session and continue it in a new terminal`
-        : `${aiAssistantName()} is unavailable. Choose an installed, signed-in provider in Settings.`,
-      disabled: !aiAssistantAvailable(),
+        : assistantRecoverable
+          ? `${copilotSetupPrompt().action}, then open the session picker`
+          : `${aiAssistantName()} is unavailable. Choose an installed provider in Settings.`,
+      disabled: !aiAssistantAvailable() && !assistantRecoverable,
       run: () => openCopilotResume(null, { newTerminal: true })
     },
     {
@@ -30455,11 +31284,14 @@ function syncAiSessionControls() {
   syncCopilotRemoteControls();
   const available = aiProviderAvailableFor(provider, "session") && Array.isArray(provider.models) && provider.models.length > 0;
   const resumeName = aiAssistantName(state.settings.aiSessionProvider);
-  elements.copilotSessionsToggle.disabled = !available;
+  const recoverableCopilot = state.settings.aiSessionProvider === "copilot" && copilotCliRecoveryNeeded();
+  elements.copilotSessionsToggle.disabled = !available && !recoverableCopilot;
   updatePageGroupButton();
   elements.copilotSessionsToggle.title = available
     ? `Resume a ${resumeName} session`
-    : "Choose an available interactive AI assistant in Settings";
+    : recoverableCopilot
+      ? `${copilotSetupPrompt().action} to resume sessions`
+      : "Choose an available interactive AI assistant in Settings";
   elements.copilotSessionsToggle.setAttribute("aria-label", elements.copilotSessionsToggle.title);
   if (!available) {
     const savedModel = state.settings.aiSessionModel || "";
@@ -30670,7 +31502,19 @@ function closeAiSetupForGuidedSetup() {
   state.aiSetup.returnFocus = null;
 }
 
-function startCopilotGuidedSetup() {
+function recoverCopilotCliForAction(onReady, { origin = "this action", onAbandon = null } = {}) {
+  if (aiProviderAvailableFor(aiProviderById("copilot"), "session")) {
+    if (typeof onReady === "function") window.setTimeout(() => onReady(), 0);
+    return true;
+  }
+  if (state.aiSetup.guided) {
+    toast("GitHub Copilot setup is already running in another terminal", "info", 3000);
+    return false;
+  }
+  return startCopilotGuidedSetup({ closeSetup: false, onAbandon, onReady, origin });
+}
+
+function startCopilotGuidedSetup({ closeSetup = true, onAbandon = null, onReady = null, origin = "settings" } = {}) {
   if (state.aiSetup.guided) return false;
   const prompt = copilotSetupPrompt();
   if (!prompt) return false;
@@ -30688,8 +31532,15 @@ function startCopilotGuidedSetup() {
     shell: "pwsh",
     title: "GitHub Copilot setup"
   });
-  state.aiSetup.guided = { checking: false, terminalId: terminal.id, timer: 0 };
-  closeAiSetupForGuidedSetup();
+  state.aiSetup.guided = {
+    checking: false,
+    onAbandon: typeof onAbandon === "function" ? onAbandon : null,
+    onReady: typeof onReady === "function" ? onReady : null,
+    origin,
+    terminalId: terminal.id,
+    timer: 0
+  };
+  if (closeSetup) closeAiSetupForGuidedSetup();
   toast("Follow the GitHub Copilot setup in the new terminal", "info", 3200);
   scheduleCopilotGuidedProviderCheck(2500);
   return true;
@@ -30713,7 +31564,9 @@ async function checkCopilotGuidedSetup() {
   if (provider?.interactiveAvailable) {
     window.clearTimeout(guided.timer);
     state.aiSetup.guided = null;
-    if (!state.settings.aiSetupCompleted) {
+    if (guided.onReady) {
+      window.setTimeout(() => guided.onReady(), 0);
+    } else if (!state.settings.aiSetupCompleted) {
       state.aiProviderBootstrap = { version: 1, provider: "copilot" };
       openAiSetup();
     }
@@ -30723,8 +31576,11 @@ async function checkCopilotGuidedSetup() {
   const terminal = state.terminals.get(guided.terminalId);
   if (!terminal || terminal.status === "exited") {
     state.aiSetup.guided = null;
-    if (!state.settings.aiSetupCompleted) openAiSetup();
-    toast("GitHub Copilot setup did not finish. Review the terminal output and try again.", "warn", 3600);
+    if (guided.onAbandon) guided.onAbandon();
+    else if (!guided.onReady && !state.settings.aiSetupCompleted) openAiSetup();
+    toast(guided.onReady
+      ? `GitHub Copilot setup did not finish, so ${guided.origin} was cancelled. Review the terminal output and try again.`
+      : "GitHub Copilot setup did not finish. Review the terminal output and try again.", "warn", 3600);
     return;
   }
   scheduleCopilotGuidedProviderCheck();
@@ -30819,7 +31675,7 @@ function bindAiSetup() {
       if (state.aiSetup.draft) state.aiSetup.draft[kind].context = controls.context.value;
     });
   }
-  elements.aiSetupCopilotAction.addEventListener("click", startCopilotGuidedSetup);
+  elements.aiSetupCopilotAction.addEventListener("click", () => startCopilotGuidedSetup());
   elements.aiSetupSave.addEventListener("click", saveAiSetup);
   elements.aiSetupOverlay.addEventListener("keydown", (event) => {
     if (event.key !== "Tab") return;

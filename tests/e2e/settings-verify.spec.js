@@ -34,6 +34,10 @@ test.describe("Settings panel verification", () => {
     // Reset to exactly one fresh terminal so this file is independent of any
     // state left behind by other e2e specs sharing the same bridge.
     await page.evaluate(() => closeAllTerminals());
+    await expect.poll(async () => {
+      await page.evaluate(() => closeAllTerminals());
+      return page.locator(".terminal-pane").count();
+    }, { timeout: 30000 }).toBe(0);
     await page.evaluate(() => addTerminal());
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
   });
@@ -1107,6 +1111,123 @@ test.describe("Settings panel verification", () => {
     });
   });
 
+  test("runs guided recovery callbacks for ready, duplicate, and abandoned setup states", async () => {
+    const result = await page.evaluate(async () => {
+      const original = {
+        addTerminal,
+        copilotSetupScript: state.copilotSetupScript,
+        guided: state.aiSetup.guided,
+        providers: state.aiProviders,
+        refreshAiProviders,
+        startCopilotGuidedSetup,
+        settingsCompleted: state.settings.aiSetupCompleted
+      };
+      const callbacks = [];
+      let buttonStarts = 0;
+      try {
+        state.aiProviders = [{
+          id: "copilot",
+          authenticated: true,
+          available: true,
+          cliInstalled: true,
+          interactiveAvailable: true,
+          titleAvailable: true,
+          models: []
+        }];
+        state.aiSetup.guided = null;
+        const alreadyReady = recoverCopilotCliForAction(() => callbacks.push("immediate"), {
+          origin: "the ready action"
+        });
+        const readyWithoutCallback = recoverCopilotCliForAction(null);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        state.aiProviders[0].interactiveAvailable = false;
+        state.aiProviders[0].authenticated = false;
+        state.aiSetup.guided = { checking: false, terminalId: "already-running", timer: 0 };
+        const duplicate = recoverCopilotCliForAction(() => callbacks.push("duplicate"));
+
+        state.aiSetup.guided = null;
+        state.copilotSetupScript = "D:\\Install-CopilotCli.ps1";
+        addTerminal = () => ({ id: "callback-setup-terminal" });
+        const setupWithCallbacks = startCopilotGuidedSetup({
+          closeSetup: false,
+          onAbandon: () => callbacks.push("created-abandon"),
+          onReady: () => callbacks.push("created-ready"),
+          origin: "callback setup"
+        });
+        window.clearTimeout(state.aiSetup.guided?.timer);
+        state.aiSetup.guided = null;
+        addTerminal = original.addTerminal;
+
+        startCopilotGuidedSetup = () => { buttonStarts += 1; return true; };
+        elements.aiCopilotSetup.click();
+        elements.aiSetupCopilotAction.click();
+        startCopilotGuidedSetup = original.startCopilotGuidedSetup;
+
+        state.aiProviders[0].interactiveAvailable = true;
+        state.aiProviders[0].authenticated = true;
+        refreshAiProviders = async () => state.aiProviders;
+        state.settings.aiSetupCompleted = true;
+        state.aiSetup.guided = {
+          checking: false,
+          onAbandon: null,
+          onReady: () => callbacks.push("ready"),
+          origin: "provider refresh",
+          terminalId: "ready-terminal",
+          timer: 0
+        };
+        await checkCopilotGuidedSetup();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        state.aiProviders = [{
+          id: "copilot",
+          authenticated: false,
+          available: false,
+          cliInstalled: true,
+          interactiveAvailable: false,
+          titleAvailable: false,
+          models: []
+        }];
+        state.aiSetup.guided = {
+          checking: false,
+          onAbandon: () => callbacks.push("abandoned"),
+          onReady: null,
+          origin: "closed setup",
+          terminalId: "missing-terminal",
+          timer: 0
+        };
+        await checkCopilotGuidedSetup();
+        state.aiSetup.guided = {
+          checking: false,
+          onAbandon: null,
+          onReady: () => callbacks.push("unreached-ready"),
+          origin: "closed continuation",
+          terminalId: "another-missing-terminal",
+          timer: 0
+        };
+        await checkCopilotGuidedSetup();
+        return { alreadyReady, buttonStarts, callbacks, duplicate, readyWithoutCallback, setupWithCallbacks };
+      } finally {
+        addTerminal = original.addTerminal;
+        state.copilotSetupScript = original.copilotSetupScript;
+        state.aiSetup.guided = original.guided;
+        state.aiProviders = original.providers;
+        state.settings.aiSetupCompleted = original.settingsCompleted;
+        refreshAiProviders = original.refreshAiProviders;
+        startCopilotGuidedSetup = original.startCopilotGuidedSetup;
+      }
+    });
+
+    expect(result).toEqual({
+      alreadyReady: true,
+      buttonStarts: 2,
+      callbacks: ["immediate", "ready", "abandoned"],
+      duplicate: false,
+      readyWithoutCallback: true,
+      setupWithCallbacks: true
+    });
+  });
+
   test("keeps Copilot login pending until output, readiness, and paste all succeed", async () => {
     const result = await page.evaluate(async () => {
       const originalPaste = pasteIntoSpecificTerminal;
@@ -1348,6 +1469,13 @@ test.describe("Settings panel verification", () => {
   });
 
   test("rechecks guided setup when its terminal is closed", async () => {
+    await page.evaluate(() => closeAllTerminals());
+    await expect.poll(async () => {
+      await page.evaluate(() => closeAllTerminals());
+      return page.locator(".terminal-pane").count();
+    }, { timeout: 30000 }).toBe(0);
+    await page.evaluate(() => addTerminal());
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
     const result = await page.evaluate(() => {
       const terminal = [...state.terminals.values()][0];
       const originalSchedule = scheduleCopilotGuidedProviderCheck;

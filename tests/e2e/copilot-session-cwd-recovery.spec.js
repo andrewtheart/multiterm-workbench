@@ -77,6 +77,99 @@ test.describe("Copilot session working-directory recovery", () => {
     });
   });
 
+  test("restores the resume picker when CWD query setup cannot start", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const result = await page.evaluate(async () => {
+      const session = {
+        id: "62d43a25-c209-4933-af9a-24d9bff3789c",
+        key: "cli:62d43a25-c209-4933-af9a-24d9bff3789c",
+        name: "Recover this folder",
+        source: "cli"
+      };
+      const original = {
+        buildAiAssistantCommand,
+        copilotCliRecoveryNeeded,
+        mode: cwdChange.mode,
+        openResumeCwdChange,
+        provider: copilotResume.provider,
+        recoverCopilotCliForAction,
+        restoreCopilotResume,
+        resumeSession: cwdChange.resumeSession,
+        startCwdSessionQuery
+      };
+      let recovery = null;
+      let secondRecovery = null;
+      let restored = 0;
+      let retries = 0;
+      let recoveryNeeded = true;
+      try {
+        copilotResume.provider = "copilot";
+        cwdChange.mode = "resume";
+        cwdChange.resumeSession = session;
+        buildAiAssistantCommand = () => "";
+        copilotCliRecoveryNeeded = () => recoveryNeeded;
+        restoreCopilotResume = () => { restored += 1; };
+        recoverCopilotCliForAction = (onReady, options) => {
+          recovery = { onReady, options };
+          return false;
+        };
+        const started = startCwdSessionQuery();
+        const status = elements.cwdChangeStatus.textContent;
+        recovery.options.onAbandon();
+        recoverCopilotCliForAction = (onReady, options) => {
+          secondRecovery = { onReady, options };
+          return true;
+        };
+        cwdChange.mode = "resume";
+        cwdChange.resumeSession = session;
+        const acceptedStart = startCwdSessionQuery();
+        secondRecovery.options.onAbandon();
+        recoveryNeeded = false;
+        openResumeCwdChange = () => false;
+        startCwdSessionQuery = ({ retry } = {}) => {
+          if (retry) retries += 1;
+          return true;
+        };
+        recovery.onReady();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        openResumeCwdChange = () => true;
+        recovery.onReady();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return {
+          acceptedStart,
+          hasAbandon: typeof recovery.options.onAbandon === "function",
+          origin: recovery.options.origin,
+          retries,
+          restored,
+          started,
+          status
+        };
+      } finally {
+        buildAiAssistantCommand = original.buildAiAssistantCommand;
+        copilotCliRecoveryNeeded = original.copilotCliRecoveryNeeded;
+        openResumeCwdChange = original.openResumeCwdChange;
+        recoverCopilotCliForAction = original.recoverCopilotCliForAction;
+        restoreCopilotResume = original.restoreCopilotResume;
+        startCwdSessionQuery = original.startCwdSessionQuery;
+        cwdChange.mode = original.mode;
+        cwdChange.resumeSession = original.resumeSession;
+        copilotResume.provider = original.provider;
+        closeCwdChange({ restoreResume: false });
+      }
+    });
+
+    expect(result).toEqual({
+      acceptedStart: false,
+      hasAbandon: true,
+      origin: "the working-directory query",
+      retries: 1,
+      restored: 5,
+      started: false,
+      status: "GitHub Copilot setup could not start."
+    });
+  });
+
   test("privately asks an unavailable session and promotes that terminal on Send", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");

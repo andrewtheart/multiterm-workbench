@@ -32,6 +32,7 @@ test.describe("Empty workspace guidance", () => {
     await expect(page.locator("#workspaceEmptyHint")).toContainText("right clicking in this page");
     await expect(page.locator("#workspaceEmptyHint")).toContainText("on the top right of the app");
     await expect(page.locator(".workspace-empty-mark")).toBeVisible();
+    await expect(page.locator("#workspaceEmptyHint .workspace-empty-title")).toHaveCSS("font-size", "16.1px");
   });
 
   test("offers to restore minimized terminals instead of the hint", async ({ page }) => {

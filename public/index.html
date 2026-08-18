@@ -1058,7 +1058,7 @@
           <button id="copilotResumeTabLocal" class="copilot-resume-tab" type="button" role="tab" aria-selected="true" data-resume-scope="local">This machine</button>
           <button id="copilotResumeTabRemote" class="copilot-resume-tab" type="button" role="tab" aria-selected="false" data-resume-scope="remote">Remote</button>
         </div>
-        <div class="copilot-resume-toolbar">
+        <div id="copilotResumeToolbar" class="copilot-resume-toolbar">
           <label class="copilot-resume-search">
             <i data-lucide="search" aria-hidden="true"></i>
             <input id="copilotResumeSearch" type="search" placeholder="Search source, title, repository, folder, branch, or ID" autocomplete="off" spellcheck="false" aria-label="Search AI assistant sessions">
@@ -1106,11 +1106,40 @@
           </label>
         </div>
         <p id="copilotResumeNotice" class="copilot-resume-notice" hidden></p>
-        <div class="copilot-resume-summary">
+        <div id="copilotResumeSummary" class="copilot-resume-summary">
           <span id="copilotResumeStatus" role="status">Looking for local AI assistant sessions&hellip;</span>
           <span class="copilot-resume-permission"><i data-lucide="shield-check"></i>Continue in the selected assistant</span>
         </div>
         <div id="copilotResumeList" class="copilot-resume-list" role="list"></div>
+        <div id="copilotResumeSelectionBar" class="copilot-resume-selection-bar" hidden>
+          <span id="copilotResumeSelectionCount">0 sessions selected</span>
+          <button id="copilotResumeSelectionClear" class="secondary-action" type="button">Clear</button>
+          <button id="copilotResumeSelectionReview" class="primary-action" type="button">
+            <i data-lucide="list-checks"></i>
+            <span>Review selected</span>
+          </button>
+        </div>
+        <section id="copilotResumeReview" class="copilot-resume-review" aria-labelledby="copilotResumeReviewTitle" hidden>
+          <div class="copilot-resume-review-head">
+            <div>
+              <h3 id="copilotResumeReviewTitle">Selected sessions</h3>
+              <p>Review each session and edit where its new terminal should start.</p>
+            </div>
+            <span id="copilotResumeReviewCount"></span>
+          </div>
+          <div id="copilotResumeReviewList" class="copilot-resume-review-list"></div>
+          <p id="copilotResumeReviewStatus" class="copilot-resume-review-status" role="status"></p>
+          <div class="copilot-resume-review-actions">
+            <button id="copilotResumeReviewBack" class="secondary-action" type="button">
+              <i data-lucide="arrow-left"></i>
+              <span>Back to sessions</span>
+            </button>
+            <button id="copilotResumeReviewOpen" class="primary-action" type="button">
+              <i data-lucide="play"></i>
+              <span>Open selected sessions</span>
+            </button>
+          </div>
+        </section>
         <div id="copilotResumeRemoteFoot" class="copilot-resume-remote-foot" hidden>
           <label class="copilot-resume-connect">
             <span>Connect by session ID</span>
@@ -2311,7 +2340,7 @@
         <div class="terminal-appearance-layout">
           <nav class="terminal-appearance-blade" role="tablist" aria-label="Appearance section">
             <button id="terminalAppearanceTabTerminal" type="button" role="tab" aria-selected="true" aria-controls="terminalAppearancePanel">
-              <i data-lucide="square-terminal"></i><span>Terminal</span>
+              <i data-lucide="square-terminal"></i><span>Body</span>
             </button>
             <button id="terminalAppearanceTabHeader" type="button" role="tab" aria-selected="false" aria-controls="terminalHeaderAppearancePanel">
               <i data-lucide="panel-top"></i><span>Header</span>
@@ -2390,56 +2419,82 @@
             <i data-lucide="more-horizontal" aria-hidden="true"></i>
           </div>
 
-          <fieldset class="header-gradient-types">
-            <legend>Gradient type</legend>
-            <div role="group" aria-label="Gradient type">
-              <button type="button" data-header-gradient-type="linear" aria-pressed="true"><i data-lucide="move-diagonal-2"></i><span>Linear</span></button>
-              <button type="button" data-header-gradient-type="radial" aria-pressed="false"><i data-lucide="circle-dot"></i><span>Radial</span></button>
-              <button type="button" data-header-gradient-type="conic" aria-pressed="false"><i data-lucide="aperture"></i><span>Conic</span></button>
-            </div>
-          </fieldset>
-
-          <div class="header-gradient-geometry">
-            <label id="headerGradientAngleRow" class="header-gradient-range-row">
-              <span>Angle</span>
-              <span class="header-gradient-range-pair">
-                <input id="headerGradientAngle" type="range" min="0" max="359" step="1" value="135" aria-label="Gradient angle">
-                <span class="header-gradient-number"><input id="headerGradientAngleValue" type="number" min="0" max="359" step="1" value="135" aria-label="Gradient angle in degrees"><span>deg</span></span>
-              </span>
+          <div class="header-font-fields">
+            <label>
+              <span>Font face</span>
+              <select id="headerAppearanceFontFamily"></select>
             </label>
-            <label id="headerGradientShapeRow" class="header-gradient-select-row" hidden>
-              <span>Shape</span>
-              <select id="headerGradientShape" aria-label="Radial gradient shape">
-                <option value="ellipse">Ellipse</option>
-                <option value="circle">Circle</option>
-              </select>
-            </label>
-            <label id="headerGradientCenterXRow" class="header-gradient-range-row" hidden>
-              <span>Center X</span>
-              <span class="header-gradient-range-pair">
-                <input id="headerGradientCenterX" type="range" min="0" max="100" step="1" value="50" aria-label="Gradient horizontal center">
-                <span class="header-gradient-number"><input id="headerGradientCenterXValue" type="number" min="0" max="100" step="1" value="50" aria-label="Gradient horizontal center percentage"><span>%</span></span>
-              </span>
-            </label>
-            <label id="headerGradientCenterYRow" class="header-gradient-range-row" hidden>
-              <span>Center Y</span>
-              <span class="header-gradient-range-pair">
-                <input id="headerGradientCenterY" type="range" min="0" max="100" step="1" value="50" aria-label="Gradient vertical center">
-                <span class="header-gradient-number"><input id="headerGradientCenterYValue" type="number" min="0" max="100" step="1" value="50" aria-label="Gradient vertical center percentage"><span>%</span></span>
-              </span>
+            <label>
+              <span>Font size (px)</span>
+              <input id="headerAppearanceFontSize" type="number" min="9" max="20" step="1" inputmode="numeric" placeholder="Default">
             </label>
           </div>
 
-          <section class="header-gradient-stops" aria-labelledby="headerGradientStopsTitle">
-            <div class="header-gradient-stops-head">
-              <div>
-                <h3 id="headerGradientStopsTitle">Color stops</h3>
-                <span id="headerGradientStopsCount"></span>
-              </div>
-              <button id="headerGradientAddStop" type="button" class="secondary-action"><i data-lucide="plus"></i><span>Add stop</span></button>
+          <fieldset class="header-background-modes">
+            <legend>Background</legend>
+            <div role="group" aria-label="Header background mode">
+              <button type="button" data-header-background-mode="solid" aria-pressed="false"><i data-lucide="paint-bucket"></i><span>Solid</span></button>
+              <button type="button" data-header-background-mode="gradient" aria-pressed="true"><i data-lucide="blend"></i><span>Gradient</span></button>
             </div>
-            <div id="headerGradientStopList" class="header-gradient-stop-list"></div>
+          </fieldset>
+
+          <section id="headerSolidPanel" class="header-solid-panel" aria-label="Solid header colors" hidden>
+            <h3>Color palette</h3>
+            <div id="headerSolidPalette" class="header-solid-palette" role="group" aria-label="Solid header color palette"></div>
           </section>
+
+          <div id="headerGradientPanel" class="header-gradient-panel">
+            <fieldset class="header-gradient-types">
+              <legend>Gradient type</legend>
+              <div role="group" aria-label="Gradient type">
+                <button type="button" data-header-gradient-type="linear" aria-pressed="true"><i data-lucide="move-diagonal-2"></i><span>Linear</span></button>
+                <button type="button" data-header-gradient-type="radial" aria-pressed="false"><i data-lucide="circle-dot"></i><span>Radial</span></button>
+                <button type="button" data-header-gradient-type="conic" aria-pressed="false"><i data-lucide="aperture"></i><span>Conic</span></button>
+              </div>
+            </fieldset>
+
+            <div class="header-gradient-geometry">
+              <label id="headerGradientAngleRow" class="header-gradient-range-row">
+                <span>Angle</span>
+                <span class="header-gradient-range-pair">
+                  <input id="headerGradientAngle" type="range" min="0" max="359" step="1" value="135" aria-label="Gradient angle">
+                  <span class="header-gradient-number"><input id="headerGradientAngleValue" type="number" min="0" max="359" step="1" value="135" aria-label="Gradient angle in degrees"><span>deg</span></span>
+                </span>
+              </label>
+              <label id="headerGradientShapeRow" class="header-gradient-select-row" hidden>
+                <span>Shape</span>
+                <select id="headerGradientShape" aria-label="Radial gradient shape">
+                  <option value="ellipse">Ellipse</option>
+                  <option value="circle">Circle</option>
+                </select>
+              </label>
+              <label id="headerGradientCenterXRow" class="header-gradient-range-row" hidden>
+                <span>Center X</span>
+                <span class="header-gradient-range-pair">
+                  <input id="headerGradientCenterX" type="range" min="0" max="100" step="1" value="50" aria-label="Gradient horizontal center">
+                  <span class="header-gradient-number"><input id="headerGradientCenterXValue" type="number" min="0" max="100" step="1" value="50" aria-label="Gradient horizontal center percentage"><span>%</span></span>
+                </span>
+              </label>
+              <label id="headerGradientCenterYRow" class="header-gradient-range-row" hidden>
+                <span>Center Y</span>
+                <span class="header-gradient-range-pair">
+                  <input id="headerGradientCenterY" type="range" min="0" max="100" step="1" value="50" aria-label="Gradient vertical center">
+                  <span class="header-gradient-number"><input id="headerGradientCenterYValue" type="number" min="0" max="100" step="1" value="50" aria-label="Gradient vertical center percentage"><span>%</span></span>
+                </span>
+              </label>
+            </div>
+
+            <section class="header-gradient-stops" aria-labelledby="headerGradientStopsTitle">
+              <div class="header-gradient-stops-head">
+                <div>
+                  <h3 id="headerGradientStopsTitle">Color stops</h3>
+                  <span id="headerGradientStopsCount"></span>
+                </div>
+                <button id="headerGradientAddStop" type="button" class="secondary-action"><i data-lucide="plus"></i><span>Add stop</span></button>
+              </div>
+              <div id="headerGradientStopList" class="header-gradient-stop-list"></div>
+            </section>
+          </div>
               </div>
             </section>
           </div>
@@ -2850,6 +2905,9 @@
           <button class="pane-queue-add" type="button" title="Queue a command for when this terminal is ready" aria-label="Queue a command" aria-expanded="false">
             <i data-lucide="plus"></i>
             <span class="pane-queue-add-badge" hidden>0</span>
+          </button>
+          <button class="pane-scroll-top" type="button" title="Scroll to the top" aria-label="Scroll this terminal to the top">
+            <i data-lucide="chevron-up"></i>
           </button>
           <button class="pane-scroll-bottom" type="button" title="Scroll to the bottom" aria-label="Scroll this terminal to the bottom">
             <i data-lucide="chevron-down"></i>
