@@ -18,6 +18,7 @@ const {
 } = require("../../server.js");
 
 const root = path.join(os.tmpdir(), `mt-merge-tests-${process.pid}`);
+const realGitTestTimeout = 15000;
 
 function makeRepo(name, { conflict = false } = {}) {
   const repo = path.join(root, name);
@@ -244,7 +245,7 @@ describe("git repository and worktree bridge", () => {
     });
     expect(allowed).toMatchObject({ ok: true, status: "staged" });
     await finishWorktreeMerge(allowed.sessionId, { abort: true });
-  });
+  }, realGitTestTimeout);
 
   test("routes inspection, listing, record, diff, and removal messages", async () => {
     const { repo, worktree } = makeRepo("protocol");
@@ -548,7 +549,7 @@ describe("worktree merge-back", () => {
     expect(git(["status", "--porcelain"])).toEqual(expect.stringContaining("shared.txt"));
     expect(git(["status", "--porcelain"])).toEqual(expect.stringContaining("parent-staged.txt"));
     expect(fs.existsSync(started.workPath)).toBe(false);
-  });
+  }, realGitTestTimeout);
 
   test("uses a temporary worktree when the parent is not checked out, and removes it", async () => {
     const { repo } = makeRepo("parked");
@@ -603,7 +604,7 @@ describe("worktree merge-back", () => {
       ok: false,
       reason: "That merge is no longer in progress."
     });
-  });
+  }, realGitTestTimeout);
 
   test("handles missing conflict sessions and unreadable or unwritable files", async () => {
     await expect(readConflictSides("missing-session", "shared.txt")).resolves.toEqual({

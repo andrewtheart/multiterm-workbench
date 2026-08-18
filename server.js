@@ -3729,10 +3729,26 @@ async function sendGitConflictWrite(client, message) {
 
 const gitMergeSessions = new Map();
 
+async function branchCheckoutPaths(repositoryRoot, branches) {
+  const listed = await runGit(["worktree", "list", "--porcelain"], repositoryRoot);
+  const matches = new Map();
+  if (!listed.ok) return matches; else { void 0; }
+  const wanted = new Set(branches);
+  let worktreePath = "";
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) {
+      worktreePath = line.slice(9).trim();
+    } else if (line.startsWith("branch refs/heads/")) {
+      const branch = line.slice(18);
+      if (wanted.has(branch)) matches.set(branch, worktreePath); else { void 0; }
+    } else { void 0; }
+  }
+  return matches;
+}
+
 async function branchCheckoutPath(repositoryRoot, branch) {
-  const worktrees = await listGitWorktrees(repositoryRoot);
-  const match = worktrees.find((worktree) => worktree.branch === branch);
-  return match ? match.path : "";
+  const matches = await branchCheckoutPaths(repositoryRoot, [branch]);
+  return matches.get(branch) || "";
 }
 
 async function worktreeIsDirty(directory) {
@@ -3781,13 +3797,21 @@ async function conflictedPaths(directory) {
   return listed.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 }
 
-async function snapshotGitWorktree(directory, label = "MultiTerm worktree snapshot") {
+async function snapshotGitWorktree(directory, label = "MultiTerm worktree snapshot", {
+  createCommit = true,
+  captureIndex = true,
+  captureStatus = true
+} = {}) {
   // `git status` may refresh and briefly lock the index even though it does not
   // change user-visible state. Keep these reads sequential within one worktree
   // so it cannot race `write-tree` for index.lock.
   const head = await runGit(["rev-parse", "HEAD"], directory);
-  const status = await runGit(["status", "--porcelain=v1", "--untracked-files=all"], directory);
-  const indexTree = await runGit(["write-tree"], directory);
+  const status = captureStatus
+    ? await runGit(["status", "--porcelain=v1", "--untracked-files=all"], directory)
+    : { ok: true, stdout: "", stderr: "" };
+  const indexTree = captureIndex
+    ? await runGit(["write-tree"], directory)
+    : { ok: true, stdout: "", stderr: "" };
   if (!head.ok || !status.ok || !indexTree.ok) {
     return {
       ok: false,
@@ -3811,12 +3835,14 @@ async function snapshotGitWorktree(directory, label = "MultiTerm worktree snapsh
     if (!added.ok) return { ok: false, reason: (added.stderr || added.stdout).trim() || "Git could not add pending files to the snapshot." }; else { void 0; }
     const tree = await runGit(["write-tree"], directory, 30000, { env });
     if (!tree.ok) return { ok: false, reason: (tree.stderr || tree.stdout).trim() || "Git could not write the snapshot tree." }; else { void 0; }
-    const committed = await runGit(
-      ["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", label],
-      directory,
-      30000,
-      { env }
-    );
+    const committed = createCommit
+      ? await runGit(
+        ["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", label],
+        directory,
+        30000,
+        { env }
+      )
+      : { ok: true, stdout: "", stderr: "" };
     if (!committed.ok) return { ok: false, reason: (committed.stderr || committed.stdout).trim() || "Git could not write the snapshot commit." }; else { void 0; }
     return {
       ok: true,
@@ -3970,7 +3996,9 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false, o
   // Objects written while fingerprinting do not alter the checkout. This catches
   // edits made after the dialog opened before the safety stash moves anything.
   onProgress("verifying-parent", "Verifying that the parent checkout is unchanged...");
-  const currentParent = await snapshotGitWorktree(session.parentPath, "MultiTerm parent verification");
+  const currentParent = await snapshotGitWorktree(session.parentPath, "MultiTerm parent verification", {
+    createCommit: false
+  });
   if (!currentParent.ok || currentParent.head !== session.parentSnapshot.head
     || currentParent.tree !== session.parentSnapshot.tree || currentParent.indexTree !== session.parentSnapshot.indexTree
     || currentParent.status !== session.parentSnapshot.status) {
@@ -4013,7 +4041,11 @@ async function finishPendingWorktreeMerge(sessionId, session, { abort = false, o
     } else { void 0; }
 
     onProgress("verifying-result", "Verifying the parent result...");
-    const materialized = await snapshotGitWorktree(session.parentPath, "MultiTerm result verification");
+    const materialized = await snapshotGitWorktree(session.parentPath, "MultiTerm result verification", {
+      createCommit: false,
+      captureIndex: false,
+      captureStatus: false
+    });
     if (!materialized.ok || materialized.head !== session.parentSnapshot.head || materialized.tree !== resultTree.stdout.trim()) {
       const restored = await restoreParentSafetyStash(session, stashOid);
       return {
@@ -4047,7 +4079,8 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
   } else { void 0; }
 
   onProgress("locating", "Locating the source and parent worktrees...");
-  const worktreePath = await branchCheckoutPath(repositoryRoot, worktreeBranch);
+  const checkoutPaths = await branchCheckoutPaths(repositoryRoot, [worktreeBranch, parentBranch]);
+  const worktreePath = checkoutPaths.get(worktreeBranch) || "";
   if (worktreePath && strategy !== "pending") {
     const dirty = await worktreeIsDirty(worktreePath);
     if (dirty) {
@@ -4060,7 +4093,7 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
     } else { void 0; }
   } else { void 0; }
 
-  const parentPath = await branchCheckoutPath(repositoryRoot, parentBranch);
+  const parentPath = checkoutPaths.get(parentBranch) || "";
   if (strategy !== "pending") {
     const overlap = await importedPendingOverlap(repositoryRoot, parentPath, worktreeBranch);
     if (overlap.unverifiable || overlap.paths.length) {
