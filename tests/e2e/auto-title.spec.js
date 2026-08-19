@@ -485,6 +485,42 @@ test.describe("Automatic terminal title suggestions", () => {
     await expect(pane.locator(".pane-title-generate")).not.toHaveClass(/has-suggestion/);
   });
 
+  test("never reports an unapproved suggestion to the bridge as the real title", async ({ page }) => {
+    await ready(page);
+    // A late `created` acknowledgement reconciles the pane title with the bridge.
+    // While a suggestion is on screen the input holds the unapproved text, so the
+    // reconciliation must read the committed title instead.
+    const reconciled = await page.evaluate(() => {
+      const [terminal] = [...state.terminals.values()];
+      const committed = terminal.titleInput.value;
+      showTerminalTitleSuggestion(terminal, "unapproved name", { auto: true });
+      const frames = [];
+      const send = state.socket.send.bind(state.socket);
+      state.socket.send = (payload) => { frames.push(JSON.parse(payload)); send(payload); };
+      handleBridgeMessage({
+        type: "created",
+        id: terminal.id,
+        pid: terminal.pid || 4242,
+        cwd: terminal.cwd || "D:\\multiTerm",
+        title: "stale bridge title",
+        startedAt: new Date().toISOString()
+      });
+      state.socket.send = send;
+      return {
+        committed,
+        shownTitle: terminal.titleInput.value,
+        suggestion: terminal.titleSuggestion,
+        titleFrames: frames.filter((frame) => frame.type === "title").map((frame) => frame.title)
+      };
+    });
+
+    expect(reconciled.titleFrames).toEqual([reconciled.committed]);
+    expect(reconciled.titleFrames).not.toContain("unapproved name");
+    // The suggestion stays on offer; reconciliation must not decide it either way.
+    expect(reconciled.suggestion).toBe("unapproved name");
+    expect(reconciled.shownTitle).toBe("unapproved name");
+  });
+
   test("waits as a badge rather than overwriting a rename in progress", async ({ page }) => {
     await ready(page);
     const pane = page.locator(".terminal-pane").first();

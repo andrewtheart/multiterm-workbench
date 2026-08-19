@@ -167,6 +167,7 @@ let headerBackgroundFlyoutAnchor = null;
 let terminalAppearanceTab = "terminal";
 let terminalAppearanceScope = "terminal";
 let terminalAppearanceDraft = null;
+let terminalAppearanceEditorContext = "terminal";
 const terminalAppearanceColorState = {
   background: { hue: 0, saturation: 0, value: 0 },
   foreground: { hue: 0, saturation: 0, value: 0 }
@@ -515,10 +516,14 @@ function terminalThemeWithColors(background = "", foreground = "") {
 }
 
 function terminalThemeFor(terminal) {
+  const automated = terminal?.automationAppearance;
+  if (automated) return terminalThemeWithColors(automated.background, automated.foreground);
   return terminalThemeWithColors(terminal?.terminalBackground, terminal?.terminalForeground);
 }
 
 function terminalFontFamilyName(terminal) {
+  const automated = terminal?.automationAppearance;
+  if (automated) return automated.fontFamily;
   return normalizeTerminalFontFamily(terminal?.terminalFontFamily)
     || normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily);
 }
@@ -576,6 +581,11 @@ const elements = {
   autoUpdateChecks: document.querySelector("#autoUpdateChecks"),
   automationActionAdd: document.querySelector("#automationActionAdd"),
   automationActionList: document.querySelector("#automationActionList"),
+  automationActionsBlock: document.querySelector("#automationActionsBlock"),
+  automationAppearanceBlock: document.querySelector("#automationAppearanceBlock"),
+  automationAppearanceEdit: document.querySelector("#automationAppearanceEdit"),
+  automationAppearanceSummary: document.querySelector("#automationAppearanceSummary"),
+  automationAppearanceSwatch: document.querySelector("#automationAppearanceSwatch"),
   automationActivityClear: document.querySelector("#automationActivityClear"),
   automationActivityEmpty: document.querySelector("#automationActivityEmpty"),
   automationActivityFilter: document.querySelector("#automationActivityFilter"),
@@ -605,10 +615,15 @@ const elements = {
   automationRuleList: document.querySelector("#automationRuleList"),
   automationRunNow: document.querySelector("#automationRunNow"),
   automationRunAs: document.querySelector("#automationRunAs"),
+  automationRunAsField: document.querySelector("#automationRunAsField"),
   automationRunAsHint: document.querySelector("#automationRunAsHint"),
+  automationScheduleBlock: document.querySelector("#automationScheduleBlock"),
   automationSave: document.querySelector("#automationSave"),
   automationSearch: document.querySelector("#automationSearch"),
   automationTime: document.querySelector("#automationTime"),
+  automationTitleMatchCase: document.querySelector("#automationTitleMatchCase"),
+  automationTitleMatchType: document.querySelector("#automationTitleMatchType"),
+  automationTitleMatchValue: document.querySelector("#automationTitleMatchValue"),
   automationType: document.querySelector("#automationType"),
   automationToggle: document.querySelector("#automationsToggle"),
   automationWelcome: document.querySelector("#automationWelcome"),
@@ -1454,7 +1469,7 @@ const state = {
   analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
   automations: loadAutomationStore(initialSettings.automationHistoryLimit),
   automationRuntime: { lastMessageRefresh: 0, lastTickAt: Date.now(), runs: new Map(), steps: new Map(), ticking: false, timer: 0 },
-  automationStudio: { editingId: null, returnFocus: null, view: "schedules" },
+  automationStudio: { appearanceDraft: null, editingId: null, returnFocus: null, view: "schedules" },
   hostUser: "",
   bridgeClosingDown: false,
   closeDisposition: "",
@@ -3391,8 +3406,8 @@ function handleBridgeMessage(message) {
     if (!terminal.transient) ensureTerminalAnalyticsRecord(terminal).startedAt = terminal.startedAt;
     terminal.remoteRequested = true;
     terminal.status = "live";
-    if (message.title !== terminal.titleInput.value) {
-      sendBridge({ type: "title", id: terminal.id, title: terminal.titleInput.value });
+    if (message.title !== committedTerminalTitle(terminal)) {
+      sendBridge({ type: "title", id: terminal.id, title: committedTerminalTitle(terminal) });
     }
     if (!terminal.transient) syncTerminalArtifacts(terminal);
     if (message.elevated) {
@@ -3613,6 +3628,16 @@ function handleBridgeMessage(message) {
       elements.bridgeIdentityEmpty.hidden = false;
       elements.bridgeIdentityEmpty.textContent = "Bridge switching requires an updated bridge.";
     }
+    return;
+  }
+
+  if (message.type === "error" && /Unsupported message type:\s*(?:list)?tmux/i.test(message.message || "")) {
+    resolveBridgeRequestByType("listTmux", {
+      type: "tmuxSessions",
+      sessions: [],
+      message: "WSL tmux discovery is available in the Electron app. This installed browser bridge does not support it."
+    });
+    log.debug("bridge", "Installed bridge does not support WSL tmux discovery");
     return;
   }
 
@@ -3949,6 +3974,8 @@ function addTerminal(options = {}) {
     autoQueueOutputEvidence: "",
     autoQueueRequiredRevision: 0,
     autoQueueTimer: 0,
+    automationAppearance: null,
+    automationAppearanceRuleId: "",
     automationWorkflowActive: "",
     automationWorkflowBuffer: "",
     automationCopilotTimer: 0,
@@ -4071,6 +4098,7 @@ function addTerminal(options = {}) {
   bindTerminalHandoffGrips(terminal);
   bindPaneFind(terminal);
   applyPaneColor(terminal);
+  applyAppearanceAutomationToTerminal(terminal);
   applyTerminalHeaderBackground(terminal);
   if (terminal.elevated) pane.classList.add("is-admin");
   if (!transient) applyManualLayout(terminal, ensureManualLayout(id));
@@ -5479,6 +5507,13 @@ function bindPaneControls(terminal) {
   });
 }
 
+// A pending AI title suggestion previews itself in the title input before the user
+// approves it, so anything that reads the terminal's real title must read this.
+function committedTerminalTitle(terminal) {
+  if (terminal?.titleSuggestion && terminal.titleOriginal) return terminal.titleOriginal;
+  return terminal?.titleInput?.value || "";
+}
+
 function commitTerminalTitle(terminal, rawTitle, notifyBridge = true, source = "programmatic") {
   if (!terminal) return;
   const previousTitle = String(terminal.titleDisplay?.textContent || terminal.titleInput?.value || "").trim();
@@ -5505,6 +5540,7 @@ function commitTerminalTitle(terminal, rawTitle, notifyBridge = true, source = "
   // would otherwise keep restarting the ladder and no suggestion would ever run.
   if (autoTitleSuppressed(terminal) !== wasSuppressed) scheduleAutoTitle(terminal);
   updateTerminalTitleGenerateButton(terminal);
+  refreshAppearanceAutomations({ recordHistory: true, terminals: [terminal] });
   if (terminalNotificationFlyoutId === terminal.id) renderTerminalNotificationFlyout();
   saveSessionSnapshot();
   for (const key of terminal.copilotLogKeys || []) registerCopilotLogTerminal(key, terminal);
@@ -9293,6 +9329,7 @@ function applySettings() {
     terminal.term.options.cursorStyle = state.settings.cursorStyle;
     terminal.term.options.cursorBlink = state.settings.cursorBlink;
     terminal.term.options.theme = terminalThemeFor(terminal);
+    applyTerminalHeaderBackground(terminal);
     terminal.term.options.scrollback = effectiveScrollback();
     applyManualLayout(terminal, ensureManualLayout(terminal.id));
     updateTerminalNotificationButton(terminal);
@@ -15490,9 +15527,6 @@ function syncTerminalScrollControls(terminal) {
   const copilotTui = scrollableCopilotTuiActive(terminal);
   if (copilotTuiPainted(terminal)) syncCopilotScrollInset(terminal);
   else clearCopilotScrollInset(terminal);
-  const hidden = buffer.type === "alternate" && !copilotTui;
-  topButton.hidden = hidden;
-  bottomButton.hidden = hidden;
   const subject = copilotTui ? "Copilot" : "this terminal";
   topButton.title = `Scroll ${subject} to the top`;
   topButton.setAttribute("aria-label", `Scroll ${subject} to the top`);
@@ -15502,6 +15536,9 @@ function syncTerminalScrollControls(terminal) {
   const tuiEdge = terminal.tuiScrollEdge || "bottom";
   const awayFromTop = copilotTui ? tuiEdge !== "top" : buffer.viewportY > 0;
   const awayFromBottom = copilotTui ? tuiEdge !== "bottom" : buffer.viewportY < buffer.baseY;
+  const unsupportedBuffer = buffer.type === "alternate" && !copilotTui;
+  topButton.hidden = unsupportedBuffer || !awayFromTop;
+  bottomButton.hidden = unsupportedBuffer || !awayFromBottom;
   topButton.classList.toggle("is-scrolled-down", awayFromTop);
   bottomButton.classList.toggle("is-scrolled-up", awayFromBottom);
 }
@@ -20531,7 +20568,10 @@ function paintTerminalHeaderBackground(terminal, value) {
 }
 
 function applyTerminalHeaderBackground(terminal) {
-  paintTerminalHeaderBackground(terminal, terminal?.headerBackground || state.settings.terminalHeaderBackground);
+  paintTerminalHeaderBackground(
+    terminal,
+    terminal?.automationAppearance?.headerBackground || terminal?.headerBackground || state.settings.terminalHeaderBackground
+  );
 }
 
 function applyTerminalAppearance(terminal) {
@@ -20582,6 +20622,8 @@ function terminalHsvToColor({ hue, saturation, value }) {
   return headerGradientChannelsToHex(channels.map((channel) => (channel + offset) * 255));
 }
 
+// The terminal's own stored appearance, ignoring any rule-supplied override, so the
+// editor always seeds from what the user set rather than what an automation painted.
 function terminalAppearanceValues(terminal, scope = terminalAppearanceScope) {
   const theme = themes[state.settings.theme] || themes.ember;
   if (scope === "all") {
@@ -20594,7 +20636,8 @@ function terminalAppearanceValues(terminal, scope = terminalAppearanceScope) {
   return {
     background: normalizeTerminalColor(terminal?.terminalBackground || state.settings.terminalBackground) || theme.background,
     foreground: normalizeTerminalColor(terminal?.terminalForeground || state.settings.terminalForeground) || theme.foreground,
-    fontFamily: terminalFontFamilyName(terminal)
+    fontFamily: normalizeTerminalFontFamily(terminal?.terminalFontFamily)
+      || normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily)
   };
 }
 
@@ -20693,16 +20736,32 @@ function updateTerminalAppearancePreview() {
   }
 }
 
-function loadTerminalAppearanceDraft() {
+function automationAppearanceProfileSeed(terminal) {
+  const body = terminalAppearanceValues(terminal, "terminal");
+  return automationApi.normalizeAppearance({
+    ...body,
+    headerBackground: cloneHeaderBackground(terminal?.headerBackground || state.settings.terminalHeaderBackground)
+      || defaultHeaderBackground(terminal)
+  });
+}
+
+function loadTerminalAppearanceDraft(profile = null) {
   const terminal = state.terminals.get(headerBackgroundTerminalId);
-  terminalAppearanceDraft = terminalAppearanceValues(terminal);
+  const normalizedProfile = automationApi.normalizeAppearance(profile);
+  terminalAppearanceDraft = normalizedProfile
+    ? {
+        background: normalizedProfile.background,
+        foreground: normalizedProfile.foreground,
+        fontFamily: normalizedProfile.fontFamily
+      }
+    : terminalAppearanceValues(terminal);
   setTerminalAppearanceColorControls("background", terminalAppearanceDraft.background);
   setTerminalAppearanceColorControls("foreground", terminalAppearanceDraft.foreground);
   elements.terminalAppearanceFontFamily.value = terminalAppearanceDraft.fontFamily;
   elements.terminalAppearanceFontFamily.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
-  headerBackgroundDraft = cloneHeaderBackground(
+  headerBackgroundDraft = cloneHeaderBackground(normalizedProfile?.headerBackground || (
     terminalAppearanceScope === "all" ? state.settings.terminalHeaderBackground : terminal?.headerBackground || state.settings.terminalHeaderBackground
-  ) || defaultHeaderBackground(terminal);
+  )) || defaultHeaderBackground(terminal);
   elements.headerAppearanceFontFamily.value = headerBackgroundDraft.fontFamily;
   elements.headerAppearanceFontFamily.style.fontFamily = "";
   if (headerBackgroundDraft.fontFamily) {
@@ -20734,6 +20793,21 @@ function setTerminalAppearanceApplyChoices(open) {
 }
 
 function commitTerminalAppearance(scope) {
+  if (terminalAppearanceEditorContext === "automation") {
+    const profile = automationApi.normalizeAppearance({
+      ...terminalAppearanceDraft,
+      headerBackground: headerBackgroundDraft
+    });
+    if (!profile) {
+      toast("Choose a valid body and header appearance", "warn", 2600);
+      return;
+    }
+    state.automationStudio.appearanceDraft = profile;
+    renderAutomationAppearanceSummary();
+    closeHeaderBackgroundEditor();
+    toast("Appearance automation profile updated", "success", 1800);
+    return;
+  }
   terminalAppearanceScope = scope === "all" ? "all" : "terminal";
   setTerminalAppearanceApplyChoices(false);
   applyHeaderBackgroundEditor();
@@ -21039,8 +21113,10 @@ function openTerminalAppearanceDialog(terminal, tab = "terminal") {
   headerBackgroundCloseTimer = 0;
   headerBackgroundTerminalId = terminal.id;
   headerBackgroundOpen = true;
+  terminalAppearanceEditorContext = "terminal";
   headerBackgroundReturnFocus = terminal.term.textarea || terminal.screen;
   terminalAppearanceScope = "terminal";
+  elements.headerBackgroundApply.textContent = "Apply";
   elements.headerBackgroundSubtitle.textContent = terminal.titleInput.value || "Terminal";
   const bar = terminal.pane?.querySelector(".pane-bar");
   const barHeight = bar ? Math.round(bar.getBoundingClientRect().height) : 0;
@@ -21059,6 +21135,40 @@ function openTerminalAppearanceDialog(terminal, tab = "terminal") {
   refreshIcons(elements.headerBackgroundOverlay);
 }
 
+function openAutomationAppearanceProfileEditor() {
+  if (!headerBackgroundReady) return;
+  const terminal = state.terminals.get(state.activeId) || automationLiveTerminals()[0] || null;
+  const profile = automationApi.normalizeAppearance(state.automationStudio.appearanceDraft)
+    || automationAppearanceProfileSeed(terminal);
+  if (!profile) {
+    toast("Could not create an appearance profile", "error", 2200);
+    return;
+  }
+  window.clearTimeout(headerBackgroundCloseTimer);
+  headerBackgroundCloseTimer = 0;
+  headerBackgroundTerminalId = terminal?.id || null;
+  headerBackgroundOpen = true;
+  headerBackgroundReturnFocus = elements.automationAppearanceEdit;
+  terminalAppearanceEditorContext = "automation";
+  terminalAppearanceScope = "automation";
+  elements.headerBackgroundSubtitle.textContent = terminal
+    ? `Automation profile · previewing on ${terminal.titleInput.value || "Terminal"}`
+    : "Appearance automation profile";
+  elements.headerBackgroundApply.textContent = "Save profile";
+  loadTerminalAppearanceDraft(profile);
+  setTerminalAppearanceApplyChoices(false);
+  setTerminalColorPickerExpanded("background", false);
+  setTerminalColorPickerExpanded("foreground", false);
+  setTerminalAppearanceTab("terminal");
+  elements.automationOverlay.querySelector(".automation-studio").inert = true;
+  elements.headerBackgroundOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.headerBackgroundOverlay.classList.add("is-open");
+    elements.terminalAppearanceTabTerminal.focus();
+  });
+  refreshIcons(elements.headerBackgroundOverlay);
+}
+
 function openTerminalAppearanceEditor(terminal) {
   openTerminalAppearanceDialog(terminal, "terminal");
 }
@@ -21070,11 +21180,14 @@ function openHeaderBackgroundEditor(terminal) {
 function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
   if (!elements.headerBackgroundOverlay || !headerBackgroundOpen) return;
   const returnFocus = headerBackgroundReturnFocus;
+  const editorContext = terminalAppearanceEditorContext;
   const terminal = state.terminals.get(headerBackgroundTerminalId);
   headerBackgroundTerminalId = null;
   headerBackgroundReturnFocus = null;
   headerBackgroundDraft = null;
   terminalAppearanceDraft = null;
+  terminalAppearanceEditorContext = "terminal";
+  terminalAppearanceScope = "terminal";
   setTerminalAppearanceApplyChoices(false);
   headerBackgroundOpen = false;
   // Repaint from the terminal's stored value. That discards an uncommitted
@@ -21082,6 +21195,9 @@ function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
   if (terminal) {
     applyTerminalAppearance(terminal);
     applyTerminalHeaderBackground(terminal);
+  }
+  if (editorContext === "automation") {
+    elements.automationOverlay.querySelector(".automation-studio").inert = false;
   }
   elements.headerBackgroundOverlay.classList.remove("is-open");
   headerBackgroundCloseTimer = window.setTimeout(() => {
@@ -21098,49 +21214,54 @@ function applyHeaderBackgroundEditor() {
     toast("That terminal is gone; appearance not saved", "warn", 2600);
     return;
   }
-  if (terminalAppearanceTab === "header") {
-    const background = cloneHeaderBackground(headerBackgroundDraft);
-    if (!background) {
-      toast("Choose a valid header background", "warn", 2600);
-      return;
+  if (!terminalAppearanceDraft) {
+    closeHeaderBackgroundEditor();
+    toast("Appearance draft is no longer available", "warn", 2600);
+    return;
+  }
+  const profile = automationApi.normalizeAppearance({
+    ...terminalAppearanceDraft,
+    headerBackground: headerBackgroundDraft
+  });
+  if (!profile) {
+    toast("Choose a valid body and header appearance", "warn", 2600);
+    return;
+  }
+  if (terminalAppearanceScope === "all") {
+    state.settings.terminalBackground = profile.background;
+    state.settings.terminalForeground = profile.foreground;
+    state.settings.fontFamily = profile.fontFamily;
+    state.settings.terminalHeaderBackground = cloneHeaderBackground(profile.headerBackground);
+    elements.fontFamily.value = state.settings.fontFamily;
+    for (const candidate of state.terminals.values()) {
+      candidate.terminalBackground = "";
+      candidate.terminalForeground = "";
+      candidate.terminalFontFamily = "";
+      candidate.headerBackground = null;
     }
-    if (terminalAppearanceScope === "all") {
-      state.settings.terminalHeaderBackground = background;
-      for (const candidate of state.terminals.values()) candidate.headerBackground = null;
-      saveSettings();
-      saveSessionSnapshot();
-    } else {
-      terminal.headerBackground = background;
-      saveSessionSnapshot();
-    }
-    for (const candidate of state.terminals.values()) applyTerminalHeaderBackground(candidate);
-  } else if (terminalAppearanceDraft) {
-    if (terminalAppearanceScope === "all") {
-      state.settings.terminalBackground = terminalAppearanceDraft.background;
-      state.settings.terminalForeground = terminalAppearanceDraft.foreground;
-      state.settings.fontFamily = terminalAppearanceDraft.fontFamily;
-      elements.fontFamily.value = state.settings.fontFamily;
-      for (const candidate of state.terminals.values()) {
-        candidate.terminalBackground = "";
-        candidate.terminalForeground = "";
-        candidate.terminalFontFamily = "";
-      }
-      saveSettings();
-      saveSessionSnapshot();
-    } else {
-      terminal.terminalBackground = terminalAppearanceDraft.background;
-      terminal.terminalForeground = terminalAppearanceDraft.foreground;
-      terminal.terminalFontFamily = terminalAppearanceDraft.fontFamily;
-      saveSessionSnapshot();
-    }
-    for (const candidate of state.terminals.values()) applyTerminalAppearance(candidate);
+    saveSettings();
+  } else {
+    terminal.terminalBackground = profile.background;
+    terminal.terminalForeground = profile.foreground;
+    terminal.terminalFontFamily = profile.fontFamily;
+    terminal.headerBackground = cloneHeaderBackground(profile.headerBackground);
+  }
+  saveSessionSnapshot();
+  for (const candidate of state.terminals.values()) {
+    applyTerminalAppearance(candidate);
+    applyTerminalHeaderBackground(candidate);
   }
   closeHeaderBackgroundEditor();
-  toast(terminalAppearanceTab === "header" ? "Terminal header updated" : "Terminal appearance updated", "success", 1800);
+  toast("Terminal appearance updated", "success", 1800);
 }
 
 function resetHeaderBackgroundEditor() {
   const terminal = state.terminals.get(headerBackgroundTerminalId);
+  if (terminalAppearanceEditorContext === "automation") {
+    loadTerminalAppearanceDraft(automationAppearanceProfileSeed(terminal));
+    toast("Appearance profile reset to current defaults", "info", 1800);
+    return;
+  }
   if (!terminal) {
     closeHeaderBackgroundEditor();
     toast("That terminal is gone; appearance not reset", "warn", 2600);
@@ -21332,6 +21453,10 @@ function bindHeaderBackgroundEditor() {
   elements.headerBackgroundClose.addEventListener("click", closeHeaderBackgroundEditor);
   elements.headerBackgroundCancel.addEventListener("click", closeHeaderBackgroundEditor);
   elements.headerBackgroundApply.addEventListener("click", () => {
+      if (terminalAppearanceEditorContext === "automation") {
+        commitTerminalAppearance("automation");
+        return;
+      }
       const open = elements.headerBackgroundApply.getAttribute("aria-expanded") === "true";
       setTerminalAppearanceApplyChoices(!open);
       if (!open) elements.terminalAppearanceApplyTerminal.focus();
@@ -23006,6 +23131,11 @@ function addAutomationHistory(status, title, detail = "", automationId = null) {
 }
 
 function automationScheduleSummary(rule) {
+  if (rule?.type === "appearance") {
+    const matcher = rule.titleMatch || {};
+    const labels = { contains: "contains", equals: "equals", regex: "matches regex" };
+    return `Title ${labels[matcher.type] || "contains"} ${matcher.value || "…"}${matcher.caseSensitive ? " · case sensitive" : ""}`;
+  }
   const trigger = rule?.trigger || {};
   if (trigger.mode === "daily") return `Daily at ${trigger.time}`;
   if (trigger.mode === "weekly") {
@@ -23021,6 +23151,7 @@ function automationScheduleSummary(rule) {
 }
 
 function automationNextRunLabel(rule) {
+  if (rule.type === "appearance") return rule.enabled ? "Watching terminal titles" : "Disabled";
   const snoozedUntil = rule.snoozedUntil ? new Date(rule.snoozedUntil) : null;
   if (snoozedUntil && Number.isFinite(snoozedUntil.getTime()) && snoozedUntil.getTime() > Date.now()) {
     return `Snoozed until ${snoozedUntil.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
@@ -23057,10 +23188,138 @@ function automationLiveTerminals() {
   return userTerminals().filter((terminal) => terminal.status === "live");
 }
 
+// Compiling a title matcher parses and compiles its pattern, and every rule is tested
+// against every terminal, so the compiled form is cached against the rule object.
+const appearanceRuleMatchers = new WeakMap();
+const appearanceRuleProfiles = new WeakMap();
+
+function appearanceRuleMatcher(rule) {
+  if (!appearanceRuleMatchers.has(rule)) {
+    appearanceRuleMatchers.set(rule, automationApi.compileTitleMatcher(rule.titleMatch));
+  }
+  return appearanceRuleMatchers.get(rule);
+}
+
+function appearanceRuleProfile(rule) {
+  if (!rule) return null;
+  if (!appearanceRuleProfiles.has(rule)) {
+    appearanceRuleProfiles.set(rule, automationApi.normalizeAppearance(rule.appearance));
+  }
+  return appearanceRuleProfiles.get(rule);
+}
+
+function matchingAppearanceAutomationRule(terminal, rules = state.automations.rules) {
+  if (!terminal || terminal.transient || state.automations.paused) return null;
+  const title = committedTerminalTitle(terminal);
+  return rules.find((rule) => (
+    rule.enabled
+    && rule.type === "appearance"
+    && appearanceRuleMatcher(rule)?.test(title) === true
+  )) || null;
+}
+
+function applyAppearanceAutomationToTerminal(terminal, rules = state.automations.rules) {
+  if (!terminal || terminal.transient) return { changed: false, rule: null };
+  const rule = matchingAppearanceAutomationRule(terminal, rules);
+  const previousRuleId = terminal.automationAppearanceRuleId || "";
+  const previousAppearance = terminal.automationAppearance || null;
+  const appearance = appearanceRuleProfile(rule);
+  const changed = previousRuleId !== (rule?.id || "") || previousAppearance !== appearance;
+  if (!changed) return { changed: false, rule };
+  terminal.automationAppearanceRuleId = rule?.id || "";
+  terminal.automationAppearance = appearance;
+  applyTerminalAppearance(terminal);
+  applyTerminalHeaderBackground(terminal);
+  return { changed: previousRuleId !== (rule?.id || ""), rule };
+}
+
+function refreshAppearanceAutomations({ recordHistory = false, terminals = userTerminals() } = {}) {
+  const applied = [];
+  for (const terminal of terminals) {
+    const result = applyAppearanceAutomationToTerminal(terminal);
+    if (recordHistory && result.changed && result.rule) applied.push({ rule: result.rule, terminal });
+  }
+  for (const { rule, terminal } of applied) {
+    addAutomationHistory("completed", rule.name, `Applied to ${committedTerminalTitle(terminal) || "Terminal"}`, rule.id);
+  }
+  return applied.length;
+}
+
+function runAppearanceAutomationRule(rule, { manual = false } = {}) {
+  const normalized = automationApi.normalizeRule(rule);
+  if (!normalized || normalized.type !== "appearance") return 0;
+  const matcher = appearanceRuleMatcher(normalized);
+  const appearance = appearanceRuleProfile(normalized);
+  const matches = automationLiveTerminals().filter((terminal) => matcher?.test(committedTerminalTitle(terminal)) === true);
+  for (const terminal of matches) {
+    terminal.automationAppearanceRuleId = normalized.id;
+    terminal.automationAppearance = appearance;
+    applyTerminalAppearance(terminal);
+    applyTerminalHeaderBackground(terminal);
+  }
+  if (manual) {
+    if (matches.length) {
+      addAutomationHistory("completed", normalized.name, `Applied to ${matches.length} matching terminal${matches.length === 1 ? "" : "s"}`, normalized.id);
+      toast(`Applied ${normalized.name} to ${matches.length} terminal${matches.length === 1 ? "" : "s"}`, "success", 2000);
+    } else {
+      addAutomationHistory("failed", normalized.name, "No live terminal titles matched", normalized.id);
+      toast("No live terminal titles matched this appearance rule", "info", 2200);
+    }
+  }
+  return matches.length;
+}
+
 function selectedAutomationType() {
-  return elements.automationType.querySelector("[data-automation-type][aria-checked='true']")?.dataset.automationType === "copilot"
-    ? "copilot"
-    : "command";
+  const selected = elements.automationType.querySelector("[data-automation-type][aria-checked='true']")?.dataset.automationType;
+  return ["copilot", "appearance"].includes(selected) ? selected : "command";
+}
+
+function updateAutomationAppearanceValidation() {
+  if (!elements.automationTitleMatchValue) return true;
+  const appearance = selectedAutomationType() === "appearance";
+  elements.automationTitleMatchValue.required = appearance;
+  const error = appearance
+    ? automationApi.titleMatchValidationError({
+        caseSensitive: elements.automationTitleMatchCase.value === "sensitive",
+        type: elements.automationTitleMatchType.value,
+        value: elements.automationTitleMatchValue.value
+      })
+    : "";
+  elements.automationTitleMatchValue.setCustomValidity(error);
+  return !error;
+}
+
+function renderAutomationAppearanceSummary() {
+  if (!elements.automationAppearanceSummary) return;
+  const profile = automationApi.normalizeAppearance(state.automationStudio.appearanceDraft);
+  if (!profile) {
+    elements.automationAppearanceSummary.textContent = "Choose terminal body and header styling.";
+    elements.automationAppearanceSwatch.style.background = "";
+    elements.automationAppearanceSwatch.style.borderColor = "";
+    return;
+  }
+  elements.automationAppearanceSummary.textContent = `${profile.fontFamily} · body ${profile.background} / ${profile.foreground} · ${profile.headerBackground.mode} header`;
+  elements.automationAppearanceSwatch.style.background = headerBackgroundCss(profile.headerBackground);
+  elements.automationAppearanceSwatch.style.borderColor = profile.foreground;
+}
+
+function updateAutomationTypeFields() {
+  const appearance = selectedAutomationType() === "appearance";
+  elements.automationAppearanceBlock.hidden = !appearance;
+  elements.automationScheduleBlock.hidden = appearance;
+  elements.automationScheduleBlock.disabled = appearance;
+  elements.automationActionsBlock.hidden = appearance;
+  elements.automationActionsBlock.disabled = appearance;
+  elements.automationRunAsField.hidden = appearance;
+  elements.automationRunAs.disabled = appearance;
+  elements.automationRunNow.querySelector("span").textContent = appearance ? "Apply now" : "Run now";
+  if (appearance && !automationApi.normalizeAppearance(state.automationStudio.appearanceDraft)) {
+    state.automationStudio.appearanceDraft = automationAppearanceProfileSeed(
+      state.terminals.get(state.activeId) || automationLiveTerminals()[0] || null
+    );
+  }
+  updateAutomationAppearanceValidation();
+  renderAutomationAppearanceSummary();
 }
 
 function readAutomationActionRows() {
@@ -23390,11 +23649,12 @@ function setAutomationScheduleMode(mode) {
 }
 
 function setAutomationType(type, { rerender = true } = {}) {
-  const normalized = type === "copilot" ? "copilot" : "command";
+  const normalized = ["copilot", "appearance"].includes(type) ? type : "command";
   for (const button of elements.automationType.querySelectorAll("[data-automation-type]")) {
     button.setAttribute("aria-checked", String(button.dataset.automationType === normalized));
   }
-  if (rerender) renderAutomationActionRows();
+  updateAutomationTypeFields();
+  if (rerender && normalized !== "appearance") renderAutomationActionRows();
 }
 
 function readAutomationEditorRule(existing = null) {
@@ -23405,7 +23665,8 @@ function readAutomationEditorRule(existing = null) {
     .map((button) => Number(button.dataset.day));
   const actions = readAutomationActionRows();
   return automationApi.normalizeRule({
-    actions,
+    actions: selectedAutomationType() === "appearance" ? [] : actions,
+    appearance: state.automationStudio.appearanceDraft,
     createdAt: existing?.createdAt || new Date().toISOString(),
     enabled: existing?.enabled === true,
     id: existing?.id || createId(),
@@ -23422,6 +23683,11 @@ function readAutomationEditorRule(existing = null) {
       time: elements.automationTime.value,
       type: "schedule"
     },
+    titleMatch: {
+      caseSensitive: elements.automationTitleMatchCase.value === "sensitive",
+      type: elements.automationTitleMatchType.value,
+      value: elements.automationTitleMatchValue.value
+    },
     type: selectedAutomationType(),
     updatedAt: new Date().toISOString()
   });
@@ -23430,6 +23696,12 @@ function readAutomationEditorRule(existing = null) {
 function updateAutomationPreview() {
   if (!elements.automationPreview) return;
   const rule = readAutomationEditorRule(state.automations.rules.find((item) => item.id === state.automationStudio.editingId));
+  if (selectedAutomationType() === "appearance") {
+    elements.automationPreview.textContent = rule
+      ? `${automationScheduleSummary(rule)} · first matching enabled rule wins`
+      : "Add a valid title condition and appearance profile";
+    return;
+  }
   const actionCount = elements.automationActionList.querySelectorAll(".automation-action-row").length;
   elements.automationPreview.textContent = rule
     ? `${automationScheduleSummary(rule)} · ${rule.type === "copilot" ? "Copilot" : "Command based"} · ${actionCount} visual step${actionCount === 1 ? "" : "s"}`
@@ -23460,15 +23732,23 @@ function openAutomationEditor(id = null) {
     button.setAttribute("aria-pressed", String(selectedDays.has(Number(button.dataset.day))));
   }
   elements.automationActionList.textContent = "";
+  state.automationStudio.appearanceDraft = automationApi.normalizeAppearance(rule?.appearance)
+    || automationAppearanceProfileSeed(state.terminals.get(state.activeId) || automationLiveTerminals()[0] || null);
+  elements.automationTitleMatchType.value = rule?.titleMatch?.type || "contains";
+  elements.automationTitleMatchCase.value = rule?.titleMatch?.caseSensitive ? "sensitive" : "insensitive";
+  elements.automationTitleMatchValue.value = rule?.titleMatch?.value || "";
   setAutomationType(rule?.type || "command", { rerender: false });
-  renderAutomationActionRows(rule?.actions || [{}]);
+  if (rule?.type !== "appearance") renderAutomationActionRows(rule?.actions || [{}]);
   setAutomationScheduleMode(rule?.trigger.mode || "interval");
+  updateAutomationTypeFields();
+  updateAutomationPreview();
   renderAutomationRuleList();
   elements.automationName.focus();
 }
 
 function closeAutomationEditor() {
   state.automationStudio.editingId = null;
+  state.automationStudio.appearanceDraft = null;
   elements.automationEditor.hidden = true;
   elements.automationWelcome.hidden = false;
   renderAutomationRuleList();
@@ -23480,7 +23760,13 @@ function saveAutomationEditor(event) {
   const current = currentIndex >= 0 ? state.automations.rules[currentIndex] : null;
   const rule = readAutomationEditorRule(current);
   if (!rule) {
-    toast("Add a name, destination, and command", "info", 2200);
+    toast(
+      selectedAutomationType() === "appearance"
+        ? "Add a name, valid title condition, and appearance profile"
+        : "Add a name, destination, and command",
+      "info",
+      2200
+    );
     return false;
   }
   rule.enabled = true;
@@ -23488,6 +23774,7 @@ function saveAutomationEditor(event) {
   else state.automations.rules.push(rule);
   state.automationStudio.editingId = rule.id;
   saveAutomationStore();
+  refreshAppearanceAutomations({ recordHistory: true });
   renderAutomationStudio();
   toast("Automation saved and enabled", "success", 1800);
   return true;
@@ -23499,6 +23786,7 @@ function deleteAutomationEditor() {
   if (index < 0) return;
   const [removed] = state.automations.rules.splice(index, 1);
   saveAutomationStore();
+  refreshAppearanceAutomations();
   closeAutomationEditor();
   toast(`Deleted ${removed.name}`, "info", 1600);
 }
@@ -23509,6 +23797,7 @@ function toggleAutomationRule(id) {
   rule.enabled = !rule.enabled;
   rule.updatedAt = new Date().toISOString();
   saveAutomationStore();
+  refreshAppearanceAutomations({ recordHistory: true });
   renderAutomationRuleList();
 }
 
@@ -23541,6 +23830,7 @@ function deleteAutomationRule(id) {
   const [removed] = state.automations.rules.splice(index, 1);
   if (state.automationStudio.editingId === id) closeAutomationEditor();
   saveAutomationStore();
+  refreshAppearanceAutomations();
   renderAutomationRuleList();
   toast(`Deleted ${removed.name}`, "info", 1600);
   return true;
@@ -23549,16 +23839,21 @@ function deleteAutomationRule(id) {
 function showAutomationRuleContextMenu(rule, event) {
   event.preventDefault();
   event.stopPropagation();
-  renderContextMenu([
+  const items = [
     {
       icon: rule.enabled ? "pause" : "play",
       label: rule.enabled ? "Pause automation" : "Unpause automation",
       run: () => toggleAutomationRule(rule.id)
     },
-    { icon: "alarm-clock", label: "Snooze automation...", run: () => snoozeAutomationRule(rule.id) },
+  ];
+  if (rule.type !== "appearance") {
+    items.push({ icon: "alarm-clock", label: "Snooze automation...", run: () => snoozeAutomationRule(rule.id) });
+  }
+  items.push(
     { separator: true },
     { danger: true, icon: "trash-2", label: "Delete automation", run: () => deleteAutomationRule(rule.id) }
-  ]);
+  );
+  renderContextMenu(items);
   showBuiltContextMenu(event.clientX, event.clientY, { returnFocus: event.currentTarget });
 }
 
@@ -23581,7 +23876,11 @@ function renderAutomationRuleList() {
     name.textContent = rule.name;
     const type = document.createElement("span");
     type.className = "automation-rule-type";
-    type.textContent = rule.type === "copilot" ? "Copilot automation" : "Command based automation";
+    type.textContent = rule.type === "copilot"
+      ? "Copilot automation"
+      : rule.type === "appearance"
+        ? "Appearance automation"
+        : "Command based automation";
     const summary = document.createElement("span");
     summary.textContent = `${automationScheduleSummary(rule)} · ${automationNextRunLabel(rule)}`;
     const lastOutcome = automationLastOutcome(rule);
@@ -23741,6 +24040,7 @@ function bindAutomationStudio() {
   elements.automationPause.addEventListener("click", () => {
     state.automations.paused = !state.automations.paused;
     saveAutomationStore();
+    refreshAppearanceAutomations({ recordHistory: !state.automations.paused });
     renderAutomationStudio();
   });
   for (const tab of elements.automationOverlay.querySelectorAll("[data-automation-view]")) {
@@ -23752,6 +24052,16 @@ function bindAutomationStudio() {
   for (const button of elements.automationType.querySelectorAll("[data-automation-type]")) {
     button.addEventListener("click", () => setAutomationType(button.dataset.automationType));
   }
+  elements.automationAppearanceEdit.addEventListener("click", openAutomationAppearanceProfileEditor);
+  elements.automationTitleMatchType.addEventListener("change", () => {
+    updateAutomationAppearanceValidation();
+    updateAutomationPreview();
+  });
+  elements.automationTitleMatchCase.addEventListener("change", updateAutomationPreview);
+  elements.automationTitleMatchValue.addEventListener("input", () => {
+    updateAutomationAppearanceValidation();
+    updateAutomationPreview();
+  });
   for (const button of elements.automationDays.querySelectorAll("[data-day]")) {
     button.addEventListener("click", () => {
       button.setAttribute("aria-pressed", String(button.getAttribute("aria-pressed") !== "true"));
@@ -23776,6 +24086,7 @@ function bindAutomationStudio() {
   elements.automationNew.addEventListener("click", () => openAutomationEditor());
   elements.automationWelcomeNew.addEventListener("click", () => openAutomationEditor());
   elements.automationActionAdd.addEventListener("click", () => {
+    if (selectedAutomationType() === "appearance") return;
     const actions = readAutomationActionRows();
     actions.push({
       command: "",
@@ -23844,6 +24155,7 @@ function bindAutomationStudio() {
   window.addEventListener("storage", (event) => {
     if (event.key !== AUTOMATIONS_STORAGE_KEY) return;
     state.automations = loadAutomationStore(automationHistoryLimit());
+    refreshAppearanceAutomations();
     renderAutomationStudio();
   });
   renderAutomationStudio();
@@ -24386,6 +24698,7 @@ function advanceAutomationRun(run) {
 function runAutomationRule(rule, options = {}) {
   const normalized = automationApi.normalizeRule(rule);
   if (!normalized) return 0;
+  if (normalized.type === "appearance") return runAppearanceAutomationRule(normalized, options);
   if (normalized.type === "copilot" && copilotCliRecoveryNeeded()) {
     const reason = `GitHub Copilot CLI is not ready. ${copilotSetupPrompt().action}.`;
     addAutomationHistory("failed", normalized.name, reason, normalized.id);

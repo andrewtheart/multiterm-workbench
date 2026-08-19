@@ -166,6 +166,48 @@ test.describe("Terminal appearance editor", () => {
     await expect.poll(() => page.evaluate((id) => state.terminals.get(id)?.term.options.theme.foreground, initial.firstId)).toBe("#DDEEFF");
   });
 
+  test("commits body and header changes together after switching tabs", async ({ page }) => {
+    await reset(page);
+    await openAppearance(page);
+    await page.locator("#terminalAppearanceBackgroundHex").fill("#314159");
+    await page.locator("#terminalAppearanceForegroundHex").fill("#F1E9D2");
+    await page.locator("#terminalAppearanceFontFamily").selectOption("Source Code Pro");
+    await page.locator("#terminalAppearanceTabHeader").click();
+    await page.locator('[data-header-background-mode="solid"]').click();
+    await page.locator('[data-header-solid-color="#7CA8F6"]').click();
+    await page.locator("#headerAppearanceFontFamily").selectOption("IBM Plex Mono");
+    await page.locator("#headerAppearanceFontSize").fill("17");
+    await page.locator("#headerBackgroundApply").click();
+    await page.locator("#terminalAppearanceApplyTerminal").click();
+
+    const applied = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      return {
+        body: {
+          background: terminal.terminalBackground,
+          fontFamily: terminal.terminalFontFamily,
+          foreground: terminal.terminalForeground
+        },
+        header: terminal.headerBackground,
+        rendered: {
+          background: terminal.term.options.theme.background,
+          fontFamily: terminal.term.options.fontFamily,
+          headerFont: terminal.pane.querySelector(".pane-bar").style.getPropertyValue("--pane-title-font-family"),
+          headerSize: terminal.pane.querySelector(".pane-bar").style.getPropertyValue("--pane-title-font-size")
+        }
+      };
+    });
+    expect(applied.body).toEqual({
+      background: "#314159",
+      fontFamily: "Source Code Pro",
+      foreground: "#F1E9D2"
+    });
+    expect(applied.header).toMatchObject({ color: "#7CA8F6", fontFamily: "IBM Plex Mono", fontSize: 17, mode: "solid" });
+    expect(applied.rendered).toMatchObject({ background: "#314159", headerSize: "17px" });
+    expect(applied.rendered.fontFamily).toContain("Source Code Pro");
+    expect(applied.rendered.headerFont).toContain("IBM Plex Mono");
+  });
+
   test("applies global defaults and reuses the same advanced header controls", async ({ page }) => {
     await reset(page);
     await openAppearance(page);

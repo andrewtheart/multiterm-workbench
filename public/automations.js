@@ -17,8 +17,17 @@
   const DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
   const HANDOFF_MARKER = /^\s*\*\*HAND OFF\*\*(?:\s+(.+?))?\s*$/i;
   const COPILOT_FOOTER = /(?:^\s*|[·•]\s*)\/\s*commands\s*[·•]\s*\?\s*help\b/i;
+  const FONT_FAMILIES = new Set([
+    "Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono", "Fira Code",
+    "Source Code Pro", "IBM Plex Mono", "Roboto Mono", "Ubuntu Mono", "Noto Sans Mono",
+    "DejaVu Sans Mono", "Liberation Mono", "Hack", "Inconsolata", "Menlo", "Monaco",
+    "SFMono-Regular", "Lucida Console", "Droid Sans Mono", "Courier New"
+  ]);
+  const HEADER_GRADIENT_TYPES = new Set(["linear", "radial", "conic"]);
+  const HEADER_GRADIENT_SHAPES = new Set(["ellipse", "circle"]);
   const MAX_COMMAND_LENGTH = 8192;
   const MAX_OUTPUT_MATCH_LENGTH = 4096;
+  const MAX_TITLE_MATCH_LENGTH = 512;
 
   function text(value, limit = 8192) {
     return typeof value === "string" ? value.trim().slice(0, limit) : "";
@@ -67,6 +76,211 @@
     };
   }
 
+  function color(value) {
+    const candidate = String(value || "").trim().toUpperCase();
+    return /^#[0-9A-F]{6}$/.test(candidate) ? candidate : "";
+  }
+
+  function titleRegexStructure(pattern) {
+    const source = String(pattern || "");
+    let index = 0;
+
+    function quantifier() {
+      const start = index;
+      const character = source[index];
+      if (character === "*" || character === "+" || character === "?") {
+        index += 1;
+        if (source[index] === "?") index += 1;
+        return {
+          optional: character === "*" || character === "?",
+          quantified: true,
+          openEnded: character === "*" || character === "+"
+        };
+      }
+      if (character !== "{") return { optional: false, quantified: false, openEnded: false };
+      const match = /^\{(\d+)(?:,(\d*))?\}(\?)?/.exec(source.slice(index));
+      if (!match) return { optional: false, quantified: false, openEnded: false };
+      index += match[0].length;
+      return {
+        optional: Number(match[1]) === 0,
+        quantified: true,
+        openEnded: match[2] === "" || (match[2] !== undefined && Number(match[2]) > Number(match[1]))
+      };
+    }
+
+    function expression(endCharacter = "") {
+      const alternatives = [[]];
+      while (index < source.length && source[index] !== endCharacter) {
+        if (source[index] === "|") {
+          alternatives.push([]);
+          index += 1;
+          continue;
+        }
+        if (source[index] === "^") {
+          index += 1;
+          continue;
+        }
+        if (source[index] === "$" && source[index - 1] !== "\\") {
+          index += 1;
+          continue;
+        }
+
+        let group = null;
+        if (source[index] === "(") {
+          index += 1;
+          if (source.startsWith("?:", index)) index += 2;
+          else if (source.startsWith("?<", index)) {
+            const nameEnd = source.indexOf(">", index + 2);
+            if (nameEnd < 0) return null;
+            index = nameEnd + 1;
+          }
+          group = expression(")");
+          if (!group || source[index] !== ")") return null;
+          index += 1;
+        } else if (source[index] === "[") {
+          index += 1;
+          if (source[index] === "^") index += 1;
+          while (index < source.length && source[index] !== "]") {
+            if (source[index] === "\\") index += 1;
+            index += 1;
+          }
+          if (source[index] !== "]") return null;
+          index += 1;
+        } else if (source[index] === "\\") {
+          index += Math.min(2, source.length - index);
+        } else {
+          index += 1;
+        }
+
+        const repeat = quantifier();
+        if (group && repeat.quantified && (group.hasAlternation || group.hasQuantifier)) return null;
+        const openEnded = repeat.openEnded || (!repeat.quantified && group?.hasOpenEnded === true);
+        alternatives.at(-1).push({
+          mandatory: !repeat.optional && !openEnded,
+          openEnded,
+          quantified: repeat.quantified || Boolean(group?.hasQuantifier)
+        });
+      }
+
+      for (const sequence of alternatives) {
+        let openEndedWithoutSeparator = false;
+        for (const atom of sequence) {
+          if (atom.openEnded && openEndedWithoutSeparator) return null;
+          if (atom.openEnded) openEndedWithoutSeparator = true;
+          else if (atom.mandatory) openEndedWithoutSeparator = false;
+        }
+      }
+      return {
+        hasAlternation: alternatives.length > 1,
+        hasOpenEnded: alternatives.some((sequence) => sequence.some((atom) => atom.openEnded)),
+        hasQuantifier: alternatives.some((sequence) => sequence.some((atom) => atom.quantified))
+      };
+    }
+
+    const structure = expression();
+    return structure && index === source.length ? structure : null;
+  }
+
+  function titleMatchValidationError(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const pattern = typeof source.value === "string" ? source.value.slice(0, MAX_TITLE_MATCH_LENGTH) : "";
+    if (!pattern) return "Enter title text or a regular expression.";
+    if (source.type !== "regex") return "";
+    try {
+      new RegExp(pattern, source.caseSensitive === true ? "" : "i");
+    } catch {
+      return "Enter a valid regular expression.";
+    }
+    if (/\\(?:[1-9]\d*|k<)/.test(pattern)) return "Use a regular expression without backreferences.";
+    if (/\(\?(?:[=!]|<[=!])/.test(pattern)) return "Use a regular expression without lookarounds.";
+    if (!titleRegexStructure(pattern)) {
+      return "Use a regular expression without ambiguous repetition: no nested quantifiers such as (a+)+, no adjacent open-ended quantifiers such as .*.*, and no quantifier on an alternation group such as (a|b)*.";
+    }
+    return "";
+  }
+
+  function normalizeTitleMatch(value) {
+    const source = value && typeof value === "object" ? value : {};
+    const pattern = typeof source.value === "string" ? source.value.slice(0, MAX_TITLE_MATCH_LENGTH) : "";
+    const type = ["equals", "regex"].includes(source.type) ? source.type : "contains";
+    if (titleMatchValidationError({ ...source, type, value: pattern })) return null;
+    return { caseSensitive: source.caseSensitive === true, type, value: pattern };
+  }
+
+  // Validating a matcher parses and compiles its pattern, so callers that test many
+  // titles against the same rule should compile once and reuse the result.
+  function compileTitleMatcher(value) {
+    const matcher = normalizeTitleMatch(value);
+    if (!matcher) return null;
+    const regex = matcher.type === "regex"
+      ? new RegExp(matcher.value, matcher.caseSensitive ? "" : "i")
+      : null;
+    const needle = matcher.caseSensitive ? matcher.value : matcher.value.toLocaleLowerCase();
+    return {
+      ...matcher,
+      test(title) {
+        const candidate = String(title || "");
+        if (regex) return regex.test(candidate);
+        const left = matcher.caseSensitive ? candidate : candidate.toLocaleLowerCase();
+        return matcher.type === "equals" ? left === needle : left.includes(needle);
+      }
+    };
+  }
+
+  function titleMatches(value, title) {
+    return compileTitleMatcher(value)?.test(title) === true;
+  }
+
+  function normalizeAppearanceHeader(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const mode = value.mode === "solid" ? "solid" : "gradient";
+    const stops = (Array.isArray(value.stops) ? value.stops : [])
+      .map((stop) => {
+        if (!stop || typeof stop !== "object") return null;
+        const stopColor = color(stop.color);
+        if (!stopColor) return null;
+        const position = Number(stop.position);
+        const opacity = Number(stop.opacity);
+        return {
+          color: stopColor,
+          opacity: Number.isFinite(opacity) ? Math.min(100, Math.max(0, Math.round(opacity))) : 100,
+          position: Number.isFinite(position) ? Math.min(100, Math.max(0, Math.round(position))) : 0
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 6)
+      .sort((left, right) => left.position - right.position);
+    const solidColor = color(value.color) || stops[0]?.color || "";
+    if (mode === "solid" && !solidColor) return null;
+    if (mode === "gradient" && stops.length < 2) return null;
+    const rawAngle = Number(value.angle);
+    const rawCenterX = Number(value.centerX);
+    const rawCenterY = Number(value.centerY);
+    const rawFontSize = Number(value.fontSize);
+    return {
+      angle: Number.isFinite(rawAngle) ? ((Math.round(rawAngle) % 360) + 360) % 360 : 135,
+      centerX: Number.isFinite(rawCenterX) ? Math.min(100, Math.max(0, Math.round(rawCenterX))) : 50,
+      centerY: Number.isFinite(rawCenterY) ? Math.min(100, Math.max(0, Math.round(rawCenterY))) : 50,
+      color: solidColor,
+      fontFamily: FONT_FAMILIES.has(value.fontFamily) ? value.fontFamily : "",
+      fontSize: Number.isFinite(rawFontSize) && rawFontSize > 0 ? Math.min(20, Math.max(9, Math.round(rawFontSize))) : 0,
+      mode,
+      shape: HEADER_GRADIENT_SHAPES.has(value.shape) ? value.shape : "ellipse",
+      stops,
+      type: HEADER_GRADIENT_TYPES.has(value.type) ? value.type : "linear"
+    };
+  }
+
+  function normalizeAppearance(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const background = color(value.background);
+    const foreground = color(value.foreground);
+    const fontFamily = FONT_FAMILIES.has(value.fontFamily) ? value.fontFamily : "";
+    const headerBackground = normalizeAppearanceHeader(value.headerBackground);
+    if (!background || !foreground || !fontFamily || !headerBackground) return null;
+    return { background, foreground, fontFamily, headerBackground };
+  }
+
   function normalizeAction(value, index = 0, previousIds = []) {
     const source = value && typeof value === "object" ? value : {};
     const command = typeof source.command === "string" ? source.command.trim() : "";
@@ -107,15 +321,19 @@
 
   function normalizeRule(value, index = 0) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const type = value.type === "copilot" ? "copilot" : value.type === "appearance" ? "appearance" : "command";
+    const appearance = type === "appearance" ? normalizeAppearance(value.appearance) : null;
+    const titleMatch = type === "appearance" ? normalizeTitleMatch(value.titleMatch) : null;
     const actions = [];
     for (const sourceAction of (Array.isArray(value.actions) ? value.actions : [])) {
       const action = normalizeAction(sourceAction, actions.length, actions.map((item) => item.id));
       if (action) actions.push(action);
     }
-    if (!actions.length) return null;
+    if (type === "appearance" ? !appearance || !titleMatch : !actions.length) return null;
     const now = new Date().toISOString();
     return {
-      actions,
+      actions: type === "appearance" ? [] : actions,
+      appearance,
       createdAt: text(value.createdAt, 64) || now,
       enabled: value.enabled === true,
       id: identifier(value.id) || `automation-${index + 1}`,
@@ -125,7 +343,8 @@
       runAs: text(value.runAs, 320),
       snoozedUntil: text(value.snoozedUntil, 64) || null,
       trigger: normalizeTrigger(value.trigger),
-      type: value.type === "copilot" ? "copilot" : "command",
+      titleMatch,
+      type,
       updatedAt: text(value.updatedAt, 64) || now
     };
   }
@@ -200,7 +419,7 @@
 
   function nextScheduledAt(rule, from = new Date()) {
     const normalized = normalizeRule(rule);
-    if (!normalized) return null;
+    if (!normalized || normalized.type === "appearance") return null;
     const trigger = normalized.trigger;
     const start = from instanceof Date ? new Date(from.getTime()) : new Date(from);
     if (!Number.isFinite(start.getTime())) return null;
@@ -228,7 +447,7 @@
 
   function scheduleIsDue(rule, now = new Date()) {
     const normalized = normalizeRule(rule);
-    if (!normalized?.enabled) return false;
+    if (!normalized?.enabled || normalized.type === "appearance") return false;
     const last = normalized.lastRunAt ? new Date(normalized.lastRunAt) : new Date(normalized.createdAt);
     if (!Number.isFinite(last.getTime())) return false;
     const next = nextScheduledAt({ ...normalized, lastRunAt: null, createdAt: last.toISOString() }, new Date(last.getTime() + 1));
@@ -276,14 +495,18 @@
 
   return Object.freeze({
     DAYS,
+    compileTitleMatcher,
     extractLatestHandoff,
     nextScheduledAt,
     normalizeAction,
+    normalizeAppearance,
     normalizeRule,
     normalizePendingStage,
     normalizeStore,
     normalizeTrigger,
     scheduleIsDue,
-    terminalName
+    terminalName,
+    titleMatchValidationError,
+    titleMatches
   });
 }));

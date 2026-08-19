@@ -145,6 +145,27 @@ test.describe("WSL tmux session attachment", () => {
     await expect(page.locator("#tmuxAttachOverlay")).toBeHidden();
   });
 
+  test("an installed bridge without tmux discovery fails immediately and intentionally", async () => {
+    const result = await page.evaluate(async () => {
+      requestBridge = window.__originalRequestBridge;
+      elements.tmuxAttachOverlay.hidden = false;
+      const refresh = refreshTmuxSessions();
+      await Promise.resolve();
+      handleBridgeMessage({ type: "error", message: "Unsupported message type: listTmux" });
+      await refresh;
+      return {
+        request: window.__tmuxMessages.find((message) => message.type === "listTmux"),
+        status: elements.tmuxAttachStatus.textContent,
+        toast: elements.toastHost.textContent
+      };
+    });
+
+    expect(result.request).toMatchObject({ type: "listTmux", requestId: expect.any(String) });
+    expect(result.status).toContain("installed browser bridge does not support it");
+    expect(result.status).not.toContain("Unsupported message type");
+    expect(result.toast).not.toContain("Unsupported message type");
+  });
+
   test("invalid selector candidates are ignored", async () => {
     const result = await page.evaluate(() => ({
       missing: attachTmuxSession(null),

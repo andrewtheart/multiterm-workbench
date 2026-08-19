@@ -2116,7 +2116,7 @@
           <i data-lucide="workflow" aria-hidden="true"></i>
           <div>
             <h2 id="automationsTitle">Automations</h2>
-            <p id="automationsSubtitle">Scheduled command and Copilot workflows.</p>
+            <p id="automationsSubtitle">Scheduled workflows and title-based terminal appearance.</p>
           </div>
           <button id="automationsPause" class="automation-pause" type="button" aria-pressed="false">
             <i data-lucide="pause"></i><span>Pause</span>
@@ -2125,7 +2125,7 @@
         </header>
 
         <nav class="automation-tabs" role="tablist" aria-label="Automation views">
-          <button type="button" role="tab" data-automation-view="schedules" aria-selected="true"><i data-lucide="calendar-clock"></i><span>Schedules</span></button>
+          <button type="button" role="tab" data-automation-view="schedules" aria-selected="true"><i data-lucide="workflow"></i><span>Rules</span></button>
           <button type="button" role="tab" data-automation-view="routes" aria-selected="false"><i data-lucide="route"></i><span>Handoff routes</span></button>
           <button type="button" role="tab" data-automation-view="activity" aria-selected="false"><i data-lucide="history"></i><span>Run History</span></button>
         </nav>
@@ -2133,11 +2133,11 @@
         <section id="automationSchedulesView" class="automation-view is-active" data-automation-panel="schedules" role="tabpanel">
           <aside class="automation-rule-rail">
             <div class="automation-rule-tools">
-              <label class="automation-search"><i data-lucide="search"></i><input id="automationSearch" type="search" placeholder="Filter schedules" aria-label="Filter schedules"></label>
+              <label class="automation-search"><i data-lucide="search"></i><input id="automationSearch" type="search" placeholder="Filter automations" aria-label="Filter automations"></label>
               <button id="automationNew" class="primary-action" type="button"><i data-lucide="plus"></i><span>New</span></button>
             </div>
             <div id="automationRuleList" class="automation-rule-list"></div>
-            <p id="automationRuleEmpty" class="artifact-empty">No scheduled automations.</p>
+            <p id="automationRuleEmpty" class="artifact-empty">No automations.</p>
           </aside>
 
           <form id="automationEditor" class="automation-editor" hidden>
@@ -2145,16 +2145,32 @@
               <div><span class="automation-eyebrow">Schedule</span><h3 id="automationEditorTitle">New automation</h3></div>
               <button id="automationDelete" class="icon-button automation-delete" type="button" title="Delete automation" aria-label="Delete automation"><i data-lucide="trash-2"></i></button>
             </div>
-            <label class="automation-field automation-name-field"><span>Name</span><input id="automationName" type="text" maxlength="160" autocomplete="off" required></label>
             <fieldset class="automation-kind-block">
               <legend>Automation type</legend>
               <div id="automationType" class="automation-type-options" role="radiogroup" aria-label="Automation type">
                 <button type="button" role="radio" data-automation-type="command" aria-checked="true"><i data-lucide="terminal-square"></i><span><strong>Command based automation</strong><small>Shell commands, PowerShell, or script files</small></span></button>
                 <button type="button" role="radio" data-automation-type="copilot" aria-checked="false"><i data-lucide="sparkles"></i><span><strong>Copilot automation</strong><small>Run a scheduled prompt in Copilot CLI</small></span></button>
+                <button type="button" role="radio" data-automation-type="appearance" aria-checked="false"><i data-lucide="palette"></i><span><strong>Appearance automation</strong><small>Style terminals when their titles match</small></span></button>
               </div>
             </fieldset>
+            <label class="automation-field automation-name-field"><span>Name</span><input id="automationName" type="text" maxlength="160" autocomplete="off" required></label>
 
-            <fieldset class="automation-block">
+            <fieldset id="automationAppearanceBlock" class="automation-block automation-appearance-block" hidden>
+              <legend>If terminal title</legend>
+              <div class="automation-appearance-match">
+                <label><span>Match type</span><select id="automationTitleMatchType"><option value="contains">Contains</option><option value="equals">Equals</option><option value="regex">Regular expression</option></select></label>
+                <label><span>Letter case</span><select id="automationTitleMatchCase"><option value="insensitive">Insensitive</option><option value="sensitive">Sensitive</option></select></label>
+                <label class="automation-appearance-pattern"><span>Text or pattern</span><input id="automationTitleMatchValue" type="text" maxlength="512" spellcheck="false" autocomplete="off" placeholder="e.g. Production or ^api-\\d+$"></label>
+              </div>
+              <div class="automation-appearance-profile">
+                <span id="automationAppearanceSwatch" class="automation-appearance-swatch" aria-hidden="true"></span>
+                <div><strong>Appearance profile</strong><small id="automationAppearanceSummary">Choose terminal body and header styling.</small></div>
+                <button id="automationAppearanceEdit" class="secondary-action" type="button"><i data-lucide="paintbrush"></i><span>Edit appearance…</span></button>
+              </div>
+              <p class="automation-appearance-priority">The first enabled appearance rule in this list whose title condition matches supplies the terminal appearance.</p>
+            </fieldset>
+
+            <fieldset id="automationScheduleBlock" class="automation-block">
               <legend>When</legend>
               <div class="automation-segments" role="group" aria-label="Schedule cadence">
                 <button type="button" data-schedule-mode="interval" aria-pressed="true">Interval</button>
@@ -2175,12 +2191,12 @@
               <label class="automation-check"><input id="automationCatchUp" type="checkbox"><span>Run once after sleep or reconnect</span></label>
             </fieldset>
 
-            <fieldset class="automation-block">
+            <fieldset id="automationActionsBlock" class="automation-block">
               <legend>Then</legend>
               <div id="automationActionList" class="automation-action-list" aria-label="Visual automation workflow"></div>
               <button id="automationActionAdd" class="secondary-action automation-action-add" type="button"><i data-lucide="plus"></i><span>Add another action</span></button>
             </fieldset>
-            <label class="automation-field automation-account-field"><span>Run as user</span><input id="automationRunAs" type="text" maxlength="320" autocomplete="username" spellcheck="false"><small id="automationRunAsHint">Defaults to the current user.</small></label>
+            <label id="automationRunAsField" class="automation-field automation-account-field"><span>Run as user</span><input id="automationRunAs" type="text" maxlength="320" autocomplete="username" spellcheck="false"><small id="automationRunAsHint">Defaults to the current user.</small></label>
 
             <div class="automation-preview"><i data-lucide="sparkles"></i><span id="automationPreview">Every 60 minutes</span></div>
             <footer class="automation-editor-actions">
@@ -2191,7 +2207,7 @@
           </form>
 
           <div id="automationWelcome" class="automation-welcome">
-            <i data-lucide="calendar-clock"></i><h3>Schedule terminal work</h3><p>Choose a schedule to edit or create a new one.</p>
+            <i data-lucide="workflow"></i><h3>Automate terminal work</h3><p>Choose an automation to edit or create a new one.</p>
             <button id="automationWelcomeNew" class="primary-action" type="button"><i data-lucide="plus"></i><span>New automation</span></button>
           </div>
         </section>

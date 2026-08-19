@@ -4204,6 +4204,7 @@ body.header-hidden .status-hint kbd,
 }
 
 .worktree-review-diff {
+  background: var(--surface);
   max-height: 62vh;
   overflow: auto;
 }
@@ -4211,10 +4212,11 @@ body.header-hidden .status-hint kbd,
 /* diff2html ships a light palette; these keep it legible on the dark surface. */
 .worktree-review-diff .d2h-wrapper,
 .worktree-review-diff .d2h-file-wrapper,
-.worktree-review-diff .d2h-file-header,
 .worktree-review-diff .d2h-code-line,
-.worktree-review-diff .d2h-code-side-line {
-  background: transparent;
+.worktree-review-diff .d2h-code-side-line,
+.worktree-review-diff .d2h-code-side-emptyplaceholder,
+.worktree-review-diff .d2h-emptyplaceholder {
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -4239,11 +4241,11 @@ body.header-hidden .status-hint kbd,
 }
 
 .worktree-review-diff .d2h-del {
-  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  background: color-mix(in srgb, var(--danger) 18%, var(--surface));
 }
 
 .worktree-review-diff .d2h-ins {
-  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface));
 }
 
 .worktree-review-diff .d2h-info {
@@ -8224,7 +8226,7 @@ button.shortcut-binding.is-capturing {
 .automation-type-options {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .automation-type-options > button {
@@ -8266,7 +8268,20 @@ button.shortcut-binding.is-capturing {
   padding: 13px;
 }
 
+.automation-block[hidden] { display: none; }
+.automation-field[hidden] { display: none; }
 .automation-block legend { color: var(--text); font-size: 11px; font-weight: 700; padding: 0 5px; }
+.automation-appearance-block { grid-column: 1 / -1; }
+.automation-appearance-match { display: grid; gap: 10px; grid-template-columns: minmax(120px, 0.6fr) minmax(120px, 0.6fr) minmax(220px, 1.8fr); }
+.automation-appearance-match label { display: grid; gap: 5px; }
+.automation-appearance-match label > span { color: var(--muted); font-size: 10px; }
+.automation-appearance-profile { align-items: center; background: var(--surface-raised); border: 1px solid var(--border); border-radius: 6px; display: grid; gap: 10px; grid-template-columns: 46px minmax(0, 1fr) auto; padding: 10px; }
+.automation-appearance-profile strong,
+.automation-appearance-profile small { display: block; }
+.automation-appearance-profile strong { font-size: 11px; }
+.automation-appearance-profile small { color: var(--muted); font-size: 9.5px; margin-top: 3px; }
+.automation-appearance-swatch { background: linear-gradient(135deg, var(--surface-high), var(--primary-container)); border: 1px solid var(--border); border-radius: 5px; height: 34px; width: 46px; }
+.automation-appearance-priority { color: var(--muted); font-size: 9.5px; line-height: 1.4; margin: 0; }
 .automation-segments { background: var(--surface-raised); border: 1px solid var(--border); border-radius: 5px; display: grid; grid-template-columns: repeat(3, 1fr); padding: 2px; }
 .automation-segments button { background: transparent; border: 0; border-radius: 3px; color: var(--muted); min-height: 28px; }
 .automation-segments button[aria-pressed="true"] { background: var(--surface-high); box-shadow: var(--elev-1); color: var(--text); }
@@ -8513,6 +8528,7 @@ button.shortcut-binding.is-capturing {
   .automation-tabs { justify-content: space-around; }
   .automation-tabs button { justify-content: center; }
   .automation-type-options,
+  .automation-appearance-match,
   .automation-step-body { grid-template-columns: 1fr; }
   .automation-step-body label { grid-column: 1; }
   .automation-section-head { align-items: flex-start; flex-wrap: wrap; }

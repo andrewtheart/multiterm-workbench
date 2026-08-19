@@ -244,11 +244,11 @@ If a terminal exits while commands remain, its queue moves to **Unparented queue
 
 ## Automations
 
-Open **Automations** from the workflow button in the header or the command palette. The Studio separates **Schedules**, **Handoff routes**, and **Run History** so recurring commands and terminal-to-terminal work remain visible and reviewable.
+Open **Automations** from the workflow button in the header or the command palette. The Studio separates **Rules**, **Handoff routes**, and **Run History** so recurring commands, terminal styling, and terminal-to-terminal work remain visible and reviewable.
 
 ### Scheduled terminal work
 
-Choose **Command based automation** for ad-hoc shell commands, ad-hoc PowerShell, or `.ps1`, `.cmd`, and `.bat` script paths. Choose **Copilot automation** for scheduled Copilot CLI prompts. Create an interval, daily, or selected-weekday schedule, then build the workflow from connected visual step cards.
+Choose **Command based automation** for ad-hoc shell commands, ad-hoc PowerShell, or `.ps1`, `.cmd`, and `.bat` script paths. Choose **Copilot automation** for scheduled Copilot CLI prompts. Choose **Appearance automation** to style terminals by title instead of running work. Create an interval, daily, or selected-weekday schedule, then build the workflow from connected visual step cards.
 
 A step can target a terminal by exact title, exact PID, or **New terminal**. Title and PID targets offer **Send to new terminal if selected terminal cannot be located**, enabled by default. Whenever a step opens a terminal, choose the page that is active when the automation runs, a new page, or an existing page by title. The page-title field accepts freeform text and suggests current page names. Each step can specify a working directory; new terminals start there, and existing command steps run there without permanently moving the terminal. Script steps include a file picker. Copilot steps launch Copilot when needed, optionally change its working directory, and wait for its empty composer.
 
@@ -266,6 +266,16 @@ Each action has an explicit delivery mode:
 Use **Run when workstation is** to allow each automation while Windows is locked, unlocked, or in either state. MultiTerm reads the current Windows session state when a restricted rule is due; a mismatched or unavailable state is recorded as skipped. Schedules run while MultiTerm is open, minimized, or in the tray; they do not wake a fully stopped application. **Run once after sleep or reconnect** catches up one missed occurrence. Leave it off to record missed occurrences as skipped. Each schedule row shows its latest retained outcome. The bridge grants one renderer a short renewable runner lease and atomically claims each rule's due timestamp, so an expired or disconnected renderer cannot duplicate an occurrence in another window.
 
 Use the global **Pause** control to stop both scheduled delivery and automatic handoffs. Right-click an automation name to pause or unpause that rule, snooze it for a specified duration, or delete it. **Run History** records queued, staged, skipped, blocked, completed, and failed work, with filters for schedules, handoffs, and events needing attention. Its visible **Keep _ events** setting controls persisted history retention; `0` keeps no history.
+
+### Appearance automations
+
+An **Appearance automation** has no schedule and no actions. It watches terminal titles and styles every terminal whose title matches, so a production shell or a long-running build can be recognisable at a glance without being restyled by hand each time.
+
+Under **If terminal title**, choose **Contains**, **Equals**, or **Regular expression**, set **Insensitive** or **Sensitive** letter case, and enter the text or pattern. Regular expressions are checked as you type. Patterns that cannot be evaluated cheaply are refused with the reason: backreferences, lookarounds, and ambiguous repetition such as a nested quantifier `(a+)+`, adjacent open-ended quantifiers `.*.*`, or a quantifier on an alternation group `(a|b)*`.
+
+**Edit appearance...** opens the same terminal appearance editor used by a pane's own styling, with both the **Terminal** and **Header** tabs, and saves the result as the rule's profile rather than applying it to one terminal. The profile always carries a complete body background, font color, font family, and header background.
+
+Rules are evaluated in list order and the first enabled rule whose condition matches supplies the appearance, so drag the more specific rule above the more general one. A styled terminal reverts to its own manual appearance as soon as its title stops matching, when the rule is paused or deleted, or when the global **Pause** control is on; the terminal's own saved appearance is never overwritten. Matching uses the committed title, so a title suggestion that is still awaiting approval does not restyle the terminal. **Apply now** restyles every live matching terminal immediately and records the result in **Run History**.
 
 ### Visual handoff routes
 

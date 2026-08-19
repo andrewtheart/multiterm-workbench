@@ -51,6 +51,17 @@ test.describe("Worktree review", () => {
     await expect(diff).toContainText("staged review work");
     await expect(diff).toContainText("untracked-review.txt");
     await expect(diff).toContainText("untracked review work");
+    const backgrounds = await diff.evaluate((viewer) => {
+      const selectors = [".d2h-wrapper", ".d2h-code-side-line", ".d2h-del", ".d2h-ins"];
+      return Object.fromEntries(selectors.map((selector) => {
+        const element = viewer.querySelector(selector);
+        return [selector, element ? getComputedStyle(element).backgroundColor : "missing"];
+      }));
+    });
+    for (const background of Object.values(backgrounds)) {
+      expect(background).not.toBe("missing");
+      expect(background).not.toBe("rgba(0, 0, 0, 0)");
+    }
   });
 
   test("closes the review and returns to the manager", async ({ page }) => {

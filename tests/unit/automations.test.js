@@ -131,6 +131,94 @@ describe("automations model", () => {
     expect(automations.normalizeRule(rule({ machineState: "unknown" })).machineState).toBe("both");
   });
 
+  it("normalizes title-triggered appearance rules without requiring command actions", () => {
+    const normalized = automations.normalizeRule(rule({
+      actions: [],
+      appearance: {
+        background: "#102030",
+        foreground: "#f0e0d0",
+        fontFamily: "Cascadia Mono",
+        headerBackground: {
+          angle: 500,
+          fontFamily: "Consolas",
+          fontSize: 99,
+          mode: "gradient",
+          stops: [
+            { color: "#112233", opacity: 150, position: -5 },
+            { color: "#445566", opacity: 70, position: 120 }
+          ],
+          type: "linear"
+        }
+      },
+      titleMatch: { caseSensitive: true, type: "equals", value: "Production" },
+      type: "appearance"
+    }));
+
+    expect(normalized).toMatchObject({
+      actions: [],
+      appearance: {
+        background: "#102030",
+        foreground: "#F0E0D0",
+        fontFamily: "Cascadia Mono",
+        headerBackground: { angle: 140, fontFamily: "Consolas", fontSize: 20 }
+      },
+      titleMatch: { caseSensitive: true, type: "equals", value: "Production" },
+      type: "appearance"
+    });
+    expect(normalized.appearance.headerBackground.stops).toEqual([
+      { color: "#112233", opacity: 100, position: 0 },
+      { color: "#445566", opacity: 70, position: 100 }
+    ]);
+    expect(automations.nextScheduledAt(normalized)).toBeNull();
+    expect(automations.scheduleIsDue(normalized, new Date("2026-08-04T12:00:00Z"))).toBe(false);
+  });
+
+  it("matches appearance titles by contains, equality, regex, and letter case", () => {
+    expect(automations.titleMatches({ type: "contains", value: "build" }, "Nightly BUILD output")).toBe(true);
+    expect(automations.titleMatches({ caseSensitive: true, type: "contains", value: "build" }, "BUILD")).toBe(false);
+    expect(automations.titleMatches({ type: "equals", value: "api" }, "API")).toBe(true);
+    expect(automations.titleMatches({ caseSensitive: true, type: "equals", value: "api" }, "API")).toBe(false);
+    expect(automations.titleMatches({ type: "regex", value: "^(prod|stage)-\\d+$" }, "PROD-42")).toBe(true);
+    expect(automations.titleMatches({ type: "regex", value: "[" }, "anything")).toBe(false);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "^api-\\d+-\\w+$" })).toBe("");
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(a+)+$" })).toMatch(/ambiguous repetition/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(a|aa)+$" })).toMatch(/ambiguous repetition/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: ".*.*terminal" })).toMatch(/ambiguous repetition/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(a+)a+$" })).toMatch(/ambiguous repetition/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(a)\\1" })).toMatch(/backreferences/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(a)\\1" })).not.toMatch(/lookarounds|repetition/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(?=prod)prod" })).toMatch(/lookarounds/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(?=prod)prod" })).not.toMatch(/backreferences|repetition/i);
+    expect(automations.titleMatchValidationError({ type: "regex", value: "(a|b)*x" })).toMatch(/alternation group/i);
+    expect(automations.normalizeRule(rule({ actions: [], type: "appearance", titleMatch: { value: "x" } }))).toBeNull();
+    expect(automations.normalizeRule(rule({
+      actions: [],
+      appearance: {
+        background: "#102030",
+        foreground: "#F0E0D0",
+        fontFamily: "Consolas",
+        headerBackground: { color: "#112233", mode: "solid" }
+      },
+      titleMatch: { type: "regex", value: "(a+)+$" },
+      type: "appearance"
+    }))).toBeNull();
+  });
+
+  it("compiles a reusable title matcher that agrees with single-shot matching", () => {
+    const matcher = automations.compileTitleMatcher({ type: "regex", value: "^api-\\d+$" });
+    expect(matcher).toMatchObject({ caseSensitive: false, type: "regex", value: "^api-\\d+$" });
+    for (const title of ["API-1", "api-22", "api-1", "other"]) {
+      expect(matcher.test(title)).toBe(automations.titleMatches({ type: "regex", value: "^api-\\d+$" }, title));
+    }
+    expect(matcher.test("api-7")).toBe(true);
+    expect(matcher.test("api-7")).toBe(true);
+
+    expect(automations.compileTitleMatcher({ type: "contains", value: "build" }).test("Nightly BUILD")).toBe(true);
+    expect(automations.compileTitleMatcher({ caseSensitive: true, type: "equals", value: "api" }).test("API")).toBe(false);
+    expect(automations.compileTitleMatcher({ type: "regex", value: "(a+)+$" })).toBeNull();
+    expect(automations.compileTitleMatcher({ type: "contains", value: "" })).toBeNull();
+  });
+
   it("normalizes rules and keeps malformed persisted rules disabled or discarded", () => {
     const store = automations.normalizeStore({
       paused: true,

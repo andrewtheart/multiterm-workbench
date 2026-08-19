@@ -21,13 +21,19 @@ test.describe("Terminal edge scroll controls", () => {
   const topButton = (page) => page.locator(".terminal-pane .pane-scroll-top");
   const bottomButton = (page) => page.locator(".terminal-pane .pane-scroll-bottom");
 
-  test("sits faint in the bottom-right corner and brightens on hover", async ({ page }) => {
-    await freshTerminal(page);
+  test("shows the downward control only while downward scrolling is possible", async ({ page }) => {
+    const id = await freshTerminal(page);
     const control = bottomButton(page);
+    await expect(control).toBeHidden();
+    await page.evaluate((terminalId) => {
+      const { term } = state.terminals.get(terminalId);
+      for (let line = 0; line < 400; line += 1) term.write(`filler line ${line}\r\n`);
+    }, id);
+    await expect(topButton(page)).toBeVisible();
+    await expect(control).toBeHidden();
+    await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollToTop(), id);
+    await expect(topButton(page)).toBeHidden();
     await expect(control).toBeVisible();
-
-    const idle = await control.evaluate((node) => Number(getComputedStyle(node).opacity));
-    expect(idle).toBeLessThan(0.35);
 
     const geometry = await control.evaluate((node) => {
       const pane = node.closest(".terminal-pane");
@@ -54,15 +60,18 @@ test.describe("Terminal edge scroll controls", () => {
     // read as a smudge.
     expect(geometry.overlapsStatus).toBe(false);
 
-    await control.hover();
-    await expect.poll(
-      () => control.evaluate((node) => Number(getComputedStyle(node).opacity))
-    ).toBe(1);
+    await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollToBottom(), id);
+    await expect(control).toBeHidden();
+    await expect(topButton(page)).toBeVisible();
   });
 
   test("places the upward control below the queue button without overlap", async ({ page }) => {
-    await freshTerminal(page);
+    const id = await freshTerminal(page);
     const control = topButton(page);
+    await page.evaluate((terminalId) => {
+      const { term } = state.terminals.get(terminalId);
+      for (let line = 0; line < 400; line += 1) term.write(`filler line ${line}\r\n`);
+    }, id);
     await expect(control).toBeVisible();
 
     const geometry = await control.evaluate((node) => {
@@ -88,7 +97,6 @@ test.describe("Terminal edge scroll controls", () => {
     expect(geometry.radius).toBe("50%");
     expect(geometry.overlapsQueue).toBe(false);
 
-    expect(await control.evaluate((node) => Number(getComputedStyle(node).opacity))).toBeLessThan(0.35);
     await control.hover();
     await expect.poll(
       () => control.evaluate((node) => Number(getComputedStyle(node).opacity))
@@ -96,8 +104,17 @@ test.describe("Terminal edge scroll controls", () => {
   });
 
   test("keeps the downward control clear of the pid pill in an ordinary shell", async ({ page }) => {
-    await freshTerminal(page);
+    const id = await freshTerminal(page);
     const control = bottomButton(page);
+    await page.evaluate((terminalId) => {
+      const { term } = state.terminals.get(terminalId);
+      for (let line = 0; line < 400; line += 1) term.write(`filler line ${line}\r\n`);
+    }, id);
+    await expect.poll(() => page.evaluate((terminalId) => {
+      const { term } = state.terminals.get(terminalId);
+      return term.buffer.active.length > term.rows;
+    }, id)).toBe(true);
+    await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollToTop(), id);
     await expect(control).toBeVisible();
 
     // Copilot panes lift this control onto their own scroll track; a plain
@@ -163,10 +180,9 @@ test.describe("Terminal edge scroll controls", () => {
     }, id)).toBe(0);
   });
 
-  test("brightens while scrolled away from the bottom and fades once it arrives", async ({ page }) => {
+  test("shows both controls in the middle and hides each one at its edge", async ({ page }) => {
     const id = await freshTerminal(page);
     const control = bottomButton(page);
-    const opacity = () => control.evaluate((node) => Number(getComputedStyle(node).opacity));
 
     await page.evaluate((terminalId) => {
       const { term } = state.terminals.get(terminalId);
@@ -177,27 +193,30 @@ test.describe("Terminal edge scroll controls", () => {
       return term.buffer.active.length > term.rows;
     }, id)).toBe(true);
 
-    // Sitting at the newest line there is nowhere to jump to.
-    expect(await opacity()).toBeLessThan(0.35);
+    await expect(topButton(page)).toBeVisible();
+    await expect(control).toBeHidden();
 
     await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollToTop(), id);
-    await expect.poll(opacity).toBeGreaterThan(0.5);
+    await expect(topButton(page)).toBeHidden();
+    await expect(control).toBeVisible();
 
-    // Output arriving underneath must not fade it back while still scrolled up.
+    await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollLines(5), id);
+    await expect(topButton(page)).toBeVisible();
+    await expect(control).toBeVisible();
+
+    // Output arriving underneath must not hide the downward action while the viewport stays up.
     await page.evaluate((terminalId) => state.terminals.get(terminalId).term.write("later line\r\n"), id);
-    expect(await opacity()).toBeGreaterThan(0.5);
+    await expect(control).toBeVisible();
 
     await control.click();
-    // Clicking leaves the pointer on the button, and :hover is deliberately
-    // fully opaque, so step off it before reading the resting state.
-    await page.mouse.move(5, 5);
-    await expect.poll(opacity).toBeLessThan(0.35);
+    await expect(control).toBeHidden();
+    await expect(topButton(page)).toBeVisible();
   });
 
   test("hides itself on an alternate-screen buffer that has no scrollback", async ({ page }) => {
     const id = await freshTerminal(page);
-    await expect(topButton(page)).toBeVisible();
-    await expect(bottomButton(page)).toBeVisible();
+    await expect(topButton(page)).toBeHidden();
+    await expect(bottomButton(page)).toBeHidden();
 
     // Enter the alternate screen exactly as a full-screen TUI does.
     await page.evaluate((terminalId) => state.terminals.get(terminalId).term.write("\u001b[?1049h"), id);
@@ -205,8 +224,8 @@ test.describe("Terminal edge scroll controls", () => {
     await expect(bottomButton(page)).toBeHidden();
 
     await page.evaluate((terminalId) => state.terminals.get(terminalId).term.write("\u001b[?1049l"), id);
-    await expect(topButton(page)).toBeVisible();
-    await expect(bottomButton(page)).toBeVisible();
+    await expect(topButton(page)).toBeHidden();
+    await expect(bottomButton(page)).toBeHidden();
   });
 
   test("does not leak the click into a mouse-reporting TUI", async ({ page }) => {
@@ -220,8 +239,10 @@ test.describe("Terminal edge scroll controls", () => {
       for (let line = 0; line < 200; line += 1) terminal.term.write(`row ${line}\r\n`);
     }, id);
 
-    await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollToTop(), id);
+    await expect(topButton(page)).toBeVisible();
     await topButton(page).click();
+    await expect(topButton(page)).toBeHidden();
+    await expect(bottomButton(page)).toBeVisible();
     await bottomButton(page).click();
 
     await expect.poll(() => page.evaluate((terminalId) => {

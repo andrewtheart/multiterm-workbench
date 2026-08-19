@@ -92,6 +92,197 @@ test.describe("Automation Studio", () => {
     await expect(page.locator(".automation-rule-state")).toHaveText("Off");
   });
 
+  test("creates a title-matched appearance profile and restores manual styling when the title stops matching", async ({ page }) => {
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      terminal.terminalBackground = "#101820";
+      terminal.terminalForeground = "#E8E8E8";
+      terminal.terminalFontFamily = "Consolas";
+      applyTerminalAppearance(terminal);
+    });
+
+    await page.locator("#automationsToggle").click();
+    await page.locator("#automationNew").click();
+    await page.locator("[data-automation-type='appearance']").click();
+    await expect(page.locator("#automationAppearanceBlock")).toBeVisible();
+    await expect(page.locator("#automationScheduleBlock")).toBeHidden();
+    await expect(page.locator("#automationActionsBlock")).toBeHidden();
+    await expect(page.locator("#automationRunAsField")).toBeHidden();
+    await expect(page.locator("#automationRunNow span")).toHaveText("Apply now");
+    await expect(page.locator("#automationTitleMatchType option")).toHaveText(["Contains", "Equals", "Regular expression"]);
+    await page.locator("#automationName").fill("Test terminal palette");
+    await page.locator("#automationTitleMatchType").selectOption("regex");
+    await page.locator("#automationTitleMatchCase").selectOption("insensitive");
+    await page.locator("#automationTitleMatchValue").fill("[");
+    expect(await page.locator("#automationTitleMatchValue").evaluate((input) => ({
+      message: input.validationMessage,
+      valid: input.checkValidity()
+    }))).toEqual({ message: "Enter a valid regular expression.", valid: false });
+    await page.locator("#automationTitleMatchValue").fill("(a+)+$");
+    expect(await page.locator("#automationTitleMatchValue").evaluate((input) => ({
+      message: input.validationMessage,
+      valid: input.checkValidity()
+    }))).toEqual({
+      message: "Use a regular expression without ambiguous repetition: no nested quantifiers such as (a+)+, no adjacent open-ended quantifiers such as .*.*, and no quantifier on an alternation group such as (a|b)*.",
+      valid: false
+    });
+    await page.locator("#automationTitleMatchValue").fill("^tests$");
+
+    await page.locator("#automationAppearanceEdit").click();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeVisible();
+    await expect(page.locator("#headerBackgroundApply")).toHaveText("Save profile");
+    await page.locator("#terminalAppearanceBackgroundHex").fill("#223344");
+    await page.locator("#terminalAppearanceForegroundHex").fill("#F4EEDD");
+    await page.locator("#terminalAppearanceFontFamily").selectOption("Courier New");
+    await page.locator("#terminalAppearanceTabHeader").click();
+    await page.locator("#headerAppearanceFontFamily").selectOption("Consolas");
+    await page.locator("#headerAppearanceFontSize").fill("16");
+    await page.locator("#headerBackgroundApply").click();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeHidden();
+    await expect(page.locator("#automationAppearanceSummary")).toContainText("Courier New");
+    await page.locator("#automationSave").click();
+
+    const applied = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      const stored = JSON.parse(localStorage.getItem("multiterm.automations")).rules[0];
+      return {
+        automatedRuleId: terminal.automationAppearanceRuleId,
+        background: terminal.term.options.theme.background,
+        fontFamily: terminal.term.options.fontFamily,
+        headerFontSize: terminal.pane.querySelector(".pane-bar").style.getPropertyValue("--pane-title-font-size"),
+        stored
+      };
+    });
+    expect(applied.background).toBe("#223344");
+    expect(applied.fontFamily).toContain("Courier New");
+    expect(applied.headerFontSize).toBe("16px");
+    expect(applied.automatedRuleId).toBe(applied.stored.id);
+    expect(applied.stored).toMatchObject({
+      enabled: true,
+      name: "Test terminal palette",
+      titleMatch: { caseSensitive: false, type: "regex", value: "^tests$" },
+      type: "appearance"
+    });
+    expect(applied.stored.appearance).toMatchObject({
+      background: "#223344",
+      foreground: "#F4EEDD",
+      fontFamily: "Courier New",
+      headerBackground: { fontFamily: "Consolas", fontSize: 16 }
+    });
+
+    const restored = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      commitTerminalTitle(terminal, "Production", false, "manual");
+      return {
+        automatedRuleId: terminal.automationAppearanceRuleId,
+        background: terminal.term.options.theme.background,
+        fontFamily: terminal.term.options.fontFamily
+      };
+    });
+    expect(restored).toMatchObject({ automatedRuleId: "", background: "#101820" });
+    expect(restored.fontFamily).toContain("Consolas");
+
+    await page.evaluate(() => commitTerminalTitle([...state.terminals.values()][0], "TESTS", false, "manual"));
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0].term.options.theme.background)).toBe("#223344");
+  });
+
+  test("uses first-match appearance priority across pause, deletion, enablement, and terminal creation", async ({ page }) => {
+    const initial = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      terminal.terminalBackground = "#101820";
+      applyTerminalAppearance(terminal);
+      const profile = automationAppearanceProfileSeed(terminal);
+      const rule = (id, name, background) => automationApi.normalizeRule({
+        actions: [],
+        appearance: { ...profile, background },
+        enabled: true,
+        id,
+        name,
+        titleMatch: { caseSensitive: false, type: "contains", value: "test" },
+        type: "appearance"
+      });
+      state.automations.rules = [
+        rule("appearance-first", "First palette", "#AA0000"),
+        rule("appearance-second", "Second palette", "#00AA00")
+      ];
+      saveAutomationStore();
+      refreshAppearanceAutomations();
+      return terminal.term.options.theme.background;
+    });
+    expect(initial).toBe("#AA0000");
+
+    await page.locator("#automationsToggle").click();
+    await expect(page.locator(".automation-rule-row")).toHaveCount(2);
+    await page.locator(".automation-rule-state").first().click();
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0].term.options.theme.background)).toBe("#00AA00");
+
+    await page.locator("#automationsPause").click();
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0].term.options.theme.background)).toBe("#101820");
+    await page.locator("#automationsPause").click();
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0].term.options.theme.background)).toBe("#00AA00");
+
+    await page.evaluate(() => deleteAutomationRule("appearance-second"));
+    await expect(page.locator(".automation-rule-row")).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0].term.options.theme.background)).toBe("#101820");
+    await page.locator(".automation-rule-state").click();
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0].term.options.theme.background)).toBe("#AA0000");
+
+    await page.evaluate(() => addTerminal({ title: "Tests" }));
+    await expect(page.locator(".terminal-pane")).toHaveCount(2);
+    await expect.poll(() => page.evaluate(() => [...state.terminals.values()].at(-1).term.options.theme.background)).toBe("#AA0000");
+  });
+
+  test("styles on the committed title, not a title suggestion awaiting approval", async ({ page }) => {
+    const staged = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      commitTerminalTitle(terminal, "Staging", false, "manual");
+      terminal.terminalBackground = "#101820";
+      applyTerminalAppearance(terminal);
+      const profile = automationAppearanceProfileSeed(terminal);
+      state.automations.rules = [automationApi.normalizeRule({
+        actions: [],
+        appearance: { ...profile, background: "#AA0000" },
+        enabled: true,
+        id: "appearance-suggestion",
+        name: "Production palette",
+        titleMatch: { caseSensitive: false, type: "equals", value: "Production" },
+        type: "appearance"
+      })];
+      saveAutomationStore();
+      refreshAppearanceAutomations();
+      return terminal.term.options.theme.background;
+    });
+    expect(staged).toBe("#101820");
+
+    // The suggestion is previewed in the title input before the user approves it.
+    const previewed = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      showTerminalTitleSuggestion(terminal, "Production");
+      refreshAppearanceAutomations();
+      return {
+        background: terminal.term.options.theme.background,
+        ruleId: terminal.automationAppearanceRuleId,
+        shownTitle: terminal.titleInput.value
+      };
+    });
+    expect(previewed).toEqual({ background: "#101820", ruleId: "", shownTitle: "Production" });
+
+    const rejected = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      rejectTerminalTitleSuggestion(terminal);
+      return { background: terminal.term.options.theme.background, shownTitle: terminal.titleInput.value };
+    });
+    expect(rejected).toEqual({ background: "#101820", shownTitle: "Staging" });
+
+    const accepted = await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0];
+      showTerminalTitleSuggestion(terminal, "Production");
+      acceptTerminalTitleSuggestion(terminal);
+      return { background: terminal.term.options.theme.background, ruleId: terminal.automationAppearanceRuleId };
+    });
+    expect(accepted).toEqual({ background: "#AA0000", ruleId: "appearance-suggestion" });
+  });
+
   test("persists output match controls on dependent steps", async ({ page }) => {
     await page.locator("#automationsToggle").click();
     await page.locator("#automationNew").click();
@@ -162,12 +353,15 @@ test.describe("Automation Studio", () => {
       await page.locator("#automationNew").click();
       const scheduleGeometry = await page.locator("#automationEditor").evaluate((editor) => {
         const editorRect = editor.getBoundingClientRect();
+        const typeBlock = editor.querySelector(".automation-kind-block");
+        const nameField = editor.querySelector(".automation-name-field");
         const controls = [...editor.querySelectorAll(".automation-action-row input, .automation-action-row select, .automation-action-row button")];
-        const blocks = [...editor.querySelectorAll(":scope > .automation-block")];
-        const thenBlock = blocks[1];
+        const thenBlock = editor.querySelector("#automationActionsBlock");
         const account = editor.querySelector(".automation-account-field");
         const accountRect = account.getBoundingClientRect();
+        const nameRect = nameField.getBoundingClientRect();
         const thenRect = thenBlock.getBoundingClientRect();
+        const typeRect = typeBlock.getBoundingClientRect();
         return {
           accountAfterThen: Boolean(thenBlock.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING),
           accountBelowThen: accountRect.top >= thenRect.bottom,
@@ -175,6 +369,8 @@ test.describe("Automation Studio", () => {
           accountLeft: accountRect.left,
           clientWidth: editor.clientWidth,
           controlsInside: controls.every((control) => control.getBoundingClientRect().right <= editorRect.right + 1),
+          nameAfterType: Boolean(typeBlock.compareDocumentPosition(nameField) & Node.DOCUMENT_POSITION_FOLLOWING),
+          nameBelowType: nameRect.top >= typeRect.bottom,
           scrollWidth: editor.scrollWidth,
           thenLeft: thenRect.left
         };
@@ -185,6 +381,8 @@ test.describe("Automation Studio", () => {
       expect(Math.abs(scheduleGeometry.accountLeft - scheduleGeometry.thenLeft)).toBeLessThanOrEqual(1);
       expect(scheduleGeometry.scrollWidth).toBeLessThanOrEqual(scheduleGeometry.clientWidth);
       expect(scheduleGeometry.controlsInside).toBe(true);
+      expect(scheduleGeometry.nameAfterType).toBe(true);
+      expect(scheduleGeometry.nameBelowType).toBe(true);
 
       await page.locator("[data-automation-view='routes']").click();
       await expect(page.locator("#automationSchedulesView")).toBeHidden();

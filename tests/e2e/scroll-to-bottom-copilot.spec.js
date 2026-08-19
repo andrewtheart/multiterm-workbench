@@ -1,8 +1,8 @@
 const { test, expect } = require("../support/renderer-coverage");
 
 // Copilot CLI owns scrolling inside its alternate-screen TUI, so xterm's
-// scrollToBottom cannot move it. The control stays available and drives the
-// same mouse-wheel path used when selecting retained TUI search results.
+// scrollToBottom cannot move it. The available edge control drives the same
+// mouse-wheel path used when selecting retained TUI search results.
 test.describe("Terminal edge scroll controls with a live Copilot TUI", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -44,7 +44,7 @@ test.describe("Terminal edge scroll controls with a live Copilot TUI", () => {
     await expect.poll(async () => (await readBuffer(page, id)).text, { timeout: 60000 })
       .toContain("pre-copilot line 120");
     await expect(topControl(page, id)).toBeVisible();
-    await expect(bottomControl(page, id)).toBeVisible();
+    await expect(bottomControl(page, id)).toBeHidden();
     expect((await readBuffer(page, id)).type).toBe("normal");
 
     await page.evaluate((terminalId) => {
@@ -64,8 +64,16 @@ test.describe("Terminal edge scroll controls with a live Copilot TUI", () => {
     expect(duringCopilot.baseY).toBe(0);
     await expect(topControl(page, id)).toBeVisible();
     await expect(topControl(page, id)).toHaveAttribute("aria-label", "Scroll Copilot to the top");
-    await expect(bottomControl(page, id)).toBeVisible();
+    await expect(bottomControl(page, id)).toBeHidden();
     await expect(bottomControl(page, id)).toHaveAttribute("aria-label", "Scroll Copilot to the bottom");
+
+    await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      terminal.tuiScrollEdge = "middle";
+      syncTerminalScrollControls(terminal);
+    }, id);
+    await expect(topControl(page, id)).toBeVisible();
+    await expect(bottomControl(page, id)).toBeVisible();
 
     // The chevron parks on the end of Copilot's own scroll track, which stops
     // above its composer, rather than floating over the composer at the floor.
@@ -101,6 +109,12 @@ test.describe("Terminal edge scroll controls with a live Copilot TUI", () => {
     expect(Math.abs(placement.actualLift - placement.expectedLift)).toBeLessThanOrEqual(1);
     // Horizontal placement is shared with the up chevron and must not move.
     expect(placement.rightAligned).toBeLessThanOrEqual(0);
+
+    await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      terminal.tuiScrollEdge = "bottom";
+      syncTerminalScrollControls(terminal);
+    }, id);
 
     const tuiScroll = await page.evaluate(async (terminalId) => {
       const terminal = state.terminals.get(terminalId);
@@ -210,7 +224,7 @@ test.describe("Terminal edge scroll controls with a live Copilot TUI", () => {
     // Back on the normal screen the pre-Copilot scrollback is still there and
     // the control works on it.
     await expect(topControl(page, id)).toBeVisible();
-    await expect(bottomControl(page, id)).toBeVisible();
+    await expect(bottomControl(page, id)).toBeHidden();
     await expect.poll(() => page.evaluate((terminalId) => {
       const { term } = state.terminals.get(terminalId);
       return term.buffer.active.baseY > 0;
@@ -218,6 +232,8 @@ test.describe("Terminal edge scroll controls with a live Copilot TUI", () => {
 
     await page.evaluate((terminalId) => state.terminals.get(terminalId).term.scrollToTop(), id);
     expect((await readBuffer(page, id)).viewportY).toBe(0);
+    await expect(topControl(page, id)).toBeHidden();
+    await expect(bottomControl(page, id)).toBeVisible();
 
     await bottomControl(page, id).click();
     await expect.poll(() => page.evaluate((terminalId) => {
