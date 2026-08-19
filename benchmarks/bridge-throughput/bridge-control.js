@@ -225,7 +225,7 @@ class BridgeHandle {
 }
 
 async function startNodeBridge(port) {
-  const child = spawn(process.execPath, [path.join(REPO_ROOT, "server.js")], {
+  const child = spawn(process.execPath, [path.join(REPO_ROOT, "src", "server.js")], {
     cwd: REPO_ROOT,
     env: { ...process.env, HOST: "127.0.0.1", MEMSTATS: "", PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],

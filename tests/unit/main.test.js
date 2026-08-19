@@ -29,7 +29,7 @@ const inheritedPort = process.env.PORT;
 process.env.PORT = "3177";
 let main;
 try {
-  main = require("../../main.js");
+  main = require("../../src/main.js");
 } finally {
   if (inheritedPort === undefined) delete process.env.PORT;
   else process.env.PORT = inheritedPort;

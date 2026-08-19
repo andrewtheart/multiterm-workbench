@@ -319,12 +319,22 @@ sessions. This split exists because browser JavaScript cannot spawn or stream fr
 local processes — so the bridge serves the page, accepts input over a WebSocket,
 and drives PTY-backed shells through Windows **ConPTY**.
 
+### Source layout
+
+- `src/` contains the Electron main process, preload scripts, Node bridge,
+  elevated-host helper, and shared origin policy.
+- `public/` contains browser-rendered HTML, CSS, JavaScript, and vendored assets.
+- `lib/` contains reusable bridge support and packaged helper hosts.
+- `scripts/`, `benchmarks/`, and `tests/` contain development and verification tooling.
+- Root PowerShell files are deliberate user and installer entry points; package,
+  test configuration, canonical documentation, and license files also remain at root.
+
 ### Component topology
 
 ```mermaid
 flowchart TB
     subgraph host["Front-end host (one of two)"]
-        electron["Electron desktop<br/>main.js + preload.js<br/>(BrowserWindow, tray, updater)"]
+        electron["Electron desktop<br/>src/main.js + src/preload.js<br/>(BrowserWindow, tray, updater)"]
         browser["Plain browser<br/>(default browser window)"]
     end
 
@@ -347,7 +357,7 @@ flowchart TB
 
     electron -->|"loadURL http://127.0.0.1:3177"| spa
     browser -->|"opens bridge URL"| spa
-    electron -.->|"spawns node server.js"| bridge
+    electron -.->|"spawns node src/server.js"| bridge
 
     panes <-->|"WebSocket JSON<br/>(input / resize ⇄ output / exited)"| wssrv
     spa -->|"GET / (HTML, JS, CSS)"| httpsrv
@@ -355,7 +365,7 @@ flowchart TB
     sessions -->|"pty.spawn / write / resize"| pty1
     pty1 -->|"onData → broadcast output"| wssrv
 
-    sessions -.->|"UAC + loopback relay"| elevhost["elevated-pty-host.js<br/>(owns elevated ConPTY)"]
+    sessions -.->|"UAC + loopback relay"| elevhost["src/elevated-pty-host.js<br/>(owns elevated ConPTY)"]
     elevhost --> elev
 ```
 
@@ -366,7 +376,7 @@ alternatives:
 
 | Bridge | File | PTY backend | Needs Node? | Launched by |
 | --- | --- | --- | --- | --- |
-| **Node bridge** | `server.js` | native `node-pty` (`@homebridge/node-pty-prebuilt-multiarch`) over ConPTY | Yes | Electron (`main.js` spawns `node server.js`) or `npm run server` |
+| **Node bridge** | `src/server.js` | native `node-pty` (`@homebridge/node-pty-prebuilt-multiarch`) over ConPTY | Yes | Electron (`src/main.js` spawns `node src/server.js`) or `npm run server` |
 | **PowerShell bridge** | `Start-MultiTerm.ps1` | embedded C# calling ConPTY directly | No | `Start-MultiTerm.ps1` / the installer, opens your browser |
 
 Both serve the identical `public/` assets, expose the same HTTP + WebSocket
@@ -425,7 +435,7 @@ changes are stored in the bridge and broadcast so the control console and every
 connected renderer stay aligned.
 
 > **Both bridges must stay in lock-step.** Every client → bridge message type is
-> implemented independently in `server.js` (Node) and the embedded C# of
+> implemented independently in `src/server.js` (Node) and the embedded C# of
 > `Start-MultiTerm.ps1` (PowerShell). Adding or changing a message means editing
 > both, or the bridge that lags behind answers `error: "Unsupported message type"`.
 
@@ -442,8 +452,8 @@ fits, deferred resize) are described in [Performance](#performance) above.
 
 ### Electron desktop shell
 
-In desktop mode, `main.js` spawns the Node bridge as a child process, waits for
-`/health`, then points a `BrowserWindow` at `http://127.0.0.1:3177/`. `preload.js`
+In desktop mode, `src/main.js` spawns the Node bridge as a child process, waits for
+`/health`, then points a `BrowserWindow` at `http://127.0.0.1:3177/`. `src/preload.js`
 exposes a tiny, isolated `window.multiterm` IPC surface for the few things a page
 can't do itself: native script picker, tray/close handling, the GitHub-release
 updater, and relaunching the whole app elevated. The bridge is also **supervised**
@@ -454,7 +464,7 @@ error instead of restarting forever.
 
 A UAC-elevated shell runs at **HIGH integrity**, which the medium-integrity bridge
 cannot attach a ConPTY across. So the bridge binds a loopback port, launches
-`elevated-pty-host.js` via UAC, and that helper owns the elevated shell's
+`src/elevated-pty-host.js` via UAC, and that helper owns the elevated shell's
 pseudo-console on the high side of the boundary and relays terminal frames back
 over the loopback socket. The helper is registered in the session map through a
 `node-pty`-compatible shim, so writes, resizes, kills, logging, and mem-stats all
@@ -825,7 +835,7 @@ point the checker at a fork.
 ## Feature guide and operational notes
 
 - The UI is a single-page app in `public/`.
-- Browser-only HTML cannot start or stream from local shell processes. `Start-MultiTerm.ps1` and `server.js` are local-only bridges that serve the page, accept WebSocket input, and own PTY-backed child processes through Windows ConPTY.
+- Browser-only HTML cannot start or stream from local shell processes. `Start-MultiTerm.ps1` and `src/server.js` are local-only bridges that serve the page, accept WebSocket input, and own PTY-backed child processes through Windows ConPTY.
 - The bridge binds to `127.0.0.1` by default. Set `PORT=4000` to choose another port.
 - Sessions default to PowerShell 7 (`pwsh.exe`) and can also use Windows PowerShell, Command Prompt, or WSL. Existing WSL tmux sessions can be discovered and attached from the header or command palette.
 - Ctrl+C, Tab completion, PSReadLine editing, and terminal resize are forwarded through the pseudo-terminal rather than plain pipes.

@@ -8,7 +8,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
-const nodeBridge = fs.readFileSync(path.join(repoRoot, "server.js"), "utf8");
+const nodeBridge = fs.readFileSync(path.join(repoRoot, "src", "server.js"), "utf8");
 const installedBridge = fs.readFileSync(path.join(repoRoot, "Start-MultiTerm.ps1"), "utf8");
 
 function between(source, startMarker, endMarker) {

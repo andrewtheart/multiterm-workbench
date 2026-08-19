@@ -172,7 +172,7 @@ $excludedDirectories = @(
     'playwright-report'
 )
 
-# electron is only ever loaded by main.js, and @anthropic-ai/claude-agent-sdk is a
+# electron is only ever loaded by src/main.js, and @anthropic-ai/claude-agent-sdk is a
 # lazy dynamic import the benchmark never reaches. Together they are 624 MB of the
 # 1,119 MB tree, so shipping them would more than double the transfer for nothing.
 $excludedDependencies = @(
@@ -777,7 +777,7 @@ try {
         $env:PLAYWRIGHT_BROWSERS_PATH = $Browsers
         [pscustomobject]@{
             NodeVersion = (& node --version)
-            HasServer = Test-Path (Join-Path $Repo 'server.js')
+            HasServer = Test-Path (Join-Path $Repo 'src\server.js')
             HasBridgeScript = Test-Path (Join-Path $Repo 'Start-MultiTerm.ps1')
             HasPty = Test-Path (Join-Path $Repo 'node_modules\@homebridge\node-pty-prebuilt-multiarch')
             HasPlaywright = Test-Path (Join-Path $Repo 'node_modules\@playwright\test')

@@ -8,7 +8,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const server = require("../../server");
+const server = require("../../src/server");
 const root = path.resolve(__dirname, "../..");
 const installer = fs.readFileSync(path.join(root, "installer", "MultiTerm.iss"), "utf8");
 const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), "utf8");

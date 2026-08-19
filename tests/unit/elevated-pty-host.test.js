@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const host = require("../../elevated-pty-host.js");
+const host = require("../../src/elevated-pty-host.js");
 
 function makeHostSocket() {
   const handlers = {};

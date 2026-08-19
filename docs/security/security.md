@@ -47,10 +47,10 @@ assume that a control in one path automatically protects the other.
 
 | Mode | Host and bridge | Additional boundary | Important difference |
 | --- | --- | --- | --- |
-| Electron/source | [`main.js`](../../main.js), [`preload.js`](../../preload.js), and [`server.js`](../../server.js) | Sandboxed Electron `BrowserWindow` and checked IPC | Includes the in-app updater and Node/node-pty bridge |
+| Electron/source | [`src/main.js`](../../src/main.js), [`src/preload.js`](../../src/preload.js), and [`src/server.js`](../../src/server.js) | Sandboxed Electron `BrowserWindow` and checked IPC | Includes the in-app updater and Node/node-pty bridge |
 | Installed/browser | [`Start-MultiTerm.ps1`](../../Start-MultiTerm.ps1) | User's external browser security model | Embedded C# serves HTTP/WebSocket and owns ConPTY directly |
-| Node/browser development | [`server.js`](../../server.js) in a normal browser | Browser origin rules only | No Electron sandbox or IPC boundary |
-| Per-pane administrator terminal | Node helper in [`elevated-pty-host.js`](../../elevated-pty-host.js), or the installed bridge's `-ElevatedHost` path | UAC integrity boundary and authenticated one-shot relay | High-integrity helper owns the elevated ConPTY |
+| Node/browser development | [`src/server.js`](../../src/server.js) in a normal browser | Browser origin rules only | No Electron sandbox or IPC boundary |
+| Per-pane administrator terminal | Node helper in [`src/elevated-pty-host.js`](../../src/elevated-pty-host.js), or the installed bridge's `-ElevatedHost` path | UAC integrity boundary and authenticated one-shot relay | High-integrity helper owns the elevated ConPTY |
 | Whole-window elevation | Electron or launcher is restarted with UAC | Entire app and every child run elevated | Any bridge compromise now has administrator impact |
 
 See [Architecture Design Decisions](../architecture/designdecisions.md) for why
@@ -133,7 +133,7 @@ out, but it does not stop a browser page on the same machine. Browser requests
 to loopback also originate locally, and DNS rebinding can make a hostile page
 same-origin with a loopback service.
 
-The shared policy in [`ws-origin.js`](../../ws-origin.js) therefore accepts only
+The shared policy in [`src/ws-origin.js`](../../src/ws-origin.js) therefore accepts only
 the literal hosts `127.0.0.1`, `localhost`, and `::1`.
 
 ### HTTP Host validation and DNS rebinding
@@ -145,7 +145,7 @@ rather than accepting lenient URL interpretations.
 This matters because a rebinding page keeps its attacker-controlled hostname in
 `Host` even after DNS resolves it to `127.0.0.1`. Rejecting that hostname stops
 the page from becoming same-origin with `/health`, static assets, or update
-preferences. The Node check is in [`server.js`](../../server.js); the installed
+preferences. The Node check is in [`src/server.js`](../../src/server.js); the installed
 bridge mirrors it in [`Start-MultiTerm.ps1`](../../Start-MultiTerm.ps1).
 
 ### WebSocket Origin validation
@@ -241,12 +241,12 @@ Electron mode applies the following explicitly rather than relying on defaults:
 - synchronous permission checks limited to clipboard operations from the exact
   internal origin.
 
-[`preload.js`](../../preload.js) exposes only the capabilities the renderer
+[`src/preload.js`](../../src/preload.js) exposes only the capabilities the renderer
 needs: clipboard write, script picker, close/tray response, focus, elevation,
 and update operations. It does not expose Node, filesystem, shell, or arbitrary
 IPC primitives.
 
-Every privileged handler in [`main.js`](../../main.js) checks:
+Every privileged handler in [`src/main.js`](../../src/main.js) checks:
 
 - the sender is the current application `WebContents`;
 - a supplied sender frame is the main frame;
@@ -293,7 +293,7 @@ The Node elevation path provides:
 - UAC cancellation and launcher errors surfaced without crashing the bridge;
 - final buffered output flushed before the session's exit event.
 
-[`elevated-pty-host.js`](../../elevated-pty-host.js) independently verifies that
+[`src/elevated-pty-host.js`](../../src/elevated-pty-host.js) independently verifies that
 the listener port belongs to the expected bridge PID and that its command line
 contains `server.js`. This prevents a lower-integrity impostor from learning the
 token and substituting its own listener. The installed bridge implements the
@@ -603,7 +603,7 @@ should also receive a real Windows integration test when feasible.
 
 ### Bridge or protocol change
 
-- Update and review both `server.js` and `Start-MultiTerm.ps1`.
+- Update and review both `src/server.js` and `Start-MultiTerm.ps1`.
 - Decide whether the message needs authentication, ownership, size, type, and
   rate limits before adding it to dispatch.
 - Treat missing `Origin` as native-client compatibility, not proof of trust.

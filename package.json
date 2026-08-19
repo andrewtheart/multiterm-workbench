@@ -5,7 +5,7 @@
   "description": "Local xterm.js multi-terminal workbench for PowerShell, Command Prompt, and WSL sessions.",
   "license": "GPL-3.0-or-later",
   "type": "commonjs",
-  "main": "main.js",
+  "main": "src/main.js",
   "scripts": {
     "preinstall": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\\confirm-native-module-unlocked.ps1 -NonInteractive",
     "rebuild:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\rebuild-native.ps1",
@@ -13,7 +13,7 @@
     "prestart": "npm run build:help",
     "start": "electron .",
     "preserver": "npm run build:help",
-    "server": "node server.js",
+    "server": "node src/server.js",
     "benchmark:renderer": "node benchmarks/renderer-spike/prepare.js && playwright test --config benchmarks/renderer-spike/playwright.config.js",
     "benchmark:renderer:headed": "node benchmarks/renderer-spike/prepare.js && playwright test --config benchmarks/renderer-spike/playwright.config.js --headed",
     "benchmark:bridge": "node benchmarks/bridge-throughput/run.js --mode node",

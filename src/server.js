@@ -31,19 +31,20 @@ const util = require("node:util");
 const { CopilotClient } = require("@github/copilot-sdk");
 const pty = require("@homebridge/node-pty-prebuilt-multiarch");
 const { decodeMulti } = require("@msgpack/msgpack");
-const terminalMessaging = require("./public/terminal-messaging");
+const terminalMessaging = require("../public/terminal-messaging");
 const { isAllowedHttpHost, isAllowedWebSocketOrigin } = require("./ws-origin");
 const {
   requestPromptLibraryHost,
   stopPromptLibraryHost
-} = require("./lib/prompt-library-client");
-const { CopilotLogAggregator } = require("./lib/copilot-log-aggregator");
-const { RuntimeDiagnostics, normalizeDiagnosticRecord } = require("./lib/runtime-diagnostics");
+} = require("../lib/prompt-library-client");
+const { CopilotLogAggregator } = require("../lib/copilot-log-aggregator");
+const { RuntimeDiagnostics, normalizeDiagnosticRecord } = require("../lib/runtime-diagnostics");
 
+const repoRoot = path.resolve(__dirname, "..");
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3177);
-const publicDir = path.join(__dirname, "public");
-const copilotSetupScript = path.join(__dirname, "Install-CopilotCli.ps1");
+const publicDir = path.join(repoRoot, "public");
+const copilotSetupScript = path.join(repoRoot, "Install-CopilotCli.ps1");
 const maxMessageSize = 1024 * 1024;
 // Concurrency ceilings. These are not access control -- the loopback bind and the
 // Origin check are -- but every session is a real ConPTY and every client holds an

@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const server = require("../../server");
+const server = require("../../src/server");
 
 describe("inline folder picker bridge", () => {
   let root;

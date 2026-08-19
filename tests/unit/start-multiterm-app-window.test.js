@@ -9,7 +9,7 @@ const path = require("node:path");
 
 const repoRoot = path.resolve(__dirname, "../..");
 const bridgeScript = fs.readFileSync(path.join(repoRoot, "Start-MultiTerm.ps1"), "utf8");
-const nodeBridge = fs.readFileSync(path.join(repoRoot, "server.js"), "utf8");
+const nodeBridge = fs.readFileSync(path.join(repoRoot, "src", "server.js"), "utf8");
 const renderer = fs.readFileSync(path.join(repoRoot, "public/app.js"), "utf8");
 const installer = fs.readFileSync(path.join(repoRoot, "installer/MultiTerm.iss"), "utf8");
 

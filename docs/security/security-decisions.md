@@ -32,7 +32,7 @@ NuGet packages and a second native Node SQLite binding are also excluded.
 
 MultiTerm has two local bridge implementations:
 
-- `server.js`, used by Electron and Node development workflows; and
+- `src/server.js`, used by Electron and Node development workflows; and
 - the embedded C# bridge in `Start-MultiTerm.ps1`, used by the installed browser
   application.
 
@@ -98,7 +98,7 @@ in tests.
   will not require a commercial database product or license.
 - **Deprecated unofficial SQLCipher NuGet packages:** rejected because their
   encryption binaries are explicitly deprecated, unofficial, and unmaintained.
-- **`better-sqlite3-multiple-ciphers` in `server.js`:** rejected as the shared
+- **`better-sqlite3-multiple-ciphers` in `src/server.js`:** rejected as the shared
   solution because it would cover only the Node bridge and add another native
   ABI/rebuild surface.
 - **Plain SQLite with a DPAPI-encrypted whole database:** rejected because it
@@ -185,7 +185,7 @@ The supported operations are:
 - `upsert` for create or update; and
 - `delete` for deletion.
 
-The renderer protocol is identical in `server.js` and `Start-MultiTerm.ps1`:
+The renderer protocol is identical in `src/server.js` and `Start-MultiTerm.ps1`:
 
 - `promptLibraryList`;
 - `promptLibraryGet`;

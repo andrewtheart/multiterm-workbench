@@ -9,7 +9,7 @@
  */
 
 const childProcess = require("node:child_process");
-const server = require("../../server.js");
+const server = require("../../src/server.js");
 
 function fakeClient() {
   return { send: vi.fn() };

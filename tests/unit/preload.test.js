@@ -35,8 +35,8 @@ beforeEach(() => {
     }
     return originalLoad(request, parent, isMain);
   });
-  delete require.cache[require.resolve("../../preload.js")];
-  require("../../preload.js");
+  delete require.cache[require.resolve("../../src/preload.js")];
+  require("../../src/preload.js");
 });
 
 afterEach(() => {

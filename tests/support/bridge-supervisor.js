@@ -27,12 +27,12 @@
 //
 // The known cause was a use-after-free: node-pty frees the native ConPTY inside
 // kill() but reports the exit asynchronously, so any write/resize/clear/kill
-// issued in that gap crashed the bridge (0xC0000005 / 0xC0000374). server.js now
+// issued in that gap crashed the bridge (0xC0000005 / 0xC0000374). src/server.js now
 // marks sessions dead synchronously via killSessionPty(), which closes that
 // window. This wrapper stays as defence in depth against any remaining native
 // aborts: it forwards stdio, respawns the bridge if it exits unexpectedly, and
 // tears the child down cleanly when Playwright stops the webServer. It mirrors
-// the production restart behaviour in main.js so the client's auto-reconnect can
+// the production restart behaviour in src/main.js so the client's auto-reconnect can
 // actually recover.
 //
 // Note: "AttachConsole failed" stack traces in the test output come from
@@ -44,7 +44,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-const serverPath = path.join(__dirname, "..", "..", "server.js");
+const serverPath = path.join(__dirname, "..", "..", "src", "server.js");
 const cwd = path.join(__dirname, "..", "..");
 const preferencesPath = path.join(os.tmpdir(), `multiterm-playwright-preferences-${process.pid}.json`);
 const diagnosticsPath = path.join(os.tmpdir(), `multiterm-playwright-diagnostics-${process.pid}`);

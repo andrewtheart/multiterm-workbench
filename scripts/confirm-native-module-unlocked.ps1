@@ -28,8 +28,8 @@ function Get-MultiTermNativeProcess {
     $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\')
     $targetPath = [IO.Path]::GetFullPath($NativeModulePath)
     $bridgePaths = @(
-        (Join-Path $rootPath 'server.js'),
-        (Join-Path $rootPath 'elevated-pty-host.js')
+        (Join-Path $rootPath 'src\server.js'),
+        (Join-Path $rootPath 'src\elevated-pty-host.js')
     )
     $processes = @{}
     $processInfoById = @{}

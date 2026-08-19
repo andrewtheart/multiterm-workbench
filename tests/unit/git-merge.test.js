@@ -15,7 +15,7 @@ const {
   finishWorktreeMerge,
   readConflictSides,
   writeConflictResolution
-} = require("../../server.js");
+} = require("../../src/server.js");
 
 const root = path.join(os.tmpdir(), `mt-merge-tests-${process.pid}`);
 const realGitTestTimeout = 15000;
@@ -56,7 +56,7 @@ describe("git repository and worktree bridge", () => {
   test("reports Git spawn, stream error, and timeout outcomes", async () => {
     const spawn = vi.spyOn(childProcess, "spawn");
     spawn.mockImplementationOnce(() => { throw new Error("spawn denied"); });
-    await expect(require("../../server.js").runGit(["status"], root)).resolves.toMatchObject({
+    await expect(require("../../src/server.js").runGit(["status"], root)).resolves.toMatchObject({
       ok: false, code: -1, timedOut: false, stdout: "", stderr: "spawn denied"
     });
 
@@ -65,7 +65,7 @@ describe("git repository and worktree bridge", () => {
     failed.stderr = new EventEmitter();
     failed.kill = vi.fn();
     spawn.mockReturnValueOnce(failed);
-    const failedResult = require("../../server.js").runGit(["status"], root);
+    const failedResult = require("../../src/server.js").runGit(["status"], root);
     failed.stdout.emit("data", Buffer.from("partial out"));
     failed.stderr.emit("data", Buffer.from("partial err"));
     failed.emit("error", new Error("process failed"));
@@ -80,7 +80,7 @@ describe("git repository and worktree bridge", () => {
     timed.stderr = new EventEmitter();
     timed.kill = vi.fn(() => { throw new Error("already exited"); });
     spawn.mockReturnValueOnce(timed);
-    const timedResult = require("../../server.js").runGit(["status"], root, 1);
+    const timedResult = require("../../src/server.js").runGit(["status"], root, 1);
     await vi.advanceTimersByTimeAsync(2);
     expect(timed.kill).toHaveBeenCalledOnce();
     await expect(timedResult).resolves.toMatchObject({

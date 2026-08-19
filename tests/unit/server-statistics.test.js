@@ -18,7 +18,7 @@
 
 const childProcess = require("node:child_process");
 const os = require("node:os");
-const server = require("../../server.js");
+const server = require("../../src/server.js");
 
 function makeTerminal(pid = 4321) {
   const handlers = {};

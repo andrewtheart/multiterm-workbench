@@ -54,7 +54,7 @@ async function waitForHealth(port) {
 }
 
 function startBridge(repoRoot, localAppData, port) {
-  const child = childProcess.spawn(process.execPath, [path.join(repoRoot, "server.js")], {
+  const child = childProcess.spawn(process.execPath, [path.join(repoRoot, "src", "server.js")], {
     cwd: repoRoot,
     env: {
       ...process.env,

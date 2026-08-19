@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-const server = require("../../server.js");
+const server = require("../../src/server.js");
 
 afterEach(() => {
   server.clients.clear();

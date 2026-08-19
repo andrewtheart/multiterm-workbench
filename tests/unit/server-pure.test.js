@@ -20,7 +20,7 @@ const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const server = require("../../server.js");
+const server = require("../../src/server.js");
 
 function mockResponse() {
   return {

@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-const server = require("../../server.js");
+const server = require("../../src/server.js");
 const http = require("node:http");
 
 function makeTerminal() {

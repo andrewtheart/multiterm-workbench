@@ -390,7 +390,9 @@ function Restore-PendingChangesForRelease {
 function Assert-CommitishMatchesPaths {
     param([string]$RepositoryRoot, [string[]]$ExpectedPaths, [string]$Label)
 
-    $actualInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot show --name-only --pretty=format: HEAD }
+    # --no-renames: rename detection pairs a delete with an add and reports only the
+    # destination, which would hide the source half of a move from this check.
+    $actualInfo = Get-NativeOutput { git --no-pager -C $RepositoryRoot show --name-only --no-renames --pretty=format: HEAD }
     if ($actualInfo.ExitCode -ne 0) {
         throw "Could not inspect committed paths for '$Label'."
     }
@@ -794,7 +796,7 @@ function Invoke-InteractiveDirtyPublishCommitFlow {
             throw "Release cancelled while confirming the staged-change commit."
         }
 
-        $expectedExisting = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only }
+        $expectedExisting = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only --no-renames }
         if ($expectedExisting.ExitCode -ne 0) { throw "Could not capture staged paths before commit." }
         $existingPaths = @($expectedExisting.Output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ } | Sort-Object -Unique)
         if ($existingPaths.Count -eq 0) { throw "No staged paths were available to commit." }
@@ -1118,7 +1120,7 @@ function Test-AtomicCommitStaging {
         try {
             $env:GIT_INDEX_FILE = $tempIndex
             Invoke-Native { git --no-pager -C $RepositoryRoot add -A -- @paths } "git add failed during atomic commit preflight" | Out-Null
-            $staged = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only }
+            $staged = Get-NativeOutput { git --no-pager -C $RepositoryRoot diff --cached --name-only --no-renames }
         }
         finally {
             if ($null -eq $oldIndex) {
@@ -1645,7 +1647,7 @@ if ($Push -and -not $SkipTests) {
             -Description 'the release test gate' `
             -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @(
                 'package.json', 'package-lock.json', 'vitest.config.js', 'playwright.config.js',
-                'server.js', 'main.js', 'preload.js', 'elevated-pty-host.js', 'ws-origin.js',
+                'src',
                 'Start-MultiTerm.ps1', 'HELP.md', 'public', 'lib', 'tests', 'scripts',
                 'integrations', 'installer\MultiTerm.iss', 'installer\vscode-integration'
             )) `

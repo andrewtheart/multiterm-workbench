@@ -19,7 +19,7 @@
 const { test, expect, startRendererCoverage, stopRendererCoverage } = require("../support/renderer-coverage");
 
 // Exhaustive verification of every command-palette option and every settings
-// control. Runs against `node server.js` (the browser build) on :3199, so
+// control. Runs against `node src/server.js` (the browser build) on :3199, so
 // desktop-only Electron features are expected to degrade gracefully.
 test.describe.configure({ mode: "serial" });
 

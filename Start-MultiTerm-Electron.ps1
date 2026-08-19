@@ -24,7 +24,7 @@
 
 .DESCRIPTION
   Starts the bundled Electron binary against this worktree. Electron itself
-  spawns the Node bridge (server.js) on $env:PORT and loads the renderer, so
+  spawns the Node bridge (src/server.js) on $env:PORT and loads the renderer, so
   this script only needs to resolve electron.exe, pick a free port, export the
   environment the shell reads, and launch it.
 
@@ -35,7 +35,7 @@
 
 .PARAMETER Port
   Preferred TCP port for the bridge. Defaults to $env:PORT, else 3177 (the same
-  default main.js/server.js use). If the port is busy the script auto-selects
+  default src/main.js and src/server.js use). If the port is busy the script auto-selects
   the next free port unless -StrictPort is set.
 
 .PARAMETER HostName

@@ -8,7 +8,7 @@
  * (at your option) any later version.
  */
 
-const server = require("../../server.js");
+const server = require("../../src/server.js");
 
 const liveSession = {
   id: "80f9b2ee-4618-4e71-b8a0-ae5fb172b62b",

@@ -79,7 +79,7 @@ The renderer is shared, but the bridge hot paths differ.
 
 | Area | Electron/source mode | Installed/browser mode |
 | --- | --- | --- |
-| Bridge | [`server.js`](../../server.js) under system Node | Embedded C# in [`Start-MultiTerm.ps1`](../../Start-MultiTerm.ps1) |
+| Bridge | [`src/server.js`](../../src/server.js) under system Node | Embedded C# in [`Start-MultiTerm.ps1`](../../Start-MultiTerm.ps1) |
 | PTY | native `node-pty` over ConPTY | direct ConPTY P/Invoke |
 | Bridge output coalescing | Configurable, default 8 ms, range 0-100 ms | Same renderer-controlled setting and final-output flush ordering |
 | Broadcast encoding | One JSON/WebSocket frame reused across clients | One UTF-8 byte buffer reused across per-client writer queues |
@@ -132,7 +132,7 @@ flowchart LR
 ### Stage 1: bridge output coalescing
 
 A PTY can emit a build log in thousands of small chunks. Source measurements in
-[`server.js`](../../server.js) record roughly 11,000 chunks per second averaging
+[`src/server.js`](../../src/server.js) record roughly 11,000 chunks per second averaging
 about 100 bytes for one colorized build workload, with approximately 6 microseconds
 of browser event overhead per message. These are developer-workload observations,
 not portable constants.
@@ -566,12 +566,12 @@ not over static mock content.
 
 | Observation | Source and qualification |
 | --- | --- |
-| About 11k PTY chunks/s averaging about 100 bytes; about 6 microseconds browser event plumbing | Source comment in [`server.js`](../../server.js); one colorized build workload on development hardware |
+| About 11k PTY chunks/s averaging about 100 bytes; about 6 microseconds browser event plumbing | Source comment in [`src/server.js`](../../src/server.js); one colorized build workload on development hardware |
 | WebGL used about 39% less renderer task time than built-in renderer | Source comment in [`public/app.js`](../../public/app.js); Copilot-style repaint workload, not universal |
 | 19 panes: 16 contexts/3 lost before, 12/0 after | Historical hardware run summarized in [README](../../README.md); regression proves budget, not GPU speed |
 | Restore rose from 17 ms/pane at 2 panes to 34 ms at 13 before batching | Source comment in [`public/app.js`](../../public/app.js); procedure/raw trace not preserved |
-| Minimized Chromium produced zero rAF ticks over 3 seconds | Source comment in [`main.js`](../../main.js); motivated disabling background throttling |
-| Node memory query about 1.2 s wall and 360 ms CPU | Source comment in [`server.js`](../../server.js); machine-dependent CIM startup/sample cost |
+| Minimized Chromium produced zero rAF ticks over 3 seconds | Source comment in [`src/main.js`](../../src/main.js); motivated disabling background throttling |
+| Node memory query about 1.2 s wall and 360 ms CPU | Source comment in [`src/server.js`](../../src/server.js); machine-dependent CIM startup/sample cost |
 | Concurrent closure around 8 PTYs could crash node-pty | Historical development reproduction; do not treat eight as a universal threshold |
 
 Source comments preserve useful engineering context, but a claim without a raw

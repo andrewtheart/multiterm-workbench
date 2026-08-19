@@ -26,7 +26,9 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { fileURLToPath } = require("node:url");
-const { RuntimeDiagnostics } = require("./lib/runtime-diagnostics");
+const { RuntimeDiagnostics } = require("../lib/runtime-diagnostics");
+
+const repoRoot = path.resolve(__dirname, "..");
 
 // Allows tests to inject fake Electron bindings; outside the Electron runtime
 // `require("electron")` resolves to a path string, so these are set by tests.
@@ -225,7 +227,7 @@ function captureBridgeOutput(stream, level, event) {
 function startServer() {
   const nodeExe = process.platform === "win32" ? "node.exe" : "node";
   const spawnedServer = childProcess.spawn(nodeExe, [path.join(__dirname, "server.js")], {
-    cwd: __dirname,
+    cwd: repoRoot,
     detached: true,
     env: { ...process.env, HOST: activeBridgeHost, PORT: String(activeBridgePort), MULTITERM_UI_OWNER_PID: String(process.pid) },
     stdio: ["ignore", "pipe", "pipe"],
@@ -549,7 +551,7 @@ function bridgeChooserWindowOptions(candidateCount, parentWindow = mainWindow) {
     maxHeight: 760,
     backgroundColor: "#10151c",
     title: "Choose a MultiTerm bridge",
-    icon: path.join(__dirname, "public", "favicon.ico"),
+    icon: path.join(repoRoot, "public", "favicon.ico"),
     autoHideMenuBar: true,
     frame: false,
     roundedCorners: true,
@@ -594,7 +596,7 @@ function showBridgeChooser(candidates, { parentWindow = mainWindow } = {}) {
     ipcMain.on(BRIDGE_CHOOSER_RESULT_CHANNEL, handleResult);
     chooserWindow.on("closed", () => finish({ action: "cancel", remember: false }, false));
     chooserWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    Promise.resolve(chooserWindow.loadFile(path.join(__dirname, "public", "bridge-chooser.html")))
+    Promise.resolve(chooserWindow.loadFile(path.join(repoRoot, "public", "bridge-chooser.html")))
       .then(() => {
         if (settled) return;
         chooserWindow.webContents.send(BRIDGE_CHOOSER_DATA_CHANNEL, bridgeChooserRows(candidates));
@@ -718,7 +720,7 @@ function createWindow() {
     minHeight: 480,
     backgroundColor: "#1e1e1e",
     title: "MultiTerm Workbench",
-    icon: path.join(__dirname, "public", "favicon.ico"),
+    icon: path.join(repoRoot, "public", "favicon.ico"),
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -854,7 +856,7 @@ function quitApp(closeBridge = true) {
 // System-tray icon with Show / Quit actions, so a tray-docked app stays reachable.
 function createTray() {
   if (tray || !Tray) return tray;
-  tray = new Tray(path.join(__dirname, "public", "favicon.ico"));
+  tray = new Tray(path.join(repoRoot, "public", "favicon.ico"));
   tray.setToolTip("MultiTerm Workbench");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Show MultiTerm", click: () => showMainWindow() },
@@ -1252,7 +1254,7 @@ function relaunchAsAdmin() {
     const args = process.argv.slice(1);
     const argList = args.length ? args.map((a) => `'${String(a).replace(/'/g, "''")}'`).join(",") : "";
     const startArgs = argList ? `-ArgumentList ${argList} ` : "";
-    const psCommand = `$env:PORT='${activeBridgePort}'; $env:MULTITERM_ELEVATED='1'; Start-Process -FilePath '${exe.replace(/'/g, "''")}' ${startArgs}-WorkingDirectory '${__dirname.replace(/'/g, "''")}' -Verb RunAs`;
+    const psCommand = `$env:PORT='${activeBridgePort}'; $env:MULTITERM_ELEVATED='1'; Start-Process -FilePath '${exe.replace(/'/g, "''")}' ${startArgs}-WorkingDirectory '${repoRoot.replace(/'/g, "''")}' -Verb RunAs`;
     childProcess.spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", psCommand], { detached: true, stdio: "ignore", windowsHide: true }).unref();
     return true;
   } catch {
@@ -1328,7 +1330,7 @@ function getCurrentVersion() {
   } catch {
     /* not running under Electron (tests) — fall back to package.json */
   }
-  return require("./package.json").version;
+  return require(path.join(repoRoot, "package.json")).version;
 }
 
 // GET that follows GitHub's redirects (release assets live on a CDN) and

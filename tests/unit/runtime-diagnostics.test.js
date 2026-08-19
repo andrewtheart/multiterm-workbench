@@ -7,7 +7,7 @@ const {
   normalizeDiagnosticsConfig,
   redactDiagnosticValue
 } = require("../../lib/runtime-diagnostics");
-const server = require("../../server");
+const server = require("../../src/server");
 
 describe("runtime diagnostic storage", () => {
   let directory;

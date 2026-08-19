@@ -6,6 +6,7 @@
 
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const repoRoot = path.resolve(__dirname, "..", "..");
@@ -19,7 +20,7 @@ const nativeInstruction = fs.readFileSync(
   "utf8"
 );
 
-function runPowerShellFunctions(names, commands) {
+function runPowerShellFunctions(names, commands, extraEnv = {}) {
   const loadFunctions = names.map((name) => [
     `$functionAst = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq '${name}' }, $true)`,
     `if (-not $functionAst) { throw '${name} not found' }`,
@@ -40,7 +41,7 @@ function runPowerShellFunctions(names, commands) {
     {
       cwd: repoRoot,
       encoding: "utf8",
-      env: { ...process.env, RELEASE_SCRIPT: scriptPath }
+      env: { ...process.env, ...extraEnv, RELEASE_SCRIPT: scriptPath }
     }
   ).trim();
 }
@@ -287,6 +288,78 @@ describe("installer release notes", () => {
   });
 });
 
+describe("atomic commit path verification", () => {
+  // Rename detection pairs a delete with an add and reports only the destination,
+  // so a move would otherwise appear to stage and commit half its paths.
+  const root = path.join(os.tmpdir(), `mt-release-move-${process.pid}`);
+
+  function git(cwd, args) {
+    childProcess.execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+  }
+
+  beforeAll(() => {
+    fs.rmSync(root, { force: true, recursive: true });
+    fs.mkdirSync(root, { recursive: true });
+    git(root, ["init", "-b", "main"]);
+    git(root, ["config", "user.email", "release@test.invalid"]);
+    git(root, ["config", "user.name", "Release Test"]);
+    fs.writeFileSync(path.join(root, "server.js"), "module.exports = { serve: true };\n".repeat(20));
+    fs.writeFileSync(path.join(root, "keep.md"), "unrelated\n");
+    git(root, ["add", "-A"]);
+    git(root, ["commit", "-m", "chore: seed"]);
+
+    // The exact shape of the pending src/ restructure: a delete plus an untracked add.
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.renameSync(path.join(root, "server.js"), path.join(root, "src", "server.js"));
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { force: true, recursive: true });
+  });
+
+  it("accepts a group holding both halves of a move", () => {
+    const output = runPowerShellFunctions(
+      ["Invoke-Native", "Get-NativeOutput", "ConvertTo-AbsolutePath", "Test-AtomicCommitStaging"],
+      [
+        "$plan = [pscustomobject]@{ groups = @([pscustomobject]@{ message = 'refactor: move'; paths = @('server.js', 'src/server.js') }) }",
+        "$result = Test-AtomicCommitStaging -RepositoryRoot $env:MOVE_REPO -Plan $plan",
+        "[pscustomobject]@{ Ok = $result } | ConvertTo-Json -Compress"
+      ],
+      { MOVE_REPO: root }
+    );
+    expect(JSON.parse(output)).toEqual({ Ok: true });
+  });
+
+  it("still rejects a pathspec that stages more than it names", () => {
+    // A directory entry expands to its files, so the group would commit paths the
+    // reviewed plan never listed.
+    expect(() => runPowerShellFunctions(
+      ["Invoke-Native", "Get-NativeOutput", "ConvertTo-AbsolutePath", "Test-AtomicCommitStaging"],
+      [
+        "$plan = [pscustomobject]@{ groups = @([pscustomobject]@{ message = 'refactor: directory'; paths = @('src') }) }",
+        "Test-AtomicCommitStaging -RepositoryRoot $env:MOVE_REPO -Plan $plan | Out-Null"
+      ],
+      { MOVE_REPO: root }
+    )).toThrow(/Staging did not select exactly the planned paths/);
+  });
+
+  it("verifies a committed move by both of its paths", () => {
+    const output = runPowerShellFunctions(
+      ["Get-NativeOutput", "Assert-CommitishMatchesPaths"],
+      [
+        "git -C $env:MOVE_REPO add -A -- 'server.js' 'src/server.js' | Out-Null",
+        "git -C $env:MOVE_REPO commit -q -m 'refactor: move' | Out-Null",
+        "Assert-CommitishMatchesPaths -RepositoryRoot $env:MOVE_REPO -ExpectedPaths @('server.js', 'src/server.js') -Label 'refactor: move'",
+        "$rejected = $false",
+        "try { Assert-CommitishMatchesPaths -RepositoryRoot $env:MOVE_REPO -ExpectedPaths @('src/server.js') -Label 'refactor: move' } catch { $rejected = $true }",
+        "[pscustomobject]@{ Rejected = $rejected } | ConvertTo-Json -Compress"
+      ],
+      { MOVE_REPO: root }
+    );
+    expect(JSON.parse(output)).toEqual({ Rejected: true });
+  });
+});
+
 describe("release test gate", () => {
   const gateIndex = script.indexOf("# --- Release test gate");
 
@@ -310,6 +383,26 @@ describe("release test gate", () => {
     const gate = script.slice(gateIndex, script.indexOf("# --- Conservatively commit pending changes"));
     expect(gate).not.toContain("npm run test:e2e:full");
     expect(packageJson.scripts["test:e2e"]).toBe("playwright test");
+  });
+
+  it("invalidates the release checkpoint when runtime source changes", () => {
+    const gate = script.slice(gateIndex, script.indexOf("# --- Conservatively commit pending changes"));
+    const list = /-Paths @\(([\s\S]*?)\)\)/.exec(gate);
+    expect(list).not.toBeNull();
+    const fingerprintPaths = [...list[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+
+    // Every fingerprinted path must exist, or a rename silently stops invalidating
+    // the checkpoint and an interrupted release resumes past a stale test result.
+    for (const fingerprintPath of fingerprintPaths) {
+      expect({ fingerprintPath, exists: fs.existsSync(path.join(repoRoot, fingerprintPath)) })
+        .toEqual({ fingerprintPath, exists: true });
+    }
+
+    // Both bridges, the Electron shell, and the renderer must each be covered.
+    for (const required of ["src", "public", "lib", "tests", "Start-MultiTerm.ps1", "package.json"]) {
+      expect(fingerprintPaths).toContain(required);
+    }
+    expect(fingerprintPaths.filter((entry) => entry.endsWith(".js") && !entry.includes("config"))).toEqual([]);
   });
 
   it("gates only publishing runs and stays skippable", () => {

@@ -13,7 +13,7 @@ const os = require("node:os");
 const path = require("node:path");
 const childProcess = require("node:child_process");
 const { encode } = require("@msgpack/msgpack");
-const server = require("../../server.js");
+const server = require("../../src/server.js");
 
 let temporaryRoot;
 

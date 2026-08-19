@@ -13,7 +13,7 @@ const path = require("node:path");
 
 const repoRoot = path.join(__dirname, "..", "..");
 const installedBridge = fs.readFileSync(path.join(repoRoot, "Start-MultiTerm.ps1"), "utf8");
-const nodeBridge = fs.readFileSync(path.join(repoRoot, "server.js"), "utf8");
+const nodeBridge = fs.readFileSync(path.join(repoRoot, "src", "server.js"), "utf8");
 
 describe("installed bridge remote Copilot sessions", () => {
   it("asks GitHub for the agent session list on a worker thread", () => {

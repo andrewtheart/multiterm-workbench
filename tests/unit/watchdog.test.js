@@ -12,7 +12,7 @@ const watchdogPath = path.join(root, "scripts", "MultiTerm-Watchdog.ps1");
 const watchdogBytes = fs.readFileSync(watchdogPath);
 const watchdog = watchdogBytes.toString("utf8");
 const installer = fs.readFileSync(path.join(root, "installer", "MultiTerm.iss"), "utf8");
-const nodeBridge = fs.readFileSync(path.join(root, "server.js"), "utf8");
+const nodeBridge = fs.readFileSync(path.join(root, "src", "server.js"), "utf8");
 const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), "utf8");
 
  describe("optional MultiTerm watchdog", () => {

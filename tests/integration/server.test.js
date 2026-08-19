@@ -17,7 +17,7 @@
  */
 
 const http = require("node:http");
-const app = require("../../server.js");
+const app = require("../../src/server.js");
 
 // `fetch` derives Host from the URL, so spoofing it (as a rebinding attack does)
 // needs the lower-level client.

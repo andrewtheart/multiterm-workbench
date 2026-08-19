@@ -10,7 +10,7 @@
 MultiTerm currently has two local backend implementations that expose the same
 JSON-over-WebSocket protocol to the renderer:
 
-- `server.js` is the Node.js bridge used by Electron and development workflows.
+- `src/server.js` is the Node.js bridge used by Electron and development workflows.
   It manages terminal sessions through `node-pty`.
 - `Start-MultiTerm.ps1` is the installed application's bridge. It embeds C# that
   serves HTTP and WebSockets, calls Windows ConPTY directly, manages elevated
@@ -57,7 +57,7 @@ without measured justification:
 2. **The shipped backend does not use `node-pty`**
 
    The installed application calls ConPTY directly from embedded C#. The native
-   `node-pty` teardown crashes documented in `server.js` primarily affect the
+   `node-pty` teardown crashes documented in `src/server.js` primarily affect the
    Electron and Node development path, not the backend shipped by the installer.
 
 3. **Established behavior and test coverage**
@@ -133,7 +133,7 @@ bottlenecks and do not justify placing the backend in WebAssembly.
 
 ### Migration scope and estimated effort
 
-Replacing only `server.js` is not backend unification because the installer
+Replacing only `src/server.js` is not backend unification because the installer
 would continue to use the separate PowerShell/C# implementation.
 
 Approximate effort for one engineer:
