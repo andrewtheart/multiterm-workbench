@@ -8,11 +8,14 @@ test.describe("Inline folder picker", () => {
       window.__folderPickerOriginalRequestBridge = requestBridge;
       window.__folderPickerMessages = [];
       window.__folderPickerEverythingAvailable = false;
+      window.__folderPickerFailure = "";
       state.settings.folderEverythingReminderDismissed = false;
       saveSettings();
       requestBridge = async (message) => {
         window.__folderPickerMessages.push({ ...message });
         if (message.type === "folderList") {
+          if (window.__folderPickerFailure === "list-silent") return null;
+          if (window.__folderPickerFailure === "list-error") return { ok: false, error: "list denied" };
           const current = message.path || "D:\\Root";
           const entries = current === "D:\\Root"
             ? [
@@ -33,6 +36,8 @@ test.describe("Inline folder picker", () => {
           };
         }
         if (message.type === "folderSearch") {
+          if (window.__folderPickerFailure === "search-silent") return null;
+          if (window.__folderPickerFailure === "search-error") return { ok: false, error: "search denied" };
           if (message.autocomplete) {
             return {
               ok: true,
@@ -66,6 +71,8 @@ test.describe("Inline folder picker", () => {
           };
         }
         if (message.type === "folderCreate") {
+          if (window.__folderPickerFailure === "create-silent") return null;
+          if (window.__folderPickerFailure === "create-error") return { ok: false, error: "create denied" };
           return { ok: true, path: `${message.path}\\${message.name}` };
         }
         return window.__folderPickerOriginalRequestBridge(message);
@@ -80,6 +87,7 @@ test.describe("Inline folder picker", () => {
       delete window.__folderPickerOriginalRequestBridge;
       delete window.__folderPickerMessages;
       delete window.__folderPickerEverythingAvailable;
+      delete window.__folderPickerFailure;
     });
   });
 
@@ -197,5 +205,95 @@ test.describe("Inline folder picker", () => {
     expect(bounds.y).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
     expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
+  });
+
+  test("handles errors, keyboard navigation, history, focus wrapping, and every dismissal route", async ({ page }) => {
+    await page.evaluate(() => { chooseInlineFolder("D:\\Root", "Folder behavior"); });
+    await expect(page.locator("#folderPickerOverlay")).toBeVisible();
+
+    await page.locator("#folderPickerLocation").fill("");
+    await page.evaluate(() => updateFolderPickerSuggestions());
+    await expect(page.locator("#folderPickerSuggestions")).toBeHidden();
+
+    await page.locator("#folderPickerSearch").fill("");
+    await page.locator("#folderPickerSearch").press("Enter");
+    await expect(page.locator("#folderPickerStatus")).toContainText("2 subfolders");
+    await page.evaluate(() => {
+      folderPicker.entries = [{ name: "Only", path: "D:\\Root\\Only" }];
+      renderFolderPickerRows(folderPicker.entries);
+      runFolderPickerSearch();
+    });
+    await expect(page.locator("#folderPickerStatus")).toContainText("1 subfolder.");
+
+    await page.evaluate(() => { window.__folderPickerFailure = "search-error"; });
+    await page.locator("#folderPickerSearch").fill("denied");
+    await page.locator("#folderPickerSearch").press("Enter");
+    await expect(page.locator("#folderPickerStatus")).toHaveText("search denied");
+    await page.evaluate(() => { window.__folderPickerFailure = "search-silent"; });
+    await page.locator("#folderPickerSearch").press("Enter");
+    await expect(page.locator("#folderPickerStatus")).toContainText("bridge");
+
+    await page.evaluate(() => { window.__folderPickerFailure = ""; });
+    await page.locator("#folderPickerSearch").fill("");
+    await page.evaluate(() => navigateFolderPicker("D:\\Root\\Alpha"));
+    await page.evaluate(() => navigateFolderPicker("D:\\Root\\Alpha", { record: true }));
+    expect(await page.evaluate(() => folderPicker.history)).toEqual(["D:\\Root", "D:\\Root\\Alpha"]);
+    await page.locator("#folderPickerBack").click();
+    await expect(page.locator("#folderPickerLocation")).toHaveValue("D:\\Root");
+    await page.locator("#folderPickerForward").click();
+    await expect(page.locator("#folderPickerLocation")).toHaveValue("D:\\Root\\Alpha");
+    await page.locator("#folderPickerUp").click();
+    await expect(page.locator("#folderPickerLocation")).toHaveValue("D:\\Root");
+    await page.evaluate(() => navigateFolderPickerHistory(-99));
+
+    await page.locator("#folderPickerLocation").fill("D:\\Root\\Al");
+    await page.evaluate(() => updateFolderPickerSuggestions());
+    const suggestion = page.locator("#folderPickerSuggestions button");
+    await expect(suggestion).toBeVisible();
+    await page.locator("#folderPickerLocation").press("ArrowDown");
+    await expect(suggestion).toBeFocused();
+    await suggestion.press("ArrowDown");
+    await suggestion.press("ArrowUp");
+    await suggestion.press("Escape");
+    await expect(page.locator("#folderPickerLocation")).toBeFocused();
+    await page.locator("#folderPickerLocation").press("Enter");
+
+    await page.locator("#folderPickerSearch").fill("match");
+    await page.locator("#folderPickerSearch").press("Enter");
+    const rows = page.locator(".folder-picker-row-main");
+    await rows.first().focus();
+    await rows.first().press("ArrowDown");
+    await rows.nth(1).press("ArrowUp");
+    await rows.first().press("ArrowLeft");
+    await page.locator("#folderPickerSearch").fill("match");
+    await page.locator("#folderPickerSearch").press("Enter");
+    await rows.first().press("ArrowRight");
+
+    await page.locator("#folderPickerNew").click();
+    await page.locator("#folderPickerNewForm button[type='submit']").click();
+    await expect(page.locator("#folderPickerStatus")).toHaveText("Enter a folder name.");
+    await page.locator("#folderPickerNewCancel").click();
+    await expect(page.locator("#folderPickerNew")).toBeFocused();
+    await page.locator("#folderPickerNew").click();
+    await page.locator("#folderPickerNewName").fill("Denied");
+    await page.evaluate(() => { window.__folderPickerFailure = "create-error"; });
+    await page.locator("#folderPickerNewForm button[type='submit']").click();
+    await expect(page.locator("#folderPickerStatus")).toHaveText("create denied");
+    await page.evaluate(() => { window.__folderPickerFailure = "create-silent"; });
+    await page.locator("#folderPickerNewForm button[type='submit']").click();
+    await expect(page.locator("#folderPickerStatus")).toContainText("bridge");
+
+    await page.locator("#folderPickerClose").click();
+    await expect(page.locator("#folderPickerOverlay")).toBeHidden();
+    await page.evaluate(() => { window.__folderPickerFailure = "list-error"; chooseInlineFolder("D:\\Root"); });
+    await expect(page.locator("#folderPickerStatus")).toHaveText("list denied");
+    await page.evaluate(() => { window.__folderPickerFailure = "list-silent"; navigateFolderPicker("D:\\Root"); });
+    await expect(page.locator("#folderPickerStatus")).toContainText("bridge");
+
+    await page.locator("#folderPickerOverlay").click({ position: { x: 2, y: 2 } });
+    await expect(page.locator("#folderPickerOverlay")).toBeHidden();
+    await page.evaluate(() => { window.__folderPickerFailure = ""; chooseInlineFolder("D:\\Root"); });
+    await page.locator("#folderPickerLocation").press("Escape");
+    await expect(page.locator("#folderPickerOverlay")).toBeHidden();
   });
 });

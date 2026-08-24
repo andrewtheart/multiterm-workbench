@@ -14,6 +14,7 @@ const path = require("node:path");
 const childProcess = require("node:child_process");
 const { encode } = require("@msgpack/msgpack");
 const server = require("../../src/server.js");
+const automationOutput = require("../../src/copilot-automation-output");
 
 let temporaryRoot;
 
@@ -36,8 +37,17 @@ function addSession(id, workspace, { transcript = "{\"type\":\"user.message\"}" 
 }
 
 describe("Copilot automation output", () => {
+  const sessionId = "12345678-1234-4234-8234-123456789abc";
+
+  it("bounds output capture settings", () => {
+    expect(automationOutput.clampAutomationOutputCaptureKb("not-a-number")).toBe(128);
+    expect(automationOutput.clampAutomationOutputCaptureKb(1)).toBe(16);
+    expect(automationOutput.clampAutomationOutputCaptureKb(1024)).toBe(512);
+    expect(automationOutput.clampAutomationOutputCaptureKb(32.6)).toBe(33);
+  });
+
   it("reads only appended assistant messages and detects turn completion", () => {
-    const id = "12345678-1234-4234-8234-123456789abc";
+    const id = sessionId;
     const directory = addSession(id, "cwd: D:\\repo\n", {
       transcript: `${JSON.stringify({ type: "assistant.message", data: { content: "old response" } })}\n`
     });
@@ -70,6 +80,118 @@ describe("Copilot automation output", () => {
       sessionId: "12345678-1234-4234-8234-123456789abc",
       snapshot: true
     }, temporaryRoot)).toEqual({ complete: false, cursor: 0, output: "", truncated: false, turnStarted: false });
+  });
+
+  it("returns correlated protocol errors for invalid automation output requests", () => {
+    const client = { send: vi.fn() };
+    server.handleClientMessage(client, JSON.stringify({
+      type: "copilotAutomationOutput",
+      requestId: "output-1",
+      sessionId: "invalid"
+    }));
+    server.handleClientMessage(client, JSON.stringify({
+      type: "copilotAutomationOutput",
+      requestId: 42,
+      sessionId: "invalid"
+    }));
+
+    expect(client.send).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      type: "copilotAutomationOutput",
+      requestId: "output-1",
+      error: "A valid Copilot session ID is required."
+    }));
+    expect(client.send).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      type: "copilotAutomationOutput",
+      requestId: "",
+      error: "A valid Copilot session ID is required."
+    }));
+  });
+
+  it("uses the default session root and rethrows unexpected stat failures", () => {
+    let requestedPath = "";
+    const missingFileSystem = {
+      statSync(target) {
+        requestedPath = target;
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      }
+    };
+    expect(automationOutput.readCopilotAutomationOutput({ sessionId }, { fileSystem: missingFileSystem }))
+      .toEqual({ complete: false, cursor: 0, output: "", truncated: false, turnStarted: false });
+    expect(requestedPath).toContain(path.join(".copilot", "session-state", sessionId, "events.jsonl"));
+
+    const deniedFileSystem = {
+      statSync() {
+        throw Object.assign(new Error("denied"), { code: "EACCES" });
+      }
+    };
+    expect(() => automationOutput.readCopilotAutomationOutput(
+      { sessionId },
+      { fileSystem: deniedFileSystem, sessionRoot: temporaryRoot }
+    )).toThrow("denied");
+  });
+
+  it("returns immediately when the requested cursor is already at the end", () => {
+    addSession(sessionId, "cwd: D:\\repo\n", { transcript: "" });
+    expect(server.readCopilotAutomationOutput({
+      cursor: 100,
+      sessionId,
+      turnStarted: true
+    }, temporaryRoot)).toEqual({
+      complete: false,
+      cursor: 0,
+      output: "",
+      truncated: false,
+      turnStarted: true
+    });
+  });
+
+  it("keeps an incomplete record pending when the file has no complete line", () => {
+    const directory = addSession(sessionId, "cwd: D:\\repo\n", { transcript: "partial event" });
+    const size = fs.statSync(path.join(directory, "events.jsonl")).size;
+    expect(server.readCopilotAutomationOutput({ cursor: 0, sessionId }, temporaryRoot)).toEqual({
+      complete: false,
+      cursor: 0,
+      output: "",
+      truncated: false,
+      turnStarted: false
+    });
+
+    fs.writeFileSync(path.join(directory, "events.jsonl"), "x".repeat(17 * 1024), "utf8");
+    expect(server.readCopilotAutomationOutput({ cursor: 0, maxKb: 16, sessionId }, temporaryRoot))
+      .toMatchObject({ complete: false, cursor: 17 * 1024, output: "", truncated: true });
+    expect(size).toBeGreaterThan(0);
+  });
+
+  it("discards a partial leading record from a bounded read", () => {
+    const message = JSON.stringify({ type: "assistant.message", data: { content: "bounded response" } });
+    addSession(sessionId, "cwd: D:\\repo\n", {
+      transcript: `${"x".repeat(17 * 1024)}\n${message}\n`
+    });
+
+    expect(server.readCopilotAutomationOutput({ cursor: 0, maxKb: 16, sessionId }, temporaryRoot))
+      .toMatchObject({ complete: false, output: "bounded response", truncated: true });
+  });
+
+  it("closes the event log when an operating-system read ends early", () => {
+    const closeSync = vi.fn();
+    const fileSystem = {
+      closeSync,
+      openSync: vi.fn(() => 17),
+      readSync: vi.fn(() => 0),
+      statSync: vi.fn(() => ({ size: 32 }))
+    };
+
+    expect(automationOutput.readCopilotAutomationOutput(
+      { cursor: 0, sessionId },
+      { fileSystem, sessionRoot: temporaryRoot }
+    )).toEqual({
+      complete: false,
+      cursor: 0,
+      output: "",
+      truncated: false,
+      turnStarted: false
+    });
+    expect(closeSync).toHaveBeenCalledWith(17);
   });
 
   it("retries a Copilot event that was only partially written", () => {
@@ -828,6 +950,7 @@ describe("Copilot CLI session discovery", () => {
       { name: "Docs", terminals: ["t-3"] }
     ]);
     expect(() => server.parseTerminalPageGroups("no json", allowed)).toThrow("invalid grouping response");
+    expect(() => server.parseTerminalPageGroups("prefix {bad json} suffix", allowed)).toThrow("invalid grouping response");
     expect(() => server.parseTerminalPageGroups(JSON.stringify({ other: [] }), allowed)).toThrow("invalid grouping response");
     expect(() => server.parseTerminalPageGroups(JSON.stringify({
       groups: [{ name: "Partial", terminals: ["t-1"] }]
@@ -835,6 +958,9 @@ describe("Copilot CLI session discovery", () => {
     expect(server.parseTerminalPageGroups(JSON.stringify({
       groups: [{ name: "Invented", terminals: ["t-1", "t-2", "t-3", "t-9"] }, { name: "Empty", terminals: [] }]
     }), allowed)).toEqual([{ name: "Invented", terminals: ["t-1", "t-2", "t-3"] }]);
+    expect(server.parseTerminalPageGroups(JSON.stringify({
+      groups: [null, { name: "API", terminals: [null, "t-1", "t-1", "t-2", "t-3"] }]
+    }), ["t-1", "t-2", "t-3"])).toEqual([{ name: "API", terminals: ["t-1", "t-2", "t-3"] }]);
 
     expect(server.terminalPageGroupPrompt([{ id: "t-1", title: "api" }]))
       .toContain("Every supplied terminal id must appear exactly once");
@@ -882,6 +1008,51 @@ describe("Copilot CLI session discovery", () => {
       }))),
       contextKb: 64
     })).rejects.toThrow("Grouping these pages needs");
+  });
+
+  it("reports grouping authentication and model failures and honors explicit model options", async () => {
+    const catalog = JSON.stringify([
+      { id: "t-1", title: "Build" },
+      { id: "t-2", title: "Test" }
+    ]);
+    const signedOut = {
+      start: vi.fn(async () => {}),
+      getAuthStatus: vi.fn(async () => ({ isAuthenticated: false, statusMessage: "Sign in first." })),
+      stop: vi.fn(async () => {})
+    };
+    await expect(server.groupTerminalPages({ terminals: catalog }, () => signedOut)).rejects.toThrow("Sign in first.");
+    expect(signedOut.stop).toHaveBeenCalledOnce();
+
+    const noMessage = {
+      start: vi.fn(async () => {}),
+      getAuthStatus: vi.fn(async () => ({ isAuthenticated: false })),
+      stop: vi.fn(async () => {})
+    };
+    await expect(server.groupTerminalPages({ terminals: catalog }, () => noMessage))
+      .rejects.toThrow("GitHub Copilot is not signed in for this Windows account.");
+
+    const noModel = copilotSdkFixture({ models: [{ id: "off", policy: { state: "disabled" } }] });
+    await expect(server.groupTerminalPages({ terminals: catalog }, noModel.createClient))
+      .rejects.toThrow("No enabled GitHub Copilot model is available for page grouping.");
+
+    const selected = copilotSdkFixture({
+      models: [
+        { id: "other", policy: { state: "enabled" }, supportedReasoningEfforts: [] },
+        { id: "target", policy: { state: "enabled" }, supportedReasoningEfforts: ["high"] }
+      ],
+      output: JSON.stringify({ groups: [{ name: "Work", terminals: ["t-1", "t-2"] }] })
+    });
+    await expect(server.groupTerminalPages({
+      terminals: catalog,
+      model: "target",
+      effort: "high",
+      context: "long_context"
+    }, selected.createClient)).resolves.toEqual([{ name: "Work", terminals: ["t-1", "t-2"] }]);
+    expect(selected.client.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      contextTier: "long_context",
+      model: "target",
+      reasoningEffort: "high"
+    }));
   });
 
   it("groups pages into page groups when the caller asks for that scope", async () => {
@@ -1316,12 +1487,18 @@ describe("Copilot terminal title generation", () => {
     });
 
     const noModels = copilotSdkFixture({ models: [] });
+    // A momentarily empty catalogue must not cost a signed-in account its
+    // ability to resume or relocate a session; only titling needs a model.
     await expect(server.copilotProviderCapabilities(noModels.createClient, vi.fn(async () => "C:\\Tools\\copilot.exe")))
       .resolves.toMatchObject({
         cliInstalled: true,
         authenticated: true,
         available: false,
-        cwdChangeStatus: "No GitHub Copilot models are available for this account."
+        titleAvailable: false,
+        interactiveAvailable: true,
+        cwdChangeAvailable: true,
+        interactiveStatus: "",
+        cwdChangeStatus: ""
       });
     await expect(server.copilotProviderCapabilities(noModels.createClient, vi.fn(async () => "")))
       .resolves.toMatchObject({
@@ -1331,6 +1508,37 @@ describe("Copilot terminal title generation", () => {
         cwdChangeAvailable: false,
         interactiveStatus: "GitHub Copilot CLI is not installed or is not on PATH."
       });
+  });
+
+  it("keeps a signed-in account usable when the Copilot probe throws", async () => {
+    const throwing = () => ({
+      start: vi.fn(async () => { throw new Error("socket hang up"); }),
+      stop: vi.fn(async () => {})
+    });
+    const installed = vi.fn(async () => "C:\\Tools\\copilot.exe");
+
+    // A throw is "the check failed", not "the account signed out".
+    await expect(server.copilotProviderCapabilities(throwing, installed, { authenticated: true }))
+      .resolves.toMatchObject({
+        cliInstalled: true,
+        authenticated: true,
+        probeFailed: true,
+        interactiveAvailable: true,
+        cwdChangeAvailable: true,
+        interactiveStatus: ""
+      });
+
+    // With no completed check to stand on there is nothing to preserve.
+    await expect(server.copilotProviderCapabilities(throwing, installed, { authenticated: null }))
+      .resolves.toMatchObject({
+        authenticated: false,
+        probeFailed: true,
+        interactiveAvailable: false
+      });
+
+    const memory = { authenticated: null };
+    await server.copilotProviderCapabilities(copilotSdkFixture({ models: [] }).createClient, installed, memory);
+    expect(memory.authenticated, "a completed check is what updates the remembered state").toBe(true);
   });
 
   it("reports Claude version, authentication, and SDK initialization failures", async () => {

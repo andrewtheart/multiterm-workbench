@@ -1051,6 +1051,14 @@ describe("bridge startup discovery", () => {
       { bridgeId: "BRIDGE-004", bridgeType: "installed", port: 3200, startedAt: "2026-08-16T10:00:00Z", health: { sessions: 2 } },
       { bridgeId: "BRIDGE-005", bridgeType: "electron", port: 3201, startedAt: "2026-08-16T11:00:00Z", health: { sessions: 1 } }
     ];
+    const parentWindow = { isDestroyed: vi.fn(() => false) };
+
+    expect(main.normalizeBridgeChooserResult({ action: "new", remember: 1 }, candidates.length))
+      .toEqual({ action: "new", remember: true });
+    expect(main.normalizeBridgeChooserResult({ action: "cancel" }, candidates.length))
+      .toEqual({ action: "cancel", remember: false });
+    expect(main.bridgeChooserWindowOptions(candidates.length, parentWindow))
+      .toEqual(expect.objectContaining({ parent: parentWindow, modal: true }));
 
     const pending = main.showBridgeChooser(candidates, { parentWindow: null });
     const chooser = electron.BrowserWindow.mock.results.at(-1).value;

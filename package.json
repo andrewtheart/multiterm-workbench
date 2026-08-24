@@ -29,7 +29,7 @@
     "test:full": "npm run test:powershell:coverage && npm run test:coverage && npm run test:e2e:full",
     "test:watch": "vitest",
     "pretest:coverage": "npm run build:help",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --maxWorkers=1 --no-file-parallelism",
     "test:powershell:coverage": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts\\test-powershell-coverage.ps1",
     "pretest:e2e": "npm run build:help",
     "test:e2e": "playwright test",

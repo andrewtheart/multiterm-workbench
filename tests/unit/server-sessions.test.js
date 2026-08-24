@@ -296,6 +296,70 @@ describe("writeSession", () => {
   });
 });
 
+describe("promoteSession", () => {
+  it("publishes an owner-promoted session once and rejects unavailable sessions", () => {
+    const owner = fakeClient();
+    const observer = fakeClient();
+    const stranger = fakeClient();
+    server.clients.add(observer);
+    server.createSession(owner, { id: "private01", ephemeral: true }, sessionDependencies);
+    owner.send.mockClear();
+    observer.send.mockClear();
+
+    server.handleClientMessage(stranger, JSON.stringify({
+      type: "promoteSession",
+      requestId: "foreign",
+      id: "private01"
+    }));
+    expect(stranger.send).toHaveBeenCalledWith({
+      type: "sessionPromoted",
+      requestId: "foreign",
+      id: "private01",
+      ok: false,
+      reason: "Session is unavailable."
+    });
+
+    server.handleClientMessage(owner, JSON.stringify({
+      type: "promoteSession",
+      requestId: "owner",
+      id: "private01"
+    }));
+    expect(owner.send).toHaveBeenCalledWith({
+      type: "sessionPromoted",
+      requestId: "owner",
+      id: "private01",
+      ok: true,
+      reason: ""
+    });
+    expect(observer.send).toHaveBeenCalledWith(expect.objectContaining({ type: "created", id: "private01" }));
+    expect(server.sessions.get("private01")).toMatchObject({
+      ephemeral: false,
+      ownerClient: null,
+      promotedByClient: owner
+    });
+
+    observer.send.mockClear();
+    server.handleClientMessage(owner, JSON.stringify({ type: "promoteSession", id: "private01" }));
+    expect(owner.send).toHaveBeenLastCalledWith({
+      type: "sessionPromoted",
+      requestId: "",
+      id: "private01",
+      ok: true,
+      reason: ""
+    });
+    expect(observer.send).not.toHaveBeenCalled();
+
+    server.handleClientMessage(stranger, JSON.stringify({ type: "promoteSession" }));
+    expect(stranger.send).toHaveBeenLastCalledWith({
+      type: "sessionPromoted",
+      requestId: "",
+      id: "",
+      ok: false,
+      reason: "Session is unavailable."
+    });
+  });
+});
+
 describe("renameSession", () => {
   it("persists and broadcasts a normalized title", () => {
     const observer = fakeClient();

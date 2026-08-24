@@ -1118,6 +1118,17 @@ test.describe("MultiTerm Workbench UI", () => {
     await setCheck("#compactChrome", false);
     await expect(page.locator("#terminalHost")).not.toHaveClass(/compact/);
 
+    // Pending changes only claims a header slot inside a git repository, and
+    // whether the checkout under test is one has nothing to do with pane width.
+    await page.evaluate(() => {
+      for (const terminal of state.terminals.values()) {
+        window.clearTimeout(terminal.gitInspectTimer);
+        terminal.gitInspectTimer = 0;
+        terminal.cwd = "";
+        applyTerminalGitInspection(terminal, null);
+      }
+    });
+
     await setNative("#layoutMode", "columns", "change");
     await setNative("#columnCount", "3", "input");
 

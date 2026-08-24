@@ -3891,7 +3891,7 @@ body.header-hidden .status-hint kbd,
 }
 
 .palette.worktree-review {
-  width: min(1100px, 97vw);
+  width: min(1400px, 97vw);
 }
 
 .palette.worktree-merge {
@@ -4207,6 +4207,10 @@ body.header-hidden .status-hint kbd,
   background: var(--surface);
   max-height: 62vh;
   overflow: auto;
+  /* diff2html positions side-by-side line numbers absolutely so the horizontal
+     code scroll cannot move them. Without this the dialog's transformed card is
+     their containing block and they stop scrolling vertically with their rows. */
+  position: relative;
 }
 
 /* diff2html ships a light palette; these keep it legible on the dark surface. */
@@ -4251,6 +4255,17 @@ body.header-hidden .status-hint kbd,
 .worktree-review-diff .d2h-info {
   background: var(--surface-raised);
   color: var(--muted);
+}
+
+/* diff2html keeps code on one line and scrolls it horizontally. A dialog is not
+   a viewport you can widen, so wrap instead of hiding the end of the line. */
+.worktree-review-diff .d2h-code-line-ctn {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.worktree-review-diff .d2h-file-diff {
+  overflow-x: auto;
 }
 
 .worktree-list {
@@ -7422,6 +7437,7 @@ button.shortcut-binding.is-capturing {
 
 .artifact-toggle,
 .pane-artifacts,
+.pane-git-changes,
 .pane-dequeue {
   position: relative;
 }
@@ -8584,6 +8600,27 @@ button.shortcut-binding.is-capturing {
 
 .pane-actions .pane-dequeue[hidden] {
   display: none;
+}
+
+.pane-actions .pane-git-changes[hidden] {
+  display: none;
+}
+
+.pane-git-changes.has-changes {
+  color: var(--warn);
+}
+
+/* A count would need a second git call per pane; presence is what the icon promises. */
+.pane-git-changes.has-changes::after {
+  background: var(--warn);
+  border: 2px solid var(--surface-raised);
+  border-radius: 999px;
+  content: "";
+  height: 9px;
+  position: absolute;
+  right: -2px;
+  top: -2px;
+  width: 9px;
 }
 
 .terminal-notes-flyout {

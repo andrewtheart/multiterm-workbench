@@ -73,13 +73,12 @@ function metadata(iconName, text) {
   return item;
 }
 
-function selectBridge(index, focusConnect = false) {
+function selectBridge(index) {
   selectedIndex = index;
   confirmedIndex = -1;
   elements.warning.hidden = true;
   elements.connect.querySelector("span").textContent = "Connect";
   elements.connect.disabled = index < 0;
-  if (focusConnect) elements.connect.focus();
 }
 
 function createBridgeOption(bridge, position) {

@@ -204,6 +204,25 @@ describe("automations model", () => {
     }))).toBeNull();
   });
 
+  it("accepts bounded regular-expression structures without permitting ambiguous repetition", () => {
+    for (const pattern of [
+      "a+?",
+      "a{0}",
+      "a{2}",
+      "a{2,}",
+      "a{2,4}",
+      "a{word}",
+      "(?:ab)+",
+      "(?<word>ab)+",
+      "[^\\]]+",
+      "a+ba+"
+    ]) {
+      expect(automations.titleMatchValidationError({ type: "regex", value: pattern }), pattern).toBe("");
+    }
+    expect(automations.titleMatchValidationError(null)).toMatch(/Enter title text/i);
+    expect(automations.compileTitleMatcher({ type: "contains", value: "build" }).test(null)).toBe(false);
+  });
+
   it("compiles a reusable title matcher that agrees with single-shot matching", () => {
     const matcher = automations.compileTitleMatcher({ type: "regex", value: "^api-\\d+$" });
     expect(matcher).toMatchObject({ caseSensitive: false, type: "regex", value: "^api-\\d+$" });
@@ -236,6 +255,74 @@ describe("automations model", () => {
       enabled: false,
       id: "automation-3",
       trigger: { days: [1, 5], mode: "weekly", time: "07:05" }
+    });
+  });
+
+  it("defaults malformed triggers and preserves one-time catch-up", () => {
+    expect(automations.normalizeTrigger(null)).toMatchObject({
+      catchUp: "skip",
+      intervalMinutes: 60,
+      mode: "interval",
+      time: "09:00"
+    });
+    expect(automations.normalizeTrigger({
+      catchUp: "once",
+      days: "weekdays",
+      intervalMinutes: "bad",
+      mode: "unknown",
+      time: "99:99"
+    })).toEqual({
+      catchUp: "once",
+      days: [1, 2, 3, 4, 5],
+      intervalMinutes: 60,
+      mode: "interval",
+      time: "23:59",
+      type: "schedule"
+    });
+    expect(automations.terminalName("  Build   Output  ")).toBe("build output");
+  });
+
+  it("rejects malformed appearances and normalizes fallback header values", () => {
+    expect(automations.normalizeAppearance(null)).toBeNull();
+    expect(automations.normalizeAppearance([])).toBeNull();
+    const appearance = {
+      background: "#102030",
+      foreground: "#f0e0d0",
+      fontFamily: "Consolas"
+    };
+    expect(automations.normalizeAppearance({
+      ...appearance,
+      headerBackground: { mode: "solid" }
+    })).toBeNull();
+    expect(automations.normalizeAppearance({
+      ...appearance,
+      headerBackground: {
+        mode: "gradient",
+        stops: [null, { color: "invalid" }, { color: "#112233" }]
+      }
+    })).toBeNull();
+    expect(automations.normalizeAppearance({
+      ...appearance,
+      headerBackground: {
+        angle: "invalid",
+        centerX: "invalid",
+        centerY: "invalid",
+        fontSize: "invalid",
+        mode: "solid",
+        shape: "circle",
+        stops: [{ color: "#112233", opacity: "invalid", position: "invalid" }],
+        type: "radial"
+      }
+    })).toMatchObject({
+      headerBackground: {
+        angle: 135,
+        centerX: 50,
+        centerY: 50,
+        color: "#112233",
+        fontSize: 0,
+        shape: "circle",
+        type: "radial"
+      }
     });
   });
 
@@ -281,6 +368,28 @@ describe("automations model", () => {
       requiredMode: "copilot",
       targetId: "target-session1"
     });
+    expect(automations.normalizePendingStage(null)).toBeNull();
+    expect(automations.normalizePendingStage({ payload: " git status ", targetId: "target-session2" }, 4))
+      .toMatchObject({
+        automationId: null,
+        id: "stage-5",
+        payload: "git status",
+        requiredMode: "",
+        targetId: "target-session2",
+        title: "Automation"
+      });
+  });
+
+  it("repairs malformed persisted history entries", () => {
+    const store = automations.normalizeStore({ history: [null, {}] }, "invalid");
+    expect(store.history).toHaveLength(1);
+    expect(store.history[0]).toMatchObject({
+      automationId: null,
+      id: "history-2",
+      status: "failed",
+      title: "Automation"
+    });
+    expect(new Date(store.history[0].occurredAt).getTime()).not.toBeNaN();
   });
 
   it("computes interval recurrences from their wall-clock anchor without drift", () => {
@@ -288,6 +397,13 @@ describe("automations model", () => {
     expect(next.toISOString()).toBe("2026-08-04T11:30:00.000Z");
     expect(automations.scheduleIsDue(rule(), new Date("2026-08-04T10:29:59.000Z"))).toBe(false);
     expect(automations.scheduleIsDue(rule(), new Date("2026-08-04T10:30:00.000Z"))).toBe(true);
+    expect(automations.nextScheduledAt(rule({ createdAt: "2026-08-04T13:00:00.000Z" }), "2026-08-04T12:00:00.000Z")?.toISOString())
+      .toBe("2026-08-04T13:00:00.000Z");
+    expect(automations.nextScheduledAt(rule(), "invalid")).toBeNull();
+    expect(automations.nextScheduledAt(rule({ createdAt: "invalid" }), new Date("2026-08-04T12:00:00.000Z"))?.toISOString())
+      .toBe("2026-08-04T12:30:00.000Z");
+    expect(automations.scheduleIsDue(rule({ lastRunAt: "2026-08-04T10:00:00.000Z" }), new Date("2026-08-04T10:30:00.000Z")))
+      .toBe(true);
   });
 
   it("computes daily and selected-weekday recurrences in local wall-clock time", () => {
@@ -331,5 +447,9 @@ describe("automations model", () => {
       { row: 4, text: "Continue from this context." }
     ])).toMatchObject({ markerRow: 3, targetName: "", payload: "Continue from this context." });
     expect(automations.extractLatestHandoff(["**HAND OFF** Consumer", "/ commands · ? help"])).toBeNull();
+    expect(automations.extractLatestHandoff([
+      { text: "**HAND OFF** Indexed" },
+      { text: "Continue from this context." }
+    ])).toMatchObject({ markerRow: 0, targetName: "Indexed" });
   });
 });

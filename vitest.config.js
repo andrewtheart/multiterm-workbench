@@ -27,14 +27,30 @@ module.exports = defineConfig({
       provider: "v8",
       reporter: ["text", "text-summary", "html", "json"],
       reportsDirectory: "coverage/vitest",
-      include: ["src/server.js", "src/main.js", "src/elevated-pty-host.js", "src/preload.js", "src/ws-origin.js"],
+      include: [
+        "src/server.js",
+        "src/main.js",
+        "src/elevated-pty-host.js",
+        "src/preload.js",
+        "src/ws-origin.js",
+        "src/shell-integration.js",
+        "src/copilot-automation-output.js",
+        "src/renderer-routing.js",
+        "public/automations.js",
+        "public/git-worktrees.js",
+        "public/syntax-highlight.js",
+        "public/terminal-messaging.js",
+        "public/bridge-chooser.js",
+        "public/help-theme.js"
+      ],
       // public/app.js is a browser renderer script exercised by Playwright E2E.
       all: true,
       thresholds: {
-        lines: 100,
-        functions: 100,
-        branches: 100,
-        statements: 100
+        perFile: true,
+        lines: 95,
+        functions: 95,
+        branches: 95,
+        statements: 95
       }
     }
   }

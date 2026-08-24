@@ -124,6 +124,7 @@ const defaultSettings = {
   scrollback: 20000,
   scrollbackInfinite: false,
   searchAcrossPages: true,
+  shellIntegration: true,
   showBridgeIdInWindowTitle: true,
   showVersionInWindowTitle: false,
   sidecarHidden: false,
@@ -244,6 +245,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   scrollbackInfinite: "unlimited infinite terminal history output buffer no limit scrollback",
   scrollOnOutput: "follow tail auto scroll autoscroll bottom new output terminal",
   searchAcrossPages: "search find filter across every all pages other page gather collect borrow reveal results matches global workspace scope",
+  shellIntegration: "shell integration prompt injection working directory cwd tracking osc detect folder current location cd follow",
   outputCoalesceMs: "performance output batching batch coalesce grouping bridge chunks messages latency throttle delay milliseconds pty",
   outputBacklogKb: "performance output buffer queue backlog burst memory ram renderer pending kilobytes kb",
   bridgeClientBacklogKb: "performance bridge client backlog queue slow stalled memory disconnect legacy synchronous send kilobytes kb",
@@ -291,8 +293,8 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
 const PANE_OVERFLOW_WIDTH = 600;
 const HEADER_ACTION_IDS = [
   "move-left", "move-right", "find", "clear", "copy", "color", "restart",
-  "dequeue", "artifacts", "header-background", "minimize", "focus", "maximize",
-  "duplicate", "close"
+  "dequeue", "git-changes", "artifacts", "header-background", "minimize", "focus",
+  "maximize", "duplicate", "close"
 ];
 const HEADER_ACTION_ID_SET = new Set(HEADER_ACTION_IDS);
 // Most of these have a menu equivalent and are used rarely, so the header keeps
@@ -304,7 +306,7 @@ const DEFAULT_HEADER_ACTIONS_IN_MENU = defaultSettings.headerActionsInMenu.slice
 const HEADER_ACTION_OVERFLOW_ORDER = [
   "duplicate", "move-left", "move-right", "color", "find", "clear",
   "copy", "restart", "minimize", "maximize",
-  "header-background", "notifications", "artifacts"
+  "header-background", "notifications", "git-changes", "artifacts"
 ];
 // The title needs a floor worth reading before buttons may take the rest.
 const PANE_TITLE_MIN_WIDTH = 150;
@@ -317,6 +319,7 @@ const HEADER_ACTIONS = Object.freeze({
   color: { label: "Cycle label color", icon: "tag" },
   restart: { label: "Restart", icon: "rotate-cw", hint: "Ctrl+Shift+R" },
   dequeue: { label: "Run next queued command", icon: "list-start" },
+  "git-changes": { label: "Pending changes\u2026", icon: "git-branch" },
   artifacts: { label: "Notes & command queue", icon: "notebook-tabs" },
   "header-background": { label: "Header background\u2026", icon: "palette" },
   minimize: { label: "Minimize", icon: "minus" },
@@ -344,6 +347,7 @@ const HEADER_ACTION_SHORTCUT_DEFAULTS = Object.freeze({
   color: { ctrl: true, alt: true, shift: true, key: "k" },
   restart: { ctrl: true, alt: true, shift: true, key: "r" },
   dequeue: { ctrl: true, alt: true, shift: true, key: "n" },
+  "git-changes": { ctrl: true, alt: true, shift: true, key: "g" },
   artifacts: { ctrl: true, alt: true, shift: true, key: "a" },
   "header-background": { ctrl: true, alt: true, shift: true, key: "b" },
   minimize: { ctrl: true, alt: true, shift: true, key: "m" },
@@ -965,6 +969,7 @@ const elements = {
   helpSearchStatus: document.querySelector("#helpSearchStatus"),
   helpSearchToggle: document.querySelector("#helpSearchToggle"),
   highlightInputPrompts: document.querySelector("#highlightInputPrompts"),
+  shellIntegration: document.querySelector("#shellIntegration"),
   host: document.querySelector("#terminalHost"),
   keepSessionsOnClose: document.querySelector("#keepSessionsOnClose"),
   layoutMode: document.querySelector("#layoutMode"),
@@ -1318,6 +1323,31 @@ let copilotSessionTitlesCloseTimer = 0;
 let copilotSessionTitlesHoverTimer = 0;
 
 const COPILOT_CWD_HISTORY_STORAGE_KEY = "multiterm.copilotCwdHistory";
+// The catalogue is in-memory only, so every launch started with no known
+// provider and the resume action stayed dead until a probe answered - measured
+// at 1.9-17.3s here, and indefinitely when that first probe failed, because the
+// "keep the last known availability" fallback had nothing but an empty array to
+// keep. Rehydrating from the last answer makes the action live immediately.
+const AI_PROVIDERS_STORAGE_KEY = "multiterm.aiProviders";
+
+function loadAiProviderCatalog() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(AI_PROVIDERS_STORAGE_KEY) || "[]");
+    return Array.isArray(raw)
+      ? raw.filter((provider) => provider && typeof provider.id === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAiProviderCatalog(providers) {
+  try {
+    localStorage.setItem(AI_PROVIDERS_STORAGE_KEY, JSON.stringify(providers));
+  } catch (error) {
+    log.warn("ai", "Could not persist the AI provider catalog", { error: String(error?.message || error) });
+  }
+}
 const COPILOT_CWD_HISTORY_LIMIT = 10;
 
 function normalizeCopilotCwdEntry(value) {
@@ -1463,7 +1493,7 @@ const state = {
   activePageId: null,
   aiProviderBootstrap: null,
   aiProviderDiscovery: { generation: 0, initializeUpdatesAfterSetup: false, loading: false },
-  aiProviders: [],
+  aiProviders: loadAiProviderCatalog(),
   aiSetup: { draft: null, guided: null, returnFocus: null },
   analytics: loadTerminalAnalytics(),
   analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
@@ -1539,9 +1569,9 @@ const logStore = {
 
 const pendingDiagnosticRecords = [];
 const DURABLE_DIAGNOSTIC_DETAIL_FIELDS = [
-  "activeElement", "clean", "code", "elapsedMs", "error", "id", "operation", "outcome", "pendingRequests",
+  "accepted", "activeElement", "clean", "code", "elapsedMs", "error", "id", "operation", "outcome", "pendingRequests",
   "phase", "readyState", "reason", "requestId", "requestType", "responseType",
-  "socketReady", "timeoutMs", "timeoutSeconds"
+  "socketReady", "target", "terminalId", "timeoutMs", "timeoutSeconds"
 ];
 
 function logEvent(level, source, message, detail, options = {}) {
@@ -1724,6 +1754,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindWorktreeDialog();
   bindWorktreeManager();
   bindWorktreeReview();
+  startTerminalGitWatcher();
   bindWorktreeMerge();
   bindWorktreeConflict();
   bindFolderPicker();
@@ -1864,6 +1895,7 @@ function bindControls() {
   elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
   elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
+  elements.shellIntegration.checked = state.settings.shellIntegration !== false;
   elements.rightClickAction.value = state.settings.rightClickAction;
   elements.scrollbackLines.value = state.settings.scrollback;
   elements.scrollbackInfinite.checked = state.settings.scrollbackInfinite;
@@ -2152,6 +2184,7 @@ function bindControls() {
   bindSetting(elements.showVersionInWindowTitle, "showVersionInWindowTitle", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
   bindSetting(elements.highlightInputPrompts, "highlightInputPrompts", "change", (_, element) => element.checked);
+  bindSetting(elements.shellIntegration, "shellIntegration", "change", (_, element) => element.checked);
   bindSetting(elements.rightClickAction, "rightClickAction", "change", (value) => value);
   bindSetting(elements.scrollbackLines, "scrollback", "change", Number);
   bindSetting(elements.scrollbackInfinite, "scrollbackInfinite", "change", (_, element) => element.checked);
@@ -4004,6 +4037,14 @@ function addTerminal(options = {}) {
     fontZoomIndicator,
     fontZoomIndicatorTimer: 0,
     fontZoomWheelDelta: 0,
+    gitInspection: null,
+    gitInspectChain: null,
+    gitInspectTimer: 0,
+    gitInspectedAt: 0,
+    gitInspectedRevision: -1,
+    assistantCwd: "",
+    assistantCwdShellPath: "",
+    assistantCwdCheckedRevision: -1,
     id,
     handoffDispatching: false,
     handoffDeliveryTimer: 0,
@@ -4117,6 +4158,7 @@ function addTerminal(options = {}) {
   bindTerminalFontZoom(terminal);
   bindTerminalSelectionHandling(terminal);
   registerCwdTracking(terminal);
+  scheduleTerminalGitInspection(terminal);
   registerModifiedKeyReporting(terminal);
   bindTerminalScrollControls(terminal);
   bindComposerSelection(terminal);
@@ -4131,6 +4173,7 @@ function addTerminal(options = {}) {
     // clear its awaiting flag, erasing the indicator meant to call you back.
     const isUserInput = !FOCUS_REPORT_SEQUENCE.test(data);
     const clearsSelection = isUserInput && !MOUSE_REPORT_SEQUENCE.test(data);
+    if (isUserInput) trackAssistantDirectoryCommand(terminal, data);
     const targets = terminal.targetedPaste
       ? [id]
       : state.settings.syncInput
@@ -5330,6 +5373,8 @@ function runHeaderAction(terminal, action, anchor = null) {
     restartSession(terminal.id);
   } else if (action === "dequeue") {
     dequeueNextTerminalCommand(terminal);
+  } else if (action === "git-changes") {
+    openTerminalGitChanges(terminal);
   } else if (action === "artifacts") {
     if (anchor) toggleTerminalNotesFlyout(terminal, anchor);
     else openTerminalArtifacts(terminal.id);
@@ -7329,6 +7374,7 @@ function requestSession(terminal) {
     id: terminal.id,
     rows: terminal.term.rows,
     shell: terminal.shell || elements.shellSelect.value,
+    shellIntegration: state.settings.shellIntegration !== false,
     title: terminal.titleInput.value,
     ephemeral: terminal.transient,
     elevated: Boolean(terminal.elevated),
@@ -7441,6 +7487,8 @@ function disposeTerminal(terminal) {
   window.clearTimeout(terminal.fontZoomIndicatorTimer);
   window.clearTimeout(terminal.webglRecoveryHandle);
   terminal.webglRecoveryHandle = 0;
+  window.clearTimeout(terminal.gitInspectTimer);
+  terminal.gitInspectTimer = 0;
   cancelTerminalOutputFlush(terminal);
   terminal.pendingOutput = [];
   terminal.pendingOutputBytes = 0;
@@ -8025,6 +8073,7 @@ function writeTerminal(terminal, data) {
   markActivity(terminal);
   handleOutputNotifications(terminal);
   scheduleInputPromptCheck(terminal);
+  scheduleAssistantDirectoryScan(terminal);
   scheduleAutomaticQueueCheck(terminal);
   scheduleAutomationWorkflowCheck(terminal);
   scheduleAutomationCopilotCheck(terminal);
@@ -15613,7 +15662,12 @@ function registerCwdTracking(terminal) {
   parser.registerOscHandler(7, (data) => {
     const match = String(data || "").match(/^file:\/\/[^/]*(\/.*)$/);
     if (match) {
-      let dir = decodeURIComponent(match[1]);
+      let dir = match[1];
+      try {
+        dir = decodeURIComponent(dir);
+      } catch {
+        // A third-party emitter that did not percent-encode still gives a path.
+      }
       if (/^\/[A-Za-z]:/.test(dir)) dir = dir.slice(1);
       updateTerminalCwd(terminal, dir);
     }
@@ -15664,8 +15718,15 @@ function updateTerminalCwd(terminal, dir) {
   const raw = String(dir || "").trim();
   const clean = cwdTerminalShell(terminal) === "wsl" ? raw : raw.replace(/\//g, "\\");
   if (!clean) return;
+  // A hooked shell reports at every prompt, including the prompts that precede an
+  // assistant and outlive it. An unchanged directory therefore proves nothing: it
+  // must not cost a git process, and it must not retire a live assistant path.
+  if (terminal.cwd === clean) return;
   terminal.cwd = clean;
+  // The shell moved under its own steam, so it owns the directory again.
+  terminal.assistantCwd = "";
   refreshTerminalSearchText(terminal);
+  scheduleTerminalGitInspection(terminal);
   if (terminal.id === state.activeId) updateStatusBar();
 }
 
@@ -15676,6 +15737,245 @@ function revealTerminalCwd(terminal) {
     return;
   }
   revealPath(terminal.cwd);
+}
+
+// A shell reports its directory a character at a time while the user types `cd`,
+// so the repository lookup waits for the path to settle.
+const GIT_INSPECT_DEBOUNCE_MS = 700;
+// Output is the only cheap evidence that a git command may have run, so an idle
+// pane never costs a git process no matter how long it stays open.
+const GIT_INSPECT_REFRESH_MS = 30000;
+
+function scheduleTerminalGitInspection(terminal) {
+  if (!terminal || terminal.transient) return;
+  window.clearTimeout(terminal.gitInspectTimer);
+  terminal.gitInspectTimer = window.setTimeout(() => {
+    terminal.gitInspectTimer = 0;
+    refreshTerminalGitInspection(terminal);
+  }, GIT_INSPECT_DEBOUNCE_MS);
+}
+
+// An assistant TUI keeps its own working directory and the shell that launched
+// it never reports the change, so once MultiTerm knows the assistant moved, that
+// path decides. Detection of a painted TUI is deliberately not consulted: it
+// blips off while the TUI is still up, which would snap the lookup back to the
+// launch folder. The shell reporting its own directory is what hands authority
+// back, because that only happens at a prompt.
+function terminalGitDirectory(terminal) {
+  // Recorded against the shell path of the moment, so any other flow that
+  // authoritatively rewrites terminal.cwd retires the assistant path for free.
+  const assistant = terminal?.assistantCwdShellPath === terminal?.cwd
+    ? String(terminal?.assistantCwd || "").trim()
+    : "";
+  return assistant || String(terminal?.cwd || "").trim();
+}
+
+function noteAssistantWorkingDirectory(terminal, value) {
+  const next = String(value || "").trim();
+  if (!terminal || !next || terminal.assistantCwd === next) return;
+  terminal.assistantCwd = next;
+  terminal.assistantCwdShellPath = terminal.cwd;
+  scheduleTerminalGitInspection(terminal);
+}
+
+// Typing /cwd inside the TUI is the only signal MultiTerm ever gets that the
+// assistant moved: nothing is echoed back over the protocol, and the click-time
+// probe cannot help a tooltip that is merely hovered. Assistant detection is
+// deliberately NOT consulted - it reads empty while the TUI is still painted,
+// which silently dropped the capture. An absolute path the user typed is the
+// signal; if it is not a repository the inspection simply hides the button.
+const ASSISTANT_DIRECTORY_COMMAND = /^\s*\/(?:cwd|cd|add-dir)\s+(.+?)\s*$/;
+// A bare drive ("C:") is how people actually type it, so it counts as absolute
+// and is rooted before the lookup.
+const ABSOLUTE_DIRECTORY = /^(?:[A-Za-z]:(?:[\\/]|$)|\\\\[^\\]|\/)/;
+
+// Typing is a guess at the destination: tab-completion, a picker selection or a
+// relative path all reach the assistant without ever appearing as the final
+// directory. The assistant announcing the move is the authoritative signal, so
+// it decides whenever it appears, and keystroke capture stays as the earlier,
+// weaker hint. The rendered buffer is read rather than the output stream because
+// a TUI repaints by moving the cursor and never emits the line on its own.
+const ASSISTANT_DIRECTORY_ANNOUNCEMENT =
+  /(?:changed|switched|set)\s+(?:the\s+)?(?:working|current)\s+directory\s+to:?\s*(.+?)$/i;
+const ASSISTANT_ANNOUNCEMENT_DEBOUNCE_MS = 400;
+
+function scheduleAssistantDirectoryScan(terminal) {
+  if (!terminal || terminal.transient) return;
+  window.clearTimeout(terminal.assistantAnnounceTimer);
+  terminal.assistantAnnounceTimer = window.setTimeout(() => {
+    terminal.assistantAnnounceTimer = 0;
+    scanAssistantDirectoryAnnouncement(terminal);
+  }, ASSISTANT_ANNOUNCEMENT_DEBOUNCE_MS);
+}
+
+function scanAssistantDirectoryAnnouncement(terminal) {
+  if (!terminal || terminal.transient) return;
+  let latest = "";
+  // Lowest match wins: the transcript keeps older moves visible above it.
+  for (const line of activeBufferLines(terminal)) {
+    const match = ASSISTANT_DIRECTORY_ANNOUNCEMENT.exec(String(line || "").trim());
+    if (match) latest = match[1].replace(/^["']|["']$/g, "").trim();
+  }
+  if (!latest || !ABSOLUTE_DIRECTORY.test(latest)) return;
+  // The announcement stays on screen, so re-applying it would fight a shell that
+  // has since taken the directory back.
+  if (terminal.assistantAnnouncementApplied === latest) return;
+  terminal.assistantAnnouncementApplied = latest;
+  log.debug("terminal", "Assistant directory announcement seen", { terminalId: terminal.id, target: latest, accepted: true });
+  noteAssistantWorkingDirectory(terminal, latest);
+}
+
+function trackAssistantDirectoryCommand(terminal, data) {
+  if (!terminal) return;
+  let buffer = terminal.assistantCommandBuffer || "";
+  // An assistant that negotiated the enhanced keyboard protocol receives Enter as
+  // CSI 13u / CSI 27;n;13~ rather than CR, and the bare ESC would otherwise read
+  // as an abandoned line and discard exactly the command being submitted.
+  const normalized = String(data).replace(/\u001b\[(?:13u|27;\d+;13~)/g, "\r");
+  for (const character of normalized) {
+    if (character === "\r" || character === "\n") {
+      const match = ASSISTANT_DIRECTORY_COMMAND.exec(buffer);
+      buffer = "";
+      const target = match ? match[1].replace(/^["']|["']$/g, "").trim() : "";
+      if (match) {
+        const accepted = Boolean(target) && ABSOLUTE_DIRECTORY.test(target);
+        const rooted = accepted && /^[A-Za-z]:$/.test(target) ? `${target}\\` : target;
+        // Logged whether or not it is taken, so a rejected path is distinguishable
+        // from input that never reached this stream at all. The bridge persists
+        // terminalId, not id.
+        log.debug("terminal", "Assistant directory command seen", { terminalId: terminal.id, target, accepted });
+        if (accepted) noteAssistantWorkingDirectory(terminal, rooted);
+      }
+    } else if (character === "\u007f" || character === "\b") {
+      buffer = buffer.slice(0, -1);
+    } else if (character === "\u0003" || character === "\u001b") {
+      buffer = "";
+    } else if (character >= " ") {
+      buffer = `${buffer}${character}`.slice(-512);
+    }
+  }
+  terminal.assistantCommandBuffer = buffer;
+}
+
+// Only a live query can see a directory the user changed inside the TUI itself.
+// It is bounded, needs an idle composer, and is skipped until the pane produces
+// new output, so repeated clicks cannot litter the transcript.
+async function refreshAssistantWorkingDirectory(terminal) {
+  if (cwdTerminalProvider(terminal) !== "copilot") return;
+  if (terminal.assistantCwdCheckedRevision === terminal.outputRevision) return;
+  const livePath = await queryCopilotCwd(terminal);
+  if (!state.terminals.has(terminal.id)) return;
+  terminal.assistantCwdCheckedRevision = terminal.outputRevision;
+  noteAssistantWorkingDirectory(terminal, livePath);
+}
+
+// Returns the newest inspection this terminal has, or null when none has ever
+// been answered. Lookups are serialized per terminal so a caller that starts
+// while another is in flight still gets a reading taken after its own request.
+function refreshTerminalGitInspection(terminal) {
+  if (!terminal || !state.terminals.has(terminal.id)) return Promise.resolve(null);
+  const chain = (terminal.gitInspectChain || Promise.resolve())
+    .then(() => runTerminalGitInspection(terminal));
+  terminal.gitInspectChain = chain.catch(() => {});
+  return chain;
+}
+
+async function runTerminalGitInspection(terminal) {
+  if (!state.terminals.has(terminal.id)) return terminal.gitInspection;
+  const directory = terminalGitDirectory(terminal);
+  if (!directory) {
+    applyTerminalGitInspection(terminal, null);
+    return null;
+  }
+  const response = await requestBridge({ type: "gitInspect", path: directory }, { timeout: 30000 });
+  if (!state.terminals.has(terminal.id)) return terminal.gitInspection;
+  // A silent bridge deliberately leaves the previous answer alone.
+  if (response) applyTerminalGitInspection(terminal, response);
+  return terminal.gitInspection;
+}
+
+function applyTerminalGitInspection(terminal, inspection) {
+  terminal.gitInspectedAt = Date.now();
+  terminal.gitInspectedRevision = terminal.outputRevision;
+  terminal.gitInspection = inspection;
+  updateTerminalGitChangesButton(terminal);
+}
+
+function updateTerminalGitChangesButton(terminal) {
+  const button = terminal?.pane?.querySelector('.pane-actions button[data-action="git-changes"]');
+  if (!button) return;
+  const inspection = terminal.gitInspection;
+  const inRepository = inspection?.isRepository === true;
+  button.hidden = !inRepository;
+  button.disabled = !inRepository;
+  const dirty = inRepository && inspection.isDirty === true;
+  button.classList.toggle("has-changes", dirty);
+  // Pending work is a notification, so it stays put instead of hiding until hover.
+  button.classList.toggle("has-badge", dirty);
+  if (inRepository) {
+    const branch = terminalGitBranchLabel(inspection);
+    const label = inspection.isDirty
+      ? `Pending changes on ${branch}`
+      : `No pending changes on ${branch}`;
+    // Only this button's hint is rebuilt here: the shared refresher rewrites every
+    // header tooltip from its first line, which would drop the queued command the
+    // dequeue button appends on its second.
+    const binding = headerActionShortcut("git-changes", terminal);
+    button.title = binding ? `${label}\nShortcut: ${formatGlobalShortcut(binding)}` : label;
+    button.setAttribute("aria-label", label);
+    refreshIcons(button);
+  }
+  updateHeaderActionOverflow(terminal);
+}
+
+function terminalGitBranchLabel(inspection) {
+  const branch = String(inspection?.currentBranch || "").trim();
+  return branch && branch !== "HEAD" ? branch : "a detached HEAD";
+}
+
+function startTerminalGitWatcher() {
+  window.setInterval(() => {
+    if (document.hidden) return;
+    const now = Date.now();
+    for (const terminal of state.terminals.values()) {
+      if (terminal.transient || terminal.minimized || !isOnActivePage(terminal)) continue;
+      if (terminal.outputRevision === terminal.gitInspectedRevision) continue;
+      if (now - terminal.gitInspectedAt < GIT_INSPECT_REFRESH_MS) continue;
+      refreshTerminalGitInspection(terminal);
+    }
+  }, GIT_INSPECT_REFRESH_MS);
+}
+
+async function openTerminalGitChanges(terminal) {
+  if (!terminal) return;
+  // The branch and repository root are read again here, so a checkout the
+  // watcher has not caught up with cannot be diffed against the wrong branch.
+  await refreshAssistantWorkingDirectory(terminal);
+  const inspection = await refreshTerminalGitInspection(terminal);
+  if (!inspection) {
+    toast(terminalGitDirectory(terminal)
+      ? "MultiTerm could not check that folder for a git repository."
+      : "Working directory unknown", "error", 3000);
+    return;
+  }
+  if (!inspection.isRepository) {
+    toast(inspection.reason || "That folder is not inside a git repository.", "info", 2600);
+    return;
+  }
+  const branch = inspection.currentBranch || "HEAD";
+  await openGitDiffReview({
+    subtitle: `Uncommitted changes on ${terminalGitBranchLabel(inspection)} in ${inspection.repositoryRoot}`,
+    emptyMessage: "This branch has no uncommitted changes.",
+    // Comparing HEAD with the checked-out branch leaves only the working tree,
+    // index and untracked files in the diff.
+    request: {
+      type: "gitDiff",
+      repositoryRoot: inspection.repositoryRoot,
+      base: "HEAD",
+      head: branch,
+      worktreePath: inspection.repositoryRoot
+    }
+  });
 }
 
 const cwdChange = {
@@ -17243,11 +17543,26 @@ async function openWorktreeReview(worktree, {
   repositoryRoot = worktree?.repositoryRoot || worktreeManager.repositoryRoot,
   onClose = null
 } = {}) {
+  await openGitDiffReview({
+    subtitle: `${worktree.branch} compared with ${worktree.parentBranch}`,
+    emptyMessage: "This worktree has no committed or pending changes yet.",
+    onClose,
+    request: {
+      type: "gitDiff",
+      repositoryRoot,
+      base: worktree.parentBranch,
+      head: worktree.branch,
+      worktreePath: worktree.path
+    }
+  });
+}
+
+async function openGitDiffReview({ subtitle, request, emptyMessage, onClose = null }) {
   worktreeReview.returnFocus = document.activeElement;
   worktreeReview.onClose = onClose;
   window.clearTimeout(worktreeReview.closeTimer);
   const generation = ++worktreeReview.generation;
-  elements.worktreeReviewSubtitle.textContent = `${worktree.branch} compared with ${worktree.parentBranch}`;
+  elements.worktreeReviewSubtitle.textContent = subtitle;
   elements.worktreeReviewDiff.textContent = "";
   elements.worktreeReviewStatus.textContent = "Loading changes...";
   elements.worktreeReviewStatus.dataset.tone = "waiting";
@@ -17258,13 +17573,7 @@ async function openWorktreeReview(worktree, {
   });
   refreshIcons(elements.worktreeReviewOverlay);
 
-  const response = await requestBridge({
-    type: "gitDiff",
-    repositoryRoot,
-    base: worktree.parentBranch,
-    head: worktree.branch,
-    worktreePath: worktree.path
-  }, { timeout: 90000 });
+  const response = await requestBridge(request, { timeout: 90000 });
   if (generation !== worktreeReview.generation) return;
 
   if (!response || !response.ok) {
@@ -17273,7 +17582,7 @@ async function openWorktreeReview(worktree, {
     return;
   }
   if (!response.diff.trim()) {
-    elements.worktreeReviewStatus.textContent = "This worktree has no committed or pending changes yet.";
+    elements.worktreeReviewStatus.textContent = emptyMessage;
     delete elements.worktreeReviewStatus.dataset.tone;
     return;
   }
@@ -17287,10 +17596,13 @@ async function openWorktreeReview(worktree, {
     : "";
   if (!response.truncated) delete elements.worktreeReviewStatus.dataset.tone;
   // diff2html escapes the diff it renders; the input is git's own output.
+  // Unified rather than side-by-side: two 4.5em gutters plus half the dialog
+  // leaves ~60 characters a side, and long lines have to wrap to stay readable,
+  // which would drift the two independently scrolled columns out of step.
   elements.worktreeReviewDiff.innerHTML = window.Diff2Html.html(response.diff, {
     drawFileList: true,
     matching: "lines",
-    outputFormat: "side-by-side",
+    outputFormat: "line-by-line",
     colorScheme: state.settings.appTheme === "light" ? "light" : "dark"
   });
 }
@@ -20408,6 +20720,7 @@ function syncControlsFromSettings() {
   elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
   elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
+  elements.shellIntegration.checked = state.settings.shellIntegration !== false;
   elements.rightClickAction.value = state.settings.rightClickAction;
   elements.scrollbackLines.value = state.settings.scrollback;
   elements.scrollbackInfinite.checked = state.settings.scrollbackInfinite;
@@ -28255,6 +28568,7 @@ function sendCopilotCwd(terminal, rawValue) {
   terminal.copilotCwd = value;
   rememberCopilotCwd(value);
   saveSessionSnapshot();
+  noteAssistantWorkingDirectory(terminal, value);
   return sendTerminalSlashCommand(terminal, state.settings.aiSessionProvider === "claude" ? "add-dir" : "cwd", value);
 }
 
@@ -31541,6 +31855,7 @@ async function refreshAiProviders(options = {}) {
   state.aiProviders = Array.isArray(response?.providers)
     ? response.providers.filter((provider) => AI_PROVIDER_IDS.has(provider?.id))
     : [];
+  saveAiProviderCatalog(state.aiProviders);
   const available = state.aiProviders.filter((provider) => provider?.available);
   elements.aiTitleProviderStatus.textContent = available.length > 0
     ? `${available.length} AI provider${available.length === 1 ? "" : "s"} available.`
@@ -31595,12 +31910,16 @@ function syncAiSessionControls() {
 
   const provider = aiProviderById(state.settings.aiSessionProvider);
   syncCopilotRemoteControls();
-  const available = aiProviderAvailableFor(provider, "session") && Array.isArray(provider.models) && provider.models.length > 0;
+  // Resuming needs a signed-in provider, not its model catalog: --resume carries
+  // the session and an empty catalog still means "provider default". Only the
+  // model and effort pickers below genuinely depend on discovery having landed.
+  const canResume = aiProviderAvailableFor(provider, "session");
+  const available = canResume && Array.isArray(provider.models) && provider.models.length > 0;
   const resumeName = aiAssistantName(state.settings.aiSessionProvider);
   const recoverableCopilot = state.settings.aiSessionProvider === "copilot" && copilotCliRecoveryNeeded();
-  elements.copilotSessionsToggle.disabled = !available && !recoverableCopilot;
+  elements.copilotSessionsToggle.disabled = !canResume && !recoverableCopilot;
   updatePageGroupButton();
-  elements.copilotSessionsToggle.title = available
+  elements.copilotSessionsToggle.title = canResume
     ? `Resume a ${resumeName} session`
     : recoverableCopilot
       ? `${copilotSetupPrompt().action} to resume sessions`

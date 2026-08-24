@@ -32,6 +32,7 @@ describe("git worktree input validation", () => {
     expect(isSafeRepositoryUrl("https://host/repo.git | calc")).toBe(false);
     expect(isSafeRepositoryUrl("file:///C:/windows")).toBe(false);
     expect(isSafeRepositoryUrl("")).toBe(false);
+    expect(isSafeRepositoryUrl(null)).toBe(false);
     expect(isSafeRepositoryUrl(`https://host/${"a".repeat(3000)}`)).toBe(false);
   });
 
@@ -49,7 +50,10 @@ describe("git worktree input validation", () => {
     expect(isSafeBranchName("trailing/")).toBe(false);
     expect(isSafeBranchName("thing.lock")).toBe(false);
     expect(isSafeBranchName("has@{ref}")).toBe(false);
+    expect(isSafeBranchName("has//empty-segment")).toBe(false);
+    expect(isSafeBranchName("has\u0000control")).toBe(false);
     expect(isSafeBranchName("")).toBe(false);
+    expect(isSafeBranchName(null)).toBe(false);
   });
 
   it("keeps worktree names usable as a Windows folder", () => {
@@ -64,12 +68,16 @@ describe("git worktree input validation", () => {
     expect(isSafeWorktreeName("trailing ")).toBe(false);
     expect(isSafeWorktreeName("CON")).toBe(false);
     expect(isSafeWorktreeName("lpt1.txt")).toBe(false);
+    expect(isSafeWorktreeName("has..parent")).toBe(false);
+    expect(isSafeWorktreeName("x".repeat(129))).toBe(false);
+    expect(isSafeWorktreeName(null)).toBe(false);
   });
 
   it("flattens a branch path into one folder segment", () => {
     expect(flattenBranchName("feature/copilot/worktrees")).toBe("feature-copilot-worktrees");
     expect(flattenBranchName("rel/1.2.x")).toBe("rel-1.2.x");
     expect(flattenBranchName("//odd//")).toBe("odd");
+    expect(flattenBranchName(null)).toBe("");
   });
 
   it("disambiguates several worktrees taken from one branch on one day", () => {
@@ -80,6 +88,8 @@ describe("git worktree input validation", () => {
     // Existing names may differ in case on Windows.
     expect(suggestWorktreeName("main", ["MAIN-0806"], day)).toBe("main-0806-2");
     expect(suggestWorktreeName("feature/x", [], day)).toBe("feature-x-0806");
+    expect(suggestWorktreeName("main", null, day)).toBe("main-0806");
+    expect(suggestWorktreeName("main", [], new Date("invalid"))).toMatch(/^main-\d{4}$/);
   });
 
   it("always produces a name that passes its own validation", () => {

@@ -39,6 +39,7 @@ describe("shell syntax highlighting", () => {
     expect(highlighter.normalizeLanguage("auto", "wsl")).toBe("shell");
     expect(highlighter.normalizeLanguage("", "cmd")).toBe("batch");
     expect(highlighter.normalizeLanguage("klingon")).toBe("text");
+    expect(highlighter.tokenize(null, "text")).toEqual([]);
   });
 
   it.each([

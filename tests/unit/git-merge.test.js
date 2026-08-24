@@ -10,6 +10,7 @@ const {
   listGitWorktrees,
   recordWorktreeParent,
   forgetWorktreeParent,
+  snapshotGitWorktree,
   createGitWorktree,
   startWorktreeMerge,
   finishWorktreeMerge,
@@ -41,6 +42,19 @@ function makeRepo(name, { conflict = false } = {}) {
     git(["commit", "-m", "main edit"]);
   }
   return { repo, worktree };
+}
+
+function makeCreationRepo(name) {
+  const repo = path.join(root, name);
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (args, cwd = repo) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  git(["init", "-b", "main"]);
+  git(["config", "user.email", "p@e.com"]);
+  git(["config", "user.name", "P"]);
+  fs.writeFileSync(path.join(repo, "base.txt"), "base\n");
+  git(["add", "."]);
+  git(["commit", "-m", "base"]);
+  return { git, repo };
 }
 
 beforeAll(() => {
@@ -158,6 +172,44 @@ describe("git repository and worktree bridge", () => {
     ]);
   });
 
+  test("reports every Git snapshot stage failure and supports a tree-only snapshot", async () => {
+    const success = (stdout = "") => ({ ok: true, stdout, stderr: "" });
+    const runner = (failedStage = "") => vi.fn(async (args, _directory, _timeout, options) => {
+      const stage = args[0] === "write-tree"
+        ? (options?.env ? "snapshot-tree" : "index-tree")
+        : args[0];
+      if (stage === failedStage) return { ok: false, stdout: "", stderr: `${stage} failed` };
+      if (stage === "rev-parse") return success("head\n");
+      if (stage === "status") return success(" M pending.txt\n");
+      if (stage === "index-tree") return success("index\n");
+      if (stage === "snapshot-tree") return success("tree\n");
+      if (stage === "commit-tree") return success("commit\n");
+      return success();
+    });
+
+    for (const stage of ["rev-parse", "status", "index-tree", "read-tree", "add", "snapshot-tree", "commit-tree"]) {
+      await expect(snapshotGitWorktree(root, "Snapshot", { run: runner(stage) }))
+        .resolves.toMatchObject({ ok: false, reason: `${stage} failed` });
+    }
+
+    const run = runner();
+    await expect(snapshotGitWorktree(root, "Tree only", {
+      captureIndex: false,
+      captureStatus: false,
+      createCommit: false,
+      run
+    })).resolves.toEqual({
+      ok: true,
+      reason: "",
+      head: "head",
+      indexTree: "",
+      tree: "tree",
+      commit: "",
+      status: ""
+    });
+    expect(run.mock.calls.map(([args]) => args[0])).toEqual(["rev-parse", "read-tree", "add", "write-tree"]);
+  });
+
   test("creates a worktree with the parent's pending snapshot without changing the parent", async () => {
     const repo = path.join(root, "create-with-pending");
     const worktree = path.join(root, "create-with-pending-wt");
@@ -199,6 +251,87 @@ describe("git repository and worktree bridge", () => {
     expect(git(["config", "--local", "--get", "multiterm.worktree.agent-import.parent"]).trim()).toBe("main");
     expect(git(["config", "--local", "--get", "multiterm.worktree.agent-import.importedSnapshot"]).trim()).toBe(created.snapshotCommit);
   });
+
+  test("validates worktree creation and records a clean worktree without an imported snapshot", async () => {
+    await expect(createGitWorktree({})).resolves.toEqual({
+      ok: false,
+      reason: "Repository, parent branch, worktree branch and path are all required."
+    });
+
+    const { git, repo } = makeCreationRepo("create-validation");
+    const nested = path.join(repo, "nested");
+    const target = path.join(root, "create-validation-wt");
+    fs.mkdirSync(nested);
+    await expect(createGitWorktree({
+      repositoryRoot: nested,
+      parentBranch: "main",
+      branch: "agent",
+      worktreePath: target,
+      importPending: false
+    })).resolves.toMatchObject({ ok: false, reason: "That repository path is not a checkout root." });
+    await expect(createGitWorktree({
+      repositoryRoot: repo,
+      parentBranch: "bad parent",
+      branch: "bad branch",
+      worktreePath: target,
+      importPending: false
+    })).resolves.toEqual({ ok: false, reason: "The parent or worktree branch name is not valid." });
+
+    const progress = vi.fn();
+    const created = await createGitWorktree({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      branch: "clean-agent",
+      worktreePath: target,
+      importPending: true
+    }, progress);
+    expect(created).toEqual({ ok: true, reason: "", importedPending: false, snapshotCommit: "" });
+    expect(progress.mock.calls.map(([phase]) => phase)).toEqual(["validating", "creating", "recording"]);
+    expect(git(["config", "--local", "--get", "multiterm.worktree.clean-agent.parent"]).trim()).toBe("main");
+
+    const duplicate = await createGitWorktree({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      branch: "clean-agent",
+      worktreePath: path.join(root, "create-validation-duplicate"),
+      importPending: false
+    });
+    expect(duplicate).toMatchObject({ ok: false, reason: expect.any(String) });
+    git(["worktree", "remove", "--force", target]);
+    git(["branch", "-D", "clean-agent"]);
+  }, realGitTestTimeout);
+
+  test("removes a new worktree when importing or verifying pending changes fails", async () => {
+    const materialize = makeCreationRepo("create-materialize-failure");
+    fs.writeFileSync(path.join(materialize.repo, "pending.txt"), "pending\n");
+    const materializeTarget = path.join(root, "create-materialize-failure-wt");
+    const materializeResult = await createGitWorktree({
+      repositoryRoot: materialize.repo,
+      parentBranch: "main",
+      branch: "materialize-agent",
+      worktreePath: materializeTarget,
+      importPending: true
+    }, (phase) => {
+      if (phase === "importing") fs.rmSync(path.join(materializeTarget, ".git"), { force: true });
+    });
+    expect(materializeResult).toMatchObject({ ok: false, reason: expect.any(String) });
+    expect(materialize.git(["branch", "--list", "materialize-agent"]).trim()).toBe("");
+
+    const verify = makeCreationRepo("create-verify-failure");
+    fs.writeFileSync(path.join(verify.repo, "pending.txt"), "pending\n");
+    const verifyTarget = path.join(root, "create-verify-failure-wt");
+    const verifyResult = await createGitWorktree({
+      repositoryRoot: verify.repo,
+      parentBranch: "main",
+      branch: "verify-agent",
+      worktreePath: verifyTarget,
+      importPending: true
+    }, (phase) => {
+      if (phase === "verifying") fs.writeFileSync(path.join(verifyTarget, "mismatch.txt"), "different\n");
+    });
+    expect(verifyResult).toEqual({ ok: false, reason: "The imported worktree did not match the parent snapshot." });
+    expect(verify.git(["branch", "--list", "verify-agent"]).trim()).toBe("");
+  }, realGitTestTimeout);
 
   test("directs commit modes to Pending when committed imports still overlap the parent", async () => {
     const repo = path.join(root, "import-overlap");
@@ -325,6 +458,10 @@ describe("git repository and worktree bridge", () => {
     send({ type: "gitConflictWrite", requestId: "conflict-write", sessionId: "missing", path: "shared.txt", contents: "resolved" });
     await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
       type: "gitConflictWritten", requestId: "conflict-write", path: "shared.txt", ok: false
+    })));
+    send({ type: "gitConflictWrite", requestId: "conflict-write-empty", path: "shared.txt", contents: 42 });
+    await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "gitConflictWritten", requestId: "conflict-write-empty", path: "shared.txt", ok: false
     })));
 
     send({ type: "gitWorktreeRemove", requestId: "remove-invalid" });
@@ -549,6 +686,138 @@ describe("worktree merge-back", () => {
     expect(git(["status", "--porcelain"])).toEqual(expect.stringContaining("shared.txt"));
     expect(git(["status", "--porcelain"])).toEqual(expect.stringContaining("parent-staged.txt"));
     expect(fs.existsSync(started.workPath)).toBe(false);
+  }, realGitTestTimeout);
+
+  test("keeps a Pending merge open until conflicts are resolved", async () => {
+    const { repo, worktree } = makeRepo("pending-conflict", { conflict: true });
+    fs.writeFileSync(path.join(worktree, "pending.txt"), "pending\n");
+    const started = await startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      worktreeBranch: "agent",
+      strategy: "pending"
+    });
+    expect(started).toMatchObject({ ok: true, status: "conflicts", conflicts: ["shared.txt"] });
+    await expect(finishWorktreeMerge(started.sessionId)).resolves.toMatchObject({
+      ok: false,
+      reason: "Resolve every conflicted file before bringing the changes back.",
+      conflicts: ["shared.txt"]
+    });
+    await expect(finishWorktreeMerge(started.sessionId, { abort: true })).resolves.toEqual({ ok: true, reason: "" });
+  }, realGitTestTimeout);
+
+  test("requires both source and parent branches to be checked out for Pending mode", async () => {
+    const { repo } = makeRepo("pending-checkouts");
+    await expect(startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      worktreeBranch: "missing-agent",
+      strategy: "pending"
+    })).resolves.toEqual({
+      ok: false,
+      status: "refused",
+      reason: "missing-agent is not checked out in a worktree."
+    });
+
+    execFileSync("git", ["branch", "parked-parent", "main"], { cwd: repo, stdio: "ignore" });
+    await expect(startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "parked-parent",
+      worktreeBranch: "agent",
+      strategy: "pending"
+    })).resolves.toEqual({
+      ok: false,
+      status: "refused",
+      reason: "parked-parent must be checked out so the result can remain pending there."
+    });
+  }, realGitTestTimeout);
+
+  test("refuses a Pending result when the parent changes after preparation", async () => {
+    const { repo, worktree } = makeRepo("pending-parent-change");
+    fs.writeFileSync(path.join(worktree, "pending.txt"), "pending\n");
+    const started = await startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      worktreeBranch: "agent",
+      strategy: "pending"
+    });
+    expect(started.status).toBe("staged");
+    fs.writeFileSync(path.join(repo, "late-parent.txt"), "late\n");
+    await expect(finishWorktreeMerge(started.sessionId)).resolves.toEqual({
+      ok: false,
+      reason: "The parent checkout changed while Bring changes back was open. Review it and try again."
+    });
+    await finishWorktreeMerge(started.sessionId, { abort: true });
+  }, realGitTestTimeout);
+
+  test("restores the parent when a Pending patch cannot be applied", async () => {
+    const { repo, worktree } = makeRepo("pending-apply-failure");
+    const git = (args, cwd = repo) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    fs.writeFileSync(path.join(repo, "parent.txt"), "parent pending\n");
+    fs.writeFileSync(path.join(worktree, "worktree.txt"), "worktree pending\n");
+    const statusBefore = git(["status", "--porcelain=v1", "--untracked-files=all"]);
+    const started = await startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      worktreeBranch: "agent",
+      strategy: "pending"
+    });
+    expect(started.status).toBe("staged");
+    const result = await finishWorktreeMerge(started.sessionId, {
+      onProgress: (phase) => {
+        if (phase === "applying") {
+          fs.writeFileSync(path.join(os.tmpdir(), `multiterm-bring-back-${started.sessionId}.patch`), "not a patch\n");
+        }
+      }
+    });
+    expect(result).toMatchObject({ ok: false, reason: expect.any(String) });
+    expect(git(["status", "--porcelain=v1", "--untracked-files=all"])).toBe(statusBefore);
+    expect(fs.readFileSync(path.join(repo, "parent.txt"), "utf8").replace(/\r\n/g, "\n")).toBe("parent pending\n");
+    await finishWorktreeMerge(started.sessionId, { abort: true });
+  }, realGitTestTimeout);
+
+  test("rolls back a clean parent when it changes immediately before patch application", async () => {
+    const { repo } = makeRepo("pending-apply-race");
+    const started = await startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      worktreeBranch: "agent",
+      strategy: "pending"
+    });
+    expect(started.status).toBe("staged");
+
+    const result = await finishWorktreeMerge(started.sessionId, {
+      onProgress: (phase) => {
+        if (phase === "applying") fs.writeFileSync(path.join(repo, "shared.txt"), "interfering edit\n");
+      }
+    });
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("patch does not apply") });
+    expect(fs.readFileSync(path.join(repo, "shared.txt"), "utf8")).toContain("two");
+    await finishWorktreeMerge(started.sessionId, { abort: true });
+  }, realGitTestTimeout);
+
+  test("rolls back when the applied Pending result cannot be verified", async () => {
+    const { repo } = makeRepo("pending-verification-race");
+    const started = await startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "main",
+      worktreeBranch: "agent",
+      strategy: "pending"
+    });
+    expect(started.status).toBe("staged");
+
+    const result = await finishWorktreeMerge(started.sessionId, {
+      onProgress: (phase) => {
+        if (phase === "verifying-result") fs.writeFileSync(path.join(repo, "unexpected.txt"), "unexpected\n");
+      }
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "The merged result could not be verified; the parent checkout was restored."
+    });
+    expect(fs.existsSync(path.join(repo, "unexpected.txt"))).toBe(false);
+    expect(fs.readFileSync(path.join(repo, "shared.txt"), "utf8")).toContain("two");
+    await finishWorktreeMerge(started.sessionId, { abort: true });
   }, realGitTestTimeout);
 
   test("uses a temporary worktree when the parent is not checked out, and removes it", async () => {

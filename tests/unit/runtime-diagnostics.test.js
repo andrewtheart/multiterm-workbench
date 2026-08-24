@@ -218,3 +218,26 @@ describe("runtime diagnostic storage", () => {
     expect(diagnostics.append).toHaveBeenCalledOnce();
   });
 });
+
+describe("bridge runtime diagnostic recording", () => {
+  it("contains persistence failures and reports useful Error and non-Error details", () => {
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = new Error("disk full");
+
+    expect(server.recordRuntimeDiagnostic({ event: "failed" }, {
+      append() { throw error; }
+    })).toBe(false);
+    expect(report).toHaveBeenLastCalledWith(
+      "[bridge] Could not persist runtime diagnostics:",
+      error.stack
+    );
+
+    expect(server.recordRuntimeDiagnostic({ event: "failed" }, {
+      append() { throw "storage offline"; }
+    })).toBe(false);
+    expect(report).toHaveBeenLastCalledWith(
+      "[bridge] Could not persist runtime diagnostics:",
+      "storage offline"
+    );
+  });
+});

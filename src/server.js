@@ -39,6 +39,22 @@ const {
 } = require("../lib/prompt-library-client");
 const { CopilotLogAggregator } = require("../lib/copilot-log-aggregator");
 const { RuntimeDiagnostics, normalizeDiagnosticRecord } = require("../lib/runtime-diagnostics");
+const {
+  EMPTY_SHELL_INTEGRATION,
+  POWERSHELL_INTEGRATION_SCRIPT,
+  bashPromptCommandWithIntegration,
+  cmdPromptWithIntegration,
+  ensureShellIntegrationScript,
+  getShellIntegrationDirectory,
+  powerShellIntegrationArguments,
+  shellIntegrationPlan,
+  wslEnvWithIntegration
+} = require("./shell-integration");
+const {
+  clampAutomationOutputCaptureKb,
+  readCopilotAutomationOutput
+} = require("./copilot-automation-output");
+const { selectRendererClient } = require("./renderer-routing");
 
 const repoRoot = path.resolve(__dirname, "..");
 const host = process.env.HOST || "127.0.0.1";
@@ -536,7 +552,7 @@ function probeRegisteredBridge(record, timeoutMs = 1200) {
   });
 }
 
-async function discoverRegisteredBridges(directory = getInstanceDirectory(), fileSystem = fs) {
+async function discoverRegisteredBridges(directory = getInstanceDirectory(), fileSystem = fs, probe = probeRegisteredBridge) {
   if (!directory) return [];
   let entries;
   try {
@@ -549,7 +565,7 @@ async function discoverRegisteredBridges(directory = getInstanceDirectory(), fil
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     try {
       const record = JSON.parse(fileSystem.readFileSync(path.join(directory, entry.name), "utf8"));
-      probes.push(probeRegisteredBridge(record));
+      probes.push(probe(record));
     } catch {
       // Malformed and half-written records are not navigation candidates.
     }
@@ -1299,9 +1315,9 @@ function __resetConfigOwnership() {
 }
 
 const DIAGNOSTIC_RECORD_FIELDS = [
-  "clean", "code", "copilotLogKey", "elapsedMs", "error", "event", "level", "message", "operation",
+  "accepted", "clean", "code", "copilotLogKey", "elapsedMs", "error", "event", "level", "message", "operation",
   "outcome", "pendingRequests", "phase", "readyState", "reason", "requestId",
-  "requestType", "responseType", "socketReady", "source", "terminalId", "terminalTitle", "time", "timeoutMs"
+  "requestType", "responseType", "socketReady", "source", "target", "terminalId", "terminalTitle", "time", "timeoutMs"
 ];
 
 function diagnosticRecordFromMessage(message) {
@@ -1785,20 +1801,7 @@ function externalLaunchHasOptions(launch) {
 // Only a renderer can turn a folder into a terminal, so hold the request until
 // one is present rather than dropping it.
 function dispatchOpenFolder(folder) {
-  let target = null;
-  for (const client of clients) {
-    if (!client.renderer) {
-      // Relay helpers and other non-renderer clients cannot open terminals.
-      continue;
-    } else { void 0; }
-    /* v8 ignore next */
-    if (!target
-        || (client.rendererVisible && !target.rendererVisible)
-        || (client.rendererVisible === target.rendererVisible
-          && client.rendererActiveAt > target.rendererActiveAt)) {
-      target = client;
-    } else { void 0; }
-  }
+  const target = selectRendererClient(clients);
   if (target) {
     target.send({ type: "openFolder", path: folder });
     return true;
@@ -1808,16 +1811,7 @@ function dispatchOpenFolder(folder) {
 }
 
 function dispatchOpenTerminal(launch) {
-  let target = null;
-  for (const client of clients) {
-    if (!client.renderer) continue;
-    if (!target
-        || (client.rendererVisible && !target.rendererVisible)
-        || (client.rendererVisible === target.rendererVisible
-          && client.rendererActiveAt > target.rendererActiveAt)) {
-      target = client;
-    }
-  }
+  const target = selectRendererClient(clients);
   if (target) {
     target.send({ type: "openTerminal", ...launch });
     return true;
@@ -2914,16 +2908,22 @@ function createSession(client, options, dependencies = defaultSessionDependencie
   const cwd = tmux ? process.cwd() : getWorkingDirectory(options.cwd);
   const cols = Number(options.cols) || 120;
   const rows = Number(options.rows) || 30;
+  // Absent means an older renderer, which predates the opt-out and expects the
+  // tracking to work.
+  const integration = options.shellIntegration === false
+    ? EMPTY_SHELL_INTEGRATION
+    : shellIntegrationPlan(shell, process.env);
   let terminal;
 
   try {
-    terminal = dependencies.spawnPty(shell.file, shell.args, {
+    terminal = dependencies.spawnPty(shell.file, [...shell.args, ...integration.args], {
       cols,
       cwd,
       env: {
         ...process.env,
         COLORTERM: process.env.COLORTERM || "truecolor",
-        TERM: process.env.TERM || "xterm-256color"
+        TERM: process.env.TERM || "xterm-256color",
+        ...integration.env
       },
       name: "xterm-256color",
       rows,
@@ -3801,17 +3801,18 @@ async function conflictedPaths(directory) {
 async function snapshotGitWorktree(directory, label = "MultiTerm worktree snapshot", {
   createCommit = true,
   captureIndex = true,
-  captureStatus = true
+  captureStatus = true,
+  run = runGit
 } = {}) {
   // `git status` may refresh and briefly lock the index even though it does not
   // change user-visible state. Keep these reads sequential within one worktree
   // so it cannot race `write-tree` for index.lock.
-  const head = await runGit(["rev-parse", "HEAD"], directory);
+  const head = await run(["rev-parse", "HEAD"], directory);
   const status = captureStatus
-    ? await runGit(["status", "--porcelain=v1", "--untracked-files=all"], directory)
+    ? await run(["status", "--porcelain=v1", "--untracked-files=all"], directory)
     : { ok: true, stdout: "", stderr: "" };
   const indexTree = captureIndex
-    ? await runGit(["write-tree"], directory)
+    ? await run(["write-tree"], directory)
     : { ok: true, stdout: "", stderr: "" };
   if (!head.ok || !status.ok || !indexTree.ok) {
     return {
@@ -3830,14 +3831,14 @@ async function snapshotGitWorktree(directory, label = "MultiTerm worktree snapsh
     GIT_COMMITTER_EMAIL: "multiterm@localhost"
   };
   try {
-    const read = await runGit(["read-tree", head.stdout.trim()], directory, 30000, { env });
+    const read = await run(["read-tree", head.stdout.trim()], directory, 30000, { env });
     if (!read.ok) return { ok: false, reason: (read.stderr || read.stdout).trim() || "Git could not prepare a snapshot index." }; else { void 0; }
-    const added = await runGit(["add", "-A", "--", "."], directory, 120000, { env });
+    const added = await run(["add", "-A", "--", "."], directory, 120000, { env });
     if (!added.ok) return { ok: false, reason: (added.stderr || added.stdout).trim() || "Git could not add pending files to the snapshot." }; else { void 0; }
-    const tree = await runGit(["write-tree"], directory, 30000, { env });
+    const tree = await run(["write-tree"], directory, 30000, { env });
     if (!tree.ok) return { ok: false, reason: (tree.stderr || tree.stdout).trim() || "Git could not write the snapshot tree." }; else { void 0; }
     const committed = createCommit
-      ? await runGit(
+      ? await run(
         ["commit-tree", tree.stdout.trim(), "-p", head.stdout.trim(), "-m", label],
         directory,
         30000,
@@ -3895,7 +3896,11 @@ async function createGitWorktree({ repositoryRoot, parentBranch, branch, worktre
   } else { void 0; }
 
   const discardCreatedWorktree = async () => {
-    await runGit(["worktree", "remove", "--force", target], root, 120000);
+    const removed = await runGit(["worktree", "remove", "--force", target], root, 120000);
+    if (!removed.ok) {
+      try { fs.rmSync(target, { force: true, recursive: true }); } catch { /* best-effort cleanup continues through Git */ }
+      await runGit(["worktree", "prune"], root, 30000);
+    }
     await runGit(["branch", "-D", name], root, 30000);
   };
   if (snapshot) {
@@ -4310,7 +4315,7 @@ const folderSearchPageSize = 100;
 function expandFolderPath(value) {
   let expanded = String(value || "").trim();
   if (!expanded) return "";
-  if (expanded === "~" || expanded.startsWith(`~${path.sep}`) || expanded.startsWith("~/") || expanded.startsWith("~\\")) {
+  if (expanded === "~" || /^~[\\/]/.test(expanded)) {
     expanded = path.join(os.homedir(), expanded.slice(1));
   }
   if (process.platform === "win32") {
@@ -4459,7 +4464,7 @@ async function fallbackFolderSearch(root, query, offset = 0) {
   return { results, hasMore: false };
 }
 
-async function everythingFolderSearch(executable, root, query, offset, everywhere) {
+async function everythingFolderSearch(executable, root, query, offset, everywhere, runSearch = runEverythingSearch) {
   const args = [
     "-n", String(folderSearchPageSize + 1),
     "-o", String(offset),
@@ -4469,7 +4474,7 @@ async function everythingFolderSearch(executable, root, query, offset, everywher
   ];
   if (!everywhere) args.push("-path", root);
   args.push("-r", query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const output = await runEverythingSearch(executable, args);
+  const output = await runSearch(executable, args);
   const paths = output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   return {
     results: paths.slice(0, folderSearchPageSize).map((folderPath) => ({ name: path.basename(folderPath) || folderPath, path: folderPath })),
@@ -4477,14 +4482,20 @@ async function everythingFolderSearch(executable, root, query, offset, everywher
   };
 }
 
-async function searchFolders(client, message) {
+const defaultFolderSearchDependencies = {
+  everythingFolderSearch,
+  fallbackFolderSearch,
+  findEverythingExecutable
+};
+
+async function searchFolders(client, message, dependencies = defaultFolderSearchDependencies) {
   const query = String(message.query || "").trim();
   const offset = Math.max(0, Number.parseInt(message.offset, 10) || 0);
   const root = existingFolder(message.path || message.cwd);
   if (!query) {
     sendFolderResponse(client, "folderSearchResults", message.requestId, {
       ok: true, query, path: root, offset, results: [], hasMore: false, engine: "fallback",
-      everythingAvailable: Boolean(findEverythingExecutable())
+      everythingAvailable: Boolean(dependencies.findEverythingExecutable())
     });
     return;
   }
@@ -4492,14 +4503,14 @@ async function searchFolders(client, message) {
     const completed = completeFolderPath(query, offset);
     sendFolderResponse(client, "folderSearchResults", message.requestId, {
       ok: true, query, path: root, offset, ...completed, engine: "direct",
-      everythingAvailable: Boolean(findEverythingExecutable())
+      everythingAvailable: Boolean(dependencies.findEverythingExecutable())
     });
     return;
   }
-  const executable = message.useEverything === false ? "" : findEverythingExecutable();
+  const executable = message.useEverything === false ? "" : dependencies.findEverythingExecutable();
   if (executable) {
     try {
-      const found = await everythingFolderSearch(executable, root, query, offset, message.everywhere === true);
+      const found = await dependencies.everythingFolderSearch(executable, root, query, offset, message.everywhere === true);
       sendFolderResponse(client, "folderSearchResults", message.requestId, {
         ok: true, query, path: root, offset, ...found, engine: "everything", everythingAvailable: true
       });
@@ -4508,7 +4519,7 @@ async function searchFolders(client, message) {
       console.warn(`[bridge] Everything folder search unavailable: ${error.message}`);
     }
   }
-  const found = await fallbackFolderSearch(root, query, offset);
+  const found = await dependencies.fallbackFolderSearch(root, query, offset);
   sendFolderResponse(client, "folderSearchResults", message.requestId, {
     ok: true, query, path: root, offset, ...found, engine: "fallback", everythingAvailable: false,
     warning: message.everywhere === true ? "Everything is unavailable, so MultiTerm searched the current folder instead." : ""
@@ -5719,16 +5730,19 @@ const SHELL_DEFINITIONS = {
   powershell: {
     args: ["-NoLogo", "-NoExit"],
     file: "powershell.exe",
+    integration: "powershell",
     label: "Windows PowerShell"
   },
   cmd: {
     args: [],
     file: "cmd.exe",
+    integration: "cmd",
     label: "Command Prompt"
   },
   wsl: {
     args: [],
     file: "wsl.exe",
+    integration: "posix",
     label: "WSL"
   }
 };
@@ -5736,6 +5750,7 @@ const SHELL_DEFINITIONS = {
 const DEFAULT_SHELL = {
   args: ["-NoLogo", "-NoExit"],
   file: "pwsh.exe",
+  integration: "powershell",
   label: "PowerShell 7"
 };
 
@@ -6240,8 +6255,8 @@ async function requestRemoteCopilotSessions(host, token, fetchImpl = fetch) {
   return payload.sessions.map(normalizeRemoteCopilotSession).filter(Boolean);
 }
 
-function remoteCopilotFallbackSessions() {
-  return readAssistantSessions()
+function remoteCopilotFallbackSessions(entries = readAssistantSessions()) {
+  return entries
     .filter((entry) => entry.provider === "copilot" && entry.remote)
     .map((entry) => ({
       id: copilotSessionIdPattern.test(entry.remoteSessionId) ? entry.remoteSessionId : "",
@@ -6876,83 +6891,6 @@ async function sendCopilotSessionContext(client, message) {
   }
 }
 
-const automationOutputCaptureKbBounds = { min: 16, max: 512, fallback: 128 };
-
-function clampAutomationOutputCaptureKb(value) {
-  const requested = Math.round(Number(value));
-  return Number.isFinite(requested)
-    ? Math.min(automationOutputCaptureKbBounds.max, Math.max(automationOutputCaptureKbBounds.min, requested))
-    : automationOutputCaptureKbBounds.fallback;
-}
-
-function readCopilotAutomationOutput(message, sessionRoot = path.join(os.homedir(), ".copilot", "session-state")) {
-  const sessionId = String(message?.sessionId || "").toLowerCase();
-  if (!copilotSessionIdPattern.test(sessionId)) throw new Error("A valid Copilot session ID is required.");
-  const eventsPath = path.join(sessionRoot, sessionId, "events.jsonl");
-  let size = 0;
-  try {
-    size = fs.statSync(eventsPath).size;
-  } catch (error) {
-    if (error?.code === "ENOENT") return { complete: false, cursor: 0, output: "", truncated: false, turnStarted: false };
-    throw error;
-  }
-  if (message.snapshot === true) return { complete: false, cursor: size, output: "", truncated: false, turnStarted: false };
-
-  const requestedCursor = Math.max(0, Math.floor(Number(message.cursor) || 0));
-  const cursor = Math.min(requestedCursor, size);
-  const maximumBytes = clampAutomationOutputCaptureKb(message.maxKb) * 1024;
-  const start = Math.max(cursor, size - maximumBytes);
-  const truncated = start > cursor;
-  if (start === size) return { complete: false, cursor: size, output: "", truncated, turnStarted: message.turnStarted === true };
-
-  const descriptor = fs.openSync(eventsPath, "r");
-  let buffer;
-  let bytesRead = 0;
-  let discardPartial = false;
-  try {
-    if (start > 0) {
-      const previous = Buffer.alloc(1);
-      fs.readSync(descriptor, previous, 0, 1, start - 1);
-      discardPartial = previous[0] !== 0x0a;
-    }
-    buffer = Buffer.alloc(size - start);
-    while (bytesRead < buffer.length) {
-      const read = fs.readSync(descriptor, buffer, bytesRead, buffer.length - bytesRead, start + bytesRead);
-      if (read <= 0) break;
-      bytesRead += read;
-    }
-  } finally {
-    fs.closeSync(descriptor);
-  }
-
-  buffer = buffer.subarray(0, bytesRead);
-  const lastBreak = buffer.lastIndexOf(0x0a);
-  if (lastBreak < 0) {
-    return { complete: false, cursor: truncated ? size : cursor, output: "", truncated, turnStarted: message.turnStarted === true };
-  }
-  const consumedCursor = start + lastBreak + 1;
-  let text = buffer.subarray(0, lastBreak + 1).toString("utf8");
-  if (discardPartial) {
-    const firstBreak = text.indexOf("\n");
-    text = firstBreak >= 0 ? text.slice(firstBreak + 1) : "";
-  }
-  const output = [];
-  let complete = false;
-  let turnStarted = message.turnStarted === true;
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const event = JSON.parse(line);
-      if (event?.type === "user.message" || event?.type === "assistant.turn_start") turnStarted = true;
-      if (event?.type === "assistant.message" && typeof event.data?.content === "string") output.push(event.data.content);
-      if (event?.type === "assistant.turn_end" && turnStarted) complete = true;
-    } catch {
-      // Malformed complete records are ignored without hiding valid neighboring events.
-    }
-  }
-  return { complete, cursor: consumedCursor, output: output.join("\n"), truncated, turnStarted };
-}
-
 function sendCopilotAutomationOutput(client, message) {
   const requestId = typeof message?.requestId === "string" ? message.requestId : "";
   try {
@@ -7120,9 +7058,14 @@ function claudeSupportsCwd(value) {
   return true;
 }
 
+// Last authoritative answer from a completed sign-in check, so a probe that
+// throws cannot silently downgrade a signed-in account.
+const copilotAuthMemory = { authenticated: null };
+
 async function copilotProviderCapabilities(
   createClient = createCopilotSdkClient,
-  findExecutable = findCopilotExecutable
+  findExecutable = findCopilotExecutable,
+  authMemory = copilotAuthMemory
 ) {
   const cliInstalled = Boolean(await findExecutable());
   let client;
@@ -7131,6 +7074,7 @@ async function copilotProviderCapabilities(
     await client.start();
     const auth = await client.getAuthStatus();
     if (!auth?.isAuthenticated) {
+      authMemory.authenticated = false;
       return {
         id: "copilot",
         name: "GitHub Copilot",
@@ -7154,6 +7098,7 @@ async function copilotProviderCapabilities(
       };
     } else { void 0; }
     const models = normalizeCopilotCapabilityModels(await client.listModels());
+    authMemory.authenticated = true;
     return {
       id: "copilot",
       name: "GitHub Copilot",
@@ -7162,35 +7107,44 @@ async function copilotProviderCapabilities(
       authenticated: true,
       available: models.length > 0,
       titleAvailable: models.length > 0,
-      interactiveAvailable: cliInstalled && models.length > 0,
-      cwdChangeAvailable: cliInstalled && models.length > 0,
+      // Resuming and relocating drive the CLI, which carries its own model
+      // default, so an empty catalogue must not report them as unusable. Only
+      // title generation genuinely needs a model to name.
+      interactiveAvailable: cliInstalled,
+      cwdChangeAvailable: cliInstalled,
       cwdChangeStatus: !cliInstalled
         ? "GitHub Copilot CLI is not installed or is not on PATH."
-        : models.length > 0 ? "" : "No GitHub Copilot models are available for this account.",
+        : "",
       interactiveStatus: !cliInstalled
         ? "GitHub Copilot CLI is not installed or is not on PATH."
-        : models.length > 0 ? "" : "No GitHub Copilot models are available for this account.",
+        : "",
       status: models.length > 0 ? "" : "No GitHub Copilot models are available for this account.",
       models
     };
   } catch (error) {
+    // A throw means the check failed, not that the account signed out. Claiming
+    // "signed out" here is what pushed people through a needless re-sign-in, so
+    // the last authoritative answer stands until a probe actually completes.
+    const knownAuthenticated = authMemory.authenticated === true;
+    const failure = copilotSdkError(error).message;
     return {
       id: "copilot",
       name: "GitHub Copilot",
       installed: true,
       cliInstalled,
-      authenticated: false,
+      authenticated: knownAuthenticated,
+      probeFailed: true,
       available: false,
       titleAvailable: false,
-      interactiveAvailable: false,
-      cwdChangeAvailable: false,
+      interactiveAvailable: cliInstalled && knownAuthenticated,
+      cwdChangeAvailable: cliInstalled && knownAuthenticated,
       cwdChangeStatus: cliInstalled
-        ? copilotSdkError(error).message
+        ? (knownAuthenticated ? "" : failure)
         : "GitHub Copilot CLI is not installed or is not on PATH.",
       interactiveStatus: cliInstalled
-        ? copilotSdkError(error).message
+        ? (knownAuthenticated ? "" : failure)
         : "GitHub Copilot CLI is not installed or is not on PATH.",
-      status: copilotSdkError(error).message,
+      status: failure,
       models: []
     };
   } finally {
@@ -7644,11 +7598,13 @@ module.exports = {
     sendJsonResponse,
     getInstanceDirectory,
     runGit,
+    copilotAuthMemory,
     inspectGitRepository,
     listGitWorktrees,
     recordWorktreeParent,
     forgetWorktreeParent,
     branchCheckoutPath,
+    snapshotGitWorktree,
     createGitWorktree,
     startWorktreeMerge,
     finishWorktreeMerge,
@@ -7685,6 +7641,14 @@ module.exports = {
     probeRegisteredBridge,
     sendBridgeInstances,
     createSession,
+    shellIntegrationPlan,
+    ensureShellIntegrationScript,
+    getShellIntegrationDirectory,
+    powerShellIntegrationArguments,
+    cmdPromptWithIntegration,
+    bashPromptCommandWithIntegration,
+    wslEnvWithIntegration,
+    POWERSHELL_INTEGRATION_SCRIPT,
     writeSession,
     renameSession,
     rememberSize,
@@ -7881,6 +7845,7 @@ module.exports = {
     readFolderEntries,
     completeFolderPath,
     fallbackFolderSearch,
+    everythingFolderSearch,
     findEverythingExecutable,
     listFolders,
     searchFolders,

@@ -13,6 +13,19 @@ describe("terminal messaging contract", () => {
     expect(messaging.normalizeAlias("has spaces")).toBeNull();
     expect(messaging.normalizeAlias("_leading")).toBeNull();
     expect(messaging.normalizeAlias("")).toBeNull();
+    expect(messaging.normalizeAlias(null)).toBeNull();
+  });
+
+  it("measures UTF-8 payloads in Node and browser-like runtimes", () => {
+    expect(messaging.utf8ByteLength(null)).toBe(0);
+    expect(messaging.utf8ByteLength("é")).toBe(2);
+    const savedBuffer = global.Buffer;
+    try {
+      global.Buffer = undefined;
+      expect(messaging.utf8ByteLength("é")).toBe(2);
+    } finally {
+      global.Buffer = savedBuffer;
+    }
   });
 
   it.each([
@@ -47,6 +60,10 @@ describe("terminal messaging contract", () => {
   });
 
   it("allows printable insertion text and rejects terminal controls", () => {
+    expect(messaging.validateTerminalInsertText(undefined)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/no insertable content/i)
+    });
     expect(messaging.validateTerminalInsertText("Review \u2713 complete")).toEqual({
       ok: true,
       value: "Review \u2713 complete"
@@ -57,5 +74,15 @@ describe("terminal messaging contract", () => {
         error: expect.stringMatching(/control characters/i)
       });
     }
+  });
+
+  it("preserves deferred delivery requests", () => {
+    expect(messaging.normalizeMessageRequest({
+      delivery: "whenReady",
+      kind: "text",
+      sourceId: "source-1",
+      targetId: "target-1",
+      text: "Run after the prompt returns."
+    }, 1024)).toMatchObject({ ok: true, value: { delivery: "whenReady" } });
   });
 });

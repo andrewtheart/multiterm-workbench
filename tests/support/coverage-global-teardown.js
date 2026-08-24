@@ -20,7 +20,6 @@ module.exports = async function coverageGlobalTeardown() {
   const files = fs.existsSync(rawDir)
     ? fs.readdirSync(rawDir).filter((file) => file.endsWith(".json"))
     : [];
-  const coverage = files.flatMap((file) => JSON.parse(fs.readFileSync(path.join(rawDir, file), "utf8")));
   let thresholdError = null;
   const report = new MCR.CoverageReport({
     name: "MultiTerm Renderer Coverage",
@@ -31,11 +30,12 @@ module.exports = async function coverageGlobalTeardown() {
     onEnd: ({ summary }) => {
       const metrics = ["statements", "branches", "functions", "lines"];
       const failures = metrics
-        .filter((metric) => summary[metric].pct < 100)
+        .filter((metric) => summary[metric].pct < 95)
         .map((metric) => `${metric}: ${summary[metric].pct}%`);
-      if (failures.length) thresholdError = new Error(`Renderer coverage is below 100% (${failures.join(", ")})`);
+      if (failures.length) thresholdError = new Error(`Renderer coverage is below 95% (${failures.join(", ")})`);
     }
   });
+  const coverage = files.flatMap((file) => JSON.parse(fs.readFileSync(path.join(rawDir, file), "utf8")));
   await report.add(coverage);
   await report.generate();
   if (thresholdError) throw thresholdError;

@@ -333,14 +333,21 @@ describe("atomic commit path verification", () => {
   it("still rejects a pathspec that stages more than it names", () => {
     // A directory entry expands to its files, so the group would commit paths the
     // reviewed plan never listed.
-    expect(() => runPowerShellFunctions(
-      ["Invoke-Native", "Get-NativeOutput", "ConvertTo-AbsolutePath", "Test-AtomicCommitStaging"],
-      [
-        "$plan = [pscustomobject]@{ groups = @([pscustomobject]@{ message = 'refactor: directory'; paths = @('src') }) }",
-        "Test-AtomicCommitStaging -RepositoryRoot $env:MOVE_REPO -Plan $plan | Out-Null"
-      ],
-      { MOVE_REPO: root }
-    )).toThrow(/Staging did not select exactly the planned paths/);
+    let failure;
+    try {
+      runPowerShellFunctions(
+        ["Invoke-Native", "Get-NativeOutput", "ConvertTo-AbsolutePath", "Test-AtomicCommitStaging"],
+        [
+          "$plan = [pscustomobject]@{ groups = @([pscustomobject]@{ message = 'refactor: directory'; paths = @('src') }) }",
+          "Test-AtomicCommitStaging -RepositoryRoot $env:MOVE_REPO -Plan $plan | Out-Null"
+        ],
+        { MOVE_REPO: root }
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message.replace(/\s+/g, " ")).toContain("Staging did not select exactly the planned paths");
   });
 
   it("verifies a committed move by both of its paths", () => {

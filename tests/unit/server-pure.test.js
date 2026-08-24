@@ -667,10 +667,25 @@ describe("open-folder request callbacks", () => {
     });
     expect(server.externalLaunchHasOptions(launch)).toBe(true);
 
-    const renderer = { renderer: true, rendererVisible: true, rendererActiveAt: 1, send: vi.fn() };
+    const relay = { renderer: false, rendererVisible: true, rendererActiveAt: 50, send: vi.fn() };
+    const hidden = { renderer: true, rendererVisible: false, rendererActiveAt: 20, send: vi.fn() };
+    const olderHidden = { renderer: true, rendererVisible: false, rendererActiveAt: 10, send: vi.fn() };
+    const visible = { renderer: true, rendererVisible: true, rendererActiveAt: 30, send: vi.fn() };
+    const olderVisible = { renderer: true, rendererVisible: true, rendererActiveAt: 25, send: vi.fn() };
+    const renderer = { renderer: true, rendererVisible: true, rendererActiveAt: 40, send: vi.fn() };
+    server.clients.add(relay);
+    server.clients.add(hidden);
+    server.clients.add(olderHidden);
+    server.clients.add(visible);
+    server.clients.add(olderVisible);
     server.clients.add(renderer);
     expect(server.dispatchOpenTerminal(launch)).toBe(true);
     expect(renderer.send).toHaveBeenCalledWith({ type: "openTerminal", ...launch });
+    expect(relay.send).not.toHaveBeenCalled();
+    expect(hidden.send).not.toHaveBeenCalled();
+    expect(olderHidden.send).not.toHaveBeenCalled();
+    expect(visible.send).not.toHaveBeenCalled();
+    expect(olderVisible.send).not.toHaveBeenCalled();
     server.clients.clear();
     expect(server.dispatchOpenTerminal(launch)).toBe(false);
     expect(server.pendingOpenTerminals.pop()).toEqual(launch);

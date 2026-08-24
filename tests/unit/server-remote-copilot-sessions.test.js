@@ -101,6 +101,40 @@ describe("remote Copilot session requests", () => {
 });
 
 describe("remote Copilot session listing", () => {
+  it("normalizes only usable persisted remote sessions for fallback", () => {
+    const validRemoteId = "80F9B2EE-4618-4E71-B8A0-AE5FB172B62B";
+    const validLocalId = "F8A92FBA-F4EB-4558-B3E6-1FDE977D0A5C";
+
+    expect(server.remoteCopilotFallbackSessions([
+      { id: "terminal-1", provider: "copilot", remote: false },
+      { id: "terminal-2", provider: "claude", remote: true, remoteSessionId: validRemoteId },
+      { id: "terminal-3", provider: "copilot", remote: true, remoteSessionId: "invalid" },
+      {
+        id: "terminal-4",
+        provider: "copilot",
+        remote: true,
+        remoteSessionId: validRemoteId,
+        aiSessionId: validLocalId,
+        title: "Remote work",
+        cwd: "D:\\repo",
+        recordedAt: "2026-08-09T02:03:34Z"
+      }
+    ])).toEqual([{
+      id: validRemoteId,
+      key: `remote:${validRemoteId.toLowerCase()}`,
+      source: "remote",
+      localId: validLocalId.toLowerCase(),
+      name: "Remote work",
+      state: "",
+      steerable: false,
+      repository: "",
+      cwd: "D:\\repo",
+      branch: "",
+      createdAt: "",
+      updatedAt: "2026-08-09T02:03:34Z"
+    }]);
+  });
+
   it("returns the first host that answers", async () => {
     const request = vi.fn(async (host) => {
       if (host === "https://first.invalid") throw new Error("nope");

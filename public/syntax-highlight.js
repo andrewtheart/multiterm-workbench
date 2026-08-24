@@ -63,7 +63,7 @@
     zsh: "shell"
   });
 
-  const rule = (type, pattern) => Object.freeze({ type, re: new RegExp(pattern.source, pattern.flags.includes("y") ? pattern.flags : pattern.flags + "y") });
+  const rule = (type, pattern) => Object.freeze({ type, re: new RegExp(pattern.source, pattern.flags) });
 
   const RULES = Object.freeze({
     powershell: Object.freeze([
@@ -137,7 +137,7 @@
    */
   function tokenize(text, language) {
     const source = String(text == null ? "" : text);
-    const rules = RULES[normalizeLanguage(language)] || RULES.text;
+    const rules = RULES[normalizeLanguage(language)];
     const tokens = [];
     let plainStart = 0;
     let index = 0;

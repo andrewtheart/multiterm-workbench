@@ -676,6 +676,10 @@
               <span>Highlight input prompts</span>
             </label>
             <label class="toggle-row">
+              <input id="shellIntegration" type="checkbox">
+              <span title="Adds a prompt hook when a shell starts so MultiTerm follows cd into a new folder. Turn off if it interferes with a customised prompt; existing terminals keep their current setting until restarted.">Track the working directory</span>
+            </label>
+            <label class="toggle-row">
               <input id="notifyActivity" type="checkbox">
               <span>Activity notifications</span>
             </label>
@@ -2880,6 +2884,9 @@
             <button type="button" data-action="dequeue" class="pane-dequeue" title="Insert next queued command without pressing Enter (Ctrl+Shift+Q)" aria-label="Insert next queued command without pressing Enter" aria-keyshortcuts="Control+Shift+Q" hidden>
               <i data-lucide="send"></i>
               <span class="pane-dequeue-badge">0</span>
+            </button>
+            <button type="button" data-action="git-changes" class="pane-git-changes" title="Pending changes" aria-label="Pending Git changes" aria-haspopup="dialog" hidden>
+              <i data-lucide="git-branch"></i>
             </button>
             <button type="button" data-action="artifacts" class="pane-artifacts" title="Terminal notes and command queue" aria-label="Terminal notes and command queue" aria-haspopup="dialog" aria-expanded="false">
               <i data-lucide="notebook-tabs"></i>

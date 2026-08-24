@@ -6209,6 +6209,13 @@ namespace MultiTerm.PowerShellBridge
             }
 
             TerminalSession session = new TerminalSession(id, title.Trim(), shell, cwd, cols, rows, ephemeral, ephemeral ? client.Id : String.Empty);
+            // Absent means an older renderer, which predates the opt-out and
+            // expects the tracking to work.
+            if (!String.Equals(Json.Get(options, "shellIntegration"), "false", StringComparison.OrdinalIgnoreCase))
+            {
+                session.Integration = ShellIntegration.Plan(shell);
+            }
+
             this.AttachSessionLifecycle(session, "Session exited: ");
 
             try
@@ -8781,6 +8788,9 @@ namespace MultiTerm.PowerShellBridge
             return provider;
         }
 
+        // Last completed sign-in answer. Only a finished probe may change it.
+        private static bool? copilotAuthenticatedMemory = null;
+
         private static IDictionary<string, object> CopilotProviderCapabilities()
         {
             bool cliInstalled = !String.IsNullOrEmpty(FindCopilotExecutable());
@@ -8819,10 +8829,23 @@ namespace MultiTerm.PowerShellBridge
                         string status = JsonText(response, "error");
                         if (String.IsNullOrEmpty(status)) status = errorTask.Result.Trim();
                         status = String.IsNullOrEmpty(status) ? "GitHub Copilot is not available for this account." : status;
+                        // The SDK host answers ok:false for ANY exception, so the text
+                        // is the only thing that separates "signed out" from "the check
+                        // could not run". Only the former may revoke a known sign-in.
+                        bool signedOut = Regex.IsMatch(status,
+                            "not authenticated|not logged in|authentication|unauthorized|\\b401\\b|subscription|entitlement|forbidden|\\b403\\b",
+                            RegexOptions.IgnoreCase);
+                        bool stillAuthenticated = !signedOut && copilotAuthenticatedMemory == true;
+                        if (signedOut) copilotAuthenticatedMemory = false;
+                        IDictionary<string, object> reported = UnavailableProvider(
+                            "copilot", "GitHub Copilot", true, stillAuthenticated, status);
+                        if (!signedOut) reported["probeFailed"] = true;
                         return SetProviderReadiness(
-                            UnavailableProvider("copilot", "GitHub Copilot", true, false, status),
-                            cliInstalled, false, false,
-                            cliInstalled ? status : "GitHub Copilot CLI is not installed or is not on PATH.");
+                            reported,
+                            cliInstalled, false, cliInstalled && stillAuthenticated,
+                            !cliInstalled
+                                ? "GitHub Copilot CLI is not installed or is not on PATH."
+                                : stillAuthenticated ? String.Empty : status);
                     }
                     List<object> models = new List<object>();
                     foreach (object item in JsonItems(response, "models"))
@@ -8840,22 +8863,35 @@ namespace MultiTerm.PowerShellBridge
                         { "status", models.Count > 0 ? String.Empty : "No GitHub Copilot models are available for this account." },
                         { "models", models }
                     };
+                    copilotAuthenticatedMemory = true;
                     return SetProviderReadiness(
                         provider,
                         cliInstalled,
                         models.Count > 0,
-                        cliInstalled && models.Count > 0,
+                        // Resuming and relocating drive the CLI, which carries its own
+                        // model default, so an empty catalogue must not report them as
+                        // unusable. Only title generation genuinely needs a model.
+                        cliInstalled,
                         !cliInstalled
                             ? "GitHub Copilot CLI is not installed or is not on PATH."
-                            : models.Count > 0 ? String.Empty : "No GitHub Copilot models are available for this account.");
+                            : String.Empty);
                 }
             }
             catch (Exception error)
             {
+                // A throw means the check failed, not that the account signed out.
+                // Claiming "signed out" here forced a needless re-sign-in, so the
+                // last completed answer stands until a probe actually finishes.
+                bool knownAuthenticated = copilotAuthenticatedMemory == true;
+                IDictionary<string, object> unavailable = UnavailableProvider(
+                    "copilot", "GitHub Copilot", true, knownAuthenticated, error.Message);
+                unavailable["probeFailed"] = true;
                 return SetProviderReadiness(
-                    UnavailableProvider("copilot", "GitHub Copilot", true, false, error.Message),
-                    cliInstalled, false, false,
-                    cliInstalled ? error.Message : "GitHub Copilot CLI is not installed or is not on PATH.");
+                    unavailable,
+                    cliInstalled, false, cliInstalled && knownAuthenticated,
+                    !cliInstalled
+                        ? "GitHub Copilot CLI is not installed or is not on PATH."
+                        : knownAuthenticated ? String.Empty : error.Message);
             }
         }
 
@@ -10594,25 +10630,25 @@ namespace MultiTerm.PowerShellBridge
         {
             if (value == "powershell")
             {
-                return new ShellInfo("powershell.exe", " -NoLogo -NoExit", "Windows PowerShell");
+                return new ShellInfo("powershell.exe", " -NoLogo -NoExit", "Windows PowerShell", "powershell");
             }
 
             if (value == "cmd")
             {
-                return new ShellInfo("cmd.exe", String.Empty, "Command Prompt");
+                return new ShellInfo("cmd.exe", String.Empty, "Command Prompt", "cmd");
             }
 
             if (value == "wsl")
             {
-                return new ShellInfo("wsl.exe", String.Empty, "WSL");
+                return new ShellInfo("wsl.exe", String.Empty, "WSL", "posix");
             }
 
             if (!this.CommandExists("pwsh.exe"))
             {
-                return new ShellInfo("powershell.exe", " -NoLogo -NoExit", "Windows PowerShell");
+                return new ShellInfo("powershell.exe", " -NoLogo -NoExit", "Windows PowerShell", "powershell");
             }
 
-            return new ShellInfo("pwsh.exe", " -NoLogo -NoExit", "PowerShell 7");
+            return new ShellInfo("pwsh.exe", " -NoLogo -NoExit", "PowerShell 7", "powershell");
         }
 
         private bool CommandExists(string fileName)
@@ -11219,10 +11255,16 @@ namespace MultiTerm.PowerShellBridge
     internal sealed class ShellInfo
     {
         public ShellInfo(string file, string arguments, string label)
+            : this(file, arguments, label, String.Empty)
+        {
+        }
+
+        public ShellInfo(string file, string arguments, string label, string integration)
         {
             this.File = file;
             this.Arguments = arguments;
             this.Label = label;
+            this.Integration = integration ?? String.Empty;
         }
 
         public string File { get; private set; }
@@ -11230,6 +11272,201 @@ namespace MultiTerm.PowerShellBridge
         public string Arguments { get; private set; }
 
         public string Label { get; private set; }
+
+        public string Integration { get; private set; }
+    }
+
+    internal sealed class ShellIntegrationPlan
+    {
+        public ShellIntegrationPlan(string arguments, Dictionary<string, string> environment)
+        {
+            this.Arguments = arguments ?? String.Empty;
+            this.Environment = environment;
+        }
+
+        public string Arguments { get; private set; }
+
+        public Dictionary<string, string> Environment { get; private set; }
+    }
+
+    // Nothing in a stock shell volunteers its working directory, so a `cd` is
+    // invisible unless a prompt hook is installed the way Windows Terminal and
+    // VS Code do. OSC 9;9 carries a native path, which spares every shell from
+    // percent-encoding a file:// URL. Mirrors shellIntegrationPlan in server.js.
+    internal static class ShellIntegration
+    {
+        public const string Marker = "]9;9;";
+        public const string EnvironmentVariable = "MULTITERM_SHELL_INTEGRATION";
+
+        private static readonly object ScriptSync = new object();
+        private static string scriptPath = String.Empty;
+
+        // Dot-sourced after profiles have loaded so it wraps whatever prompt the
+        // user ended up with. It writes the sequence itself rather than
+        // prepending it to the returned value, because a prompt function may
+        // return something other than a string.
+        public static string PowerShellScript()
+        {
+            return String.Join("\r\n", new string[] {
+                "if (-not $global:__MultiTermShellIntegration) {",
+                "  $global:__MultiTermShellIntegration = $true",
+                "  $global:__MultiTermInnerPrompt = $function:prompt",
+                "  function global:prompt {",
+                "    try {",
+                "      $location = $ExecutionContext.SessionState.Path.CurrentLocation",
+                "      if ($location.Provider.Name -eq 'FileSystem') {",
+                "        [Console]::Write([char]27 + ']9;9;' + $location.ProviderPath + [char]27 + '\\')",
+                "      }",
+                "    } catch {",
+                "    }",
+                "    if ($global:__MultiTermInnerPrompt) {",
+                "      & $global:__MultiTermInnerPrompt",
+                "    } else {",
+                "      'PS ' + $PWD.Path + '> '",
+                "    }",
+                "  }",
+                "}",
+                ""
+            });
+        }
+
+        // Written once per bridge lifetime. Failing to write it must never stop a
+        // terminal opening, so an empty result means "spawn the shell untouched".
+        public static string EnsureScript()
+        {
+            lock (ScriptSync)
+            {
+                if (!String.IsNullOrEmpty(scriptPath))
+                {
+                    return scriptPath;
+                }
+
+                try
+                {
+                    string directory = Path.Combine(
+                        System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData),
+                        "MultiTerm",
+                        "ShellIntegration");
+                    Directory.CreateDirectory(directory);
+                    string target = Path.Combine(directory, "multiterm-shell-integration.ps1");
+                    File.WriteAllText(target, PowerShellScript(), new UTF8Encoding(false));
+                    scriptPath = target;
+                }
+                catch
+                {
+                    scriptPath = String.Empty;
+                }
+
+                return scriptPath;
+            }
+        }
+
+        // The command line carries no user data at all: the script path travels
+        // in the environment, so a directory containing quotes or spaces cannot
+        // break parsing.
+        public static string PowerShellArguments()
+        {
+            return " -Command \"if ($env:" + EnvironmentVariable + ") { . $env:" + EnvironmentVariable + " }\"";
+        }
+
+        // cmd re-reads PROMPT from its environment at startup, so the documented
+        // default is only restated when the user has no prompt of their own.
+        public static string CmdPrompt(string existing)
+        {
+            string current = (existing ?? String.Empty).Trim();
+            if (current.Length == 0)
+            {
+                current = "$P$G";
+            }
+
+            if (current.IndexOf(Marker, StringComparison.Ordinal) >= 0)
+            {
+                return current;
+            }
+
+            return "$e" + Marker + "$p$e\\" + current;
+        }
+
+        // bash inherits PROMPT_COMMAND from its environment. A shell whose rc
+        // file overwrites it keeps reporting the launch directory, which is
+        // exactly the case the assistant-side fallbacks still cover.
+        public static string BashPromptCommand(string existing)
+        {
+            string emit = "printf '\\033" + Marker + "%s\\033\\\\' \"$PWD\"";
+            string current = (existing ?? String.Empty).Trim();
+            if (current.IndexOf(Marker, StringComparison.Ordinal) >= 0)
+            {
+                return current;
+            }
+
+            if (current.Length == 0)
+            {
+                return emit;
+            }
+
+            return current + "; " + emit;
+        }
+
+        // WSL forwards only the variables named in WSLENV, and that list belongs
+        // to the user, so an existing entry keeps its translation flags.
+        public static string WslEnv(string existing, string name)
+        {
+            List<string> entries = new List<string>();
+            foreach (string entry in (existing ?? String.Empty).Split(':'))
+            {
+                string trimmed = entry.Trim();
+                if (trimmed.Length > 0)
+                {
+                    entries.Add(trimmed);
+                }
+            }
+
+            foreach (string entry in entries)
+            {
+                if (String.Equals(entry.Split('/')[0], name, StringComparison.Ordinal))
+                {
+                    return String.Join(":", entries.ToArray());
+                }
+            }
+
+            entries.Add(name);
+            return String.Join(":", entries.ToArray());
+        }
+
+        public static ShellIntegrationPlan Plan(ShellInfo shell)
+        {
+            string kind = shell == null ? String.Empty : shell.Integration;
+            if (String.Equals(kind, "powershell", StringComparison.Ordinal))
+            {
+                string script = EnsureScript();
+                if (String.IsNullOrEmpty(script))
+                {
+                    return null;
+                }
+
+                Dictionary<string, string> environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                environment[EnvironmentVariable] = script;
+                return new ShellIntegrationPlan(PowerShellArguments(), environment);
+            }
+
+            if (String.Equals(kind, "cmd", StringComparison.Ordinal))
+            {
+                Dictionary<string, string> environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                environment["PROMPT"] = CmdPrompt(System.Environment.GetEnvironmentVariable("PROMPT"));
+                return new ShellIntegrationPlan(String.Empty, environment);
+            }
+
+            if (String.Equals(kind, "posix", StringComparison.Ordinal))
+            {
+                Dictionary<string, string> environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                environment["PROMPT_COMMAND"] = BashPromptCommand(System.Environment.GetEnvironmentVariable("PROMPT_COMMAND"));
+                environment["WSLENV"] = WslEnv(System.Environment.GetEnvironmentVariable("WSLENV"), "PROMPT_COMMAND");
+                return new ShellIntegrationPlan(String.Empty, environment);
+            }
+
+            // tmux attach targets and unknown shells are spawned untouched.
+            return null;
+        }
     }
 
     // The Windows "Open file" common dialog, driven directly rather than through
@@ -11418,6 +11655,10 @@ namespace MultiTerm.PowerShellBridge
         public string Title { get; private set; }
 
         public ShellInfo Shell { get; private set; }
+
+        // Applied at spawn so a `cd` reports back. Null means the shell starts
+        // exactly as it always did.
+        public ShellIntegrationPlan Integration { get; set; }
 
         public string Cwd { get; private set; }
 
@@ -11957,6 +12198,7 @@ namespace MultiTerm.PowerShellBridge
             Native.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize);
             IntPtr attributeList = Marshal.AllocHGlobal(attributeListSize);
             bool attributeListInitialized = false;
+            IntPtr environmentBlock = IntPtr.Zero;
 
             try
             {
@@ -11976,8 +12218,17 @@ namespace MultiTerm.PowerShellBridge
                 startupInfo.lpAttributeList = attributeList;
 
                 Native.PROCESS_INFORMATION processInformation;
-                string commandLine = Json.QuoteCommandLine(this.Shell.File) + this.Shell.Arguments;
-                bool started = Native.CreateProcessW(null, commandLine, IntPtr.Zero, IntPtr.Zero, false, Native.EXTENDED_STARTUPINFO_PRESENT, IntPtr.Zero, this.Cwd, ref startupInfo, out processInformation);
+                ShellIntegrationPlan integration = this.Integration;
+                string extraArguments = integration == null ? String.Empty : integration.Arguments;
+                string commandLine = Json.QuoteCommandLine(this.Shell.File) + this.Shell.Arguments + extraArguments;
+                int creationFlags = Native.EXTENDED_STARTUPINFO_PRESENT;
+                environmentBlock = this.BuildEnvironmentBlock(integration);
+                if (environmentBlock != IntPtr.Zero)
+                {
+                    creationFlags |= Native.CREATE_UNICODE_ENVIRONMENT;
+                }
+
+                bool started = Native.CreateProcessW(null, commandLine, IntPtr.Zero, IntPtr.Zero, false, creationFlags, environmentBlock, this.Cwd, ref startupInfo, out processInformation);
                 if (!started)
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not start " + this.Shell.File + ".");
@@ -11994,7 +12245,46 @@ namespace MultiTerm.PowerShellBridge
                     Native.DeleteProcThreadAttributeList(attributeList);
                 }
                 Marshal.FreeHGlobal(attributeList);
+                if (environmentBlock != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(environmentBlock);
+                }
             }
+        }
+
+        // CreateProcessW inherits the bridge environment when this returns
+        // IntPtr.Zero, which is what every session did before shell integration.
+        private IntPtr BuildEnvironmentBlock(ShellIntegrationPlan integration)
+        {
+            if (integration == null || integration.Environment == null || integration.Environment.Count == 0)
+            {
+                return IntPtr.Zero;
+            }
+
+            Dictionary<string, string> merged = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (DictionaryEntry entry in System.Environment.GetEnvironmentVariables())
+            {
+                string name = Convert.ToString(entry.Key);
+                if (!String.IsNullOrEmpty(name))
+                {
+                    merged[name] = Convert.ToString(entry.Value);
+                }
+            }
+
+            foreach (KeyValuePair<string, string> pair in integration.Environment)
+            {
+                merged[pair.Key] = pair.Value ?? String.Empty;
+            }
+
+            List<string> names = new List<string>(merged.Keys);
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+            StringBuilder builder = new StringBuilder();
+            foreach (string name in names)
+            {
+                builder.Append(name).Append('=').Append(merged[name]).Append('\0');
+            }
+            builder.Append('\0');
+            return Marshal.StringToHGlobalUni(builder.ToString());
         }
 
         private void StartOutputLoop()
@@ -12554,6 +12844,7 @@ namespace MultiTerm.PowerShellBridge
     internal static class Native
     {
         public const int EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+        public const int CREATE_UNICODE_ENVIRONMENT = 0x00000400;
         public const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
         public const uint INFINITE = 0xffffffff;
 

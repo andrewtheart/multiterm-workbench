@@ -147,6 +147,44 @@ describe("registered bridge discovery", () => {
       await new Promise((resolve) => healthServer.close(resolve));
     }
   });
+
+  it("filters malformed records and orders only live bridge probes", async () => {
+    const records = {
+      "bad.json": "{not json",
+      "old.json": JSON.stringify({ bridgeId: "BRIDGE-OLD", startedAt: "2026-08-16T10:00:00.000Z" }),
+      "new.json": JSON.stringify({ bridgeId: "BRIDGE-NEW", startedAt: "2026-08-16T12:00:00.000Z" }),
+      "dead.json": JSON.stringify({ bridgeId: "BRIDGE-DEAD", startedAt: "2026-08-16T13:00:00.000Z" })
+    };
+    const fileSystem = {
+      readdirSync: vi.fn(() => [
+        { name: "folder.json", isFile: () => false },
+        { name: "notes.txt", isFile: () => true },
+        ...Object.keys(records).map((name) => ({ name, isFile: () => true }))
+      ]),
+      readFileSync: vi.fn((filePath) => records[filePath.split(/[\\/]/).at(-1)])
+    };
+    const probe = vi.fn(async (record) => record.bridgeId === "BRIDGE-DEAD" ? null : record);
+
+    await expect(server.discoverRegisteredBridges("C:\\instances", fileSystem, probe)).resolves.toEqual([
+      { bridgeId: "BRIDGE-NEW", startedAt: "2026-08-16T12:00:00.000Z" },
+      { bridgeId: "BRIDGE-OLD", startedAt: "2026-08-16T10:00:00.000Z" }
+    ]);
+    expect(probe).toHaveBeenCalledTimes(3);
+    await expect(server.discoverRegisteredBridges("", fileSystem, probe)).resolves.toEqual([]);
+    await expect(server.discoverRegisteredBridges("C:\\denied", {
+      readdirSync: () => { throw new Error("denied"); }
+    }, probe)).resolves.toEqual([]);
+  });
+
+  it("returns an empty bridge list when discovery itself fails", async () => {
+    const client = { send: vi.fn() };
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await server.sendBridgeInstances(client, "broken", async () => { throw new Error("scan failed"); });
+
+    expect(warning).toHaveBeenCalledWith("[bridge] Could not discover bridge instances: scan failed");
+    expect(client.send).toHaveBeenCalledWith({ type: "bridgeInstances", requestId: "broken", bridges: [] });
+  });
 });
 
 describe("createSession environment branches", () => {
