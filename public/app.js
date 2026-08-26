@@ -24980,8 +24980,9 @@ function bindTerminalArtifactsHub() {
         state.terminalArtifactsHub.draftText = null;
       }
     }
+    // The list deliberately is not redrawn here: it sits directly above the
+    // editor, so echoing each keystroke would show the same text twice.
     elements.terminalNotesDelete.disabled = !note;
-    renderTerminalNoteList(record);
     elements.terminalNotesSaved.textContent = note ? "Saved" : "";
     window.clearTimeout(state.terminalArtifactsHub.savedTimer);
     state.terminalArtifactsHub.savedTimer = window.setTimeout(() => {

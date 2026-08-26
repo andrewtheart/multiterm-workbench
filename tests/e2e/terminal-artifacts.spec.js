@@ -235,10 +235,13 @@ test.describe("Terminal notes and command queue", () => {
     await expect(page.locator("#terminalNotesInput")).toHaveValue("");
     await page.locator("#terminalNotesInput").fill("Fourth note from full editor");
     await expect(page.locator("#terminalNotesSaved")).toHaveText("Saved");
-    await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(4);
+    // The note being typed is already on screen in the editor, so it stays out
+    // of the list until the edit is committed.
+    await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(3);
 
     await page.locator("#terminalNotesList .terminal-note-list-item").filter({ hasText: "First investigation note" }).click();
     await expect(page.locator("#terminalNotesInput")).toHaveValue("First investigation note");
+    await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(4);
     await page.locator("#terminalNotesDelete").click();
     await expect(page.locator("#terminalNotesList .terminal-note-list-item")).toHaveCount(3);
     await expect(page.locator("#terminalNotesList")).not.toContainText("First investigation note");
@@ -297,6 +300,32 @@ test.describe("Terminal notes and command queue", () => {
       return flyout.top - anchor.bottom;
     });
     expect(Math.abs(gap - 7)).toBeLessThanOrEqual(1);
+  });
+
+  test("keeps a note being typed out of the list without losing it", async ({ page }) => {
+    await reset(page);
+    await page.locator("#terminalArtifactsToggle").click();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+
+    const rows = page.locator("#terminalNotesList .terminal-note-list-item");
+    await page.locator("#terminalNotesAdd").click();
+    await page.locator("#terminalNotesInput").fill("A note as it is being typed");
+    await expect(page.locator("#terminalNotesSaved")).toHaveText("Saved");
+
+    // Nothing above the editor repeats what is in it, and the only note is not
+    // shown as an empty list either.
+    await expect(rows).toHaveCount(0);
+    await expect(page.locator("#terminalNotesList")).toBeHidden();
+    // It is still saved, so an unexpected exit cannot lose the text.
+    expect(await page.evaluate(() =>
+      artifactNotes(ensureTerminalArtifact([...state.terminals.values()][0])).map((note) => note.text)))
+      .toEqual(["A note as it is being typed"]);
+
+    // Reopening the dialog is a commit point, so the note joins the list.
+    await page.locator("#terminalArtifactsClose").click();
+    await page.locator("#terminalArtifactsToggle").click();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText("A note as it is being typed");
   });
 
   test("dequeues a command by inserting it without Enter", async ({ page }) => {
