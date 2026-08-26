@@ -10250,21 +10250,22 @@ button.shortcut-binding.is-capturing {
 
 .command-queue-add {
   align-items: center;
-  align-self: stretch;
+  align-self: center;
   background: var(--primary);
   border-color: var(--primary);
+  border-radius: 50%;
   color: var(--on-primary);
   display: inline-flex;
-  font-weight: 650;
-  gap: 7px;
+  height: 40px;
   justify-content: center;
-  min-width: 92px;
+  padding: 0;
+  width: 40px;
 }
 
 .command-queue-add i,
 .command-queue-add svg {
-  height: 15px;
-  width: 15px;
+  height: 17px;
+  width: 17px;
 }
 
 .unparented-target {
@@ -10426,7 +10427,7 @@ button.shortcut-binding.is-capturing {
   }
 
   .command-queue-add {
-    min-height: 38px;
+    justify-self: end;
   }
 }
 
