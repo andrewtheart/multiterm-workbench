@@ -109,4 +109,21 @@ describe("installed bridge output replay", () => {
     expect(elevated[0]).toContain('this.AttachSessionLifecycle(session, "Administrator session exited: ");');
     expect(elevated[0]).toMatch(/lock \(this\.sessionCatalogLock\)[\s\S]*?this\.sessions\.TryAdd\(id, session\);[\s\S]*?session\.AttachRemote[\s\S]*?this\.PublishSessionCreated/);
   });
+
+  it("never lets a diagnostics read delay an output replay", () => {
+    // The receive loop is a client's only reader, so a slow store read handled
+    // inline stalls every message behind it, replay included.
+    expect(bridgeScript).toMatch(/else if \(type == "diagnosticList"\)[\s\S]{0,400}Task\.Run\(delegate \{ this\.SendRuntimeDiagnostics\(client, listRequest\); \}\);/);
+    expect(bridgeScript).toContain("private void SendRuntimeDiagnostics(BridgeClient client, Dictionary<string, string> message)");
+  });
+
+  it("reads only as far back as the requested diagnostics window", () => {
+    const recent = bridgeScript.match(/public string RecentJson\(long requestedLimit\)[\s\S]*?\n        \}/);
+    expect(recent).toBeTruthy();
+    // Newest file first with an early stop, so the cost follows the window and
+    // not the size of a store that grows every day.
+    expect(recent[0]).toContain("for (int index = files.Length - 1; index >= 0; index--)");
+    expect(recent[0]).toContain("if (limit > 0 && collected >= limit) break;");
+    expect(recent[0]).toContain("chunks.Insert(0, fileRecords);");
+  });
 });

@@ -3528,7 +3528,15 @@ async function inspectGitRepository(directory) {
   };
 }
 
+// A worktree whose directory has gone still owns its branch, so git refuses to
+// check that branch out again and keeps listing the dead path. Locked worktrees
+// are skipped, so one on a volume that is merely offline survives.
+async function pruneStaleWorktreeRecords(repositoryRoot) {
+  await runGit(["worktree", "prune"], repositoryRoot, 30000);
+}
+
 async function listGitWorktrees(repositoryRoot) {
+  await pruneStaleWorktreeRecords(repositoryRoot);
   const listed = await runGit(["worktree", "list", "--porcelain"], repositoryRoot);
   if (!listed.ok) return []; else { void 0; }
   const worktrees = [];
@@ -4700,6 +4708,7 @@ async function startWorktreeMerge({ repositoryRoot, parentBranch, worktreeBranch
   } else { void 0; }
 
   onProgress("locating", "Locating the source and parent worktrees...");
+  await pruneStaleWorktreeRecords(repositoryRoot);
   const checkoutPaths = await branchCheckoutPaths(repositoryRoot, [worktreeBranch, parentBranch]);
   const worktreePath = checkoutPaths.get(worktreeBranch) || "";
   if (worktreePath && strategy !== "pending") {

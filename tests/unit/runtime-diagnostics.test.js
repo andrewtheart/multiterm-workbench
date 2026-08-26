@@ -4,6 +4,7 @@ const path = require("node:path");
 const {
   RuntimeDiagnostics,
   defaultDiagnosticsDirectory,
+  normalizeDiagnosticRecord,
   normalizeDiagnosticsConfig,
   redactDiagnosticValue
 } = require("../../lib/runtime-diagnostics");
@@ -75,6 +76,160 @@ describe("runtime diagnostic storage", () => {
     expect(diagnostics.readRecent(5).map((entry) => entry.event)).toEqual([
       "event-7", "event-8", "event-9", "event-10", "event-11"
     ]);
+  });
+
+  it("reads only as far back as the requested window", () => {
+    const now = Date.UTC(2026, 7, 12, 12);
+    // Three rotated files; only the newest is needed to answer a small window.
+    const names = ["runtime-a.jsonl", "runtime-b.jsonl", "runtime-c.jsonl"];
+    names.forEach((name, fileIndex) => {
+      const filePath = path.join(directory, name);
+      const lines = [];
+      for (let index = 0; index < 5; index += 1) lines.push(JSON.stringify({ event: `${name}-${index}` }));
+      fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+      const stamp = new Date(now - (names.length - fileIndex) * 60000);
+      fs.utimesSync(filePath, stamp, stamp);
+    });
+
+    const diagnostics = new RuntimeDiagnostics({ directory, now: () => now, viewerEntries: 3 });
+    const readFiles = [];
+    const realReadFileSync = fs.readFileSync;
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation((target, ...rest) => {
+      if (typeof target === "string" && target.endsWith(".jsonl")) readFiles.push(path.basename(target));
+      return realReadFileSync(target, ...rest);
+    });
+
+    try {
+      expect(diagnostics.readRecent(3).map((entry) => entry.event)).toEqual([
+        "runtime-c.jsonl-2", "runtime-c.jsonl-3", "runtime-c.jsonl-4"
+      ]);
+      // The older files are never opened, so the cost follows the window rather
+      // than the size of the store.
+      expect(readFiles).toEqual(["runtime-c.jsonl"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("resolves the store location from the override, then the platform's local data directory", () => {
+    expect(defaultDiagnosticsDirectory({ MULTITERM_DIAGNOSTICS_DIR: "custom-store" }))
+      .toBe(path.resolve("custom-store"));
+    expect(defaultDiagnosticsDirectory({ LOCALAPPDATA: "C:\\Local" }, "win32"))
+      .toBe(path.join("C:\\Local", "MultiTerm", "Diagnostics"));
+    expect(defaultDiagnosticsDirectory({}, "win32"))
+      .toBe(path.join(os.homedir(), "AppData", "Local", "MultiTerm", "Diagnostics"));
+    expect(defaultDiagnosticsDirectory({}, "linux"))
+      .toBe(path.join(os.homedir(), ".local", "share", "MultiTerm", "Diagnostics"));
+  });
+
+  it("redacts inside arrays and leaves primitives untouched", () => {
+    expect(redactDiagnosticValue(["https://user:secret@example.com/path?token=1#frag", 7]))
+      .toEqual(["https://example.com/path", 7]);
+    expect(redactDiagnosticValue(42)).toBe(42);
+    expect(redactDiagnosticValue(null)).toBe(null);
+  });
+
+  it("redacts a URL-shaped value it cannot parse rather than passing it through", () => {
+    expect(redactDiagnosticValue("connect http://[ now")).toBe("connect [redacted-url] now");
+  });
+
+  it("falls back to defaults when a record omits its event", () => {
+    expect(normalizeDiagnosticRecord({ message: "no event" }, 555))
+      .toMatchObject({ time: 555, level: "info", source: "bridge", event: "log", message: "no event" });
+    expect(normalizeDiagnosticRecord({ event: "" }, 555)).toMatchObject({ event: "log" });
+  });
+
+  it("keeps a record's own valid time, level, and event", () => {
+    expect(normalizeDiagnosticRecord({ time: 1234, level: "warn", event: "resume" }, 999))
+      .toMatchObject({ time: 1234, level: "warn", event: "resume", source: "bridge", message: "" });
+  });
+
+  it("treats a missing store as empty rather than failing", () => {
+    const missing = path.join(directory, "not-created-yet");
+    const diagnostics = new RuntimeDiagnostics({ directory: missing, now: () => Date.UTC(2026, 7, 12) });
+    expect(diagnostics.readRecent(10)).toEqual([]);
+    expect(diagnostics.prune(Date.UTC(2026, 7, 12))).toEqual([]);
+  });
+
+  it("surfaces store failures that are not a missing directory", () => {
+    const diagnostics = new RuntimeDiagnostics({ directory, now: () => Date.UTC(2026, 7, 12) });
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+
+    const readdir = vi.spyOn(fs, "readdirSync").mockImplementation(() => { throw denied; });
+    try {
+      expect(() => diagnostics.readRecent(5)).toThrow("denied");
+    } finally {
+      readdir.mockRestore();
+    }
+
+    const stat = vi.spyOn(fs, "statSync").mockImplementation(() => { throw denied; });
+    try {
+      expect(() => diagnostics.append({ event: "blocked" })).toThrow("denied");
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
+  it("never prunes the file it is currently writing to", () => {
+    const now = Date.UTC(2026, 7, 12, 12);
+    const diagnostics = new RuntimeDiagnostics({ directory, now: () => now, retentionDays: 1 });
+    const current = diagnostics.append({ event: "current" });
+    // Age the live file well past retention; it must still survive.
+    const ancient = new Date(now - 30 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(current, ancient, ancient);
+
+    const stale = path.join(directory, "runtime-stale.jsonl");
+    fs.writeFileSync(stale, JSON.stringify({ event: "stale" }) + "\n", "utf8");
+    fs.utimesSync(stale, ancient, ancient);
+
+    expect(diagnostics.prune(now)).toEqual([stale]);
+    expect(fs.existsSync(current)).toBe(true);
+  });
+
+  it("still returns the whole store when the viewer window is unlimited", () => {
+    const now = Date.UTC(2026, 7, 12, 12);
+    const older = path.join(directory, "runtime-older.jsonl");
+    fs.writeFileSync(older, JSON.stringify({ event: "older" }) + "\n", "utf8");
+    const stamp = new Date(now - 120000);
+    fs.utimesSync(older, stamp, stamp);
+
+    const diagnostics = new RuntimeDiagnostics({ directory, now: () => now, viewerEntries: 0 });
+    diagnostics.append({ event: "newer" });
+
+    expect(diagnostics.readRecent(0).map((entry) => entry.event)).toEqual(["older", "newer"]);
+  });
+
+  it("keeps reading older files until the requested window is filled", () => {
+    const now = Date.UTC(2026, 7, 12, 12);
+    const names = ["runtime-a.jsonl", "runtime-b.jsonl"];
+    names.forEach((name, fileIndex) => {
+      const filePath = path.join(directory, name);
+      const lines = [];
+      for (let index = 0; index < 3; index += 1) lines.push(JSON.stringify({ event: `${name}-${index}` }));
+      fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf8");
+      const stamp = new Date(now - (names.length - fileIndex) * 60000);
+      fs.utimesSync(filePath, stamp, stamp);
+    });
+
+    const diagnostics = new RuntimeDiagnostics({ directory, now: () => now, viewerEntries: 5 });
+    expect(diagnostics.readRecent(5).map((entry) => entry.event)).toEqual([
+      "runtime-a.jsonl-1", "runtime-a.jsonl-2",
+      "runtime-b.jsonl-0", "runtime-b.jsonl-1", "runtime-b.jsonl-2"
+    ]);
+  });
+
+  it("orders files written in the same millisecond by name", () => {
+    const now = Date.UTC(2026, 7, 12, 12);
+    const stamp = new Date(now - 60000);
+    for (const name of ["runtime-second.jsonl", "runtime-first.jsonl"]) {
+      const filePath = path.join(directory, name);
+      fs.writeFileSync(filePath, JSON.stringify({ event: name }) + "\n", "utf8");
+      fs.utimesSync(filePath, stamp, stamp);
+    }
+
+    const diagnostics = new RuntimeDiagnostics({ directory, now: () => now, viewerEntries: 0 });
+    expect(diagnostics.readRecent(0).map((entry) => entry.event))
+      .toEqual(["runtime-first.jsonl", "runtime-second.jsonl"]);
   });
 
   it("redacts sensitive fields and URL credentials, query strings, and fragments", () => {

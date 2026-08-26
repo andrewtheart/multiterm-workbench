@@ -1715,20 +1715,31 @@ namespace MultiTerm.PowerShellBridge
                     int byTime = left.LastWriteTimeUtc.CompareTo(right.LastWriteTimeUtc);
                     return byTime != 0 ? byTime : StringComparer.OrdinalIgnoreCase.Compare(left.FullName, right.FullName);
                 });
-                List<string> records = new List<string>();
-                foreach (FileInfo file in files)
+                // Newest file first, stopping once the window is full. The store grows
+                // without bound, so reading all of it to return a small tail costs more
+                // every day and stalls the bridge that is doing the reading.
+                List<List<string>> chunks = new List<List<string>>();
+                long collected = 0;
+                for (int index = files.Length - 1; index >= 0; index--)
                 {
-                    foreach (string line in File.ReadLines(file.FullName, Encoding.UTF8))
+                    List<string> fileRecords = new List<string>();
+                    foreach (string line in File.ReadLines(files[index].FullName, Encoding.UTF8))
                     {
                         if (String.IsNullOrWhiteSpace(line)) continue;
                         try
                         {
                             Json.ParseFlatObject(line);
-                            records.Add(line);
+                            fileRecords.Add(line);
                         }
                         catch { }
                     }
+                    chunks.Insert(0, fileRecords);
+                    collected += fileRecords.Count;
+                    if (limit > 0 && collected >= limit) break;
                 }
+
+                List<string> records = new List<string>();
+                foreach (List<string> chunk in chunks) records.AddRange(chunk);
                 if (limit > 0 && records.Count > limit)
                 {
                     int removeCount = records.Count - (int)Math.Min(limit, Int32.MaxValue);
@@ -2798,6 +2809,7 @@ namespace MultiTerm.PowerShellBridge
                     + ",\"ok\":false,\"reason\":\"That folder is not inside a git repository.\",\"worktrees\":[]}");
                 return;
             }
+            PruneStaleWorktreeRecords(repositoryRoot);
             GitResult listed = RunGit(new string[] { "worktree", "list", "--porcelain" }, repositoryRoot, 30000);
             StringBuilder builder = new StringBuilder("[");
             bool first = true;
@@ -4104,8 +4116,17 @@ namespace MultiTerm.PowerShellBridge
             }
         }
 
+        // A worktree whose directory has gone still owns its branch, so git refuses to
+        // check that branch out again and keeps listing the dead path. Locked worktrees
+        // are skipped, so one on a volume that is merely offline survives.
+        private static void PruneStaleWorktreeRecords(string repositoryRoot)
+        {
+            RunGit(new string[] { "worktree", "prune" }, repositoryRoot, 30000);
+        }
+
         private static string BranchCheckoutPath(string repositoryRoot, string branch)
         {
+            PruneStaleWorktreeRecords(repositoryRoot);
             GitResult listed = RunGit(new string[] { "worktree", "list", "--porcelain" }, repositoryRoot, 30000);
             if (!listed.Ok) return String.Empty;
             string currentPath = String.Empty;
@@ -6445,19 +6466,10 @@ namespace MultiTerm.PowerShellBridge
             }
             else if (type == "diagnosticList")
             {
-                try
-                {
-                    long limit = RuntimeDiagnosticsStore.NonNegativeLong(message, "limit", -1);
-                    client.Send("{\"type\":\"diagnostics\",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
-                        + ",\"directory\":" + Json.Quote(this.runtimeDiagnostics.DirectoryPath)
-                        + ",\"entries\":" + this.runtimeDiagnostics.RecentJson(limit) + "}");
-                }
-                catch (Exception error)
-                {
-                    client.Send("{\"type\":\"diagnostics\",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
-                        + ",\"directory\":" + Json.Quote(this.runtimeDiagnostics.DirectoryPath)
-                        + ",\"entries\":[],\"error\":" + Json.Quote(error.Message) + "}");
-                }
+                // This loop is the client's only reader, so a slow store read here
+                // delays everything queued behind it, including output replay.
+                Dictionary<string, string> listRequest = message;
+                Task.Run(delegate { this.SendRuntimeDiagnostics(client, listRequest); });
             }
             else if (type == "copilotLogRegister")
             {
@@ -11587,6 +11599,23 @@ namespace MultiTerm.PowerShellBridge
 
         // A reconnecting renderer reports the last sequence it saw and is handed a
         // COMPLETE retained suffix or an explicit gap, never a partial screen.
+        private void SendRuntimeDiagnostics(BridgeClient client, Dictionary<string, string> message)
+        {
+            try
+            {
+                long limit = RuntimeDiagnosticsStore.NonNegativeLong(message, "limit", -1);
+                client.Send("{\"type\":\"diagnostics\",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
+                    + ",\"directory\":" + Json.Quote(this.runtimeDiagnostics.DirectoryPath)
+                    + ",\"entries\":" + this.runtimeDiagnostics.RecentJson(limit) + "}");
+            }
+            catch (Exception error)
+            {
+                client.Send("{\"type\":\"diagnostics\",\"requestId\":" + Json.Quote(Json.Get(message, "requestId"))
+                    + ",\"directory\":" + Json.Quote(this.runtimeDiagnostics.DirectoryPath)
+                    + ",\"entries\":[],\"error\":" + Json.Quote(error.Message) + "}");
+            }
+        }
+
         private void ResumeSessionOutput(BridgeClient client, Dictionary<string, string> message)
         {
             string id = Json.Get(message, "id");

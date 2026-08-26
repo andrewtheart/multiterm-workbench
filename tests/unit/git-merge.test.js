@@ -535,6 +535,46 @@ describe("git repository and worktree bridge", () => {
 });
 
 describe("worktree merge-back", () => {
+  test("ignores a worktree whose directory has been deleted", async () => {
+    const { git, repo } = makeCreationRepo("stale-listing");
+    const gone = path.join(root, "stale-listing-gone");
+    git(["worktree", "add", gone, "-b", "gone"]);
+    fs.rmSync(gone, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+
+    // Git keeps the record until it is pruned, so the dead path would otherwise
+    // be offered as a real worktree.
+    const worktrees = await listGitWorktrees(repo);
+    expect(worktrees.map((worktree) => worktree.branch)).not.toContain("gone");
+  }, realGitTestTimeout);
+
+  test("merges into a parent whose previous worktree directory has been deleted", async () => {
+    const { git, repo } = makeCreationRepo("stale-parent");
+    git(["branch", "parent"]);
+    const parentWorktree = path.join(root, "stale-parent-checkout");
+    git(["worktree", "add", parentWorktree, "parent"]);
+    const agentWorktree = path.join(root, "stale-parent-agent");
+    git(["worktree", "add", agentWorktree, "-b", "agent-stale", "parent"]);
+    fs.writeFileSync(path.join(agentWorktree, "agent.txt"), "from the agent\n");
+    git(["add", "."], agentWorktree);
+    git(["commit", "-m", "agent work"], agentWorktree);
+
+    // The parent's worktree vanishes the way an interrupted run or a cleaned
+    // temp directory leaves it: the directory is gone, the record is not.
+    fs.rmSync(parentWorktree, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+
+    const started = await startWorktreeMerge({
+      repositoryRoot: repo,
+      parentBranch: "parent",
+      worktreeBranch: "agent-stale",
+      strategy: "merge"
+    });
+    // Unpruned, the dead path is reported as the parent checkout and the merge
+    // runs in a directory that is not there.
+    expect(started).toMatchObject({ ok: true, status: "staged" });
+    expect(fs.existsSync(started.workPath)).toBe(true);
+    await finishWorktreeMerge(started.sessionId, { abort: true });
+  }, realGitTestTimeout);
+
   test("rejects missing merge inputs and missing branches", async () => {
     await expect(startWorktreeMerge({})).resolves.toMatchObject({ status: "refused", reason: expect.stringContaining("required") });
     const { repo } = makeRepo("missing-branches");

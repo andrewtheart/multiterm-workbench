@@ -64,4 +64,13 @@ describe("installed bridge Git worktree execution", () => {
     expect(source).toMatch(/RunGit\([^)]*\)\s*\{\s*return RunProcess\("git", arguments, workingDirectory, timeoutMilliseconds, environment\);/);
     expect(source).toContain('RunProcess("gh", new string[] { "--version" }');
   });
+
+  test("drops worktree records whose directory has gone before listing or locating a branch", () => {
+    // Git keeps such a record, still refuses to check the branch out again, and
+    // keeps reporting the dead path until it is pruned.
+    expect(source).toContain("private static void PruneStaleWorktreeRecords(string repositoryRoot)");
+    expect(source).toContain('RunGit(new string[] { "worktree", "prune" }, repositoryRoot, 30000);');
+    expect(source).toMatch(/PruneStaleWorktreeRecords\(repositoryRoot\);\s*GitResult listed = RunGit\(new string\[\] \{ "worktree", "list", "--porcelain" \}/);
+    expect(source).toMatch(/private static string BranchCheckoutPath\(string repositoryRoot, string branch\)\s*\{\s*PruneStaleWorktreeRecords\(repositoryRoot\);/);
+  });
 });

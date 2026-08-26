@@ -36,6 +36,7 @@ module.exports = defineConfig({
         "src/shell-integration.js",
         "src/copilot-automation-output.js",
         "src/renderer-routing.js",
+        "lib/runtime-diagnostics.js",
         "public/automations.js",
         "public/git-worktrees.js",
         "public/syntax-highlight.js",
