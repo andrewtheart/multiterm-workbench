@@ -1378,4 +1378,57 @@ test.describe("Copilot resume listing", () => {
       unmatched: false
     });
   });
+
+  test("keeps the last session reachable when the window is shorter than the list", async () => {
+    const original = page.viewportSize();
+    try {
+      await page.setViewportSize({ width: 1280, height: 600 });
+      await page.evaluate(() => {
+        const sessions = [];
+        for (let index = 0; index < 30; index += 1) {
+          sessions.push({
+            id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+            key: `cli:short-window-${index}`,
+            source: "cli",
+            name: `Session ${index}`,
+            cwd: `D:\\short-window\\folder-${index}`,
+            updatedAt: new Date(Date.UTC(2026, 7, 25, 12, 0, index)).toISOString()
+          });
+        }
+        copilotResume.provider = "copilot";
+        copilotResume.scope = "local";
+        copilotResume.view = "list";
+        copilotResume.sessions = sessions;
+        // Shown without the bridge round trip, because this asserts geometry.
+        elements.copilotResumeOverlay.hidden = false;
+        elements.copilotResumeOverlay.classList.add("is-open");
+        syncCopilotResumeView();
+        setCopilotResumeOriginFilter("all");
+        renderCopilotSessions();
+      });
+      await expect(page.locator(".copilot-session-card")).toHaveCount(30);
+
+      const geometry = await page.evaluate(() => {
+        const dialog = document.querySelector("#copilotResumeOverlay .palette");
+        const list = elements.copilotResumeList;
+        list.scrollTop = list.scrollHeight;
+        const cards = [...document.querySelectorAll(".copilot-session-card")];
+        const dialogRect = dialog.getBoundingClientRect();
+        return {
+          dialogClipped: dialog.scrollHeight - dialog.clientHeight,
+          listBelowDialog: Math.round(list.getBoundingClientRect().bottom - dialogRect.bottom),
+          lastCardCutOff: Math.max(0, Math.round(cards[cards.length - 1].getBoundingClientRect().bottom - dialogRect.bottom))
+        };
+      });
+
+      // A list sized in vh independently of the dialog put the bottom of its own
+      // scroll viewport past the dialog's clipped edge, so the final entries
+      // could not be scrolled into view at any scroll position.
+      expect(geometry.dialogClipped).toBe(0);
+      expect(geometry.listBelowDialog).toBeLessThanOrEqual(0);
+      expect(geometry.lastCardCutOff).toBe(0);
+    } finally {
+      await page.setViewportSize(original);
+    }
+  });
 });

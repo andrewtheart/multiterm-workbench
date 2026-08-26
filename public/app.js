@@ -127,6 +127,7 @@ const defaultSettings = {
   outputBacklogKb: 1024,
   outputCoalesceMs: 8,
   pageCloseAction: "ask",
+  pageSwipeGestures: true,
   paneHeight: 320,
   pagerCollapsed: false,
   pagerPlacement: "bottom",
@@ -291,6 +292,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   worktreeSharedRoot: "worktree worktrees git clone shared location folder repository repo agent isolated parallel branch",
   copyOnSelect: "selection selected highlight mouse clipboard copy automatically auto",
   highlightInputPrompts: "awaiting input prompt prompts question questions badge glow attention detect detection interactive highlight",
+  pageSwipeGestures: "swipe swiping gesture gestures touch touchscreen trackpad touchpad two finger fling flick page pages next previous navigate navigation",
   notifyActivity: "activity busy background output notification notifications alert alerts terminal change",
   notifyQuestions: "question questions ask asking answer choice form copilot claude notification notifications alert alerts input",
   notifySilence: "idle quiet silence inactivity completion done notification notifications alert alerts terminal",
@@ -1047,6 +1049,7 @@ const elements = {
   helpSearchStatus: document.querySelector("#helpSearchStatus"),
   helpSearchToggle: document.querySelector("#helpSearchToggle"),
   highlightInputPrompts: document.querySelector("#highlightInputPrompts"),
+  pageSwipeGestures: document.querySelector("#pageSwipeGestures"),
   shellIntegration: document.querySelector("#shellIntegration"),
   host: document.querySelector("#terminalHost"),
   keepSessionsOnClose: document.querySelector("#keepSessionsOnClose"),
@@ -1824,6 +1827,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindAutomationStudio();
   bindMemStatus();
   bindWorkspaceBackgroundZoom();
+  bindPageSwipeGestures();
   bindGlobalShortcuts();
   refreshGlobalShortcutHints();
   bindFullscreenEvents();
@@ -1973,6 +1977,7 @@ function bindControls() {
   elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
   elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
+  elements.pageSwipeGestures.checked = state.settings.pageSwipeGestures !== false;
   elements.shellIntegration.checked = state.settings.shellIntegration !== false;
   elements.rightClickAction.value = state.settings.rightClickAction;
   elements.scrollbackLines.value = state.settings.scrollback;
@@ -2271,6 +2276,7 @@ function bindControls() {
   bindSetting(elements.showVersionInWindowTitle, "showVersionInWindowTitle", "change", (_, element) => element.checked);
   bindSetting(elements.copyOnSelect, "copyOnSelect", "change", (_, element) => element.checked);
   bindSetting(elements.highlightInputPrompts, "highlightInputPrompts", "change", (_, element) => element.checked);
+  bindSetting(elements.pageSwipeGestures, "pageSwipeGestures", "change", (_, element) => element.checked);
   bindSetting(elements.shellIntegration, "shellIntegration", "change", (_, element) => element.checked);
   bindSetting(elements.rightClickAction, "rightClickAction", "change", (value) => value);
   bindSetting(elements.scrollbackLines, "scrollback", "change", Number);
@@ -4714,6 +4720,116 @@ function bindWorkspaceBackgroundZoom() {
 function mouseReportingActive(terminal) {
   const mode = terminal.term.modes?.mouseTrackingMode;
   return Boolean(mode) && mode !== "none";
+}
+
+// A trackpad two-finger swipe arrives as horizontal wheel deltas; a touchscreen
+// swipe arrives as touch moves. Both only move pages when the gesture is
+// decisively sideways and nothing under the pointer wants that direction.
+const PAGE_SWIPE_WHEEL_DISTANCE = 180;
+const PAGE_SWIPE_TOUCH_DISTANCE = 72;
+const PAGE_SWIPE_DOMINANCE = 1.5;
+const PAGE_SWIPE_IDLE_RESET_MS = 250;
+const PAGE_SWIPE_COOLDOWN_MS = 350;
+
+let pageSwipeWheelDelta = 0;
+let pageSwipeWheelAt = 0;
+let pageSwipeLastAt = 0;
+let pageSwipeTouch = null;
+
+function pageSwipeAvailable() {
+  return state.settings.pageSwipeGestures !== false && state.pages.length > 1;
+}
+
+// A TUI that owns the mouse must receive the raw event instead.
+function pageSwipeBlockedByTerminal(target) {
+  const pane = target instanceof Element ? target.closest(".terminal-pane") : null;
+  const terminal = pane ? state.terminals.get(pane.dataset.id) : null;
+  return Boolean(terminal && mouseReportingActive(terminal));
+}
+
+// Anything still able to scroll that way owns the gesture, so a diff, editor or
+// long row can be panned without the page changing underneath it.
+function pageSwipeBlockedByScroller(target, direction) {
+  let node = target instanceof Element ? target : null;
+  while (node && node !== elements.stage) {
+    if (node.scrollWidth > node.clientWidth + 1) {
+      const overflowX = getComputedStyle(node).overflowX;
+      if (overflowX === "auto" || overflowX === "scroll") {
+        const remaining = direction > 0
+          ? node.scrollWidth - node.clientWidth - node.scrollLeft
+          : node.scrollLeft;
+        if (remaining > 1) return true;
+      }
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function runPageSwipe(direction) {
+  const now = Date.now();
+  if (now - pageSwipeLastAt < PAGE_SWIPE_COOLDOWN_MS) return false;
+  pageSwipeLastAt = now;
+  cyclePage(direction);
+  return true;
+}
+
+function bindPageSwipeGestures() {
+  if (!elements.stage) return;
+
+  elements.stage.addEventListener("wheel", (event) => {
+    if (!pageSwipeAvailable()) return;
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+    const now = Date.now();
+    if (now - pageSwipeWheelAt > PAGE_SWIPE_IDLE_RESET_MS) pageSwipeWheelDelta = 0;
+    pageSwipeWheelAt = now;
+    if (Math.abs(event.deltaX) <= Math.abs(event.deltaY) * PAGE_SWIPE_DOMINANCE) {
+      pageSwipeWheelDelta = 0;
+      return;
+    }
+    // Scrolling content rightwards reveals the next page, matching how the
+    // platform's own horizontal scrolling reads.
+    const direction = event.deltaX > 0 ? 1 : -1;
+    if (pageSwipeBlockedByTerminal(event.target)) return;
+    if (pageSwipeBlockedByScroller(event.target, direction)) return;
+    if (pageSwipeWheelDelta !== 0 && Math.sign(pageSwipeWheelDelta) !== direction) pageSwipeWheelDelta = 0;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 24
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 240 : 1;
+    pageSwipeWheelDelta += event.deltaX * scale;
+    // Also stops the shell treating a sideways swipe as history navigation.
+    if (event.cancelable) event.preventDefault();
+    if (Math.abs(pageSwipeWheelDelta) < PAGE_SWIPE_WHEEL_DISTANCE) return;
+    if (runPageSwipe(direction)) pageSwipeWheelDelta = 0;
+  }, { capture: true, passive: false });
+
+  elements.stage.addEventListener("touchstart", (event) => {
+    pageSwipeTouch = null;
+    if (!pageSwipeAvailable() || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    pageSwipeTouch = { x: touch.clientX, y: touch.clientY, target: event.target, spent: false };
+  }, { capture: true, passive: true });
+
+  elements.stage.addEventListener("touchmove", (event) => {
+    if (!pageSwipeTouch || pageSwipeTouch.spent || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - pageSwipeTouch.x;
+    const dy = touch.clientY - pageSwipeTouch.y;
+    if (Math.abs(dx) < PAGE_SWIPE_TOUCH_DISTANCE) return;
+    if (Math.abs(dx) <= Math.abs(dy) * PAGE_SWIPE_DOMINANCE) return;
+    // The next page follows the finger in from the right.
+    const direction = dx < 0 ? 1 : -1;
+    pageSwipeTouch.spent = true;
+    if (pageSwipeBlockedByTerminal(pageSwipeTouch.target)) return;
+    if (pageSwipeBlockedByScroller(pageSwipeTouch.target, direction)) return;
+    if (runPageSwipe(direction) && event.cancelable) event.preventDefault();
+  }, { capture: true, passive: false });
+
+  const endPageSwipeTouch = () => {
+    pageSwipeTouch = null;
+  };
+  elements.stage.addEventListener("touchend", endPageSwipeTouch, { capture: true, passive: true });
+  elements.stage.addEventListener("touchcancel", endPageSwipeTouch, { capture: true, passive: true });
 }
 
 const DRAG_SELECT_THRESHOLD_PX = 3;
@@ -22227,6 +22343,7 @@ function syncControlsFromSettings() {
   elements.allowBridgeTerminalFocus.checked = state.settings.allowBridgeTerminalFocus;
   elements.copyOnSelect.checked = state.settings.copyOnSelect;
   elements.highlightInputPrompts.checked = state.settings.highlightInputPrompts;
+  elements.pageSwipeGestures.checked = state.settings.pageSwipeGestures !== false;
   elements.shellIntegration.checked = state.settings.shellIntegration !== false;
   elements.rightClickAction.value = state.settings.rightClickAction;
   elements.scrollbackLines.value = state.settings.scrollback;

@@ -195,6 +195,7 @@ WSL and tmux must already be installed and configured. MultiTerm does not instal
 Pages organize terminals into separate visual groups without ending their shell processes.
 
 - Use the page tabs or <kbd>Ctrl+PageUp</kbd>/<kbd>Ctrl+PageDown</kbd> to switch pages. Each tab has a small <strong>x</strong> at its right edge; the last remaining page keeps a disabled close indicator because MultiTerm always retains one page.
+- Swipe sideways across the workspace to change page: a touchscreen swipe, or a two-finger swipe on a trackpad. Swiping left brings in the next page and swiping right the previous one, wrapping at either end. The gesture is ignored when a terminal application has taken over the mouse, and anything that can still scroll sideways under the pointer keeps the swipe for itself. Turn it off with **Swipe between pages** under **Layout**.
 - Double-click a page name to rename it.
 - Right-click a page for **Rename**, **Add to group**, **New page**, **Close page**, **Close other pages**, and **Close all**. Close other pages keeps only the page you right-clicked and makes it active; Close all resets the workspace to one empty **Page 1**. Both close entries are hidden when a single page is left.
 - Closing a populated page asks whether to move its terminals to a neighbouring page or close them. Select **Take this action next time** to remember the choice, or change **When closing a page with terminals** under **Session** settings. Close other pages asks the same question and moves surviving terminals onto the page you kept.

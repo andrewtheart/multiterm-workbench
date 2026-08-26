@@ -131,3 +131,163 @@ test.describe("Ctrl+Tab page cycling", () => {
       .toContain("Ctrl+Tab");
   });
 });
+
+test.describe("Page swipe gestures", () => {
+  let context;
+  let page;
+  let cdp;
+  let centre;
+
+  const activeIndex = () => page.evaluate(() => state.pages.findIndex((entry) => entry.id === state.activePageId));
+
+  // The gesture is deliberately rate limited, so each case starts from rest.
+  const settle = () => page.waitForTimeout(400);
+
+  async function trackpadSwipe(deltaX) {
+    await page.mouse.move(centre.x, centre.y);
+    for (let step = 0; step < 4; step += 1) await page.mouse.wheel(deltaX, 0);
+    await page.waitForTimeout(120);
+  }
+
+  async function touchSwipe(deltaX, deltaY = 0) {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [centre] });
+    for (const fraction of [0.3, 0.6, 1]) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: Math.round(centre.x + deltaX * fraction), y: Math.round(centre.y + deltaY * fraction) }]
+      });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await page.waitForTimeout(150);
+  }
+
+  test.beforeAll(async ({ browser }) => {
+    context = await browser.newContext({ baseURL: "http://127.0.0.1:3199", hasTouch: true });
+    page = await context.newPage();
+    cdp = await context.newCDPSession(page);
+    await startRendererCoverage(page);
+    await page.goto("/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.evaluate(() => closeAllTerminals());
+    await page.evaluate(() => {
+      state.pages = [{ id: "page-1", name: "Page 1" }];
+      state.activePageId = "page-1";
+      savePages();
+      renderPager();
+      addPage({ name: "Page 2", activate: false });
+      addPage({ name: "Page 3", activate: false });
+      setActivePage("page-1");
+      // Held in memory only, so the shared origin is not left changed.
+      state.settings.pageSwipeGestures = true;
+    });
+    const box = await page.locator(".stage").boundingBox();
+    centre = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+  });
+
+  test.afterAll(async () => {
+    await page.evaluate(() => {
+      closeAllTerminals();
+      state.pages = [{ id: "page-1", name: "Page 1" }];
+      state.activePageId = "page-1";
+      savePages();
+      renderPager();
+    });
+    await stopRendererCoverage(page);
+    await context.close();
+  });
+
+  test("moves forward on a two-finger swipe left and back on a swipe right", async () => {
+    await page.evaluate(() => setActivePage("page-1"));
+    expect(await activeIndex()).toBe(0);
+
+    await trackpadSwipe(60);
+    expect(await activeIndex()).toBe(1);
+    await settle();
+
+    await trackpadSwipe(60);
+    expect(await activeIndex()).toBe(2);
+    await settle();
+
+    await trackpadSwipe(-60);
+    expect(await activeIndex()).toBe(1);
+    await settle();
+  });
+
+  test("moves forward on a touchscreen swipe left and back on a swipe right", async () => {
+    await page.evaluate(() => setActivePage("page-1"));
+    await settle();
+
+    await touchSwipe(-140);
+    expect(await activeIndex()).toBe(1);
+    await settle();
+
+    await touchSwipe(140);
+    expect(await activeIndex()).toBe(0);
+    await settle();
+  });
+
+  test("leaves ordinary scrolling and short or slanted gestures alone", async () => {
+    await page.evaluate(() => setActivePage("page-2"));
+    await settle();
+
+    await page.mouse.move(centre.x, centre.y);
+    for (let step = 0; step < 8; step += 1) await page.mouse.wheel(0, 90);
+    await page.waitForTimeout(150);
+    expect(await activeIndex()).toBe(1);
+
+    await touchSwipe(-90, 220);
+    expect(await activeIndex()).toBe(1);
+    await settle();
+
+    await touchSwipe(-40);
+    expect(await activeIndex()).toBe(1);
+    await settle();
+
+    // A pinch or a modified wheel belongs to zooming, not to paging.
+    await page.keyboard.down("Control");
+    await trackpadSwipe(60);
+    await page.keyboard.up("Control");
+    expect(await activeIndex()).toBe(1);
+    await settle();
+  });
+
+  test("lets a horizontally scrollable region pan instead of changing page", async () => {
+    await page.evaluate(() => setActivePage("page-2"));
+    await settle();
+    await page.evaluate(() => {
+      const scroller = document.createElement("div");
+      scroller.id = "swipeScrollProbe";
+      scroller.style.cssText = "position:fixed;inset:20% 20%;overflow-x:auto;z-index:60;background:#111";
+      const wide = document.createElement("div");
+      wide.style.cssText = "width:4000px;height:100%";
+      scroller.append(wide);
+      document.querySelector(".stage").append(scroller);
+    });
+
+    await trackpadSwipe(60);
+    const scrolled = await page.evaluate(() => document.querySelector("#swipeScrollProbe").scrollLeft);
+    expect(scrolled).toBeGreaterThan(0);
+    expect(await activeIndex()).toBe(1);
+
+    await page.evaluate(() => document.querySelector("#swipeScrollProbe").remove());
+    await settle();
+  });
+
+  test("does nothing while the gesture setting is off", async () => {
+    await page.evaluate(() => {
+      setActivePage("page-2");
+      state.settings.pageSwipeGestures = false;
+    });
+    await settle();
+
+    await trackpadSwipe(60);
+    expect(await activeIndex()).toBe(1);
+
+    await touchSwipe(-140);
+    expect(await activeIndex()).toBe(1);
+
+    await page.evaluate(() => {
+      state.settings.pageSwipeGestures = true;
+    });
+  });
+});

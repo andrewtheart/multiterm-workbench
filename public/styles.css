@@ -2639,8 +2639,23 @@ body.header-hidden .status-hint kbd,
 /* ---------------- Copilot CLI session resume --------------- */
 
 .palette.copilot-resume {
-  max-height: min(760px, 88vh);
+  display: flex;
+  flex-direction: column;
+  /* The overlay pins dialogs 12vh from the top, so 88vh left no bottom margin. */
+  max-height: min(760px, 82vh);
   width: min(860px, 94vw);
+}
+
+/* Only the scrolling panels give up height. Sizing them in vh independently of
+   the card let the card clip the bottom of a scroller's own viewport, which no
+   amount of scrolling can reach. */
+.palette.copilot-resume > * {
+  flex: none;
+}
+
+.palette.copilot-resume > .copilot-resume-list,
+.palette.copilot-resume > .copilot-resume-review {
+  flex: 0 1 auto;
 }
 
 .copilot-resume-head,
@@ -2833,7 +2848,6 @@ body.header-hidden .status-hint kbd,
 .copilot-resume-list {
   display: grid;
   gap: 8px;
-  max-height: 56vh;
   min-height: 160px;
   overflow: auto;
   padding: 4px 12px 14px;
@@ -3127,7 +3141,8 @@ body.header-hidden .status-hint kbd,
 }
 
 .copilot-resume-review {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   min-height: 280px;
   overflow: hidden;
@@ -3157,7 +3172,7 @@ body.header-hidden .status-hint kbd,
 .copilot-resume-review-list {
   display: grid;
   gap: 9px;
-  max-height: 50vh;
+  min-height: 0;
   overflow: auto;
   padding: 2px;
 }
