@@ -114,16 +114,25 @@ test.describe("Terminal pending changes", () => {
     await expect(page.locator("#worktreeReviewOverlay")).toBeVisible();
     await expect(page.locator("#worktreeReviewSubtitle")).toContainText("Uncommitted changes on main");
 
+    // Every change is listed by pane; the viewer shows one file at a time.
+    const staged = page.locator('#gitReviewStagedList .git-review-file');
+    const unstaged = page.locator('#gitReviewUnstagedList .git-review-file');
+    await expect(staged).toHaveCount(1, { timeout: 60000 });
+    await expect(staged.first()).toContainText("staged.txt");
+    await expect(unstaged.filter({ hasText: "greeting.txt" })).toHaveCount(1);
+    await expect(unstaged.filter({ hasText: "untracked.txt" })).toHaveCount(1);
+    // keep.txt was never touched, so it is not a pending change at all.
+    await expect(page.locator("#gitReviewPanes")).not.toContainText("keep.txt");
+
     const diff = page.locator("#worktreeReviewDiff");
     await expect(diff.locator(".d2h-file-wrapper").first()).toBeVisible({ timeout: 60000 });
-    await expect(diff).toContainText("greeting.txt");
     await expect(diff).toContainText("pending world");
-    await expect(diff).toContainText("staged.txt");
+
+    await staged.first().click();
     await expect(diff).toContainText("staged work");
-    await expect(diff).toContainText("untracked.txt");
+
+    await unstaged.filter({ hasText: "untracked.txt" }).click();
     await expect(diff).toContainText("untracked work");
-    // keep.txt was never touched, and nothing was committed, so neither shows.
-    await expect(diff).not.toContainText("keep.txt");
 
     await page.locator("#worktreeReviewDone").click();
     await expect(page.locator("#worktreeReviewOverlay")).toBeHidden();
@@ -152,7 +161,12 @@ test.describe("Terminal pending changes", () => {
 
     await page.locator(BUTTON).click();
     await expect(page.locator("#worktreeReviewOverlay")).toBeVisible();
+    // long.txt is the only change tall enough to scroll inside the viewer.
+    await page.locator('#gitReviewUnstagedList .git-review-file').filter({ hasText: "long.txt" }).click();
     const viewer = page.locator("#worktreeReviewDiff");
+    // Wait for content unique to long.txt: the previous file's diff is still
+    // on screen until this one replaces it.
+    await expect(viewer).toContainText("line 300", { timeout: 60000 });
     await expect(viewer.locator(".d2h-code-linenumber").first()).toBeVisible({ timeout: 60000 });
 
     const measured = await viewer.evaluate((element) => {
@@ -198,7 +212,7 @@ test.describe("Terminal pending changes", () => {
 
     await page.locator(BUTTON).click();
     await expect(page.locator("#worktreeReviewSubtitle")).toContainText(repo);
-    await expect(page.locator("#worktreeReviewDiff")).toContainText("untracked.txt");
+    await expect(page.locator("#gitReviewPanes")).toContainText("untracked.txt");
     await page.locator("#worktreeReviewDone").click();
     await expect(page.locator("#worktreeReviewOverlay")).toBeHidden();
   });
@@ -211,7 +225,9 @@ test.describe("Terminal pending changes", () => {
 
     await page.locator(BUTTON).click();
     await expect(page.locator("#worktreeReviewOverlay")).toBeVisible();
+    await page.locator('#gitReviewUnstagedList .git-review-file').filter({ hasText: "long.txt" }).click();
     const viewer = page.locator("#worktreeReviewDiff");
+    await expect(viewer).toContainText("line 300", { timeout: 60000 });
     await expect(viewer.locator(".d2h-code-line-ctn").first()).toBeVisible({ timeout: 60000 });
 
     const overflow = await viewer.evaluate((element) => {
@@ -416,7 +432,8 @@ test.describe("Terminal pending changes", () => {
     ]);
     const review = messages.find((entry) => entry.kind === "review");
     expect(review.options.subtitle).toContain("a detached HEAD");
-    expect(review.options.request.head).toBe("HEAD");
+    expect(review.options.staging.branch).toBe("HEAD");
+    expect(review.options.staging.worktreePath).toBe("C:\\Known");
   });
 
   test("uses a plain tooltip when the pending-change shortcut is unassigned", async ({ page }) => {

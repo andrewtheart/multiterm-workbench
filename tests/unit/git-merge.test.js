@@ -415,7 +415,7 @@ describe("git repository and worktree bridge", () => {
     for (const [requestId, base, head] of [["diff-missing", "", "agent"], ["diff-option", "-main", "agent"]]) {
       send({ type: "gitDiff", requestId, repositoryRoot: repo, base, head });
       await vi.waitFor(() => expect(client.send).toHaveBeenCalledWith({
-        type: "gitDiffResult", requestId, ok: false, diff: "",
+        type: "gitDiffResult", requestId, ok: false, diff: "", scope: "",
         reason: "A repository and two revisions are required.", truncated: false
       }));
     }

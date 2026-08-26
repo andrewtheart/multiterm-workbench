@@ -3891,7 +3891,562 @@ body.header-hidden .status-hint kbd,
 }
 
 .palette.worktree-review {
+  display: grid;
+  /* head, panes+diff, commit, publish, actions. */
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  /* The overlay pins dialogs 12vh from the top, so a 94vh card would hang off
+     the bottom of a short screen and strand the action buttons. */
+  height: min(880px, 82vh);
   width: min(1400px, 97vw);
+  /* The legend reads these too, so a swatch cannot drift from the real diff. */
+  /* Standard diff hues rather than the app accent, so added and removed read the
+     way they do in git, GitHub and every editor's diff view. The mixes are held
+     where code text still clears WCAG AA against every one of them. */
+  --git-diff-add-hue: #2ea043;
+  --git-diff-del-hue: #f85149;
+  --git-diff-added: color-mix(in srgb, var(--git-diff-add-hue) 30%, var(--surface));
+  --git-diff-removed: color-mix(in srgb, var(--git-diff-del-hue) 28%, var(--surface));
+  --git-diff-word-added: color-mix(in srgb, var(--git-diff-add-hue) 62%, var(--surface));
+  --git-diff-word-removed: color-mix(in srgb, var(--git-diff-del-hue) 55%, var(--surface));
+  --git-diff-match: #58a6ff59;
+  --git-diff-active-match: #58a6ffb3;
+}
+
+.palette-overlay.is-expanded {
+  padding: 0;
+}
+
+.palette-overlay.is-expanded .palette.worktree-review {
+  border-radius: 0;
+  height: 100vh;
+  width: 100vw;
+}
+
+.git-review-expand [data-expand-icon="shrink"],
+.git-review-expand[aria-pressed="true"] [data-expand-icon="grow"] {
+  display: none;
+}
+
+.git-review-expand[aria-pressed="true"] [data-expand-icon="shrink"] {
+  display: block;
+}
+
+.git-review-head-tools {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.git-review-search {
+  align-items: center;
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  gap: 4px;
+  padding: 2px 6px;
+}
+
+.git-review-search[hidden] {
+  display: none;
+}
+
+.git-review-search > i {
+  color: var(--muted);
+  height: 14px;
+  width: 14px;
+}
+
+.git-review-search input[type="search"] {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  outline: none;
+  padding: 4px 2px;
+  width: 190px;
+}
+
+.git-review-search-count {
+  color: var(--muted);
+  font-size: 11px;
+  min-width: 62px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.git-review-search select {
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+.git-review-body {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.git-review-panes {
+  display: grid;
+  gap: 10px;
+  grid-template-rows: 1fr 1fr;
+  min-height: 0;
+}
+
+.git-review-panes[hidden] {
+  display: none;
+}
+
+.git-review-panes[data-busy="true"] {
+  opacity: 0.6;
+}
+
+.git-review-pane {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.git-review-pane-head {
+  align-items: center;
+  background: var(--surface-high);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 6px 8px;
+}
+
+.git-review-pane-head h3 {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  margin: 0;
+}
+
+.git-review-pane-head h3 i {
+  height: 14px;
+  width: 14px;
+}
+
+.git-review-count {
+  background: var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  min-width: 20px;
+  padding: 1px 6px;
+  text-align: center;
+}
+
+.git-review-pane-head button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.git-review-file-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.git-review-file-list[data-drop-target="true"] {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+.git-review-file {
+  align-items: center;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.git-review-file[hidden] {
+  display: none;
+}
+
+.git-review-file:hover,
+.git-review-file:focus-visible {
+  background: var(--surface-high);
+}
+
+.git-review-file[aria-selected="true"] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.git-review-file > i {
+  flex: 0 0 auto;
+  height: 14px;
+  width: 14px;
+}
+
+.git-review-file[data-kind="added"] > i,
+.git-review-file[data-kind="untracked"] > i {
+  color: var(--ok, #3fb950);
+}
+
+.git-review-file[data-kind="deleted"] > i {
+  color: var(--danger, #f85149);
+}
+
+.git-review-file[data-kind="modified"] > i,
+.git-review-file[data-kind="typechange"] > i {
+  color: var(--warn, #d29922);
+}
+
+.git-review-file[data-kind="conflicted"] > i {
+  color: var(--danger, #f85149);
+}
+
+.git-review-file-name {
+  direction: rtl;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-review-file-action {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  opacity: 0;
+  padding: 2px 6px;
+}
+
+.git-review-file:hover .git-review-file-action,
+.git-review-file:focus-within .git-review-file-action,
+.git-review-file[aria-selected="true"] .git-review-file-action {
+  opacity: 1;
+}
+
+.git-review-file-open {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  opacity: 0;
+  padding: 2px;
+}
+
+.git-review-file-open svg {
+  height: 13px;
+  width: 13px;
+}
+
+.git-review-file:hover .git-review-file-open,
+.git-review-file:focus-within .git-review-file-open,
+.git-review-file[aria-selected="true"] .git-review-file-open {
+  opacity: 1;
+}
+
+.git-review-file-open:hover:not(:disabled) {
+  background: var(--surface-high);
+  color: var(--text);
+}
+
+/* Kept in the layout rather than hidden so the rows do not reflow on hover. */
+.git-review-file-open:disabled {
+  cursor: default;
+  opacity: 0.25;
+}
+
+.git-review-empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 8px;
+}
+
+.git-review-main {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 6px;
+  min-height: 0;
+}
+
+.git-review-toolbar {
+  align-items: center;
+  column-gap: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.git-review-legend {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  gap: 4px 12px;
+  list-style: none;
+  margin: 0 0 0 auto;
+  padding: 0;
+}
+
+.git-review-legend[hidden] {
+  display: none;
+}
+
+.git-review-legend li {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+/* The swatch carries the same prefix git prints, so the key does not depend on
+   colour perception alone. */
+.git-review-legend li > span {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1;
+  min-width: 20px;
+  padding: 2px 3px;
+  text-align: center;
+}
+
+.git-review-legend li[data-key="added"] > span {
+  background: var(--git-diff-added);
+}
+
+.git-review-legend li[data-key="removed"] > span {
+  background: var(--git-diff-removed);
+}
+
+.git-review-legend li[data-key="word"] > span {
+  background: var(--git-diff-word-added);
+}
+
+.git-review-legend li[data-key="context"] > span {
+  background: var(--surface);
+}
+
+.git-review-legend li[data-key="hunk"] > span {
+  background: var(--surface-raised);
+  color: var(--muted);
+}
+
+.git-review-legend li[data-key="match"] > span {
+  background: var(--git-diff-match);
+}
+
+.git-review-scope {
+  display: flex;
+  gap: 4px;
+}
+
+.git-review-scope[hidden] {
+  display: none;
+}
+
+.git-review-scope-tab {
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11.5px;
+  padding: 3px 12px;
+}
+
+.git-review-scope-tab[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.git-review-hunk-action,
+.git-review-hunk-open {
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 10.5px;
+  margin-left: 10px;
+  padding: 0 6px;
+}
+
+.git-review-hunk-action:hover,
+.git-review-hunk-open:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.git-review-hunk-open {
+  margin-left: 6px;
+}
+
+.git-review-commit {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 6px;
+  /* Matches .cwd-change-body, so the message box and its buttons line up with
+     the panes above instead of running into the dialog walls. */
+  padding: 10px 20px 0;
+}
+
+.git-review-commit[hidden] {
+  display: none;
+}
+
+.git-review-commit-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.git-review-commit-head label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.git-review-commit-tools {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.git-review-commit textarea {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.45;
+  resize: vertical;
+  width: 100%;
+}
+
+.git-review-commit-hint {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin: 0;
+}
+
+.git-review-commit-hint[data-tone="error"] {
+  color: var(--danger, #f85149);
+}
+
+.git-review-commit-hint[data-tone="ready"] {
+  color: var(--ok, #3fb950);
+}
+
+.git-review-suggestion {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-high));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.git-review-suggestion[hidden] {
+  display: none;
+}
+
+.git-review-suggestion p {
+  flex: 1 1 auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.git-review-suggestion-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.git-review-suggestion-actions button {
+  font-size: 11px;
+  padding: 3px 10px;
+}
+
+.git-review-publish {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 6px;
+  padding: 8px 20px 0;
+}
+
+.git-review-publish[hidden] {
+  display: none;
+}
+
+.git-review-publish-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.git-review-publish-row[hidden] {
+  display: none;
+}
+
+.git-review-publish-row label {
+  font-size: 12px;
+}
+
+.git-review-branch {
+  background: var(--surface-high);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 2px 10px;
+}
+
+.git-review-tracking {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-right: auto;
+}
+
+/* Highlight pseudo-elements resolve custom properties inconsistently, and a
+   failed var() would silently stop painting matches, so these stay literal and
+   are mirrored by --git-diff-match for the legend swatch. */
+::highlight(git-review-match) {
+  background-color: #58a6ff59;
+}
+
+::highlight(git-review-active-match) {
+  background-color: #58a6ffb3;
+}
+
+@media (max-width: 900px) {
+  .git-review-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(160px, 34%) minmax(0, 1fr);
+  }
+
+  .git-review-panes {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .git-review-search input[type="search"] {
+    width: 120px;
+  }
 }
 
 .palette.worktree-merge {
@@ -3901,7 +4456,9 @@ body.header-hidden .status-hint kbd,
 .palette.worktree-conflict {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  height: min(860px, 94vh);
+  /* 12vh of overlay padding plus 94vh of card overflowed every viewport below
+     977px, stranding the resolution buttons. */
+  height: min(860px, 82vh);
   width: min(1180px, 98vw);
 }
 
@@ -4205,7 +4762,9 @@ body.header-hidden .status-hint kbd,
 
 .worktree-review-diff {
   background: var(--surface);
-  max-height: 62vh;
+  /* No max-height: the grid row above is minmax(0, 1fr), so the card's own
+     height bounds this. A viewport-relative cap here would ignore the extra
+     room the expanded dialog buys. */
   overflow: auto;
   /* diff2html positions side-by-side line numbers absolutely so the horizontal
      code scroll cannot move them. Without this the dialog's transformed card is
@@ -4244,12 +4803,31 @@ body.header-hidden .status-hint kbd,
   color: var(--muted);
 }
 
-.worktree-review-diff .d2h-del {
-  background: color-mix(in srgb, var(--danger) 18%, var(--surface));
+/* diff2html paints a modified line differently from a purely added or removed
+   one (its "change" palette is amber for deletions), which makes a simple key
+   untrue. One colour per meaning; the inline highlight below still shows which
+   characters moved. The selectors outrank its .d2h-change rules on specificity
+   rather than on stylesheet order. */
+.palette.worktree-review .worktree-review-diff .d2h-del,
+.palette.worktree-review .worktree-review-diff .d2h-file-diff .d2h-del.d2h-change {
+  background: var(--git-diff-removed);
 }
 
-.worktree-review-diff .d2h-ins {
-  background: color-mix(in srgb, var(--primary) 18%, var(--surface));
+.palette.worktree-review .worktree-review-diff .d2h-ins,
+.palette.worktree-review .worktree-review-diff .d2h-file-diff .d2h-ins.d2h-change {
+  background: var(--git-diff-added);
+}
+
+/* diff2html marks the exact changed characters with its own GitHub palette,
+   which clashes with this theme's accent. */
+.worktree-review-diff .d2h-code-line del,
+.worktree-review-diff .d2h-code-side-line del {
+  background-color: var(--git-diff-word-removed);
+}
+
+.worktree-review-diff .d2h-code-line ins,
+.worktree-review-diff .d2h-code-side-line ins {
+  background-color: var(--git-diff-word-added);
 }
 
 .worktree-review-diff .d2h-info {

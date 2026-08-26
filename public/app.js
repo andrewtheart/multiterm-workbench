@@ -54,6 +54,21 @@ const defaultSettings = {
   automationHistoryLimit: 200,
   automationOutputCaptureKb: 128,
   automationStepTimeoutMinutes: 30,
+  gitChangesFileLimit: 500,
+  // Review Changes remembers whether the user filled the window with it.
+  gitReviewExpanded: false,
+  gitDiffMaxKb: 2048,
+  gitPushTimeoutSeconds: 120,
+  gitMergeTimeoutSeconds: 300,
+  // A healthy suggestion answers in seconds; this is the point at which a stalled
+  // Copilot call is reported rather than waited on.
+  commitMessageTimeoutSeconds: 60,
+  // Optional commit-message starting points, offered in Review Changes.
+  gitCommitTemplates: [],
+  // Trailers every commit message must carry, e.g. "Signed-off-by".
+  gitCommitRequiredFooters: "",
+  // Bare command name "Open in editor" runs; anything else falls back to code.
+  editorCommand: "code",
   addTerminalButtonColor: "#1677FF",
   bellNotify: false,
   // Custom header background picks, newest first, so the quick picker can offer
@@ -236,6 +251,16 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   resumeAssistantSessions: "resume restore copilot claude sessions relaunch restart crash recover reopen tui",
   headerActionsRevealOnHover: "header actions buttons hide reveal hover show on hover terminal title space room icons",
   copilotTitleMaxWords: "copilot title maximum words length short concise",
+  gitChangesFileLimit: "git review changes files listed staged unstaged maximum limit count cap list size",
+  editorCommand: "editor command open in editor vscode code visual studio insiders codium cursor goto launch external",
+  gitDiffMaxKb: "git review changes diff size maximum kilobytes kb truncate large patch limit",
+  gitPushTimeoutSeconds: "git push remote upload timeout seconds wait network origin publish",
+  gitMergeTimeoutSeconds: "git merge bring back combine branch timeout seconds wait conflict",
+  commitMessageTimeoutSeconds: "commit message suggest copilot ai timeout seconds wait stall give up slow",
+  gitCommitRequiredFooters: "git commit message required footers trailers signed-off-by sign off validation policy",
+  gitCommitTemplateName: "git commit message template name label preset boilerplate conventional",
+  gitCommitTemplateBody: "git commit message template body text preset boilerplate conventional add",
+  gitCommitTemplateAdd: "git commit message template add save new preset boilerplate",
   syncInput: "broadcast keyboard keys keystrokes mirror mirrored linked simultaneous type typing all terminals panes",
   ctrlVPaste: "clipboard paste keyboard shortcut control ctrl v insert",
   cleanCopilotClipboard: "copilot clipboard copy borders pipes ascii formatting cleanup clean markdown table",
@@ -670,6 +695,59 @@ const elements = {
   worktreeReviewDone: document.querySelector("#worktreeReviewDone"),
   worktreeReviewStatus: document.querySelector("#worktreeReviewStatus"),
   worktreeReviewDiff: document.querySelector("#worktreeReviewDiff"),
+  gitReviewPanes: document.querySelector("#gitReviewPanes"),
+  gitReviewStagedList: document.querySelector("#gitReviewStagedList"),
+  gitReviewUnstagedList: document.querySelector("#gitReviewUnstagedList"),
+  gitReviewStagedCount: document.querySelector("#gitReviewStagedCount"),
+  gitReviewUnstagedCount: document.querySelector("#gitReviewUnstagedCount"),
+  gitReviewStageAll: document.querySelector("#gitReviewStageAll"),
+  gitReviewUnstageAll: document.querySelector("#gitReviewUnstageAll"),
+  gitReviewCommit: document.querySelector("#gitReviewCommit"),
+  gitReviewCommitMessage: document.querySelector("#gitReviewCommitMessage"),
+  gitReviewCommitTemplate: document.querySelector("#gitReviewCommitTemplate"),
+  gitReviewCommitPreview: document.querySelector("#gitReviewCommitPreview"),
+  gitReviewCommitSuggest: document.querySelector("#gitReviewCommitSuggest"),
+  gitReviewCommitCancel: document.querySelector("#gitReviewCommitCancel"),
+  gitReviewSuggestion: document.querySelector("#gitReviewSuggestion"),
+  gitReviewSuggestionText: document.querySelector("#gitReviewSuggestionText"),
+  gitReviewSuggestionAccept: document.querySelector("#gitReviewSuggestionAccept"),
+  gitReviewSuggestionEdit: document.querySelector("#gitReviewSuggestionEdit"),
+  gitReviewSuggestionDiscard: document.querySelector("#gitReviewSuggestionDiscard"),
+  gitReviewCommitHint: document.querySelector("#gitReviewCommitHint"),
+  gitReviewCommitButton: document.querySelector("#gitReviewCommitButton"),
+  gitReviewSearchRow: document.querySelector("#gitReviewSearchRow"),
+  gitReviewSearch: document.querySelector("#gitReviewSearch"),
+  gitReviewSearchCount: document.querySelector("#gitReviewSearchCount"),
+  gitReviewSearchPrev: document.querySelector("#gitReviewSearchPrev"),
+  gitReviewSearchNext: document.querySelector("#gitReviewSearchNext"),
+  gitReviewSearchScope: document.querySelector("#gitReviewSearchScope"),
+  gitReviewScope: document.querySelector("#gitReviewScope"),
+  gitReviewExpand: document.querySelector("#gitReviewExpand"),
+  gitReviewScopePending: document.querySelector("#gitReviewScopePending"),
+  gitReviewScopeComparison: document.querySelector("#gitReviewScopeComparison"),
+  gitReviewPublish: document.querySelector("#gitReviewPublish"),
+  gitReviewBranchLabel: document.querySelector("#gitReviewBranchLabel"),
+  gitReviewTracking: document.querySelector("#gitReviewTracking"),
+  gitReviewPush: document.querySelector("#gitReviewPush"),
+  gitReviewPushTerminal: document.querySelector("#gitReviewPushTerminal"),
+  gitReviewMergeToggle: document.querySelector("#gitReviewMergeToggle"),
+  gitReviewPublishStatus: document.querySelector("#gitReviewPublishStatus"),
+  gitReviewMergeRow: document.querySelector("#gitReviewMergeRow"),
+  gitReviewMergeTarget: document.querySelector("#gitReviewMergeTarget"),
+  gitReviewMergeLocal: document.querySelector("#gitReviewMergeLocal"),
+  gitReviewPullRequest: document.querySelector("#gitReviewPullRequest"),
+  gitReviewMergePreview: document.querySelector("#gitReviewMergePreview"),
+  gitChangesFileLimit: document.querySelector("#gitChangesFileLimit"),
+  editorCommand: document.querySelector("#editorCommand"),
+  gitDiffMaxKb: document.querySelector("#gitDiffMaxKb"),
+  gitPushTimeoutSeconds: document.querySelector("#gitPushTimeoutSeconds"),
+  gitMergeTimeoutSeconds: document.querySelector("#gitMergeTimeoutSeconds"),
+  commitMessageTimeoutSeconds: document.querySelector("#commitMessageTimeoutSeconds"),
+  gitCommitRequiredFooters: document.querySelector("#gitCommitRequiredFooters"),
+  gitCommitTemplateList: document.querySelector("#gitCommitTemplateList"),
+  gitCommitTemplateName: document.querySelector("#gitCommitTemplateName"),
+  gitCommitTemplateBody: document.querySelector("#gitCommitTemplateBody"),
+  gitCommitTemplateAdd: document.querySelector("#gitCommitTemplateAdd"),
   worktreeMergeOverlay: document.querySelector("#worktreeMergeOverlay"),
   worktreeMergeSubtitle: document.querySelector("#worktreeMergeSubtitle"),
   worktreeMergeClose: document.querySelector("#worktreeMergeClose"),
@@ -1939,6 +2017,8 @@ function bindControls() {
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
+  elements.gitCommitRequiredFooters.value = state.settings.gitCommitRequiredFooters || "";
+  state.settings.editorCommand = clampEditorCommand(state.settings.editorCommand, elements.editorCommand);
   syncAutomaticUpdateControls();
 
   elements.addTerminal.addEventListener("click", () => addTerminal({ reveal: true, runStartup: true }));
@@ -2163,6 +2243,13 @@ function bindControls() {
   bindSetting(elements.copilotTitleEffort, "copilotTitleEffort", "change", normalizeCopilotTitleEffort);
   bindSetting(elements.copilotTitleContext, "copilotTitleContext", "change", normalizeCopilotTitleContext);
   bindSetting(elements.copilotTitleContextKb, "copilotTitleContextKb", "change", clampCopilotTitleContextKb);
+  bindSetting(elements.gitChangesFileLimit, "gitChangesFileLimit", "change", clampGitChangesFileLimit);
+  bindSetting(elements.editorCommand, "editorCommand", "change", clampEditorCommand);
+  bindSetting(elements.gitDiffMaxKb, "gitDiffMaxKb", "change", clampGitDiffMaxKb);
+  bindSetting(elements.gitPushTimeoutSeconds, "gitPushTimeoutSeconds", "change", clampGitPushTimeoutSeconds);
+  bindSetting(elements.gitMergeTimeoutSeconds, "gitMergeTimeoutSeconds", "change", clampGitMergeTimeoutSeconds);
+  bindSetting(elements.commitMessageTimeoutSeconds, "commitMessageTimeoutSeconds", "change", clampCommitMessageTimeoutSeconds);
+  bindSetting(elements.gitCommitRequiredFooters, "gitCommitRequiredFooters", "change", (value) => String(value || "").trim());
   bindSetting(elements.copilotTitleMinWords, "copilotTitleMinWords", "change", clampCopilotTitleMinWords);
   bindSetting(elements.copilotTitleMaxWords, "copilotTitleMaxWords", "change", clampCopilotTitleMaxWords);
   bindSetting(elements.autoTitleSuggestions, "autoTitleSuggestions", "change", (_, element) => element.checked);
@@ -2274,6 +2361,16 @@ function bindControls() {
     }
   });
   renderSnippets();
+
+  elements.gitCommitTemplateAdd.addEventListener("click", () =>
+    addGitCommitTemplate(elements.gitCommitTemplateName.value, elements.gitCommitTemplateBody.value));
+  elements.gitCommitTemplateBody.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      addGitCommitTemplate(elements.gitCommitTemplateName.value, elements.gitCommitTemplateBody.value);
+    }
+  });
+  renderGitCommitTemplates();
 
   elements.searchAcrossPages.addEventListener("change", () => {
     setSearchAcrossPages(elements.searchAcrossPages.checked);
@@ -2452,6 +2549,11 @@ const BRIDGE_CLIENT_BACKLOG_KB_BOUNDS = { min: 64, max: 16384, fallback: 4096 };
 const BRIDGE_REPLAY_BUFFER_KB_BOUNDS = { min: 16, max: 4096, fallback: 512 };
 const BRIDGE_HEARTBEAT_SECONDS_BOUNDS = { min: 5, max: 600, fallback: 30 };
 const AUTOMATION_OUTPUT_CAPTURE_KB_BOUNDS = { min: 16, max: 512, fallback: 128 };
+const GIT_CHANGES_FILE_LIMIT_BOUNDS = { min: 50, max: 5000, fallback: 500 };
+const GIT_DIFF_MAX_KB_BOUNDS = { min: 256, max: 16384, fallback: 2048 };
+const GIT_PUSH_TIMEOUT_SECONDS_BOUNDS = { min: 10, max: 1800, fallback: 120 };
+const GIT_MERGE_TIMEOUT_SECONDS_BOUNDS = { min: 30, max: 1800, fallback: 300 };
+const COMMIT_MESSAGE_TIMEOUT_SECONDS_BOUNDS = { min: 15, max: 600, fallback: 60 };
 const AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS = { min: 1, max: 1440, fallback: 30 };
 const BRIDGE_HEARTBEAT_TIMEOUT_SECONDS_BOUNDS = { min: 10, max: 300, fallback: 30 };
 const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
@@ -2593,6 +2695,35 @@ function clampAutomationOutputCaptureKb(value, element) {
 
 function clampAutomationStepTimeoutMinutes(value, element) {
   return clampSettingNumber(value, element, AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS);
+}
+
+function clampGitChangesFileLimit(value, element = elements.gitChangesFileLimit) {
+  return clampSettingNumber(value, element, GIT_CHANGES_FILE_LIMIT_BOUNDS);
+}
+
+// The bridge runs this as a program name, so a path or shell punctuation would be a
+// way to launch something other than an editor. Anything else falls back to code.
+function clampEditorCommand(value, element = elements.editorCommand) {
+  const trimmed = String(value ?? "").trim();
+  const command = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(trimmed) ? trimmed : "code";
+  if (element) element.value = command;
+  return command;
+}
+
+function clampGitDiffMaxKb(value, element = elements.gitDiffMaxKb) {
+  return clampSettingNumber(value, element, GIT_DIFF_MAX_KB_BOUNDS);
+}
+
+function clampGitPushTimeoutSeconds(value, element = elements.gitPushTimeoutSeconds) {
+  return clampSettingNumber(value, element, GIT_PUSH_TIMEOUT_SECONDS_BOUNDS);
+}
+
+function clampGitMergeTimeoutSeconds(value, element = elements.gitMergeTimeoutSeconds) {
+  return clampSettingNumber(value, element, GIT_MERGE_TIMEOUT_SECONDS_BOUNDS);
+}
+
+function clampCommitMessageTimeoutSeconds(value, element = elements.commitMessageTimeoutSeconds) {
+  return clampSettingNumber(value, element, COMMIT_MESSAGE_TIMEOUT_SECONDS_BOUNDS);
 }
 
 function clampBridgeHeartbeatTimeoutSeconds(value, element) {
@@ -3311,6 +3442,13 @@ function handleBridgeMessage(message) {
     || message.type === "gitWorktreeCreated"
     || message.type === "gitDiffResult" || message.type === "gitMergeStarted"
     || message.type === "gitMergeFinished" || message.type === "gitConflictSides"
+    || message.type === "gitStatusResult" || message.type === "gitStageResult"
+    || message.type === "gitCommitResult" || message.type === "gitBranchList"
+    || message.type === "gitRemoteInfoResult" || message.type === "gitMergePreviewResult"
+    || message.type === "gitPushResult" || message.type === "gitPullRequestResult"
+    || message.type === "commitMessageSuggestion"
+    || message.type === "commitMessageCancelled"
+    || message.type === "openEditorResult"
     || message.type === "gitConflictWritten" || message.type === "assistantSessions") {
     resolveBridgeRequest(message, message);
     return;
@@ -9071,7 +9209,7 @@ function sendBridge(message) {
 // and resolve to null when the bridge is unreachable or never replies.
 const pendingBridgeRequests = new Map();
 
-function requestBridge(message, { timeout = 300000, onProgress = null } = {}) {
+function requestBridge(message, { timeout = 300000, onProgress = null, onRequestId = null } = {}) {
   return new Promise((resolve) => {
     const requestId = createId();
     const startedAt = performance.now();
@@ -9110,6 +9248,7 @@ function requestBridge(message, { timeout = 300000, onProgress = null } = {}) {
       readyState: state.socket?.readyState,
       socketReady: state.socketReady
     });
+    if (typeof onRequestId === "function") onRequestId(requestId);
     if (!sendBridge({ ...message, requestId })) {
       const connected = state.socketReady && state.socket?.readyState === WebSocket.OPEN;
       settle(null, connected ? "send-error" : "disconnected");
@@ -12477,7 +12616,7 @@ async function openSelectedCopilotSessions() {
       if (!response?.valid || !response.path) {
         // A missing response means the bridge never answered, which says nothing
         // about the folder.
-        const reason = response?.error || bridgeSilenceReason("checked");
+        const reason = response?.error || bridgeSilenceReason("check that folder");
         input?.setAttribute("aria-invalid", "true");
         if (input) input.title = reason;
         validationFailure = response ? validationFailure || "Fix the highlighted working directories before opening sessions." : reason;
@@ -15966,14 +16105,11 @@ async function openTerminalGitChanges(terminal) {
   await openGitDiffReview({
     subtitle: `Uncommitted changes on ${terminalGitBranchLabel(inspection)} in ${inspection.repositoryRoot}`,
     emptyMessage: "This branch has no uncommitted changes.",
-    // Comparing HEAD with the checked-out branch leaves only the working tree,
-    // index and untracked files in the diff.
-    request: {
-      type: "gitDiff",
+    staging: {
       repositoryRoot: inspection.repositoryRoot,
-      base: "HEAD",
-      head: branch,
-      worktreePath: inspection.repositoryRoot
+      worktreePath: inspection.repositoryRoot,
+      branch,
+      terminalId: terminal.id
     }
   });
 }
@@ -16221,7 +16357,7 @@ async function navigateFolderPicker(folderPath, { record = true, initial = false
   }, { timeout: 300000 });
   if (generation !== folderPicker.generation || elements.folderPickerOverlay.hidden) return;
   if (!response?.ok || !response.path) {
-    setFolderPickerStatus(response?.error || bridgeSilenceReason("listed"), "error");
+    setFolderPickerStatus(response?.error || bridgeSilenceReason("list that folder"), "error");
     return;
   }
   folderPicker.currentPath = response.path;
@@ -16281,7 +16417,7 @@ async function runFolderPickerSearch({ append = false } = {}) {
   if (generation !== folderPicker.searchGeneration || elements.folderPickerOverlay.hidden
       || query !== elements.folderPickerSearch.value.trim()) return;
   if (!response?.ok) {
-    setFolderPickerStatus(response?.error || bridgeSilenceReason("searched"), "error");
+    setFolderPickerStatus(response?.error || bridgeSilenceReason("search for folders"), "error");
     return;
   }
   updateFolderPickerCapabilities(response.everythingAvailable, folderPicker.platform);
@@ -16383,7 +16519,7 @@ async function createFolderFromPicker() {
     name
   }, { timeout: 300000 });
   if (!response?.ok || !response.path) {
-    setFolderPickerStatus(response?.error || bridgeSilenceReason("created"), "error");
+    setFolderPickerStatus(response?.error || bridgeSilenceReason("create that folder"), "error");
     return;
   }
   await navigateFolderPicker(response.path);
@@ -16911,7 +17047,9 @@ const worktreeConflict = {
   closeTimer: 0,
   files: [],
   path: "",
-  sides: null
+  sides: null,
+  // Review Changes opens the same resolver, so the caller owns where Back goes.
+  returnTo: null
 };
 
 function worktreeMergeMode() {
@@ -17297,10 +17435,14 @@ async function loadWorktreeConflict(filePath) {
 }
 
 function showWorktreeMergeAfterConflicts() {
-  elements.worktreeConflictOverlay.classList.remove("is-open");
-  worktreeConflict.closeTimer = window.setTimeout(() => {
-    elements.worktreeConflictOverlay.hidden = true;
-  }, 150);
+  hideWorktreeConflictOverlay();
+  if (worktreeConflict.returnTo) {
+    const finish = worktreeConflict.returnTo;
+    worktreeConflict.returnTo = null;
+    reopenGitReviewAfterConflicts();
+    finish();
+    return;
+  }
   elements.worktreeMergeOverlay.hidden = false;
   window.requestAnimationFrame(() => {
     elements.worktreeMergeOverlay.classList.add("is-open");
@@ -17362,12 +17504,20 @@ async function chooseWorktreeConflictSide(choice) {
   await completeWorktreeConflictWrite(response);
 }
 
-function returnToWorktreeMerge() {
-  if (worktreeConflict.busy) return;
+function hideWorktreeConflictOverlay() {
   elements.worktreeConflictOverlay.classList.remove("is-open");
   worktreeConflict.closeTimer = window.setTimeout(() => {
     elements.worktreeConflictOverlay.hidden = true;
   }, 150);
+}
+
+function returnToWorktreeMerge() {
+  if (worktreeConflict.busy) return;
+  hideWorktreeConflictOverlay();
+  if (worktreeConflict.returnTo) {
+    reopenGitReviewAfterConflicts();
+    return;
+  }
   elements.worktreeMergeOverlay.hidden = false;
   window.requestAnimationFrame(() => {
     elements.worktreeMergeOverlay.classList.add("is-open");
@@ -17380,13 +17530,27 @@ function returnToWorktreeMerge() {
   setWorktreeMergeStatus("Conflicts still need resolution. Resume them or abort this provisional merge.", "error");
 }
 
-function openWorktreeConflict(files) {
+function reopenGitReviewAfterConflicts() {
+  elements.worktreeReviewOverlay.hidden = false;
+  window.requestAnimationFrame(() => elements.worktreeReviewOverlay.classList.add("is-open"));
+  const remaining = worktreeConflict.files.length;
+  setGitReviewPublishStatus(remaining
+    ? `${remaining} file${remaining === 1 ? "" : "s"} still conflict. Reopen Merge to continue or abort.`
+    : "Every conflict is resolved.", remaining ? "error" : "ready");
+}
+
+function openWorktreeConflict(files, { returnTo = null } = {}) {
   worktreeConflict.files = [...files];
   worktreeConflict.path = "";
   worktreeConflict.sides = null;
+  worktreeConflict.returnTo = returnTo;
   window.clearTimeout(worktreeConflict.closeTimer);
   elements.worktreeMergeOverlay.classList.remove("is-open");
   elements.worktreeMergeOverlay.hidden = true;
+  if (returnTo) {
+    elements.worktreeReviewOverlay.classList.remove("is-open");
+    elements.worktreeReviewOverlay.hidden = true;
+  }
   elements.worktreeConflictOverlay.hidden = false;
   renderWorktreeConflictFiles();
   window.requestAnimationFrame(() => elements.worktreeConflictOverlay.classList.add("is-open"));
@@ -17537,7 +17701,1343 @@ function closeWorktreeManager() {
   if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
 }
 
-const worktreeReview = { closeTimer: 0, generation: 0, onClose: null, returnFocus: null };
+const worktreeReview = {
+  closeTimer: 0,
+  generation: 0,
+  onClose: null,
+  returnFocus: null,
+  // Set only when the dialog is showing a working tree that can be staged.
+  staging: null,
+  status: null,
+  selection: null,
+  diffText: "",
+  diffFiles: [],
+  busy: false,
+  pushCommand: "",
+  emptyMessage: "",
+  // Each request that owns the diff pane takes a ticket; a slower earlier one
+  // must not overwrite the status a newer request has already written.
+  viewSequence: 0,
+  comparisonRequest: null,
+  searchMatches: [],
+  searchIndex: -1,
+  // Tracks the in-flight Copilot call so its wait can be reported and stopped.
+  suggestion: { requestId: "", phase: "", startedAt: 0, timer: 0, cancelled: false }
+};
+
+const GIT_STATUS_ICONS = Object.freeze({
+  added: "file-plus",
+  conflicted: "alert-triangle",
+  copied: "copy",
+  deleted: "file-minus",
+  modified: "file-pen",
+  renamed: "file-symlink",
+  typechange: "file-cog",
+  untracked: "file-question"
+});
+
+function gitReviewStagingActive() {
+  return Boolean(worktreeReview.staging);
+}
+
+function gitReviewFileLimit() {
+  return clampGitChangesFileLimit(state.settings.gitChangesFileLimit, elements.gitChangesFileLimit);
+}
+
+function gitReviewDiffMaxBytes() {
+  return clampGitDiffMaxKb(state.settings.gitDiffMaxKb, elements.gitDiffMaxKb) * 1024;
+}
+
+function setGitReviewStatus(text, tone = "") {
+  elements.worktreeReviewStatus.textContent = text;
+  if (tone) elements.worktreeReviewStatus.dataset.tone = tone;
+  else delete elements.worktreeReviewStatus.dataset.tone;
+}
+
+// Splits a unified diff into per-file sections so a single hunk can be turned
+// back into a patch that git apply accepts.
+function splitUnifiedDiffFiles(diffText) {
+  const lines = String(diffText || "").split("\n");
+  const files = [];
+  let current = null;
+  let hunk = null;
+  const closeHunk = () => {
+    if (current && hunk) current.hunks.push(hunk.join("\n"));
+    hunk = null;
+  };
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      closeHunk();
+      current = { path: "", header: [line], hunks: [] };
+      files.push(current);
+    } else if (!current) {
+      continue;
+    } else if (line.startsWith("@@")) {
+      closeHunk();
+      hunk = [line];
+    } else if (hunk) {
+      hunk.push(line);
+    } else {
+      current.header.push(line);
+      if (line.startsWith("+++ b/")) current.path = line.slice(6);
+      else if (line.startsWith("--- a/") && !current.path) current.path = line.slice(6);
+    }
+  }
+  closeHunk();
+  for (const file of files) {
+    if (file.path) continue;
+    const named = /^diff --git a\/(.+) b\/(.+)$/.exec(file.header[0] || "");
+    if (named) file.path = named[2];
+  }
+  return files;
+}
+
+function gitReviewHunkPatch(filePath, hunkIndex) {
+  const file = worktreeReview.diffFiles.find((entry) => entry.path === filePath)
+    || worktreeReview.diffFiles[0];
+  if (!file || !file.hunks[hunkIndex]) return "";
+  return `${file.header.join("\n")}\n${file.hunks[hunkIndex]}\n`;
+}
+
+function gitReviewEntries(pane) {
+  const status = worktreeReview.status;
+  if (!status) return [];
+  if (pane === "staged") return status.staged || [];
+  return [...(status.conflicted || []), ...(status.unstaged || [])];
+}
+
+// A deleted file has no working copy left to open.
+const GIT_REVIEW_UNOPENABLE_KINDS = new Set(["deleted"]);
+
+function gitReviewWorktreePath() {
+  return worktreeReview.staging?.worktreePath || worktreeReview.staging?.repositoryRoot || "";
+}
+
+// Git reports paths relative to the repository root, so the editor needs them rejoined.
+function gitReviewAbsolutePath(relativePath) {
+  const root = gitReviewWorktreePath();
+  if (!root || !relativePath) return "";
+  const separator = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  const normalized = separator === "\\" ? relativePath.replace(/\//g, "\\") : relativePath;
+  return `${root.replace(/[\\/]+$/, "")}${separator}${normalized}`;
+}
+
+async function openGitReviewFileInEditor(relativePath, line = 1) {
+  const absolute = gitReviewAbsolutePath(relativePath);
+  if (!absolute) {
+    setGitReviewStatus("MultiTerm does not know where this worktree lives on disk.", "error");
+    return;
+  }
+  const editor = state.settings.editorCommand || "code";
+  // Claim the viewer's status the same way a diff load does, or a diff request
+  // that is still in flight lands after this one and wipes the result.
+  const view = ++worktreeReview.viewSequence;
+  setGitReviewStatus(`Opening ${relativePath} in ${editor}...`, "waiting");
+  const response = await requestBridge({
+    type: "openInEditor",
+    path: absolute,
+    line,
+    editor
+  }, { timeout: 30000 });
+  if (view !== worktreeReview.viewSequence) return;
+  if (response?.ok) {
+    setGitReviewStatus(`Opened ${relativePath} in ${editor}.`, "ok");
+    return;
+  }
+  setGitReviewStatus(response?.reason || bridgeSilenceReason("open that file in your editor"), "error");
+}
+
+function renderGitReviewFileRow(entry, pane) {
+  const row = document.createElement("div");
+  row.className = "git-review-file";
+  row.setAttribute("role", "option");
+  row.dataset.path = entry.path;
+  row.dataset.kind = entry.kind;
+  row.dataset.pane = pane;
+  row.tabIndex = -1;
+  row.draggable = true;
+  const active = worktreeReview.selection?.pane === pane && worktreeReview.selection?.path === entry.path;
+  row.setAttribute("aria-selected", active ? "true" : "false");
+
+  const icon = document.createElement("i");
+  icon.dataset.lucide = GIT_STATUS_ICONS[entry.kind] || "file";
+  icon.setAttribute("aria-hidden", "true");
+
+  const name = document.createElement("span");
+  name.className = "git-review-file-name";
+  name.textContent = entry.origPath ? `${entry.origPath} -> ${entry.path}` : entry.path;
+  name.title = name.textContent;
+
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = "git-review-file-action";
+  const staging = pane === "unstaged";
+  action.textContent = staging ? "Stage" : "Unstage";
+  action.title = `${action.textContent} ${entry.path}`;
+  action.addEventListener("click", (event) => {
+    event.stopPropagation();
+    applyGitReviewStaging(staging ? "stage" : "unstage", "file", [entry.path]);
+  });
+
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "git-review-file-open";
+  open.disabled = GIT_REVIEW_UNOPENABLE_KINDS.has(entry.kind);
+  open.title = open.disabled
+    ? `${entry.path} was deleted, so there is nothing to open`
+    : `Open ${entry.path} in ${state.settings.editorCommand || "code"}`;
+  open.setAttribute("aria-label", open.title);
+  const openIcon = document.createElement("i");
+  openIcon.dataset.lucide = "external-link";
+  openIcon.setAttribute("aria-hidden", "true");
+  open.append(openIcon);
+  open.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openGitReviewFileInEditor(entry.path);
+  });
+
+  row.append(icon, name, open, action);
+  row.addEventListener("click", () => selectGitReviewFile(pane, entry.path));
+  row.addEventListener("dragstart", (event) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", JSON.stringify({ pane, path: entry.path }));
+  });
+  return row;
+}
+
+function renderGitReviewFileLists() {
+  const status = worktreeReview.status;
+  const lists = [["staged", elements.gitReviewStagedList], ["unstaged", elements.gitReviewUnstagedList]];
+  for (const [pane, list] of lists) {
+    list.textContent = "";
+    const entries = gitReviewEntries(pane);
+    if (!entries.length) {
+      const empty = document.createElement("p");
+      empty.className = "git-review-empty";
+      empty.textContent = pane === "staged" ? "Nothing staged yet." : "No pending changes.";
+      list.append(empty);
+      continue;
+    }
+    for (const entry of entries) list.append(renderGitReviewFileRow(entry, pane));
+  }
+  elements.gitReviewStagedCount.textContent = String((status?.staged || []).length);
+  elements.gitReviewUnstagedCount.textContent = String(gitReviewEntries("unstaged").length);
+  elements.gitReviewStageAll.disabled = worktreeReview.busy || !gitReviewEntries("unstaged").length;
+  elements.gitReviewUnstageAll.disabled = worktreeReview.busy || !(status?.staged || []).length;
+  refreshIcons(elements.gitReviewPanes);
+  updateGitReviewCommitState();
+}
+
+// Selection changes only repaint the marks: replacing the rows would swap a
+// node out from under a click that is already in flight.
+function updateGitReviewSelectionMarks() {
+  for (const row of elements.gitReviewPanes.querySelectorAll(".git-review-file")) {
+    const active = worktreeReview.selection?.pane === row.dataset.pane
+      && worktreeReview.selection?.path === row.dataset.path;
+    row.setAttribute("aria-selected", active ? "true" : "false");
+  }
+}
+
+function setGitReviewBusy(busy) {
+  worktreeReview.busy = busy;
+  elements.gitReviewPanes.dataset.busy = busy ? "true" : "false";
+  for (const button of elements.gitReviewPanes.querySelectorAll("button")) button.disabled = busy;
+  elements.gitReviewCommitPreview.disabled = busy;
+  elements.gitReviewCommitSuggest.disabled = busy;
+  updateGitReviewCommitState();
+}
+
+async function refreshGitReviewStatus() {
+  if (!gitReviewStagingActive()) return null;
+  const generation = worktreeReview.generation;
+  const response = await requestBridge({
+    type: "gitStatus",
+    worktreePath: worktreeReview.staging.worktreePath,
+    fileLimit: gitReviewFileLimit()
+  }, { timeout: 60000 });
+  if (generation !== worktreeReview.generation) return null;
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || bridgeSilenceReason("read the repository status"), "error");
+    return null;
+  }
+  applyGitReviewStatus(response);
+  return response;
+}
+
+function applyGitReviewStatus(status) {
+  worktreeReview.status = status;
+  renderGitReviewFileLists();
+  refreshGitReviewPublish();
+  if (status.truncated) {
+    setGitReviewStatus(
+      `Showing the first ${gitReviewFileLimit()} files of ${status.totalCount} changes. Raise "Files listed per pane" in Git settings to see more.`,
+      "waiting"
+    );
+  }
+}
+
+async function selectGitReviewFile(pane, filePath, { focusRow = true } = {}) {
+  if (!gitReviewStagingActive()) return;
+  setGitReviewScopeTabs("pending");
+  worktreeReview.selection = { pane, path: filePath };
+  updateGitReviewSelectionMarks();
+  if (focusRow) {
+    const row = elements.gitReviewPanes.querySelector(`.git-review-file[data-pane="${pane}"][data-path="${cssEscape(filePath)}"]`);
+    if (row) row.focus();
+  }
+  const view = ++worktreeReview.viewSequence;
+  setGitReviewStatus(`Loading ${filePath}...`, "waiting");
+  const response = await requestBridge({
+    type: "gitDiff",
+    worktreePath: worktreeReview.staging.worktreePath,
+    scope: pane === "staged" ? "staged" : "unstaged",
+    paths: JSON.stringify([filePath]),
+    maxBytes: gitReviewDiffMaxBytes()
+  }, { timeout: 90000 });
+  if (view !== worktreeReview.viewSequence) return;
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || bridgeSilenceReason("load that diff"), "error");
+    return;
+  }
+  renderGitReviewDiff(response, { pane, filePath });
+}
+
+function renderGitReviewDiff(response, { pane = "", filePath = "" } = {}) {
+  worktreeReview.diffText = response.diff || "";
+  worktreeReview.diffFiles = splitUnifiedDiffFiles(worktreeReview.diffText);
+  if (!worktreeReview.diffText.trim()) {
+    elements.worktreeReviewDiff.textContent = "";
+    setGitReviewStatus(filePath ? `${filePath} has no textual changes.` : worktreeReview.emptyMessage);
+    return;
+  }
+  if (!window.Diff2Html) {
+    setGitReviewStatus("The diff viewer did not load.", "error");
+    return;
+  }
+  setGitReviewStatus(response.truncated
+    ? `Showing the first ${Math.round(gitReviewDiffMaxBytes() / 1024)} KB of a larger diff.`
+    : "", response.truncated ? "waiting" : "");
+  // diff2html escapes the diff it renders; the input is git's own output.
+  // Unified rather than side-by-side: two 4.5em gutters plus half the dialog
+  // leaves ~60 characters a side, and long lines have to wrap to stay readable,
+  // which would drift the two independently scrolled columns out of step.
+  elements.worktreeReviewDiff.innerHTML = window.Diff2Html.html(worktreeReview.diffText, {
+    drawFileList: !gitReviewStagingActive(),
+    matching: "lines",
+    outputFormat: "line-by-line",
+    colorScheme: state.settings.appTheme === "light" ? "light" : "dark"
+  });
+  if (pane) injectGitReviewHunkControls(pane, filePath);
+  if (filePath) injectGitReviewOpenControls(pane, filePath);
+  applyGitReviewSearchHighlight();
+}
+
+// The new-side start line of a hunk, so the editor lands on the change rather
+// than the top of the file.
+function gitReviewHunkLine(hunkIndex) {
+  const hunk = worktreeReview.diffFiles[0]?.hunks?.[hunkIndex] || "";
+  const parsed = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(hunk);
+  return parsed ? Number(parsed[1]) : 1;
+}
+
+// Unlike hunk staging, opening a hunk works for untracked and conflicted files
+// too, so these controls are injected independently of the staging ones.
+function injectGitReviewOpenControls(pane, filePath) {
+  const entry = pane ? gitReviewEntries(pane).find((candidate) => candidate.path === filePath) : null;
+  if (entry && GIT_REVIEW_UNOPENABLE_KINDS.has(entry.kind)) return;
+  const editor = state.settings.editorCommand || "code";
+  const headers = elements.worktreeReviewDiff.querySelectorAll("td.d2h-info .d2h-code-line");
+  headers.forEach((header, hunkIndex) => {
+    const line = gitReviewHunkLine(hunkIndex);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "git-review-hunk-open";
+    button.dataset.hunkIndex = String(hunkIndex);
+    button.textContent = `Open line ${line}`;
+    button.title = `Open ${filePath} at line ${line} in ${editor}`;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openGitReviewFileInEditor(filePath, line);
+    });
+    header.append(button);
+  });
+}
+
+// diff2html renders each hunk header as an info row; the staging controls are
+// attached afterwards so its generated markup never has to be hand-built.
+function injectGitReviewHunkControls(pane, filePath) {
+  const entry = gitReviewEntries(pane).find((candidate) => candidate.path === filePath);
+  // An untracked file has no index entry, so a hunk patch cannot apply to it.
+  if (!entry || entry.kind === "untracked" || entry.kind === "conflicted") return;
+  const staging = pane === "unstaged";
+  const wrappers = elements.worktreeReviewDiff.querySelectorAll(".d2h-file-wrapper");
+  for (const wrapper of wrappers) {
+    // diff2html marks the hunk header cell d2h-info and leaves the code line
+    // inside it unclassed, so the cell is what identifies a hunk boundary.
+    const headers = wrapper.querySelectorAll("td.d2h-info .d2h-code-line");
+    headers.forEach((header, hunkIndex) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "git-review-hunk-action";
+      button.dataset.hunkIndex = String(hunkIndex);
+      button.textContent = staging ? "Stage hunk" : "Unstage hunk";
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        applyGitReviewHunkStaging(staging ? "stage" : "unstage", filePath, hunkIndex);
+      });
+      header.append(button);
+    });
+  }
+}
+
+async function applyGitReviewStaging(direction, mode, paths) {
+  if (!gitReviewStagingActive() || worktreeReview.busy) return;
+  const generation = worktreeReview.generation;
+  const view = ++worktreeReview.viewSequence;
+  setGitReviewBusy(true);
+  const response = await requestBridge({
+    type: "gitStage",
+    worktreePath: worktreeReview.staging.worktreePath,
+    direction,
+    mode,
+    paths: JSON.stringify(paths || []),
+    fileLimit: gitReviewFileLimit()
+  }, { timeout: 90000 });
+  if (generation !== worktreeReview.generation) return;
+  setGitReviewBusy(false);
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || bridgeSilenceReason("change the staging area"), "error");
+    return;
+  }
+  applyGitReviewStatus(response.status);
+  // Skip the follow-up view refresh when the user has already asked for
+  // something else, so it cannot yank the viewer back.
+  if (view !== worktreeReview.viewSequence) return;
+  await reselectGitReviewFileAfterStaging(direction, mode, paths);
+}
+
+async function applyGitReviewHunkStaging(direction, filePath, hunkIndex) {
+  if (!gitReviewStagingActive() || worktreeReview.busy) return;
+  const patch = gitReviewHunkPatch(filePath, hunkIndex);
+  if (!patch) {
+    setGitReviewStatus("That hunk is no longer available. Reloading the diff.", "error");
+    await refreshGitReviewStatus();
+    return;
+  }
+  const generation = worktreeReview.generation;
+  const view = ++worktreeReview.viewSequence;
+  setGitReviewBusy(true);
+  const response = await requestBridge({
+    type: "gitStage",
+    worktreePath: worktreeReview.staging.worktreePath,
+    direction,
+    mode: "hunk",
+    patch,
+    fileLimit: gitReviewFileLimit()
+  }, { timeout: 90000 });
+  if (generation !== worktreeReview.generation) return;
+  setGitReviewBusy(false);
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || bridgeSilenceReason("stage that hunk"), "error");
+    return;
+  }
+  applyGitReviewStatus(response.status);
+  if (view !== worktreeReview.viewSequence) return;
+  await reselectGitReviewFileAfterStaging(direction, "hunk", [filePath]);
+}
+
+// After staging, the file may have moved panes or disappeared entirely, so the
+// diff pane follows it rather than showing a stale view.
+async function reselectGitReviewFileAfterStaging(direction, mode, paths) {
+  const wanted = mode === "all" ? "" : (paths && paths[0]) || "";
+  const target = direction === "stage" ? "staged" : "unstaged";
+  if (wanted && gitReviewEntries(target).some((entry) => entry.path === wanted)) {
+    await selectGitReviewFile(target, wanted, { focusRow: false });
+    return;
+  }
+  const origin = direction === "stage" ? "unstaged" : "staged";
+  if (wanted && gitReviewEntries(origin).some((entry) => entry.path === wanted)) {
+    await selectGitReviewFile(origin, wanted, { focusRow: false });
+    return;
+  }
+  worktreeReview.selection = null;
+  elements.worktreeReviewDiff.textContent = "";
+  updateGitReviewSelectionMarks();
+  setGitReviewStatus(gitReviewEntries("staged").length || gitReviewEntries("unstaged").length
+    ? "Select a file to see its changes."
+    : "This branch has no uncommitted changes.");
+}
+
+function cssEscape(value) {
+  return window.CSS && typeof window.CSS.escape === "function"
+    ? window.CSS.escape(value)
+    : String(value).replace(/["\\]/g, "\\$&");
+}
+
+function applyGitReviewExpanded(expanded) {
+  elements.worktreeReviewOverlay.classList.toggle("is-expanded", expanded);
+  elements.gitReviewExpand.setAttribute("aria-pressed", expanded ? "true" : "false");
+  const label = expanded ? "Restore the dialog size" : "Fill the window";
+  elements.gitReviewExpand.title = label;
+  elements.gitReviewExpand.setAttribute("aria-label", label);
+}
+
+function toggleGitReviewExpanded() {
+  state.settings.gitReviewExpanded = !state.settings.gitReviewExpanded;
+  saveSettings();
+  applyGitReviewExpanded(state.settings.gitReviewExpanded);
+  // Highlights survive the resize, but the viewer is a different height now, so
+  // the match the user was reading can end up off-screen.
+  if (worktreeReview.searchIndex >= 0) focusGitReviewSearchMatch(worktreeReview.searchIndex);
+}
+
+function setGitReviewScopeTabs(scope) {
+  elements.gitReviewScopePending.setAttribute("aria-pressed", scope === "pending" ? "true" : "false");
+  elements.gitReviewScopeComparison.setAttribute("aria-pressed", scope === "comparison" ? "true" : "false");
+}
+
+// The comparison view shows committed branch work, where staging a hunk has no
+// meaning, so it stays read-only while the panes keep working alongside it.
+async function showGitReviewComparison() {
+  if (!worktreeReview.comparisonRequest) return;
+  setGitReviewScopeTabs("comparison");
+  worktreeReview.selection = null;
+  updateGitReviewSelectionMarks();
+  const view = ++worktreeReview.viewSequence;
+  setGitReviewStatus("Loading changes...", "waiting");
+  const response = await requestBridge(worktreeReview.comparisonRequest, { timeout: 90000 });
+  if (view !== worktreeReview.viewSequence) return;
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || bridgeSilenceReason("load that comparison"), "error");
+    return;
+  }
+  if (!response.diff.trim()) {
+    elements.worktreeReviewDiff.textContent = "";
+    setGitReviewStatus(worktreeReview.emptyMessage);
+    return;
+  }
+  renderGitReviewDiff(response);
+}
+
+async function showGitReviewPending() {
+  setGitReviewScopeTabs("pending");
+  const first = gitReviewEntries("unstaged")[0] || gitReviewEntries("staged")[0];
+  if (!first) {
+    elements.worktreeReviewDiff.textContent = "";
+    setGitReviewStatus("This branch has no uncommitted changes.");
+    return;
+  }
+  const pane = gitReviewEntries("unstaged").some((entry) => entry.path === first.path) ? "unstaged" : "staged";
+  await selectGitReviewFile(pane, first.path, { focusRow: false });
+}
+
+async function openGitDiffReview({ subtitle, request, emptyMessage, onClose = null, staging = null }) {
+  worktreeReview.returnFocus = document.activeElement;
+  worktreeReview.onClose = onClose;
+  worktreeReview.staging = staging;
+  worktreeReview.status = null;
+  worktreeReview.selection = null;
+  worktreeReview.diffText = "";
+  worktreeReview.diffFiles = [];
+  worktreeReview.busy = false;
+  worktreeReview.viewSequence = 0;
+  worktreeReview.emptyMessage = emptyMessage;
+  worktreeReview.comparisonRequest = request || null;
+  window.clearTimeout(worktreeReview.closeTimer);
+  const generation = ++worktreeReview.generation;
+  elements.worktreeReviewSubtitle.textContent = subtitle;
+  elements.worktreeReviewDiff.textContent = "";
+  setGitReviewStatus("Loading changes...", "waiting");
+  elements.gitReviewPanes.hidden = !staging;
+  elements.gitReviewCommit.hidden = !staging;
+  elements.gitReviewCommitButton.hidden = !staging;
+  elements.gitReviewPublish.hidden = !staging;
+  elements.gitReviewMergeRow.hidden = true;
+  elements.gitReviewPushTerminal.hidden = true;
+  elements.gitReviewMergePreview.textContent = "";
+  setGitReviewPublishStatus("");
+  hideGitReviewSuggestion();
+  stopGitReviewSuggestionProgress();
+  applyGitReviewExpanded(state.settings.gitReviewExpanded === true);
+  elements.gitReviewScope.hidden = !(staging && request);
+  setGitReviewScopeTabs(request ? "comparison" : "pending");
+  elements.worktreeReviewOverlay.hidden = false;
+  resetGitReviewSearch();
+  renderGitReviewCommitTemplateOptions();
+  window.requestAnimationFrame(() => {
+    elements.worktreeReviewOverlay.classList.add("is-open");
+    elements.worktreeReviewClose.focus();
+  });
+  refreshIcons(elements.worktreeReviewOverlay);
+
+  if (staging) {
+    const status = await refreshGitReviewStatus();
+    if (generation !== worktreeReview.generation || !status) return;
+    // A worktree opened from the manager keeps its branch comparison as the
+    // first view; the pending panes are already populated beside it.
+    if (request) await showGitReviewComparison();
+    else await showGitReviewPending();
+    return;
+  }
+
+  const response = await requestBridge(request, { timeout: 90000 });
+  if (generation !== worktreeReview.generation) return;
+
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || "The bridge did not answer.", "error");
+    return;
+  }
+  if (!response.diff.trim()) {
+    setGitReviewStatus(emptyMessage);
+    return;
+  }
+  renderGitReviewDiff(response);
+}
+
+function closeWorktreeReview() {
+  worktreeReview.generation += 1;
+  // A Copilot call outlives the dialog otherwise, and its timer keeps firing.
+  if (worktreeReview.suggestion.requestId) cancelGitReviewSuggestion();
+  stopGitReviewSuggestionProgress();
+  elements.worktreeReviewOverlay.classList.remove("is-open");
+  worktreeReview.closeTimer = window.setTimeout(() => {
+    elements.worktreeReviewOverlay.hidden = true;
+    elements.worktreeReviewDiff.textContent = "";
+  }, 150);
+  worktreeReview.staging = null;
+  worktreeReview.status = null;
+  worktreeReview.selection = null;
+  worktreeReview.diffFiles = [];
+  worktreeReview.pushCommand = "";
+  resetGitReviewSearch();
+  const returnFocus = worktreeReview.returnFocus;
+  const onClose = worktreeReview.onClose;
+  worktreeReview.returnFocus = null;
+  worktreeReview.onClose = null;
+  if (typeof onClose === "function") onClose();
+  else if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
+}
+
+function gitReviewFocusedRow() {
+  const active = document.activeElement;
+  return active?.classList?.contains("git-review-file") ? active : null;
+}
+
+function onGitReviewPaneKeydown(event) {
+  const row = gitReviewFocusedRow();
+  if (!row) return;
+  const key = event.key.toLowerCase();
+  if (key === "o") {
+    event.preventDefault();
+    if (!GIT_REVIEW_UNOPENABLE_KINDS.has(row.dataset.kind)) openGitReviewFileInEditor(row.dataset.path);
+    return;
+  }
+  if (key === "s" || key === "u") {
+    event.preventDefault();
+    const direction = key === "s" ? "stage" : "unstage";
+    // Staging a file already in the target pane would be a no-op.
+    if ((direction === "stage") === (row.dataset.pane === "unstaged")) {
+      applyGitReviewStaging(direction, "file", [row.dataset.path]);
+    }
+    return;
+  }
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+  event.preventDefault();
+  const rows = [...row.parentElement.querySelectorAll(".git-review-file")];
+  const next = rows[rows.indexOf(row) + (event.key === "ArrowDown" ? 1 : -1)];
+  if (next) next.focus();
+}
+
+function bindGitReviewPaneDrop(list, pane) {
+  list.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    list.dataset.dropTarget = "true";
+  });
+  list.addEventListener("dragleave", () => { delete list.dataset.dropTarget; });
+  list.addEventListener("drop", (event) => {
+    event.preventDefault();
+    delete list.dataset.dropTarget;
+    let payload;
+    try {
+      payload = JSON.parse(event.dataTransfer.getData("text/plain"));
+    } catch {
+      return;
+    }
+    if (!payload || payload.pane === pane) return;
+    applyGitReviewStaging(pane === "staged" ? "stage" : "unstage", "file", [payload.path]);
+  });
+}
+
+function gitReviewRequiredFooters() {
+  return String(state.settings.gitCommitRequiredFooters || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function gitReviewCommitProblem(message) {
+  const text = String(message || "").trim();
+  if (!text) return "A commit message is required.";
+  const missing = gitReviewRequiredFooters().filter((footer) => {
+    const pattern = footer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return !new RegExp(`^${pattern}:`, "mi").test(text);
+  });
+  if (missing.length) return `Missing required footer: ${missing.join(", ")}.`;
+  return "";
+}
+
+function updateGitReviewCommitState() {
+  if (!gitReviewStagingActive()) return;
+  const staged = (worktreeReview.status?.staged || []).length;
+  const problem = gitReviewCommitProblem(elements.gitReviewCommitMessage.value);
+  const hint = staged
+    ? (problem || `${staged} staged file${staged === 1 ? "" : "s"} will be committed.`)
+    : "Stage something before committing.";
+  elements.gitReviewCommitHint.textContent = hint;
+  if (staged && problem) elements.gitReviewCommitHint.dataset.tone = "error";
+  else delete elements.gitReviewCommitHint.dataset.tone;
+  elements.gitReviewCommitButton.disabled = worktreeReview.busy || !staged || Boolean(problem);
+}
+
+function renderGitReviewCommitTemplateOptions() {
+  const select = elements.gitReviewCommitTemplate;
+  const templates = Array.isArray(state.settings.gitCommitTemplates) ? state.settings.gitCommitTemplates : [];
+  select.textContent = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = templates.length ? "Template..." : "No templates";
+  select.append(placeholder);
+  templates.forEach((template, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = template.name || `Template ${index + 1}`;
+    select.append(option);
+  });
+  select.disabled = !templates.length;
+}
+
+async function previewGitReviewCommit() {
+  if (!gitReviewStagingActive()) return;
+  const view = ++worktreeReview.viewSequence;
+  setGitReviewStatus("Loading the staged diff...", "waiting");
+  const response = await requestBridge({
+    type: "gitDiff",
+    worktreePath: worktreeReview.staging.worktreePath,
+    scope: "staged",
+    maxBytes: gitReviewDiffMaxBytes()
+  }, { timeout: 90000 });
+  if (view !== worktreeReview.viewSequence) return;
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || bridgeSilenceReason("load the staged diff"), "error");
+    return;
+  }
+  worktreeReview.selection = null;
+  updateGitReviewSelectionMarks();
+  renderGitReviewDiff(response);
+  const staged = (worktreeReview.status?.staged || []).length;
+  if (response.diff.trim()) {
+    setGitReviewStatus(`Exactly this will be committed: ${staged} file${staged === 1 ? "" : "s"}.`);
+  }
+}
+
+async function commitGitReviewChanges() {
+  if (!gitReviewStagingActive() || worktreeReview.busy) return;
+  const message = elements.gitReviewCommitMessage.value;
+  const problem = gitReviewCommitProblem(message);
+  if (problem) {
+    elements.gitReviewCommitHint.textContent = problem;
+    elements.gitReviewCommitHint.dataset.tone = "error";
+    elements.gitReviewCommitMessage.focus();
+    return;
+  }
+  const generation = worktreeReview.generation;
+  setGitReviewBusy(true);
+  setGitReviewStatus("Creating the commit...", "waiting");
+  const response = await requestBridge({
+    type: "gitCommit",
+    worktreePath: worktreeReview.staging.worktreePath,
+    message,
+    fileLimit: gitReviewFileLimit()
+  }, { timeout: 120000 });
+  if (generation !== worktreeReview.generation) return;
+  setGitReviewBusy(false);
+  if (!response || !response.ok) {
+    setGitReviewStatus(response?.reason || bridgeSilenceReason("create the commit"), "error");
+    return;
+  }
+  elements.gitReviewCommitMessage.value = "";
+  worktreeReview.selection = null;
+  elements.worktreeReviewDiff.textContent = "";
+  hideGitReviewSuggestion();
+  applyGitReviewStatus(response.status);
+  setGitReviewStatus(`Committed ${response.sha} ${response.subject}`, "ready");
+}
+
+function setGitReviewPublishStatus(text, tone = "") {
+  elements.gitReviewPublishStatus.textContent = text;
+  if (tone) elements.gitReviewPublishStatus.dataset.tone = tone;
+  else delete elements.gitReviewPublishStatus.dataset.tone;
+}
+
+function gitReviewTrackingLabel(status) {
+  if (!status) return "";
+  if (!status.upstream) return "no upstream yet";
+  const parts = [];
+  if (status.ahead) parts.push(`${status.ahead} ahead`);
+  if (status.behind) parts.push(`${status.behind} behind`);
+  return parts.length ? `${parts.join(", ")} of ${status.upstream}` : `up to date with ${status.upstream}`;
+}
+
+function refreshGitReviewPublish() {
+  if (!gitReviewStagingActive()) return;
+  const status = worktreeReview.status;
+  const branch = status?.branch || worktreeReview.staging.branch || "";
+  elements.gitReviewBranchLabel.textContent = branch || "detached HEAD";
+  elements.gitReviewTracking.textContent = gitReviewTrackingLabel(status);
+  // A detached HEAD has no branch to push or merge.
+  const publishable = Boolean(branch) && !status?.detached;
+  elements.gitReviewPush.disabled = worktreeReview.busy || !publishable;
+  elements.gitReviewMergeToggle.disabled = worktreeReview.busy || !publishable;
+}
+
+async function pushGitReviewBranch() {
+  if (!gitReviewStagingActive() || worktreeReview.busy) return;
+  const branch = worktreeReview.status?.branch || worktreeReview.staging.branch;
+  if (!branch) return;
+  const generation = worktreeReview.generation;
+  setGitReviewBusy(true);
+  elements.gitReviewPushTerminal.hidden = true;
+  setGitReviewPublishStatus(`Pushing ${branch}...`, "waiting");
+  const response = await requestBridge({
+    type: "gitPush",
+    worktreePath: worktreeReview.staging.worktreePath,
+    remote: "origin",
+    branch,
+    // Without an upstream the first push has to create one.
+    setUpstream: !worktreeReview.status?.upstream,
+    timeoutMs: clampGitPushTimeoutSeconds(state.settings.gitPushTimeoutSeconds) * 1000
+  }, { timeout: clampGitPushTimeoutSeconds(state.settings.gitPushTimeoutSeconds) * 1000 + 15000 });
+  if (generation !== worktreeReview.generation) return;
+  setGitReviewBusy(false);
+  if (!response || !response.ok) {
+    setGitReviewPublishStatus(response?.reason || bridgeSilenceReason("push that branch"), "error");
+    worktreeReview.pushCommand = response?.command || "";
+    elements.gitReviewPushTerminal.hidden = !(response?.needsInteractive && worktreeReview.pushCommand);
+    return;
+  }
+  setGitReviewPublishStatus(`Pushed ${branch} to origin.`, "ready");
+  await refreshGitReviewStatus();
+}
+
+// A push that needs credentials is finished where the user can answer the prompt.
+function runGitReviewPushInTerminal() {
+  const command = safeTerminalCommand(worktreeReview.pushCommand);
+  const terminal = state.terminals.get(worktreeReview.staging?.terminalId);
+  if (!command || !terminal) {
+    toast("No terminal is available to run that push.", "error", 2600);
+    return;
+  }
+  closeWorktreeReview();
+  revealTerminal(terminal);
+  sendBridge({ type: "input", id: terminal.id, data: `${command}\r` });
+}
+
+async function toggleGitReviewMergeRow() {
+  const showing = !elements.gitReviewMergeRow.hidden;
+  elements.gitReviewMergeRow.hidden = showing;
+  if (showing) {
+    elements.gitReviewMergePreview.textContent = "";
+    return;
+  }
+  await refreshGitReviewMergeTargets();
+}
+
+async function refreshGitReviewMergeTargets() {
+  if (!gitReviewStagingActive()) return;
+  const generation = worktreeReview.generation;
+  elements.gitReviewMergePreview.textContent = "Loading branches...";
+  const response = await requestBridge({
+    type: "gitBranches",
+    repositoryRoot: worktreeReview.staging.repositoryRoot,
+    worktreePath: worktreeReview.staging.worktreePath
+  }, { timeout: 60000 });
+  if (generation !== worktreeReview.generation) return;
+  if (!response || !response.ok) {
+    elements.gitReviewMergePreview.textContent = response?.reason || bridgeSilenceReason("list branches");
+    elements.gitReviewMergePreview.dataset.tone = "error";
+    return;
+  }
+  const current = response.currentBranch;
+  const select = elements.gitReviewMergeTarget;
+  select.textContent = "";
+  for (const branch of response.branches.filter((name) => name !== current)) {
+    const option = document.createElement("option");
+    option.value = branch;
+    option.textContent = branch;
+    select.append(option);
+  }
+  if (!select.options.length) {
+    elements.gitReviewMergePreview.textContent = "This repository has no other branch to merge into.";
+    delete elements.gitReviewMergePreview.dataset.tone;
+    elements.gitReviewMergeLocal.disabled = true;
+    elements.gitReviewPullRequest.disabled = true;
+    return;
+  }
+  elements.gitReviewMergeLocal.disabled = false;
+  elements.gitReviewPullRequest.disabled = false;
+  const suggested = response.suggestedTarget || worktreeReview.staging.parentBranch || "";
+  if (suggested && [...select.options].some((option) => option.value === suggested)) select.value = suggested;
+  await refreshGitReviewMergePreview();
+}
+
+const GIT_MERGE_OUTCOMES = Object.freeze({
+  clean: "These branches merge cleanly.",
+  conflicts: "This merge has conflicts to resolve.",
+  fastForward: "This merge fast-forwards.",
+  unknown: "This Git version cannot predict the merge result.",
+  upToDate: "The target already contains this branch."
+});
+
+async function refreshGitReviewMergePreview() {
+  if (!gitReviewStagingActive()) return;
+  const target = elements.gitReviewMergeTarget.value;
+  const source = worktreeReview.status?.branch || worktreeReview.staging.branch;
+  if (!target || !source) return;
+  const generation = worktreeReview.generation;
+  elements.gitReviewMergePreview.textContent = "Checking the merge...";
+  delete elements.gitReviewMergePreview.dataset.tone;
+  const response = await requestBridge({
+    type: "gitMergePreview",
+    repositoryRoot: worktreeReview.staging.repositoryRoot,
+    sourceBranch: source,
+    targetBranch: target
+  }, { timeout: 120000 });
+  if (generation !== worktreeReview.generation) return;
+  if (!response || !response.ok) {
+    elements.gitReviewMergePreview.textContent = response?.reason || bridgeSilenceReason("preview that merge");
+    elements.gitReviewMergePreview.dataset.tone = "error";
+    return;
+  }
+  const summary = GIT_MERGE_OUTCOMES[response.outcome] || GIT_MERGE_OUTCOMES.unknown;
+  const base = response.mergeBase ? ` Merge base ${response.mergeBase.slice(0, 8)}.` : "";
+  const files = response.conflicts?.length ? ` Conflicts in ${response.conflicts.join(", ")}.` : "";
+  elements.gitReviewMergePreview.textContent = `${summary}${base}${files}`;
+  if (response.outcome === "conflicts") elements.gitReviewMergePreview.dataset.tone = "error";
+  else delete elements.gitReviewMergePreview.dataset.tone;
+}
+
+async function mergeGitReviewLocally() {
+  if (!gitReviewStagingActive() || worktreeReview.busy) return;
+  const target = elements.gitReviewMergeTarget.value;
+  const source = worktreeReview.status?.branch || worktreeReview.staging.branch;
+  if (!target || !source) return;
+  const generation = worktreeReview.generation;
+  setGitReviewBusy(true);
+  setGitReviewPublishStatus(`Merging ${source} into ${target}...`, "waiting");
+  const response = await requestBridge({
+    type: "gitMergeStart",
+    repositoryRoot: worktreeReview.staging.repositoryRoot,
+    sourceBranch: source,
+    targetBranch: target,
+    strategy: "merge"
+  }, {
+    timeout: clampGitMergeTimeoutSeconds(state.settings.gitMergeTimeoutSeconds) * 1000,
+    onProgress: (progress) => {
+      const text = String(progress?.message || "").trim();
+      if (text) setGitReviewPublishStatus(text, "waiting");
+    }
+  });
+  if (generation !== worktreeReview.generation) return;
+  setGitReviewBusy(false);
+  if (!response || !response.ok) {
+    setGitReviewPublishStatus(response?.reason || bridgeSilenceReason("start that merge"), "error");
+    return;
+  }
+  worktreeMerge.sessionId = response.sessionId || "";
+  worktreeMerge.worktree = { branch: source, parentBranch: target };
+  if (response.status === "conflicts") {
+    setGitReviewPublishStatus("Resolve the conflicts to finish this merge.", "error");
+    // The resolver returns here rather than to the worktree bring-back dialog.
+    openWorktreeConflict(response.conflicts || [], { returnTo: finishGitReviewMerge });
+    return;
+  }
+  await finishGitReviewMerge();
+}
+
+async function finishGitReviewMerge() {
+  if (!worktreeMerge.sessionId) return;
+  const target = elements.gitReviewMergeTarget.value;
+  const source = worktreeReview.status?.branch || worktreeReview.staging?.branch;
+  const generation = worktreeReview.generation;
+  setGitReviewBusy(true);
+  setGitReviewPublishStatus("Creating the merge commit...", "waiting");
+  const response = await requestBridge({
+    type: "gitMergeFinish",
+    sessionId: worktreeMerge.sessionId,
+    commitMessage: `Merge ${source} into ${target}`
+  }, { timeout: clampGitMergeTimeoutSeconds(state.settings.gitMergeTimeoutSeconds) * 1000 });
+  if (generation !== worktreeReview.generation) return;
+  setGitReviewBusy(false);
+  if (!response?.ok) {
+    setGitReviewPublishStatus(response?.reason || bridgeSilenceReason("finish that merge"), "error");
+    return;
+  }
+  worktreeMerge.sessionId = "";
+  setGitReviewPublishStatus(`Merged ${source} into ${target}.`, "ready");
+  await refreshGitReviewStatus();
+}
+
+async function abortGitReviewMerge() {
+  if (!worktreeMerge.sessionId) return;
+  await requestBridge({ type: "gitMergeFinish", sessionId: worktreeMerge.sessionId, abort: true }, { timeout: 120000 });
+  worktreeMerge.sessionId = "";
+  setGitReviewPublishStatus("The merge was rolled back.", "");
+}
+
+async function createGitReviewPullRequest() {
+  if (!gitReviewStagingActive() || worktreeReview.busy) return;
+  const target = elements.gitReviewMergeTarget.value;
+  const source = worktreeReview.status?.branch || worktreeReview.staging.branch;
+  if (!target || !source) return;
+  const generation = worktreeReview.generation;
+  setGitReviewBusy(true);
+  setGitReviewPublishStatus("Opening a pull request...", "waiting");
+  const response = await requestBridge({
+    type: "gitPullRequest",
+    repositoryRoot: worktreeReview.staging.repositoryRoot,
+    sourceBranch: source,
+    targetBranch: target,
+    title: `Merge ${source} into ${target}`,
+    body: elements.gitReviewCommitMessage.value.trim()
+  }, { timeout: 180000 });
+  if (generation !== worktreeReview.generation) return;
+  setGitReviewBusy(false);
+  if (!response || !response.ok) {
+    setGitReviewPublishStatus(response?.reason || bridgeSilenceReason("open a pull request"), "error");
+    return;
+  }
+  if (response.openUrl) {
+    // The same validated external-open path the updater uses.
+    openReleasePage(response.openUrl);
+    setGitReviewPublishStatus("Opened the pull request page in your browser.", "ready");
+    return;
+  }
+  setGitReviewPublishStatus(response.url ? `Created ${response.url}` : "Created the pull request.", "ready");
+}
+
+function bindGitReviewPublish() {
+  elements.gitReviewPush.addEventListener("click", pushGitReviewBranch);
+  elements.gitReviewPushTerminal.addEventListener("click", runGitReviewPushInTerminal);
+  elements.gitReviewMergeToggle.addEventListener("click", toggleGitReviewMergeRow);
+  elements.gitReviewMergeTarget.addEventListener("change", refreshGitReviewMergePreview);
+  elements.gitReviewMergeLocal.addEventListener("click", mergeGitReviewLocally);
+  elements.gitReviewPullRequest.addEventListener("click", createGitReviewPullRequest);
+}
+
+function hideGitReviewSuggestion() {
+  elements.gitReviewSuggestion.hidden = true;
+  elements.gitReviewSuggestionText.textContent = "";
+}
+
+// The suggestion is shown for approval rather than written straight into the
+// box, so a message already being typed is never overwritten.
+async function suggestGitReviewCommitMessage() {
+  if (!gitReviewStagingActive() || worktreeReview.busy || worktreeReview.suggestion.requestId) return;
+  const view = ++worktreeReview.viewSequence;
+  elements.gitReviewCommitSuggest.disabled = true;
+  hideGitReviewSuggestion();
+  setGitReviewStatus("Reading the staged diff...", "waiting");
+  const staged = await requestBridge({
+    type: "gitDiff",
+    worktreePath: worktreeReview.staging.worktreePath,
+    scope: "staged",
+    maxBytes: gitReviewDiffMaxBytes()
+  }, { timeout: 90000 });
+  if (view !== worktreeReview.viewSequence) return;
+  if (!staged || !staged.ok || !staged.diff.trim()) {
+    elements.gitReviewCommitSuggest.disabled = false;
+    setGitReviewStatus(staged?.reason || "Stage something before asking for a commit message.", "error");
+    return;
+  }
+
+  startGitReviewSuggestionProgress("Asking Copilot for a commit message");
+  const response = await requestBridge({
+    type: "generateCommitMessage",
+    text: staged.diff,
+    model: state.settings.copilotTitleModel,
+    effort: state.settings.copilotTitleEffort,
+    context: state.settings.copilotTitleContext,
+    contextKb: clampCopilotTitleContextKb(state.settings.copilotTitleContextKb)
+  }, {
+    timeout: clampCommitMessageTimeoutSeconds(
+      state.settings.commitMessageTimeoutSeconds,
+      elements.commitMessageTimeoutSeconds
+    ) * 1000,
+    onRequestId: (requestId) => { worktreeReview.suggestion.requestId = requestId; },
+    onProgress: (progress) => {
+      const text = String(progress?.message || "").trim();
+      if (text) worktreeReview.suggestion.phase = text;
+      renderGitReviewSuggestionProgress();
+    }
+  });
+  const cancelled = worktreeReview.suggestion.cancelled;
+  stopGitReviewSuggestionProgress();
+  if (view !== worktreeReview.viewSequence) return;
+  elements.gitReviewCommitSuggest.disabled = false;
+  if (cancelled || response?.cancelled) {
+    setGitReviewStatus("Stopped waiting for Copilot.");
+    return;
+  }
+  if (!response || response.error || !response.message) {
+    setGitReviewStatus(response?.error || bridgeSilenceReason("suggest a commit message"), "error");
+    return;
+  }
+  setGitReviewStatus("");
+  elements.gitReviewSuggestionText.textContent = response.message;
+  elements.gitReviewSuggestion.hidden = false;
+  elements.gitReviewSuggestionAccept.focus();
+}
+
+// A Copilot call can run for minutes, so the wait reports both the stage it has
+// reached and how long it has been going.
+function renderGitReviewSuggestionProgress() {
+  const { phase, startedAt } = worktreeReview.suggestion;
+  if (!startedAt) return;
+  const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  setGitReviewStatus(`${phase}... ${seconds}s`, "waiting");
+}
+
+function startGitReviewSuggestionProgress(phase) {
+  worktreeReview.suggestion.phase = phase;
+  worktreeReview.suggestion.startedAt = Date.now();
+  worktreeReview.suggestion.cancelled = false;
+  elements.gitReviewCommitCancel.hidden = false;
+  elements.gitReviewCommitCancel.disabled = false;
+  renderGitReviewSuggestionProgress();
+  window.clearInterval(worktreeReview.suggestion.timer);
+  worktreeReview.suggestion.timer = window.setInterval(renderGitReviewSuggestionProgress, 1000);
+}
+
+function stopGitReviewSuggestionProgress() {
+  window.clearInterval(worktreeReview.suggestion.timer);
+  worktreeReview.suggestion.timer = 0;
+  worktreeReview.suggestion.startedAt = 0;
+  worktreeReview.suggestion.requestId = "";
+  elements.gitReviewCommitCancel.hidden = true;
+}
+
+// Cancelling tells the bridge to drop the Copilot session; the request itself
+// still settles, so the reply path stays the single place that clears the wait.
+function cancelGitReviewSuggestion() {
+  const target = worktreeReview.suggestion.requestId;
+  if (!target) return;
+  worktreeReview.suggestion.cancelled = true;
+  elements.gitReviewCommitCancel.disabled = true;
+  setGitReviewStatus("Stopping...", "waiting");
+  window.clearInterval(worktreeReview.suggestion.timer);
+  worktreeReview.suggestion.timer = 0;
+  void requestBridge({ type: "cancelCommitMessage", target }, { timeout: 15000 });
+}
+
+function acceptGitReviewSuggestion({ focusEditor = false } = {}) {
+  elements.gitReviewCommitMessage.value = elements.gitReviewSuggestionText.textContent;
+  hideGitReviewSuggestion();
+  updateGitReviewCommitState();
+  if (focusEditor) elements.gitReviewCommitMessage.focus();
+}
+
+function bindGitReviewCommit() {
+  elements.gitReviewCommitMessage.addEventListener("input", updateGitReviewCommitState);
+  elements.gitReviewCommitButton.addEventListener("click", commitGitReviewChanges);
+  elements.gitReviewCommitPreview.addEventListener("click", previewGitReviewCommit);
+  elements.gitReviewCommitSuggest.addEventListener("click", suggestGitReviewCommitMessage);
+  elements.gitReviewCommitCancel.addEventListener("click", cancelGitReviewSuggestion);
+  elements.gitReviewSuggestionAccept.addEventListener("click", () => acceptGitReviewSuggestion());
+  elements.gitReviewSuggestionEdit.addEventListener("click", () => acceptGitReviewSuggestion({ focusEditor: true }));
+  elements.gitReviewSuggestionDiscard.addEventListener("click", hideGitReviewSuggestion);
+  elements.gitReviewCommitTemplate.addEventListener("change", () => {
+    const templates = Array.isArray(state.settings.gitCommitTemplates) ? state.settings.gitCommitTemplates : [];
+    const template = templates[Number(elements.gitReviewCommitTemplate.value)];
+    elements.gitReviewCommitTemplate.value = "";
+    if (!template) return;
+    elements.gitReviewCommitMessage.value = template.message || "";
+    elements.gitReviewCommitMessage.focus();
+    updateGitReviewCommitState();
+  });
+  elements.gitReviewCommitMessage.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      commitGitReviewChanges();
+    }
+  });
+}
+
+function gitReviewSearchScopeAllows(pane) {
+  const scope = elements.gitReviewSearchScope.value;
+  return scope === "both" || scope === pane;
+}
+
+function resetGitReviewSearch() {
+  worktreeReview.searchMatches = [];
+  worktreeReview.searchIndex = -1;
+  elements.gitReviewSearchCount.textContent = "";
+  if (window.CSS && CSS.highlights) {
+    CSS.highlights.delete("git-review-match");
+    CSS.highlights.delete("git-review-active-match");
+  }
+}
+
+// Matches are painted with the CSS Custom Highlight API so diff2html's
+// generated markup is never rewritten underneath the staging controls.
+function applyGitReviewSearchHighlight() {
+  const query = elements.gitReviewSearch.value.trim();
+  worktreeReview.searchMatches = [];
+  worktreeReview.searchIndex = -1;
+  if (!window.CSS || !CSS.highlights || typeof Highlight !== "function") {
+    elements.gitReviewSearchCount.textContent = query ? "Search needs a newer browser." : "";
+    return;
+  }
+  CSS.highlights.delete("git-review-match");
+  CSS.highlights.delete("git-review-active-match");
+  if (!query) {
+    elements.gitReviewSearchCount.textContent = "";
+    return;
+  }
+  const needle = query.toLocaleLowerCase();
+  const walker = document.createTreeWalker(elements.worktreeReviewDiff, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    // The injected staging buttons are chrome, not diff content.
+    if (node.parentElement?.closest(".git-review-hunk-action, .git-review-hunk-open")) continue;
+    const text = node.nodeValue.toLocaleLowerCase();
+    let from = text.indexOf(needle);
+    while (from !== -1) {
+      const range = document.createRange();
+      range.setStart(node, from);
+      range.setEnd(node, from + needle.length);
+      worktreeReview.searchMatches.push(range);
+      from = text.indexOf(needle, from + needle.length);
+    }
+  }
+  if (!worktreeReview.searchMatches.length) {
+    elements.gitReviewSearchCount.textContent = "No matches";
+    return;
+  }
+  CSS.highlights.set("git-review-match", new Highlight(...worktreeReview.searchMatches));
+  focusGitReviewSearchMatch(0);
+}
+
+function focusGitReviewSearchMatch(index) {
+  const total = worktreeReview.searchMatches.length;
+  if (!total) return;
+  worktreeReview.searchIndex = ((index % total) + total) % total;
+  const range = worktreeReview.searchMatches[worktreeReview.searchIndex];
+  elements.gitReviewSearchCount.textContent = `${worktreeReview.searchIndex + 1} of ${total}`;
+  if (window.CSS && CSS.highlights && typeof Highlight === "function") {
+    CSS.highlights.set("git-review-active-match", new Highlight(range));
+  }
+  range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function moveGitReviewSearch(delta) {
+  if (!worktreeReview.searchMatches.length) return;
+  focusGitReviewSearchMatch(worktreeReview.searchIndex + delta);
+}
+
+// Filters the file lists to the files whose diff contains the query, so the
+// search reaches files that are not currently rendered in the viewer.
+async function filterGitReviewFilesByMatch() {
+  const query = elements.gitReviewSearch.value.trim();
+  const rows = elements.gitReviewPanes.querySelectorAll(".git-review-file");
+  if (!query || !gitReviewStagingActive()) {
+    for (const row of rows) row.hidden = false;
+    return;
+  }
+  const generation = worktreeReview.generation;
+  for (const pane of ["staged", "unstaged"]) {
+    if (!gitReviewSearchScopeAllows(pane)) {
+      for (const row of elements.gitReviewPanes.querySelectorAll(`.git-review-file[data-pane="${pane}"]`)) {
+        row.hidden = true;
+      }
+      continue;
+    }
+    const response = await requestBridge({
+      type: "gitDiff",
+      worktreePath: worktreeReview.staging.worktreePath,
+      scope: pane === "staged" ? "staged" : "unstaged",
+      maxBytes: gitReviewDiffMaxBytes()
+    }, { timeout: 90000 });
+    if (generation !== worktreeReview.generation) return;
+    const matching = new Set(
+      splitUnifiedDiffFiles(response?.ok ? response.diff : "")
+        .filter((file) => file.hunks.join("\n").toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+        .map((file) => file.path)
+    );
+    for (const row of elements.gitReviewPanes.querySelectorAll(`.git-review-file[data-pane="${pane}"]`)) {
+      row.hidden = !matching.has(row.dataset.path);
+    }
+  }
+}
+
+function bindGitReviewSearch() {
+  let filterTimer = 0;
+  const rerun = () => {
+    applyGitReviewSearchHighlight();
+    window.clearTimeout(filterTimer);
+    filterTimer = window.setTimeout(filterGitReviewFilesByMatch, 250);
+  };
+  elements.gitReviewSearch.addEventListener("input", rerun);
+  elements.gitReviewSearchScope.addEventListener("change", rerun);
+  elements.gitReviewSearchNext.addEventListener("click", () => moveGitReviewSearch(1));
+  elements.gitReviewSearchPrev.addEventListener("click", () => moveGitReviewSearch(-1));
+  elements.gitReviewSearch.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      moveGitReviewSearch(event.shiftKey ? -1 : 1);
+    } else if (event.key === "Escape" && elements.gitReviewSearch.value) {
+      // Clear the query first so Escape does not also close the dialog.
+      event.preventDefault();
+      event.stopPropagation();
+      elements.gitReviewSearch.value = "";
+      rerun();
+    }
+  });
+}
+
+function bindWorktreeReview() {
+  if (!elements.worktreeReviewOverlay) return;
+  elements.worktreeReviewDone.addEventListener("click", () => closeWorktreeReview());
+  elements.worktreeReviewClose.addEventListener("click", () => closeWorktreeReview());
+  elements.gitReviewStageAll.addEventListener("click", () => applyGitReviewStaging("stage", "all", []));
+  elements.gitReviewUnstageAll.addEventListener("click", () => applyGitReviewStaging("unstage", "all", []));
+  elements.gitReviewStagedList.addEventListener("keydown", onGitReviewPaneKeydown);
+  elements.gitReviewUnstagedList.addEventListener("keydown", onGitReviewPaneKeydown);
+  bindGitReviewPaneDrop(elements.gitReviewStagedList, "staged");
+  bindGitReviewPaneDrop(elements.gitReviewUnstagedList, "unstaged");
+  elements.gitReviewScopePending.addEventListener("click", showGitReviewPending);
+  elements.gitReviewScopeComparison.addEventListener("click", showGitReviewComparison);
+  elements.gitReviewExpand.addEventListener("click", toggleGitReviewExpanded);
+  bindGitReviewCommit();
+  bindGitReviewPublish();
+  bindGitReviewSearch();
+  elements.worktreeReviewOverlay.addEventListener("mousedown", (event) => {
+    if (event.target === elements.worktreeReviewOverlay) closeWorktreeReview();
+  });
+  // Capture phase so xterm and the global palette binding never see Ctrl+F first.
+  elements.worktreeReviewOverlay.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      event.stopPropagation();
+      elements.gitReviewSearch.focus();
+      elements.gitReviewSearch.select();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeWorktreeReview();
+    }
+  }, true);
+}
 
 async function openWorktreeReview(worktree, {
   repositoryRoot = worktree?.repositoryRoot || worktreeManager.repositoryRoot,
@@ -17547,92 +19047,20 @@ async function openWorktreeReview(worktree, {
     subtitle: `${worktree.branch} compared with ${worktree.parentBranch}`,
     emptyMessage: "This worktree has no committed or pending changes yet.",
     onClose,
+    // The worktree's own checkout is what gets staged and committed; the
+    // comparison against the parent branch stays available as a read-only view.
+    staging: {
+      repositoryRoot,
+      worktreePath: worktree.path,
+      branch: worktree.branch,
+      parentBranch: worktree.parentBranch
+    },
     request: {
       type: "gitDiff",
       repositoryRoot,
       base: worktree.parentBranch,
       head: worktree.branch,
       worktreePath: worktree.path
-    }
-  });
-}
-
-async function openGitDiffReview({ subtitle, request, emptyMessage, onClose = null }) {
-  worktreeReview.returnFocus = document.activeElement;
-  worktreeReview.onClose = onClose;
-  window.clearTimeout(worktreeReview.closeTimer);
-  const generation = ++worktreeReview.generation;
-  elements.worktreeReviewSubtitle.textContent = subtitle;
-  elements.worktreeReviewDiff.textContent = "";
-  elements.worktreeReviewStatus.textContent = "Loading changes...";
-  elements.worktreeReviewStatus.dataset.tone = "waiting";
-  elements.worktreeReviewOverlay.hidden = false;
-  window.requestAnimationFrame(() => {
-    elements.worktreeReviewOverlay.classList.add("is-open");
-    elements.worktreeReviewClose.focus();
-  });
-  refreshIcons(elements.worktreeReviewOverlay);
-
-  const response = await requestBridge(request, { timeout: 90000 });
-  if (generation !== worktreeReview.generation) return;
-
-  if (!response || !response.ok) {
-    elements.worktreeReviewStatus.textContent = response?.reason || "The bridge did not answer.";
-    elements.worktreeReviewStatus.dataset.tone = "error";
-    return;
-  }
-  if (!response.diff.trim()) {
-    elements.worktreeReviewStatus.textContent = emptyMessage;
-    delete elements.worktreeReviewStatus.dataset.tone;
-    return;
-  }
-  if (!window.Diff2Html) {
-    elements.worktreeReviewStatus.textContent = "The diff viewer did not load.";
-    elements.worktreeReviewStatus.dataset.tone = "error";
-    return;
-  }
-  elements.worktreeReviewStatus.textContent = response.truncated
-    ? "Showing the first 2 MB of a larger diff."
-    : "";
-  if (!response.truncated) delete elements.worktreeReviewStatus.dataset.tone;
-  // diff2html escapes the diff it renders; the input is git's own output.
-  // Unified rather than side-by-side: two 4.5em gutters plus half the dialog
-  // leaves ~60 characters a side, and long lines have to wrap to stay readable,
-  // which would drift the two independently scrolled columns out of step.
-  elements.worktreeReviewDiff.innerHTML = window.Diff2Html.html(response.diff, {
-    drawFileList: true,
-    matching: "lines",
-    outputFormat: "line-by-line",
-    colorScheme: state.settings.appTheme === "light" ? "light" : "dark"
-  });
-}
-
-function closeWorktreeReview() {
-  worktreeReview.generation += 1;
-  elements.worktreeReviewOverlay.classList.remove("is-open");
-  worktreeReview.closeTimer = window.setTimeout(() => {
-    elements.worktreeReviewOverlay.hidden = true;
-    elements.worktreeReviewDiff.textContent = "";
-  }, 150);
-  const returnFocus = worktreeReview.returnFocus;
-  const onClose = worktreeReview.onClose;
-  worktreeReview.returnFocus = null;
-  worktreeReview.onClose = null;
-  if (typeof onClose === "function") onClose();
-  else if (returnFocus?.isConnected && typeof returnFocus.focus === "function") returnFocus.focus();
-}
-
-function bindWorktreeReview() {
-  if (!elements.worktreeReviewOverlay) return;
-  elements.worktreeReviewDone.addEventListener("click", () => closeWorktreeReview());
-  elements.worktreeReviewClose.addEventListener("click", () => closeWorktreeReview());
-  elements.worktreeReviewOverlay.addEventListener("mousedown", (event) => {
-    if (event.target === elements.worktreeReviewOverlay) closeWorktreeReview();
-  });
-  elements.worktreeReviewOverlay.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      closeWorktreeReview();
     }
   });
 }
@@ -18133,7 +19561,7 @@ async function validateCwdChange() {
     // A missing response means the bridge never answered, which says nothing
     // about the directory -- blaming the path there sends people off checking a
     // folder that was fine all along.
-    setCwdChangeStatus(response?.error || bridgeSilenceReason("checked"), "error");
+    setCwdChangeStatus(response?.error || bridgeSilenceReason("check that folder"), "error");
     if (cwdSessionQueryEligible() && !cwdChange.queryAttempted) startCwdSessionQuery();
     return;
   }
@@ -18142,10 +19570,12 @@ async function validateCwdChange() {
   updateCwdChangeReadyState();
 }
 
-function bridgeSilenceReason(verb) {
+// Callers pass an infinitive action ("read the repository status"), because this
+// reason is reused far beyond the working-directory dialog it started in.
+function bridgeSilenceReason(action) {
   return state.socketReady
-    ? `The MultiTerm bridge did not answer, so the directory was not ${verb}.`
-    : `MultiTerm is not connected to its bridge, so the directory cannot be ${verb}.`;
+    ? `The MultiTerm bridge did not answer, so MultiTerm could not ${action}.`
+    : `MultiTerm is not connected to its bridge, so it cannot ${action}.`;
 }
 
 async function browseCwdChange() {
@@ -18355,6 +19785,78 @@ function renderSnippets() {
   });
   refreshIcons();
   invalidateSettingsSearchItem(host);
+}
+
+function addGitCommitTemplate(name, message) {
+  const trimmedMessage = String(message || "").trim();
+  if (!trimmedMessage) {
+    toast("Enter a commit message template", "info", 1600);
+    return;
+  }
+  const trimmedName = String(name || "").trim() || trimmedMessage.split("\n")[0];
+  state.settings.gitCommitTemplates = [
+    ...(state.settings.gitCommitTemplates || []),
+    { name: trimmedName, message: trimmedMessage }
+  ];
+  saveSettings();
+  elements.gitCommitTemplateName.value = "";
+  elements.gitCommitTemplateBody.value = "";
+  renderGitCommitTemplates();
+}
+
+function removeGitCommitTemplate(index) {
+  const list = [...(state.settings.gitCommitTemplates || [])];
+  list.splice(index, 1);
+  state.settings.gitCommitTemplates = list;
+  saveSettings();
+  renderGitCommitTemplates();
+}
+
+function renderGitCommitTemplates() {
+  const host = elements.gitCommitTemplateList;
+  if (!host) return;
+  host.innerHTML = "";
+  const list = state.settings.gitCommitTemplates || [];
+
+  if (list.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "snippet-empty";
+    empty.textContent = "No commit templates yet.";
+    host.append(empty);
+    invalidateSettingsSearchItem(host);
+    renderGitReviewCommitTemplateOptions();
+    return;
+  }
+
+  list.forEach((template, index) => {
+    const row = document.createElement("div");
+    row.className = "snippet-row";
+
+    const label = document.createElement("button");
+    label.type = "button";
+    label.className = "snippet-run";
+    label.title = template.message;
+    label.textContent = template.name || template.message;
+    label.addEventListener("click", () => {
+      elements.gitCommitTemplateName.value = template.name || "";
+      elements.gitCommitTemplateBody.value = template.message || "";
+      elements.gitCommitTemplateName.focus();
+    });
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "snippet-del";
+    remove.title = "Delete commit template";
+    remove.setAttribute("aria-label", "Delete commit template");
+    remove.innerHTML = '<i data-lucide="trash-2"></i>';
+    remove.addEventListener("click", () => removeGitCommitTemplate(index));
+
+    row.append(label, remove);
+    host.append(row);
+  });
+  refreshIcons();
+  invalidateSettingsSearchItem(host);
+  renderGitReviewCommitTemplateOptions();
 }
 
 /* ---------------- Session logging --------------- */
@@ -20763,6 +22265,8 @@ function syncControlsFromSettings() {
   elements.notifySilence.checked = state.settings.notifySilence;
   elements.silenceSeconds.value = state.settings.silenceSeconds;
   elements.startupCommand.value = state.settings.startupCommand;
+  elements.gitCommitRequiredFooters.value = state.settings.gitCommitRequiredFooters || "";
+  state.settings.editorCommand = clampEditorCommand(state.settings.editorCommand, elements.editorCommand);
   syncAutomaticUpdateControls();
   renderSnippets();
   updateBroadcastEnterToggle();

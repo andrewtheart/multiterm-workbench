@@ -276,6 +276,148 @@ describe("openPath", () => {
   });
 });
 
+describe("openInEditor", () => {
+  // runProcess reads stdout/stderr and settles on close, so a fake child only
+  // needs those three event sources.
+  function fakeEditorProcess({ code = 0, stderr = "" } = {}) {
+    const child = {
+      stdout: { on: () => {} },
+      stderr: { on: (event, fn) => { if (event === "data") child.emitStderr = fn; } },
+      on: (event, fn) => { child[event === "close" ? "close" : "error"] = fn; },
+      kill: () => {}
+    };
+    queueMicrotask(() => {
+      if (stderr && child.emitStderr) child.emitStderr(Buffer.from(stderr, "utf8"));
+      child.close(code);
+    });
+    return child;
+  }
+
+  function existingFile() {
+    vi.spyOn(fs, "statSync").mockReturnValue({ isFile: () => true, isDirectory: () => false });
+  }
+
+  // The handler resolves against the real host, which the faked platform does not change.
+  const resolved = (value) => require("node:path").resolve(value);
+
+  it("keeps the file name out of the command line on Windows", async () => {
+    setPlatform("win32");
+    existingFile();
+    const spawn = vi.spyOn(childProcess, "spawn").mockImplementation(() => fakeEditorProcess());
+    const client = fakeClient();
+    await server.openInEditor(client, { path: "C:\\src\\rm -rf & calc.txt", line: 42, requestId: "r1" });
+
+    const [command, args, options] = spawn.mock.calls[0];
+    expect(command).toBe("powershell.exe");
+    // A shell would re-parse the `&` in this (legal) file name as a second command.
+    expect(args.join(" ")).not.toContain("calc");
+    expect(args.at(-1)).toBe("$ErrorActionPreference = 'Stop'; & $env:MT_EDITOR_COMMAND --goto $env:MT_EDITOR_TARGET");
+    expect(options.env.MT_EDITOR_COMMAND).toBe("code");
+    expect(options.env.MT_EDITOR_TARGET).toBe("C:\\src\\rm -rf & calc.txt:42:1");
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      type: "openEditorResult",
+      ok: true,
+      requestId: "r1"
+    }));
+  });
+
+  it("passes the file to the editor as an argument off Windows", async () => {
+    setPlatform("linux");
+    existingFile();
+    const spawn = vi.spyOn(childProcess, "spawn").mockImplementation(() => fakeEditorProcess());
+    await server.openInEditor(fakeClient(), { path: "/src/app.js", line: 7, column: 3, editor: "codium" });
+
+    const [command, args] = spawn.mock.calls[0];
+    expect(command).toBe("codium");
+    expect(args).toEqual(["--goto", `${resolved("/src/app.js")}:7:3`]);
+  });
+
+  it("refuses an editor name that is a path or carries shell punctuation", async () => {
+    setPlatform("linux");
+    existingFile();
+    const spawn = vi.spyOn(childProcess, "spawn").mockImplementation(() => fakeEditorProcess());
+    for (const editor of ["/usr/bin/rm", "code; rm -rf /", "../evil", "code me", ""]) {
+      await server.openInEditor(fakeClient(), { path: "/src/app.js", editor });
+    }
+    expect(spawn.mock.calls.map((call) => call[0])).toEqual(["code", "code", "code", "code", "code"]);
+  });
+
+  it("clamps a line number that is missing, negative or absurd", async () => {
+    setPlatform("linux");
+    existingFile();
+    const spawn = vi.spyOn(childProcess, "spawn").mockImplementation(() => fakeEditorProcess());
+    for (const line of [undefined, -5, 0, "banana", 1e12]) {
+      await server.openInEditor(fakeClient(), { path: "/src/app.js", line });
+    }
+    expect(spawn.mock.calls.map((call) => call[1][1])).toEqual([
+      `${resolved("/src/app.js")}:1:1`,
+      `${resolved("/src/app.js")}:1:1`,
+      `${resolved("/src/app.js")}:1:1`,
+      `${resolved("/src/app.js")}:1:1`,
+      `${resolved("/src/app.js")}:100000000:1`
+    ]);
+  });
+
+  it("says the file is gone rather than launching an editor on nothing", async () => {
+    setPlatform("linux");
+    vi.spyOn(fs, "statSync").mockImplementation(() => { throw new Error("ENOENT"); });
+    const spawn = vi.spyOn(childProcess, "spawn");
+    const client = fakeClient();
+    await server.openInEditor(client, { path: "/src/deleted.js" });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      ok: false,
+      reason: "That file is not on disk, so there is nothing to open."
+    }));
+  });
+
+  it("refuses a directory, which has no line to open", async () => {
+    setPlatform("linux");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isFile: () => false, isDirectory: () => true });
+    const spawn = vi.spyOn(childProcess, "spawn");
+    await server.openInEditor(fakeClient(), { path: "/src" });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("reports the editor's own complaint when the launch fails", async () => {
+    setPlatform("linux");
+    existingFile();
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => fakeEditorProcess({
+      code: 1,
+      stderr: "\n  code: command not found\nmore detail\n"
+    }));
+    const client = fakeClient();
+    await server.openInEditor(client, { path: "/src/app.js" });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      ok: false,
+      reason: "Could not run code. code: command not found"
+    }));
+  });
+
+  it("still explains a silent failure that produced no stderr", async () => {
+    setPlatform("linux");
+    existingFile();
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => fakeEditorProcess({ code: 9 }));
+    const client = fakeClient();
+    await server.openInEditor(client, { path: "/src/app.js" });
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      ok: false,
+      reason: "Could not run code. Check that it is installed and on PATH."
+    }));
+  });
+
+  it("reports a missing path without spawning anything", async () => {
+    const client = fakeClient();
+    const spawn = vi.spyOn(childProcess, "spawn");
+    await server.openInEditor(client, { path: "   " });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+      ok: false,
+      reason: "No file was given."
+    }));
+  });
+});
+
 describe("pickScript", () => {
   // A fake picker process: stdout is a plain event source so the test can decide
   // what the dialog "returned" and when it closed.
@@ -1003,6 +1145,35 @@ describe("handleClientMessage dispatch (log + reveal + open + killAll)", () => {
     expect(childProcess.spawn.mock.calls[0][0]).toBe("powershell.exe");
 
     expect(() => server.handleClientMessage(client, JSON.stringify({ type: "killAll" }))).not.toThrow();
+  });
+
+  it("routes openInEditor so the dialog is never left waiting on a promise", async () => {
+    const client = fakeClient();
+    setPlatform("win32");
+    vi.spyOn(fs, "statSync").mockReturnValue({ isFile: () => true, isDirectory: () => false });
+    vi.spyOn(childProcess, "spawn").mockImplementation(() => {
+      const child = {
+        stdout: { on: () => {} },
+        stderr: { on: () => {} },
+        on: (event, fn) => { if (event === "close") queueMicrotask(() => fn(0)); },
+        kill: () => {}
+      };
+      return child;
+    });
+
+    server.handleClientMessage(client, JSON.stringify({
+      type: "openInEditor",
+      path: "C:\\src\\app.js",
+      line: 12,
+      requestId: "r"
+    }));
+    await vi.waitFor(() => {
+      expect(client.send).toHaveBeenCalledWith(expect.objectContaining({
+        type: "openEditorResult",
+        requestId: "r",
+        ok: true
+      }));
+    });
   });
 });
 

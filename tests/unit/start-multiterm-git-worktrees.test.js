@@ -4,9 +4,9 @@ const path = require("node:path");
 const source = fs.readFileSync(path.resolve(__dirname, "../../Start-MultiTerm.ps1"), "utf8");
 
 function runGitSource() {
-  const start = source.indexOf("private static GitResult RunGit(");
+  const start = source.indexOf("private static GitResult RunProcess(");
   const end = source.indexOf("private static string GitInspectionJson(", start);
-  if (start < 0 || end < 0) throw new Error("Could not locate the installed bridge Git runner.");
+  if (start < 0 || end < 0) throw new Error("Could not locate the installed bridge process runner.");
   return source.slice(start, end);
 }
 
@@ -34,7 +34,7 @@ describe("installed bridge Git worktree execution", () => {
     const runner = runGitSource();
     expect(runner).toContain("result.ExitCode = process.ExitCode");
     expect(runner).toContain("result.DurationMilliseconds = stopwatch.ElapsedMilliseconds");
-    expect(runner).toContain('result.StandardError += "git did not finish in time."');
+    expect(runner).toContain('result.StandardError += fileName + " did not finish in time."');
   });
 
   test("streams correlated progress for worktree creation and merge stages", () => {
@@ -56,6 +56,12 @@ describe("installed bridge Git worktree execution", () => {
     expect(source).toContain('"--ita-visible-in-index"');
     expect(source).toContain("Directory.Delete(temporaryDirectory, true)");
     expect(source).toContain('Json.Get(message, "worktreePath")');
-    expect(source).toMatch(/worktreePath\.Length > 0\s*\? WorktreeDiffIncludingPending/);
+    expect(source).toMatch(/worktreePath\.Length > 0\)\s*\{\s*return WorktreeDiffIncludingPending/);
+  });
+
+  test("runs git through the shared process runner so other tools can be launched the same way", () => {
+    expect(source).toContain("private static GitResult RunGit(string[] arguments, string workingDirectory, int timeoutMilliseconds, Dictionary<string, string> environment = null)");
+    expect(source).toMatch(/RunGit\([^)]*\)\s*\{\s*return RunProcess\("git", arguments, workingDirectory, timeoutMilliseconds, environment\);/);
+    expect(source).toContain('RunProcess("gh", new string[] { "--version" }');
   });
 });

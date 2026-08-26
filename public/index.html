@@ -758,6 +758,55 @@
             <p class="snippet-hint">Snippets run in the active terminal (right-click or command palette too).</p>
           </section>
 
+          <section class="control-section">
+            <h2>Git</h2>
+            <label class="control-row">
+              <span title="Largest number of changed files Review Changes lists in each of the Staged and Unstaged panes. The counts always report the full total.">Files listed per pane</span>
+              <input id="gitChangesFileLimit" type="number" min="50" max="5000" step="50" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Largest diff Review Changes loads before it is truncated. Raise this only if you routinely review very large changes.">Maximum diff size (KB)</span>
+              <input id="gitDiffMaxKb" type="number" min="256" max="16384" step="256" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How long a push may run before MultiTerm reports it as failed. Increase this for slow networks or very large pushes.">Push timeout (seconds)</span>
+              <input id="gitPushTimeoutSeconds" type="number" min="10" max="1800" step="10" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How long a merge or bring-back operation may run before MultiTerm reports it as failed.">Merge timeout (seconds)</span>
+              <input id="gitMergeTimeoutSeconds" type="number" min="30" max="1800" step="30" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How long Suggest waits for a commit message before reporting that Copilot did not answer. A healthy suggestion returns in a few seconds; raise this only if your model is routinely slower.">Commit message timeout (seconds)</span>
+              <input id="commitMessageTimeoutSeconds" type="number" min="15" max="600" step="15" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Program Open in editor runs, passed the file and line with --goto. Must be a bare command name on PATH, for example code, code-insiders, codium or cursor.">Editor command</span>
+              <input id="editorCommand" type="text" spellcheck="false" autocomplete="off" placeholder="code">
+            </label>
+
+            <label class="control-row">
+              <span title="Comma separated trailers every commit message must contain, for example Signed-off-by. Leave empty to require none.">Required commit footers</span>
+              <input id="gitCommitRequiredFooters" type="text" spellcheck="false" autocomplete="off" placeholder="Signed-off-by, Refs">
+            </label>
+
+            <div id="gitCommitTemplateList" class="snippet-list"></div>
+            <div class="snippet-add">
+              <input id="gitCommitTemplateName" type="text" spellcheck="false" autocomplete="off" placeholder="Template name">
+              <input id="gitCommitTemplateBody" type="text" spellcheck="false" autocomplete="off" placeholder="Commit message template">
+              <button id="gitCommitTemplateAdd" type="button" title="Add commit message template">
+                <i data-lucide="plus"></i>
+                <span>Add template</span>
+              </button>
+            </div>
+            <p class="snippet-hint">Templates appear in the Review Changes commit box.</p>
+          </section>
+
           <section class="control-section action-grid">
             <button id="fitAll" type="button">
               <i data-lucide="maximize"></i>
@@ -1392,16 +1441,135 @@
               <p id="worktreeReviewSubtitle">What this worktree changed.</p>
             </div>
           </div>
-          <button id="worktreeReviewClose" class="icon-button" type="button" title="Close" aria-label="Close review dialog">
-            <i data-lucide="x"></i>
-          </button>
+          <div class="git-review-head-tools">
+            <div id="gitReviewSearchRow" class="git-review-search" role="search">
+              <i data-lucide="search" aria-hidden="true"></i>
+              <input id="gitReviewSearch" type="search" spellcheck="false" autocomplete="off"
+                placeholder="Search changes (Ctrl+F)" aria-label="Search changes"
+                aria-describedby="gitReviewSearchCount">
+              <span id="gitReviewSearchCount" class="git-review-search-count" role="status"></span>
+              <button id="gitReviewSearchPrev" class="icon-button" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match">
+                <i data-lucide="chevron-up"></i>
+              </button>
+              <button id="gitReviewSearchNext" class="icon-button" type="button" title="Next match (Enter)" aria-label="Next match">
+                <i data-lucide="chevron-down"></i>
+              </button>
+              <select id="gitReviewSearchScope" aria-label="Search scope">
+                <option value="both">Staged and unstaged</option>
+                <option value="staged">Staged only</option>
+                <option value="unstaged">Unstaged only</option>
+              </select>
+            </div>
+            <button id="gitReviewExpand" class="icon-button git-review-expand" type="button"
+              title="Fill the window" aria-label="Fill the window" aria-pressed="false">
+              <i data-lucide="maximize-2" data-expand-icon="grow"></i>
+              <i data-lucide="minimize-2" data-expand-icon="shrink"></i>
+            </button>
+            <button id="worktreeReviewClose" class="icon-button" type="button" title="Close" aria-label="Close review dialog">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
         </div>
-        <div class="cwd-change-body">
-          <p id="worktreeReviewStatus" class="cwd-change-status" role="status">Loading changes...</p>
-          <div id="worktreeReviewDiff" class="worktree-review-diff"></div>
+        <div class="cwd-change-body git-review-body">
+          <div id="gitReviewPanes" class="git-review-panes">
+            <section class="git-review-pane" data-git-pane="staged" aria-labelledby="gitReviewStagedHeading">
+              <header class="git-review-pane-head">
+                <h3 id="gitReviewStagedHeading">
+                  <i data-lucide="check" aria-hidden="true"></i>
+                  <span>Staged</span>
+                  <strong id="gitReviewStagedCount" class="git-review-count">0</strong>
+                </h3>
+                <button id="gitReviewUnstageAll" class="secondary-action" type="button">Unstage all</button>
+              </header>
+              <div id="gitReviewStagedList" class="git-review-file-list" role="listbox"
+                aria-labelledby="gitReviewStagedHeading" tabindex="0"></div>
+            </section>
+            <section class="git-review-pane" data-git-pane="unstaged" aria-labelledby="gitReviewUnstagedHeading">
+              <header class="git-review-pane-head">
+                <h3 id="gitReviewUnstagedHeading">
+                  <i data-lucide="pencil" aria-hidden="true"></i>
+                  <span>Unstaged</span>
+                  <strong id="gitReviewUnstagedCount" class="git-review-count">0</strong>
+                </h3>
+                <button id="gitReviewStageAll" class="primary-action" type="button">Stage all</button>
+              </header>
+              <div id="gitReviewUnstagedList" class="git-review-file-list" role="listbox"
+                aria-labelledby="gitReviewUnstagedHeading" tabindex="0"></div>
+            </section>
+          </div>
+          <div class="git-review-main">
+            <div class="git-review-toolbar">
+              <div id="gitReviewScope" class="git-review-scope" role="group" aria-label="Which changes to show" hidden>
+                <button id="gitReviewScopePending" class="git-review-scope-tab" type="button" data-scope="pending" aria-pressed="true">Pending changes</button>
+                <button id="gitReviewScopeComparison" class="git-review-scope-tab" type="button" data-scope="comparison" aria-pressed="false">Branch vs parent</button>
+              </div>
+              <ul class="git-review-legend" aria-label="What the diff colours mean">
+                <li data-key="added"><span aria-hidden="true">+</span>Added</li>
+                <li data-key="removed"><span aria-hidden="true">-</span>Removed</li>
+                <li data-key="word"><span aria-hidden="true">ab</span>Changed text</li>
+                <li data-key="context"><span aria-hidden="true">&nbsp;</span>Unchanged</li>
+                <li data-key="hunk"><span aria-hidden="true">@@</span>Skipped lines</li>
+                <li data-key="match"><span aria-hidden="true">ab</span>Search match</li>
+              </ul>
+            </div>
+            <p id="worktreeReviewStatus" class="cwd-change-status" role="status">Loading changes...</p>
+            <div id="worktreeReviewDiff" class="worktree-review-diff"></div>
+          </div>
         </div>
-        <div class="cwd-change-actions">
+        <div id="gitReviewCommit" class="git-review-commit" hidden>
+          <div class="git-review-commit-head">
+            <label for="gitReviewCommitMessage">Commit message</label>
+            <span class="git-review-commit-tools">
+              <select id="gitReviewCommitTemplate" aria-label="Commit message template">
+                <option value="">Template...</option>
+              </select>
+              <button id="gitReviewCommitSuggest" class="secondary-action" type="button" title="Suggest a commit message from the staged diff">
+                <i data-lucide="sparkles"></i>
+                <span>Suggest</span>
+              </button>
+              <button id="gitReviewCommitCancel" class="secondary-action" type="button"
+                title="Stop waiting for Copilot" hidden>Cancel</button>
+              <button id="gitReviewCommitPreview" class="secondary-action" type="button">Preview commit</button>
+            </span>
+          </div>
+          <div id="gitReviewSuggestion" class="git-review-suggestion" role="group" aria-label="Suggested commit message" hidden>
+            <p id="gitReviewSuggestionText"></p>
+            <span class="git-review-suggestion-actions">
+              <button id="gitReviewSuggestionAccept" class="primary-action" type="button">Use</button>
+              <button id="gitReviewSuggestionEdit" class="secondary-action" type="button">Edit</button>
+              <button id="gitReviewSuggestionDiscard" class="secondary-action" type="button">Discard</button>
+            </span>
+          </div>
+          <textarea id="gitReviewCommitMessage" rows="3" spellcheck="true"
+            placeholder="Describe what changed and why" aria-describedby="gitReviewCommitHint"></textarea>
+          <p id="gitReviewCommitHint" class="git-review-commit-hint" role="status"></p>
+        </div>
+        <div id="gitReviewPublish" class="git-review-publish" hidden>
+          <div class="git-review-publish-row">
+            <span id="gitReviewBranchLabel" class="git-review-branch"></span>
+            <span id="gitReviewTracking" class="git-review-tracking"></span>
+            <button id="gitReviewPush" class="secondary-action" type="button">
+              <i data-lucide="upload"></i>
+              <span>Push</span>
+            </button>
+            <button id="gitReviewPushTerminal" class="secondary-action" type="button" hidden>Run push in a terminal</button>
+            <button id="gitReviewMergeToggle" class="secondary-action" type="button">Merge...</button>
+          </div>
+          <p id="gitReviewPublishStatus" class="git-review-commit-hint" role="status"></p>
+          <div id="gitReviewMergeRow" class="git-review-publish-row" hidden>
+            <label for="gitReviewMergeTarget">Merge into</label>
+            <select id="gitReviewMergeTarget" aria-describedby="gitReviewMergePreview"></select>
+            <button id="gitReviewMergeLocal" class="primary-action" type="button">Merge locally</button>
+            <button id="gitReviewPullRequest" class="secondary-action" type="button">Create pull request</button>
+          </div>
+          <p id="gitReviewMergePreview" class="git-review-commit-hint" role="status"></p>
+        </div>
+        <div class="cwd-change-actions git-review-actions">
           <button id="worktreeReviewDone" class="secondary-action" type="button">Close</button>
+          <button id="gitReviewCommitButton" class="primary-action" type="button" hidden>
+            <i data-lucide="git-commit-horizontal"></i>
+            <span>Commit staged</span>
+          </button>
         </div>
       </div>
     </div>
