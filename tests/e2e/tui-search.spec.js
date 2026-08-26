@@ -148,7 +148,11 @@ test.describe("Searching TUI scrollback", () => {
       try {
         terminalVisibleText = () => steps > 0 ? "the retained needle is visible" : "not yet";
         tuiScrollStep = () => { steps += 1; };
-        syncTerminalScrollControls = () => { syncs += 1; };
+        // xterm's own onRender and onScroll handlers refresh these controls too, so
+        // counting every call would measure repaint timing rather than this jump.
+        syncTerminalScrollControls = () => {
+          if (new Error().stack.includes("jumpToTuiMatch")) syncs += 1;
+        };
         searchTerminalPane = () => { searches += 1; };
         const response = await jumpToTuiMatch(terminal, "needle");
         return { edge: terminal.tuiScrollEdge, response, searches, steps, syncs };
@@ -160,12 +164,14 @@ test.describe("Searching TUI scrollback", () => {
       }
     });
 
+    // The jump refreshes the controls exactly once, so the pane stops claiming
+    // it is parked at an edge.
     expect(result).toEqual({
       edge: "middle",
       response: { ok: true, steps: 1 },
       searches: 1,
       steps: 1,
-      syncs: 2
+      syncs: 1
     });
   });
 });
