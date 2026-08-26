@@ -501,6 +501,7 @@
 <ul>
 <li><a href="#a-terminal-does-not-start" id="toc-a-terminal-does-not-start">A terminal does not start</a></li>
 <li><a href="#the-app-disconnected" id="toc-the-app-disconnected">The app disconnected</a></li>
+<li><a href="#a-terminal-says-output-was-lost" id="toc-a-terminal-says-output-was-lost">A terminal says output was lost</a></li>
 <li><a href="#explorer-or-multiterm-is-missing" id="toc-explorer-or-multiterm-is-missing">Explorer or <code>multiterm</code> is missing</a></li>
 <li><a href="#layout-or-display-problems" id="toc-layout-or-display-problems">Layout or display problems</a></li>
 <li><a href="#getting-more-detail" id="toc-getting-more-detail">Getting more detail</a></li>
@@ -1058,6 +1059,9 @@ Continue this investigation from the context below.</code></pre>
 <h3 id="the-app-disconnected">The app disconnected</h3>
 <p>The UI reconnects automatically when the local bridge restarts. It also sends application-level heartbeats while the window is visible; if a connection remains technically open but the bridge stops answering, MultiTerm marks the terminals offline, replaces the stale socket, and reconnects. <strong>Bridge response timeout</strong> under <strong>Performance</strong> controls how long MultiTerm waits and also bounds installed-bridge WebSocket sends (10-300 seconds, default 30).</p>
 <p>If it remains disconnected, reopen MultiTerm and inspect <strong>Logs</strong> for <code>Bridge heartbeat timed out</code>, <code>WebSocket error</code>, or reconnect entries. Source launches use the configured local bridge port; installed concurrent launches automatically claim available fallback ports.</p>
+<h3 id="a-terminal-says-output-was-lost">A terminal says output was lost</h3>
+<p>If a terminal was disconnected for longer than the bridge retains output, MultiTerm cannot replay the missing bytes, so the screen you are looking at is incomplete. The pane shows a notice offering <strong>Clear screen</strong> and <strong>Restart session</strong>.</p>
+<p>Only <strong>Restart session</strong> makes the pane trustworthy again, because a partial byte stream can leave the cursor and terminal modes anywhere. <strong>Clear screen</strong> erases the visible text but does not resolve the gap. You can close the notice with its <strong>x</strong> button when it is in the way; the pane then keeps an amber title bar and border so the incomplete screen is never mistaken for a current one.</p>
 <h3 id="explorer-or-multiterm-is-missing">Explorer or <code>multiterm</code> is missing</h3>
 <p>Run the installer again and select the corresponding optional task. Explorer integration is intentionally opt-in. PATH changes are visible only to shells opened after installation.</p>
 <h3 id="layout-or-display-problems">Layout or display problems</h3>

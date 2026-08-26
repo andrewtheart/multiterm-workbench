@@ -3982,6 +3982,11 @@ function resolveTerminalDesynchronized(terminal, action) {
     restartSession(terminal.id);
     clearTerminalDesynchronized(terminal);
     return true;
+  } else if (action === "dismiss") {
+    // Hides the notice only. The pane stays marked, because the screen is still
+    // incomplete and its modes and cursor are still unreliable until a restart.
+    terminal.desyncElement.hidden = true;
+    return true;
   } else {
     return false;
   }

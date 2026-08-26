@@ -249,8 +249,10 @@ test.describe("Bridge auto-reconnect", () => {
     const id = await freshLiveTerminal();
 
     // A gap the bridge cannot bridge: the renderer is told, and must never
-    // present the incomplete screen as current.
-    await page.evaluate((terminalId) => {
+    // present the incomplete screen as current. The sequence is read in the same
+    // evaluate that delivers the gap, because this is a live shell whose own
+    // output would otherwise overwrite the adopted sequence before the check.
+    const seqAfterGap = await page.evaluate((terminalId) => {
       handleBridgeMessage({
         type: "outputGap",
         id: terminalId,
@@ -259,12 +261,13 @@ test.describe("Bridge auto-reconnect", () => {
         available: 40,
         seq: 120
       });
+      return state.terminals.get(terminalId).lastOutputSeq;
     }, id);
 
     const notice = page.locator(`.terminal-pane[data-id="${id}"] .pane-desync`);
     await expect(notice).toBeVisible();
     await expect(page.locator(`.terminal-pane[data-id="${id}"]`)).toHaveClass(/is-desynchronized/);
-    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).lastOutputSeq, id)).toBe(120);
+    expect(seqAfterGap).toBe(120);
 
     await notice.locator('[data-desync="clear"]').click();
     await expect(notice).toBeVisible();
@@ -279,9 +282,21 @@ test.describe("Bridge auto-reconnect", () => {
 
     const notice = page.locator(`.terminal-pane[data-id="${id}"] .pane-desync`);
     await expect(notice).toBeVisible();
-    expect(await page.evaluate((terminalId) => resolveTerminalDesynchronized(state.terminals.get(terminalId), "dismiss"), id)).toBe(false);
-    await expect(notice).toBeVisible();
+    // Dismissing silences the notice but must not imply the screen is trustworthy:
+    // the pane stays marked so the gap is still visible until a restart.
+    await notice.locator('[data-desync="dismiss"]').click();
+    await expect(notice).toBeHidden();
     await expect(page.locator(`.terminal-pane[data-id="${id}"]`)).toHaveClass(/is-desynchronized/);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).desynchronized, id)).toBe(true);
+    // An unknown action still resolves nothing.
+    expect(await page.evaluate((terminalId) => resolveTerminalDesynchronized(state.terminals.get(terminalId), "ignore"), id)).toBe(false);
+
+    // A fresh gap has to raise the notice again rather than stay silenced.
+    await page.evaluate((terminalId) => {
+      handleBridgeMessage({ type: "outputGap", id: terminalId, reason: "retention", expected: 10, available: 19, seq: 19 });
+    }, id);
+    await expect(notice).toBeVisible();
+
     await notice.locator('[data-desync="restart"]').click();
     // Restarting replaces the pane with a fresh session, so the old id is gone.
     await expect.poll(() => statusOf(id), { timeout: 20000 }).toBeNull();
@@ -290,11 +305,21 @@ test.describe("Bridge auto-reconnect", () => {
   });
 
   test("ignores gap and resume frames for a terminal this window does not hold", async () => {
-    await freshLiveTerminal();
-    await page.evaluate(() => {
+    const id = await freshLiveTerminal();
+    // Measured against the live pane's own state rather than a page-wide notice
+    // count, and read in the same evaluate as the injection, so that a genuine
+    // gap on the real terminal cannot be mistaken for the foreign frames taking
+    // effect.
+    const result = await page.evaluate((terminalId) => {
+      const before = state.terminals.get(terminalId).desynchronized;
       handleBridgeMessage({ type: "outputGap", id: "no-such-session", expected: 1, available: 2, seq: 2 });
       handleBridgeMessage({ type: "outputResumed", id: "no-such-session", seq: 4, replayedBytes: 0 });
-    });
-    await expect(page.locator(".pane-desync:visible")).toHaveCount(0);
+      return {
+        disturbedRealTerminal: state.terminals.get(terminalId).desynchronized !== before,
+        trackedForeignSession: state.terminals.has("no-such-session"),
+        panes: document.querySelectorAll(".terminal-pane").length
+      };
+    }, id);
+    expect(result).toEqual({ disturbedRealTerminal: false, trackedForeignSession: false, panes: 1 });
   });
 });

@@ -596,6 +596,12 @@ The UI reconnects automatically when the local bridge restarts. It also sends ap
 
 If it remains disconnected, reopen MultiTerm and inspect **Logs** for `Bridge heartbeat timed out`, `WebSocket error`, or reconnect entries. Source launches use the configured local bridge port; installed concurrent launches automatically claim available fallback ports.
 
+### A terminal says output was lost
+
+If a terminal was disconnected for longer than the bridge retains output, MultiTerm cannot replay the missing bytes, so the screen you are looking at is incomplete. The pane shows a notice offering **Clear screen** and **Restart session**.
+
+Only **Restart session** makes the pane trustworthy again, because a partial byte stream can leave the cursor and terminal modes anywhere. **Clear screen** erases the visible text but does not resolve the gap. You can close the notice with its **x** button when it is in the way; the pane then keeps an amber title bar and border so the incomplete screen is never mistaken for a current one.
+
 ### Explorer or `multiterm` is missing
 
 Run the installer again and select the corresponding optional task. Explorer integration is intentionally opt-in. PATH changes are visible only to shells opened after installation.

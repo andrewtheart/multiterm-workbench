@@ -13457,6 +13457,31 @@ body.is-pane-resizing {
   background: var(--surface-hover, var(--surface-high));
 }
 
+.pane-desync-close {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  padding: 3px;
+}
+
+.pane-desync-close:hover {
+  background: var(--surface-high);
+}
+
+/* Dismissing hides the notice, so the pane itself has to keep saying that its
+   screen is incomplete until a restart resolves it. */
+.terminal-pane.is-desynchronized:not(.is-active) {
+  border-color: var(--warn, #d9a441);
+}
+
+.terminal-pane.is-desynchronized .pane-bar {
+  background: color-mix(in srgb, var(--warn, #d9a441) 22%, var(--surface-high));
+}
+
 .pane-find[hidden] {
   display: none;
 }
