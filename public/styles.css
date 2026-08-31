@@ -14322,6 +14322,21 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
     width: calc(100% - 4px);
   }
 
+  /* Keep the primary action at the right edge once the cluster spans the full
+     width, matching the wide layout instead of trailing the icon run. */
+  .action-cluster #addTerminal {
+    margin-left: auto;
+  }
+
+  /* Level with the brand: stacked, the collapse control reads as part of the
+     tool row rather than as chrome for the whole bar. */
+  .topbar .topbar-collapse {
+    margin-left: 0;
+    position: absolute;
+    right: 18px;
+    top: 10px;
+  }
+
   .workbench {
     grid-template-areas: "settings" "stage";
     grid-template-columns: 1fr;
