@@ -1,0 +1,3 @@
+D:/multiTerm/build/CMakeFiles/sqlite3mc.dir
+D:/multiTerm/build/CMakeFiles/ALL_BUILD.dir
+D:/multiTerm/build/CMakeFiles/ZERO_CHECK.dir

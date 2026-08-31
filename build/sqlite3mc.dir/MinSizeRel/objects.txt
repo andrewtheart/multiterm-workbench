@@ -1,0 +1,1 @@
+D:/multiTerm/build/sqlite3mc.dir/MinSizeRel/sqlite3mc_amalgamation.obj
