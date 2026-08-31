@@ -185,7 +185,7 @@ The Node static server decodes the path, normalizes it beneath `public/`, checks
 The CSP and companion headers enforce:
 
 - scripts, fonts, frames, and network access from approved sources only;
-- no objects, forms, workers, media, or foreign framing;
+- no objects, forms, workers, or media, and no framing by any web origin;
 - same-origin opener/resource policies;
 - no camera, microphone, geolocation, payment, or USB;
 - no referrer leakage and no MIME sniffing.
@@ -193,6 +193,18 @@ The CSP and companion headers enforce:
 Inline styles remain allowed because the UI uses them. CSP is exploit mitigation,
 not client authorization. `help.html` is the one same-origin frame exception and
 receives a correspondingly scoped frame policy.
+
+`frame-ancestors` also names the `vscode-webview:` and `vscode-file:` schemes so a VS
+Code extension can host the workbench and keep the renderer same-origin with the
+bridge. Both are required: a webview nests inside the workbench window, and the
+directive is matched against every ancestor in the chain, which was measured as
+`page <- vscode-webview://<id> <- vscode-webview://<id> <- vscode-file://vscode-app`.
+A `*` source does not match these non-network schemes, so it is not a shortcut. No
+`http(s)` page can present such an ancestor, and an extension host able to frame the
+bridge can already drive it directly over a WebSocket carrying no `Origin`, so this
+grants no capability that was previously withheld. `X-Frame-Options` is deliberately
+not sent at all, because no value of it can name a scheme and a stale `DENY` would
+override the policy in browsers that still honour the legacy header.
 
 ### Protocol parsing and availability ceilings
 

@@ -1621,12 +1621,21 @@ const mimeTypes = new Map([
   [".webmanifest", "application/manifest+json"]
 ]);
 
+// A VS Code webview shell frames the workbench so the renderer stays same-origin with
+// the bridge. frame-ancestors is matched against EVERY ancestor, and a webview nests
+// inside the workbench window, so both schemes must be named. Measured chain:
+// page <- vscode-webview://<id> <- vscode-webview://<id> <- vscode-file://vscode-app.
+// `*` does not match these non-network schemes, so it is not a shortcut. Naming them
+// costs nothing: no http(s) page can present such an ancestor, and an extension host
+// able to frame this can already drive the bridge over a WebSocket carrying no Origin.
+const EMBED_FRAME_ANCESTORS = "vscode-webview: vscode-file:";
+
 const securityHeaders = Object.freeze({
   "Content-Security-Policy": [
     "default-src 'self'",
     "base-uri 'none'",
     "object-src 'none'",
-    "frame-ancestors 'none'",
+    `frame-ancestors ${EMBED_FRAME_ANCESTORS}`,
     "form-action 'none'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
@@ -1642,17 +1651,25 @@ const securityHeaders = Object.freeze({
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
   "Referrer-Policy": "no-referrer",
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY"
+  "X-Content-Type-Options": "nosniff"
 });
+
+// frame-ancestors is checked against every ancestor in the chain, so a Help page
+// framed by an embedded workbench needs both sources named. X-Frame-Options is
+// deliberately absent: no value of it can name a scheme, so a stale DENY would
+// block the webview in browsers that still honour it.
+function frameAncestorsSource(allowSameOriginFrame) {
+  return allowSameOriginFrame ? `'self' ${EMBED_FRAME_ANCESTORS}` : EMBED_FRAME_ANCESTORS;
+}
 
 function setSecurityHeaders(response, { allowSameOriginFrame = false } = {}) {
   if (!response || response.headersSent || typeof response.setHeader !== "function") return; else { void 0; }
   for (const [name, value] of Object.entries(securityHeaders)) {
-    if (allowSameOriginFrame && name === "Content-Security-Policy") {
-      response.setHeader(name, value.replace("frame-ancestors 'none'", "frame-ancestors 'self'"));
-    } else if (allowSameOriginFrame && name === "X-Frame-Options") {
-      response.setHeader(name, "SAMEORIGIN");
+    if (name === "Content-Security-Policy") {
+      response.setHeader(name, value.replace(
+        `frame-ancestors ${EMBED_FRAME_ANCESTORS}`,
+        `frame-ancestors ${frameAncestorsSource(allowSameOriginFrame)}`
+      ));
     } else {
       response.setHeader(name, value);
     }
@@ -7993,8 +8010,12 @@ const copilotAuthMemory = { authenticated: null };
 async function copilotProviderCapabilities(
   createClient = createCopilotSdkClient,
   findExecutable = findCopilotExecutable,
-  authMemory = copilotAuthMemory
+  authMemory = copilotAuthMemory,
+  configureCliPath = configureCopilotCliPath
 ) {
+  // Re-checked on every probe because the guided setup can install the CLI long
+  // after the bridge started.
+  await configureCliPath();
   const cliInstalled = Boolean(await findExecutable());
   let client;
   try {
@@ -8125,6 +8146,64 @@ async function findCommandExecutable(command, execFile = childProcess.execFile) 
 
 async function findCopilotExecutable(execFile = childProcess.execFile) {
   return findCommandExecutable("copilot", execFile);
+}
+
+// The SDK spawns this CLI itself, and Node on Windows cannot exec a .bat, .ps1,
+// or extensionless shim, so only a real .exe is usable as COPILOT_CLI_PATH.
+// Both platform decisions live in pure helpers so either OS can be tested here.
+function copilotLocatorCommand(platform) {
+  return platform === "win32" ? "where.exe" : "which";
+}
+
+function spawnableCopilotEntry(entries, platform) {
+  if (platform === "win32") {
+    return entries.find((entry) => /\.exe$/i.test(entry)) || "";
+  } else {
+    return entries[0] || "";
+  }
+}
+
+async function findSpawnableCopilotExecutable(execFile = childProcess.execFile) {
+  try {
+    const output = await execFileText(copilotLocatorCommand(process.platform), ["copilot"], execFile);
+    const entries = output.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+    return spawnableCopilotEntry(entries, process.platform);
+  } catch {
+    return "";
+  }
+}
+
+function bundledCopilotPackageName() {
+  return `@github/copilot-${process.platform}-${process.arch}`;
+}
+
+function hasBundledCopilotCli(resolve = require.resolve) {
+  try {
+    resolve(`${bundledCopilotPackageName()}/index.js`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The SDK's platform package carries a ~260 MB copy of the Copilot CLI and is an
+// OPTIONAL dependency, so slim deployments (the VS Code extension's bundled
+// runtime) omit it. Without it the CopilotClient constructor throws outright.
+// Point the SDK at the CLI the user already has instead of shipping a duplicate.
+async function configureCopilotCliPath({
+  env = process.env,
+  hasBundled = hasBundledCopilotCli,
+  findExecutable = findSpawnableCopilotExecutable
+} = {}) {
+  const alreadyResolved = Boolean(env.COPILOT_CLI_PATH) || hasBundled();
+  // Either the caller pinned a CLI or the SDK ships its own copy, so nothing to do.
+  const executable = alreadyResolved ? "" : await findExecutable();
+  if (executable) {
+    env.COPILOT_CLI_PATH = executable;
+    return executable;
+  } else {
+    return "";
+  }
 }
 
 async function findClaudeExecutable(execFile = childProcess.execFile) {
@@ -8510,6 +8589,8 @@ module.exports = {
     clients,
     mimeTypes,
     securityHeaders,
+    EMBED_FRAME_ANCESTORS,
+    frameAncestorsSource,
     maxMessageSize,
     maxClients,
     maxSessions,
@@ -8778,6 +8859,11 @@ module.exports = {
     spawnCommandProcess,
     findCommandExecutable,
     findCopilotExecutable,
+    findSpawnableCopilotExecutable,
+    copilotLocatorCommand,
+    spawnableCopilotEntry,
+    hasBundledCopilotCli,
+    configureCopilotCliPath,
     findClaudeExecutable,
     loadClaudeSdk,
     claudeProviderCapabilities,

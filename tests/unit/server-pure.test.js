@@ -706,7 +706,6 @@ describe("setSecurityHeaders", () => {
     server.setSecurityHeaders(res);
     expect(res.headers["Content-Security-Policy"]).toContain("script-src 'self'");
     expect(res.headers["Content-Security-Policy"]).not.toContain("script-src 'self' 'unsafe-inline'");
-    expect(res.headers["Content-Security-Policy"]).toContain("frame-ancestors 'none'");
     expect(res.headers["X-Content-Type-Options"]).toBe("nosniff");
     expect(res.headers["Permissions-Policy"]).toContain("camera=()");
   });
@@ -722,8 +721,35 @@ describe("setSecurityHeaders", () => {
     const res = mockResponse();
     server.setSecurityHeaders(res, { allowSameOriginFrame: true });
     expect(res.headers["Content-Security-Policy"]).toContain("frame-ancestors 'self'");
-    expect(res.headers["Content-Security-Policy"]).not.toContain("frame-ancestors 'none'");
-    expect(res.headers["X-Frame-Options"]).toBe("SAMEORIGIN");
+  });
+});
+
+describe("embedded host framing", () => {
+  it("permits a VS Code webview ancestor but no web origin", () => {
+    const res = mockResponse();
+    server.setSecurityHeaders(res);
+    expect(res.headers["Content-Security-Policy"]).toContain(`frame-ancestors ${server.EMBED_FRAME_ANCESTORS}`);
+    // Only schemes are named, so an http(s) page still cannot frame the workbench.
+    expect(res.headers["Content-Security-Policy"]).not.toContain("frame-ancestors 'self'");
+  });
+
+  it("names the whole measured ancestor chain, not just the webview", () => {
+    // A webview nests inside the workbench window, and frame-ancestors is matched
+    // against every ancestor, so omitting vscode-file: blocks the frame outright.
+    expect(server.EMBED_FRAME_ANCESTORS).toBe("vscode-webview: vscode-file:");
+    expect(server.frameAncestorsSource(false)).toBe("vscode-webview: vscode-file:");
+    expect(server.frameAncestorsSource(true)).toBe("'self' vscode-webview: vscode-file:");
+  });
+
+  it("never sends X-Frame-Options, which cannot express a scheme", () => {
+    // A stale DENY would win in browsers that still honour it and the embedded
+    // workbench would never render.
+    expect(server.securityHeaders).not.toHaveProperty("X-Frame-Options");
+    for (const options of [undefined, { allowSameOriginFrame: true }]) {
+      const res = mockResponse();
+      server.setSecurityHeaders(res, options);
+      expect(res.headers["X-Frame-Options"]).toBeUndefined();
+    }
   });
 });
 

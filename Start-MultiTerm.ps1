@@ -11829,9 +11829,22 @@ namespace MultiTerm.PowerShellBridge
             response.Close();
         }
 
+        // A VS Code webview shell frames the workbench so the renderer stays same-origin
+        // with the bridge. frame-ancestors is matched against EVERY ancestor, and a webview
+        // nests inside the workbench window, so both schemes must be named. Measured chain:
+        // page <- vscode-webview://<id> <- vscode-webview://<id> <- vscode-file://vscode-app.
+        // "*" does not match these non-network schemes, so it is not a shortcut.
+        private const string EmbedFrameAncestors = "vscode-webview: vscode-file:";
+
+        // A Help page framed by an embedded workbench needs its own origin named too.
+        private static string FrameAncestorsSource(bool allowSameOriginFrame)
+        {
+            return allowSameOriginFrame ? "'self' " + EmbedFrameAncestors : EmbedFrameAncestors;
+        }
+
         private void ApplySecurityHeaders(HttpListenerResponse response, bool allowSameOriginFrame)
         {
-            string frameAncestors = allowSameOriginFrame ? "'self'" : "'none'";
+            string frameAncestors = FrameAncestorsSource(allowSameOriginFrame);
             response.Headers["Content-Security-Policy"] =
                 "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors " + frameAncestors
                 + "; form-action 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'"
@@ -11843,7 +11856,8 @@ namespace MultiTerm.PowerShellBridge
             response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()";
             response.Headers["Referrer-Policy"] = "no-referrer";
             response.Headers["X-Content-Type-Options"] = "nosniff";
-            response.Headers["X-Frame-Options"] = allowSameOriginFrame ? "SAMEORIGIN" : "DENY";
+            // X-Frame-Options is deliberately absent: no value of it can name a scheme, so
+            // a stale DENY would block the webview in browsers that still honour it.
         }
 
         private bool IsAllowedHttpHost(HttpListenerRequest request)

@@ -47,7 +47,18 @@ describe("installed bridge security", () => {
     expect(bridgeScript).toContain('response.Headers["Content-Security-Policy"]');
     expect(bridgeScript).toContain("script-src 'self'");
     expect(bridgeScript).not.toContain("script-src 'self' 'unsafe-inline'");
-    expect(bridgeScript).toContain('allowSameOriginFrame ? "SAMEORIGIN" : "DENY"');
     expect(bridgeScript).toContain('response.Headers["X-Content-Type-Options"] = "nosniff"');
+  });
+
+  it("permits a VS Code webview ancestor and never sends X-Frame-Options", () => {
+    // A webview nests inside the workbench window and frame-ancestors is matched against
+    // every ancestor, so both schemes must be named or the frame is blocked outright.
+    expect(bridgeScript).toContain('private const string EmbedFrameAncestors = "vscode-webview: vscode-file:";');
+    expect(bridgeScript).toContain("private static string FrameAncestorsSource(bool allowSameOriginFrame)");
+    expect(bridgeScript).toContain("allowSameOriginFrame ? \"'self' \" + EmbedFrameAncestors : EmbedFrameAncestors");
+    expect(bridgeScript).toContain('frame-ancestors " + frameAncestors');
+    // X-Frame-Options cannot name a scheme, so a stale DENY would block the webview
+    // in browsers that still honour it.
+    expect(bridgeScript).not.toContain('response.Headers["X-Frame-Options"]');
   });
 });
