@@ -1833,9 +1833,27 @@ if ($PSCmdlet.ShouldProcess($IssPath, "Compile installer with ISCC")) {
             & (Join-Path $RepoRoot 'scripts\gen-installer-art.ps1')
         }
 
+    # The VSIX stages a complete bridge runtime, so its inputs reach well outside
+    # integrations\vscode; fingerprinting only that folder would let a resumed
+    # release repackage a stale runtime after src, public, or a host binary
+    # changed. The staged runtime folder itself is an output, so it is not listed.
+    # Host binaries live under an excluded 'publish' directory and are therefore
+    # named as individual files, which are hashed directly.
     $null = Invoke-ReleaseStage -State $ReleaseState -StatePath $ReleaseStatePath -Name 'vscodeExtension' `
         -Description 'the Visual Studio Code extension build' `
-        -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @('integrations\vscode') -Extra @($Version)) `
+        -Fingerprint (Get-ReleaseInputFingerprint -RepositoryRoot $RepoRoot -Paths @(
+            'integrations\vscode\.vscodeignore', 'integrations\vscode\build-runtime.ps1',
+            'integrations\vscode\build.ps1', 'integrations\vscode\extension.js',
+            'integrations\vscode\launcher.js', 'integrations\vscode\package.json',
+            'integrations\vscode\README.md', 'integrations\vscode\embed',
+            'integrations\vscode\runtime-package-lock.json',
+            'src', 'public', 'Install-CopilotCli.ps1', 'package.json',
+            'lib\copilot-log-aggregator.js', 'lib\prompt-library-client.js', 'lib\runtime-diagnostics.js',
+            'lib\prompt-library-host\publish\x64\MultiTerm.PromptLibraryHost.exe',
+            'lib\prompt-library-host\publish\x64\MultiTerm.PromptLibraryHost.exe.config',
+            'lib\prompt-library-host\publish\x64\sqlite3mc.dll',
+            'THIRD-PARTY-NOTICES.txt', 'LICENSE'
+        ) -Extra @($Version)) `
         -Action {
             Write-Step "Building Visual Studio Code extension..."
             & (Join-Path $RepoRoot 'integrations\vscode\build.ps1') -Version $Version

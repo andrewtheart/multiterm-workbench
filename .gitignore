@@ -24,6 +24,8 @@ installer/Output/
 installer/explorer-integration/generated/
 installer/vscode-integration/generated/
 installer/visualstudio-integration/generated/
+# Bridge runtime staged into the VS Code extension at package time
+integrations/vscode/runtime/
 *.exp
 *.lib
 *.obj

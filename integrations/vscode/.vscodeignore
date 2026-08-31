@@ -1,4 +1,7 @@
 .gitignore
 build.ps1
+build-runtime.ps1
+runtime-package-lock.json
 node_modules/**
 *.vsix
+!runtime/**

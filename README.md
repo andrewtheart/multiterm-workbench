@@ -114,6 +114,12 @@ layouts from auto-fit grids to a free-form canvas.
       Opt into Windows 11 File Explorer, Visual Studio Code, or Visual Studio 2022/2026 integrations during setup. Open selected folders, files, projects, and solutions directly in a live MultiTerm instance, with clean upgrade and uninstall ownership.
     </td>
   </tr>
+  <tr>
+    <td align="center" colspan="3">
+      <h3>🆕 🧑‍💻 Run the whole workbench inside VS Code</h3>
+      Open MultiTerm as an editor tab, the bottom panel, or the sidebar — and move it between them while terminals keep running. One surface runs the workbench at a time, so sessions are never duplicated. The extension shares a MultiTerm bridge you already have open or starts its own bundled one, so it works with or without MultiTerm installed. <a href="#multiterm-inside-vs-code">See the walkthrough →</a>
+    </td>
+  </tr>
 </table>
 
 ### Attaching an existing terminal
@@ -593,6 +599,99 @@ Open the URL printed by the bridge, usually:
 ```text
 http://127.0.0.1:3177
 ```
+
+## MultiTerm inside VS Code
+
+The VS Code extension can host the complete workbench — every layout, page,
+broadcast, and Copilot feature — without leaving the editor. Start it from the
+MultiTerm icon in the Activity Bar, or run **MultiTerm: Open MultiTerm in VS
+Code** to open it as an editor tab. The existing "open this folder in MultiTerm"
+commands are unchanged and still launch the desktop app.
+
+<p align="center">
+  <img src="docs/images/vscode-embedded-sidebar.png" alt="MultiTerm running in the VS Code sidebar with three stacked terminals named build, tests, and workbench, each showing live PowerShell output" width="1100">
+</p>
+
+<p align="center"><em>The workbench in the sidebar, running three live PowerShell sessions.</em></p>
+
+### Three surfaces, one workbench
+
+MultiTerm can run in an **editor tab**, the **bottom panel**, or the
+**sidebar**, and you can move it between them at any time. Terminals keep
+running across a move — the sessions live in the bridge, not in the view.
+
+Only one surface runs the workbench at a time. Every live surface is a full
+renderer holding xterm buffers for every terminal, so duplicating them would
+multiply memory for no benefit. The inactive surfaces show a placeholder with a
+**Move MultiTerm here** button instead:
+
+<p align="center">
+  <img src="docs/images/vscode-embedded-editor-tab.png" alt="MultiTerm running in a VS Code editor tab with three terminals, while the sidebar and the bottom panel both show a placeholder reading MultiTerm is open in an editor tab and a Move MultiTerm here button" width="1100">
+</p>
+
+<p align="center"><em>Running in an editor tab. The sidebar and panel show the placeholder, so terminals are never duplicated.</em></p>
+
+Move it with the title-bar button on either view, or with the commands:
+
+| Command | Does |
+| --- | --- |
+| `MultiTerm: Open MultiTerm in VS Code` | Opens the workbench in an editor tab |
+| `MultiTerm: Move Workbench To...` | Pick the surface from a quick pick |
+| `MultiTerm: Move Workbench to Editor Tab` | Move to an editor tab |
+| `MultiTerm: Move Workbench to Panel` | Move to the bottom panel |
+| `MultiTerm: Move Workbench to Sidebar` | Move to the sidebar |
+| `MultiTerm: Focus Editor (leave MultiTerm)` | Return focus to the editor |
+| `MultiTerm: Choose Bridge...` | Attach to a different bridge |
+| `MultiTerm: Show Bridge Log` | Open the extension's bridge log |
+
+While focus is inside the terminal, VS Code's own keybindings do not fire, which
+is what makes MultiTerm's shortcuts work unchanged. **Focus Editor** is the
+keyboard route back out — bind it if you work mostly from the keyboard.
+
+### Which bridge it uses
+
+The extension prefers a bridge you already have running, so an embedded view and
+the desktop app can share the same terminals:
+
+1. `multiterm.bridgeUrl`, if you set one.
+2. Any running MultiTerm bridge it can attach to.
+3. Its own bundled Node bridge, started on a free loopback port.
+4. The installed MultiTerm bridge, when the bundled one cannot run here.
+
+The VSIX ships the bridge and its dependencies, so no separate MultiTerm
+installation is required — but that bundled bridge contains native modules built
+for one CPU architecture and one Node.js ABI, and it needs Node.js on `PATH`. The
+extension records that target, checks it before starting anything, and falls back
+to the installed MultiTerm bridge, which is PowerShell and C# and therefore needs
+no Node.js and runs on every architecture MultiTerm supports. If neither is
+possible it says exactly what to install rather than failing silently.
+
+A bridge released before embedded mode existed answers `/health` normally but
+refuses to be framed; rather than showing an empty view, the extension skips it,
+says so, and starts its own. Update that bridge to share one again.
+
+Terminals keep running when VS Code exits, matching MultiTerm's own **Keep
+terminals when closed** setting: the bridge stays registered and the next session
+reattaches to it. Set `multiterm.closeTerminalsOnExit` if you would rather the
+bridge and its sessions end with the editor.
+
+| Setting | Purpose |
+| --- | --- |
+| `multiterm.bridgeUrl` | Attach to a specific running bridge, such as `http://127.0.0.1:3177/` |
+| `multiterm.bridgePath` | Full path to a `src/server.js` to run instead of the bundled runtime |
+| `multiterm.nodePath` | Full path to `node.exe` for the bundled runtime when it is not on `PATH` |
+| `multiterm.closeTerminalsOnExit` | Close the bridge this extension started, and its terminals, when VS Code exits |
+| `multiterm.launcherPath` | Full path to `Start-MultiTerm.ps1` when MultiTerm is installed outside a standard location |
+
+### What differs from the desktop app
+
+The renderer is the same code, so terminals, layouts, pages, notes, automation,
+and the Copilot integrations behave identically. Native dialogs are routed to
+VS Code equivalents — clipboard reads and writes go through `vscode.env.clipboard`,
+and file and folder pickers open VS Code's own dialogs. Features that require the
+Electron shell degrade rather than fail: elevation ("Restart as Administrator"),
+fullscreen, minimize-to-tray, and the in-app updater are desktop-only, so use the
+desktop app when you need an administrator terminal.
 
 ## In-app help
 

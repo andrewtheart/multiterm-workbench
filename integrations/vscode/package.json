@@ -22,7 +22,9 @@
     "onCommand:multiterm.openContainingFolder",
     "onCommand:multiterm.openFolder",
     "onCommand:multiterm.openWorkspace",
-    "onCommand:multiterm.openTerminal"
+    "onCommand:multiterm.openTerminal",
+    "onCommand:multiterm.openEmbedded",
+    "onWebviewPanel:multiterm.workbench"
   ],
   "contributes": {
     "commands": [
@@ -49,8 +51,82 @@
         "title": "Open Configured Terminal in MultiTerm",
         "category": "MultiTerm",
         "icon": "$(terminal)"
+      },
+      {
+        "command": "multiterm.openEmbedded",
+        "title": "Open MultiTerm in VS Code",
+        "category": "MultiTerm",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "multiterm.focusEditor",
+        "title": "Focus Editor (leave MultiTerm)",
+        "category": "MultiTerm"
+      },
+      {
+        "command": "multiterm.showBridgeLog",
+        "title": "Show Bridge Log",
+        "category": "MultiTerm"
+      },
+      {
+        "command": "multiterm.chooseBridge",
+        "title": "Choose Bridge...",
+        "category": "MultiTerm"
+      },
+      {
+        "command": "multiterm.moveWorkbench",
+        "title": "Move Workbench To...",
+        "category": "MultiTerm",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "multiterm.moveToEditor",
+        "title": "Move Workbench to Editor Tab",
+        "category": "MultiTerm"
+      },
+      {
+        "command": "multiterm.moveToPanel",
+        "title": "Move Workbench to Panel",
+        "category": "MultiTerm"
+      },
+      {
+        "command": "multiterm.moveToSidebar",
+        "title": "Move Workbench to Sidebar",
+        "category": "MultiTerm"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "multitermSidebar",
+          "title": "MultiTerm",
+          "icon": "$(terminal)"
+        }
+      ],
+      "panel": [
+        {
+          "id": "multitermPanel",
+          "title": "MultiTerm",
+          "icon": "$(terminal)"
+        }
+      ]
+    },
+    "views": {
+      "multitermSidebar": [
+        {
+          "id": "multiterm.sidebarView",
+          "name": "Workbench",
+          "type": "webview"
+        }
+      ],
+      "multitermPanel": [
+        {
+          "id": "multiterm.panelView",
+          "name": "Workbench",
+          "type": "webview"
+        }
+      ]
+    },
     "configuration": {
       "title": "MultiTerm Workbench",
       "properties": {
@@ -59,6 +135,30 @@
           "default": "",
           "scope": "machine",
           "description": "Optional full path to Start-MultiTerm.ps1. Leave empty to find a standard MultiTerm installation automatically."
+        },
+        "multiterm.bridgeUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional loopback URL of an already-running MultiTerm bridge to attach to, such as http://127.0.0.1:3177/. Leave empty to attach to any running bridge, or start one."
+        },
+        "multiterm.bridgePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional full path to the bridge entry point (src/server.js). Leave empty to use the bundled runtime or an installed MultiTerm."
+        },
+        "multiterm.nodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional full path to node.exe for the bundled bridge runtime. Leave empty to search PATH and the standard Node.js install locations. Ignored when the installed MultiTerm bridge is used, because that bridge does not need Node.js."
+        },
+        "multiterm.closeTerminalsOnExit": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "description": "Close the bridge this extension started, and all of its terminal sessions, when VS Code exits or the extension is reloaded. Off by default so terminals keep running and the next session reattaches to them."
         },
         "multiterm.terminalTitle": {
           "type": "string",
@@ -119,6 +219,16 @@
           "command": "multiterm.openWorkspace",
           "when": "isWindows && view == workbench.explorer.fileView && workspaceFolderCount > 0",
           "group": "navigation@90"
+        },
+        {
+          "command": "multiterm.moveWorkbench",
+          "when": "view == multiterm.panelView",
+          "group": "navigation@10"
+        },
+        {
+          "command": "multiterm.moveWorkbench",
+          "when": "view == multiterm.sidebarView",
+          "group": "navigation@10"
         }
       ],
       "commandPalette": [

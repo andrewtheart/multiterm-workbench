@@ -8,12 +8,25 @@
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version = "",
-    [string]$OutputDirectory = ""
+    [string]$OutputDirectory = "",
+    [switch]$SkipRuntime
 )
 
 $ErrorActionPreference = "Stop"
 $extensionRoot = $PSScriptRoot
 $repositoryRoot = Split-Path (Split-Path $extensionRoot -Parent) -Parent
+
+# The embedded workbench needs a bridge to run. Staging one makes the VSIX
+# self-contained; -SkipRuntime produces the launcher-only package, which still
+# works when MultiTerm is installed separately.
+if (-not $SkipRuntime) {
+    & (Join-Path $extensionRoot "build-runtime.ps1") -Clean
+    if ($LASTEXITCODE -ne 0) { throw "Staging the bridge runtime failed with exit code $LASTEXITCODE." }
+} else {
+    $staged = Join-Path $extensionRoot "runtime"
+    if (Test-Path $staged) { Remove-Item $staged -Recurse -Force }
+}
+
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repositoryRoot "installer\vscode-integration\generated"
 }

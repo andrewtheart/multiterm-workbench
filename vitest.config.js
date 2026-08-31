@@ -38,11 +38,17 @@ module.exports = defineConfig({
         "src/renderer-routing.js",
         "lib/runtime-diagnostics.js",
         "public/automations.js",
+        "public/embed-host.js",
         "public/git-worktrees.js",
         "public/syntax-highlight.js",
         "public/terminal-messaging.js",
         "public/bridge-chooser.js",
-        "public/help-theme.js"
+        "public/help-theme.js",
+        "integrations/vscode/extension.js",
+        "integrations/vscode/embed/bridge-resolver.js",
+        "integrations/vscode/embed/host-rpc.js",
+        "integrations/vscode/embed/view-host.js",
+        "integrations/vscode/embed/webview-shell.js"
       ],
       // public/app.js is a browser renderer script exercised by Playwright E2E.
       all: true,

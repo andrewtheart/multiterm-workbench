@@ -9,6 +9,7 @@
 const fs = require("node:fs");
 const vscode = require("vscode");
 const { findLauncher, folderForResource, launchFolder } = require("./launcher");
+const { MultiTermViewHost, VIEW_TYPE } = require("./embed/view-host");
 
 function configuredLauncherPath() {
   return vscode.workspace.getConfiguration("multiterm").get("launcherPath", "").trim();
@@ -112,12 +113,58 @@ async function openInMultiTerm(resource, forceWorkspace = false, overrides = {})
 }
 
 function activate(context) {
+  const output = vscode.window.createOutputChannel("MultiTerm");
+  const viewHost = new MultiTermViewHost(context, output);
+  context.subscriptions.push(output, { dispose: () => viewHost.dispose() });
+
+  async function openEmbedded() {
+    try {
+      await viewHost.open();
+    } catch (error) {
+      output.show(true);
+      vscode.window.showErrorMessage(`Could not open MultiTerm in VS Code: ${error.message}`);
+    }
+  }
+
+  async function moveWorkbench(kind) {
+    try {
+      await (kind ? viewHost.moveTo(kind) : viewHost.chooseSurface());
+    } catch (error) {
+      output.show(true);
+      vscode.window.showErrorMessage(`Could not move MultiTerm: ${error.message}`);
+    }
+  }
+
   context.subscriptions.push(
     vscode.commands.registerCommand("multiterm.openContainingFolder", (resource) => openInMultiTerm(resource)),
     vscode.commands.registerCommand("multiterm.openFolder", (resource) => openInMultiTerm(resource)),
     vscode.commands.registerCommand("multiterm.openWorkspace", (overrides = {}) => openInMultiTerm(null, true, overrides)),
-    vscode.commands.registerCommand("multiterm.openTerminal", (overrides = {}) => openInMultiTerm(null, true, overrides))
+    vscode.commands.registerCommand("multiterm.openTerminal", (overrides = {}) => openInMultiTerm(null, true, overrides)),
+    vscode.commands.registerCommand("multiterm.openEmbedded", openEmbedded),
+    vscode.commands.registerCommand("multiterm.moveWorkbench", () => moveWorkbench(null)),
+    vscode.commands.registerCommand("multiterm.moveToEditor", () => moveWorkbench("editor")),
+    vscode.commands.registerCommand("multiterm.moveToPanel", () => moveWorkbench("panel")),
+    vscode.commands.registerCommand("multiterm.moveToSidebar", () => moveWorkbench("sidebar")),
+    vscode.commands.registerCommand("multiterm.chooseBridge", () => viewHost.chooseBridge()),
+    // While focus is inside the terminal frame, VS Code's own keybindings never
+    // fire, so this is the only keyboard route back to the editor.
+    vscode.commands.registerCommand("multiterm.focusEditor", () => {
+      vscode.commands.executeCommand("workbench.action.focusActiveEditorGroup");
+    }),
+    vscode.commands.registerCommand("multiterm.showBridgeLog", () => output.show(true))
   );
+
+  for (const [kind, viewId] of [["panel", "multiterm.panelView"], ["sidebar", "multiterm.sidebarView"]]) {
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(viewId, {
+      resolveWebviewView: (webviewView) => viewHost.resolveView(kind, webviewView)
+    }, { webviewOptions: { retainContextWhenHidden: true } }));
+  }
+
+  if (vscode.window.registerWebviewPanelSerializer) {
+    context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
+      deserializeWebviewPanel: (panel) => viewHost.restorePanel(panel)
+    }));
+  }
 }
 
 function deactivate() {}
