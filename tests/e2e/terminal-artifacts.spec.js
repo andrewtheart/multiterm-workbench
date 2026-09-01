@@ -13,8 +13,12 @@ const { test, expect } = require("../support/renderer-coverage");
 async function reset(page, count = 1, { synthetic = false } = {}) {
   await page.goto("/");
   await expect(page.locator("#statusConn")).toHaveText("Connected");
-  await page.evaluate(() => closeAllTerminals());
-  await expect(page.locator(".terminal-pane")).toHaveCount(0);
+  // The renderer can seat its welcome terminal after a single close, so the
+  // close is repeated until the workspace is actually empty.
+  await expect.poll(async () => {
+    await page.evaluate(() => closeAllTerminals());
+    return page.locator(".terminal-pane").count();
+  }, { timeout: 30000 }).toBe(0);
   await page.evaluate(() => {
     localStorage.removeItem("multiterm.terminalArtifacts");
     state.terminalArtifacts = emptyTerminalArtifacts();
