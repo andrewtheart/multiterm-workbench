@@ -665,6 +665,10 @@
               <span title="How long MultiTerm waits for the first local Copilot or Claude session list. Editor history continues loading separately in the background.">Session list timeout (s)</span>
               <input id="copilotSessionListTimeoutSeconds" type="number" min="5" max="300" step="5" inputmode="numeric">
             </label>
+            <label class="control-row">
+              <span title="How many terminal notes each session card in the resume list shows before its Show more control, and how many more each click reveals.">Session notes per page</span>
+              <input id="copilotSessionNotePageSize" type="number" min="1" max="50" step="1" inputmode="numeric">
+            </label>
             <label class="toggle-row">
               <input id="bellNotify" type="checkbox">
               <span>Bell notifications</span>
@@ -1564,7 +1568,10 @@
           <p id="gitReviewPublishStatus" class="git-review-commit-hint" role="status"></p>
           <div id="gitReviewMergeRow" class="git-review-publish-row" hidden>
             <label for="gitReviewMergeTarget">Merge into</label>
-            <select id="gitReviewMergeTarget" aria-describedby="gitReviewMergePreview"></select>
+            <input id="gitReviewMergeTarget" class="git-review-merge-target" type="text"
+              list="gitReviewMergeTargetList" spellcheck="false" autocomplete="off"
+              placeholder="Type to filter branches" aria-describedby="gitReviewMergePreview">
+            <datalist id="gitReviewMergeTargetList"></datalist>
             <button id="gitReviewMergeLocal" class="primary-action" type="button">Merge locally</button>
             <button id="gitReviewPullRequest" class="secondary-action" type="button">Create pull request</button>
           </div>

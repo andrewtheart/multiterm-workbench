@@ -86,6 +86,7 @@ const defaultSettings = {
   copilotRemoteSessions: false,
   copilotCwdQueryTimeoutSeconds: 180,
   copilotSessionListTimeoutSeconds: 20,
+  copilotSessionNotePageSize: 5,
   copilotSessionSearchContextKb: 1024,
   copilotTitleContext: "default",
   copilotTitleContextKb: 16,
@@ -174,12 +175,13 @@ const HEADER_BACKGROUND_CUSTOM_LIMIT = 6;
 const ADD_TERMINAL_BUTTON_DEFAULT_COLOR = "#1677FF";
 const addTerminalColorState = { hue: 215, saturation: 91, value: 100 };
 let headerBackgroundTerminalId = null;
+let headerBackgroundPageGroupId = null;
 let headerBackgroundReturnFocus = null;
 let headerBackgroundDraft = null;
 let headerBackgroundCloseTimer = 0;
 let headerBackgroundOpen = false;
 let headerBackgroundReady = false;
-let headerBackgroundFlyoutId = null;
+let headerBackgroundFlyoutTarget = null;
 let headerBackgroundFlyoutAnchor = null;
 let terminalAppearanceTab = "terminal";
 let terminalAppearanceScope = "terminal";
@@ -210,6 +212,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotLogInitialTailKb: "diagnostics logs github copilot cli initial tail kilobytes existing content zero follow new lines",
   copilotLogViewerEnabled: "diagnostics logs github copilot cli viewer include opt in launch directory",
   copilotSessionListTimeoutSeconds: "ai assistant resume session list listing source bridge timeout seconds copilot claude",
+  copilotSessionNotePageSize: "ai assistant resume session notes page size show more batch count rows per click card copilot claude",
   copilotSessionSearchContextKb: "ai assistant session history semantic search context transcript catalog budget copilot",
   copilotCwdQueryTimeoutSeconds: "ai assistant resume working directory cwd query ask session timeout seconds hidden terminal",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
@@ -736,6 +739,7 @@ const elements = {
   gitReviewPublishStatus: document.querySelector("#gitReviewPublishStatus"),
   gitReviewMergeRow: document.querySelector("#gitReviewMergeRow"),
   gitReviewMergeTarget: document.querySelector("#gitReviewMergeTarget"),
+  gitReviewMergeTargetList: document.querySelector("#gitReviewMergeTargetList"),
   gitReviewMergeLocal: document.querySelector("#gitReviewMergeLocal"),
   gitReviewPullRequest: document.querySelector("#gitReviewPullRequest"),
   gitReviewMergePreview: document.querySelector("#gitReviewMergePreview"),
@@ -807,6 +811,7 @@ const elements = {
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
   copilotCwdQueryTimeoutSeconds: document.querySelector("#copilotCwdQueryTimeoutSeconds"),
   copilotSessionListTimeoutSeconds: document.querySelector("#copilotSessionListTimeoutSeconds"),
+  copilotSessionNotePageSize: document.querySelector("#copilotSessionNotePageSize"),
   copilotRemoteKeepAlive: document.querySelector("#copilotRemoteKeepAlive"),
   copilotRemoteSessions: document.querySelector("#copilotRemoteSessions"),
   copilotRemoteStatus: document.querySelector("#copilotRemoteStatus"),
@@ -1963,6 +1968,10 @@ function bindControls() {
     state.settings.copilotSessionListTimeoutSeconds,
     elements.copilotSessionListTimeoutSeconds
   );
+  state.settings.copilotSessionNotePageSize = clampCopilotSessionNotePageSize(
+    state.settings.copilotSessionNotePageSize,
+    elements.copilotSessionNotePageSize
+  );
   state.settings.copilotRemoteKeepAlive = normalizeCopilotKeepAlive(state.settings.copilotRemoteKeepAlive);
   elements.copilotRemoteSessions.checked = Boolean(state.settings.copilotRemoteSessions);
   elements.copilotRemoteKeepAlive.value = state.settings.copilotRemoteKeepAlive;
@@ -2235,6 +2244,7 @@ function bindControls() {
   bindSetting(elements.copilotImportContextKb, "copilotImportContextKb", "change", clampCopilotImportContextKb);
   bindSetting(elements.copilotCwdQueryTimeoutSeconds, "copilotCwdQueryTimeoutSeconds", "change", clampCopilotCwdQueryTimeoutSeconds);
   bindSetting(elements.copilotSessionListTimeoutSeconds, "copilotSessionListTimeoutSeconds", "change", clampCopilotSessionListTimeoutSeconds);
+  bindSetting(elements.copilotSessionNotePageSize, "copilotSessionNotePageSize", "change", clampCopilotSessionNotePageSize);
   bindSetting(elements.copilotSessionSearchContextKb, "copilotSessionSearchContextKb", "change", clampCopilotSessionSearchContextKb);
   bindSetting(elements.aiSessionProvider, "aiSessionProvider", "change", normalizeAiProviderId);
   bindSetting(elements.aiSessionYolo, "aiSessionYolo", "change", (_, element) => element.checked);
@@ -2568,6 +2578,7 @@ const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
 const COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS = { min: 64, max: 16384, fallback: 1024 };
 const COPILOT_CWD_QUERY_TIMEOUT_SECONDS_BOUNDS = { min: 30, max: 900, fallback: 180 };
 const COPILOT_SESSION_LIST_TIMEOUT_SECONDS_BOUNDS = { min: 5, max: 300, fallback: 20 };
+const COPILOT_SESSION_NOTE_PAGE_SIZE_BOUNDS = { min: 1, max: 50, fallback: 5 };
 const COPILOT_TITLE_CONTEXT_KB_BOUNDS = { min: 4, max: 24, fallback: 16 };
 const COPILOT_TITLE_WORD_BOUNDS = { min: 1, max: 20 };
 const TITLE_SUGGESTION_HISTORY_BOUNDS = { min: 25, max: TITLE_SUGGESTION_HISTORY_MAX_LIMIT, fallback: 500 };
@@ -2758,6 +2769,14 @@ function clampCopilotCwdQueryTimeoutSeconds(value, element = elements.copilotCwd
 
 function clampCopilotSessionListTimeoutSeconds(value, element = elements.copilotSessionListTimeoutSeconds) {
   return clampSettingNumber(value, element, COPILOT_SESSION_LIST_TIMEOUT_SECONDS_BOUNDS);
+}
+
+function clampCopilotSessionNotePageSize(value, element = elements.copilotSessionNotePageSize) {
+  return clampSettingNumber(value, element, COPILOT_SESSION_NOTE_PAGE_SIZE_BOUNDS);
+}
+
+function copilotSessionNotePageSize() {
+  return clampCopilotSessionNotePageSize(state.settings.copilotSessionNotePageSize);
 }
 
 function copilotSessionListTimeoutMs() {
@@ -7712,7 +7731,7 @@ function disposeTerminal(terminal) {
   failAutomationWorkflowTasksForTerminal(terminal, "Terminal closed before the automation step completed");
   if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
   if (terminalNotesFlyoutId === id) closeTerminalNotesFlyout();
-  if (headerBackgroundFlyoutId === id) closeHeaderBackgroundFlyout();
+  if (headerBackgroundFlyoutTarget?.kind === "terminal" && headerBackgroundFlyoutTarget.id === id) closeHeaderBackgroundFlyout();
   if (headerBackgroundTerminalId === id) closeHeaderBackgroundEditor({ restoreFocus: false });
   if (pendingHeaderActionShortcut?.terminalId === id) closeHeaderActionShortcutFlyout({ restoreFocus: false });
   if (state.snap?.id === id) {
@@ -12575,7 +12594,7 @@ const copilotResume = {
   terminalId: null,
   view: "list",
   yolo: true,
-  expandedNotes: new Set(),
+  visibleNotes: new Map(),
   filters: { origin: "multiterm", source: "cli", project: "all", updated: "any" },
   visibleLimit: COPILOT_SESSION_PAGE_SIZE
 };
@@ -12831,15 +12850,18 @@ function buildCopilotSessionNotes(session) {
 
   const wrap = document.createElement("span");
   wrap.className = "copilot-session-notes";
-  const expanded = copilotResume.expandedNotes.has(session.key);
+  // One counter drives both stages: reveal notes a page at a time, then reveal
+  // the full text of the ones already on screen.
+  const pageSize = copilotSessionNotePageSize();
+  const revealed = copilotResume.visibleNotes.get(session.key) || pageSize;
+  const shownEntries = entries.slice(0, revealed);
+  const hidden = entries.length - shownEntries.length;
+  // Full text is an explicit second step, so a list shorter than one page still
+  // shows a preview and its own control rather than expanding on sight.
+  const fullText = revealed > Math.max(entries.length, pageSize);
 
-  let used = 0;
-  let shown = 0;
   let truncated = false;
-  for (const entry of entries) {
-    const remaining = COPILOT_SESSION_NOTE_PREVIEW_CHARS - used;
-    if (!expanded && shown > 0 && remaining <= 0) break;
-
+  for (const entry of shownEntries) {
     const block = document.createElement("span");
     block.className = `copilot-session-note${entry.live ? "" : " is-recovered"}`;
 
@@ -12851,8 +12873,8 @@ function buildCopilotSessionNotes(session) {
 
     const text = document.createElement("span");
     text.className = "copilot-session-note-text";
-    if (!expanded && entry.text.length > remaining) {
-      text.textContent = `${entry.text.slice(0, Math.max(60, remaining)).trimEnd()}\u2026`;
+    if (!fullText && entry.text.length > COPILOT_SESSION_NOTE_PREVIEW_CHARS) {
+      text.textContent = `${entry.text.slice(0, COPILOT_SESSION_NOTE_PREVIEW_CHARS).trimEnd()}\u2026`;
       truncated = true;
     } else {
       text.textContent = entry.text;
@@ -12860,22 +12882,23 @@ function buildCopilotSessionNotes(session) {
 
     block.append(meta, text);
     wrap.append(block);
-    used += entry.text.length;
-    shown += 1;
   }
 
-  const hidden = entries.length - shown;
-  if (!expanded && (hidden > 0 || truncated)) {
+  if (hidden > 0 || truncated) {
+    // The count is what this click reveals, not the total still hidden, so the
+    // label never promises more than it delivers.
+    const next = Math.min(hidden, pageSize);
     const more = document.createElement("span");
     more.className = "copilot-session-notes-more";
     more.dataset.notesMore = session.key;
     more.setAttribute("role", "button");
-    more.textContent = hidden > 0 ? `Show ${hidden} more note${hidden === 1 ? "" : "s"}\u2026` : "Show more\u2026";
+    more.textContent = hidden > 0 ? `Show ${next} more note${next === 1 ? "" : "s"}\u2026` : "Show more\u2026";
     wrap.append(more);
-  } else if (expanded) {
+  } else if (revealed > pageSize) {
     const less = document.createElement("span");
     less.className = "copilot-session-notes-more";
     less.dataset.notesMore = session.key;
+    less.dataset.notesLess = "true";
     less.setAttribute("role", "button");
     less.textContent = "Show less";
     wrap.append(less);
@@ -13689,8 +13712,9 @@ function renderCopilotSessions() {
         event.preventDefault();
         event.stopPropagation();
         const key = toggle.dataset.notesMore;
-        if (copilotResume.expandedNotes.has(key)) copilotResume.expandedNotes.delete(key);
-        else copilotResume.expandedNotes.add(key);
+        const pageSize = copilotSessionNotePageSize();
+        if (toggle.dataset.notesLess === "true") copilotResume.visibleNotes.delete(key);
+        else copilotResume.visibleNotes.set(key, (copilotResume.visibleNotes.get(key) || pageSize) + pageSize);
         renderCopilotSessions();
         return;
       }
@@ -15654,6 +15678,19 @@ function composerCursorIndex(terminal, region) {
   return composerIndexAt(region, buffer.cursorY, buffer.cursorX);
 }
 
+// A mouse selection belongs to xterm, which Copilot never sees, so map it onto
+// composer indices before anything can act on it.
+function composerSelectionFromViewport(terminal, region) {
+  const position = terminal.term.getSelectionPosition() || terminal.selectionSnapshotPosition;
+  if (!position) return null;
+  const { viewportY } = terminal.term.buffer.active;
+  const anchor = composerIndexAt(region, position.start.y - viewportY, position.start.x);
+  const head = composerIndexAt(region, position.end.y - viewportY, position.end.x);
+  // Anything reaching outside the composer is ordinary output, not editable text.
+  if (anchor < 0 || head <= anchor) return null;
+  return { mode: "range", anchor, head };
+}
+
 function composerSelectionRange(selection) {
   return {
     from: Math.min(selection.anchor, selection.head),
@@ -15732,9 +15769,17 @@ function deleteComposerSelection(terminal, region, selection) {
   // first; the composer clamps there and backspaces then remove a known range.
   const data = selection.mode === "all"
     ? "\u001b[C".repeat(total) + "\u007f".repeat(length)
-    : cursor === from
-      ? "\u001b[3~".repeat(length)
-      : "\u007f".repeat(length);
+    : selection.mode === "range"
+      // A mouse range sits anywhere, so walk the cursor to its end and delete back.
+      ? (cursor < 0
+        ? ""
+        : "\u001b[C".repeat(Math.max(to - cursor, 0))
+          + "\u001b[D".repeat(Math.max(cursor - to, 0))
+          + "\u007f".repeat(length))
+      : cursor === from
+        ? "\u001b[3~".repeat(length)
+        : "\u007f".repeat(length);
+  if (!data) return false;
   sendBridge({ type: "input", id: terminal.id, data });
   return true;
 }
@@ -15799,6 +15844,20 @@ function handleComposerSelectionKey(terminal, event) {
     event.stopPropagation();
     deleteComposerSelection(terminal, region, selection);
     return true;
+  }
+
+  // Typing over a selection replaces it, the same as any other text field. The
+  // character itself is left to xterm: this handler runs in the capture phase,
+  // so the deletion reaches the PTY first. The selection test comes first
+  // because locating the composer rescans the buffer.
+  if (plain && event.key.length === 1
+      && (selection || terminal.term.hasSelection() || terminal.selectionSnapshot)) {
+    const region = copilotComposerRegion(terminal);
+    const replacing = region && (selection || composerSelectionFromViewport(terminal, region));
+    if (replacing) {
+      deleteComposerSelection(terminal, region, replacing);
+      return false;
+    }
   }
 
   if (!["Shift", "Control", "Alt", "Meta"].includes(event.key)) clearComposerSelection(terminal);
@@ -17836,6 +17895,9 @@ const worktreeReview = {
   busy: false,
   pushCommand: "",
   emptyMessage: "",
+  // Branches the merge box will accept, so a typed target is never guessed at.
+  mergeBranches: [],
+  mergePreviewTimer: 0,
   // Each request that owns the diff pane takes a ticket; a slower earlier one
   // must not overwrite the status a newer request has already written.
   viewSequence: 0,
@@ -18668,6 +18730,7 @@ async function toggleGitReviewMergeRow() {
   const showing = !elements.gitReviewMergeRow.hidden;
   elements.gitReviewMergeRow.hidden = showing;
   if (showing) {
+    clearTimeout(worktreeReview.mergePreviewTimer);
     elements.gitReviewMergePreview.textContent = "";
     return;
   }
@@ -18677,6 +18740,11 @@ async function toggleGitReviewMergeRow() {
 async function refreshGitReviewMergeTargets() {
   if (!gitReviewStagingActive()) return;
   const generation = worktreeReview.generation;
+  // A stale list would let a previous repository's branch stay mergeable while
+  // this one is still loading.
+  worktreeReview.mergeBranches = [];
+  elements.gitReviewMergeLocal.disabled = true;
+  elements.gitReviewPullRequest.disabled = true;
   elements.gitReviewMergePreview.textContent = "Loading branches...";
   const response = await requestBridge({
     type: "gitBranches",
@@ -18690,26 +18758,54 @@ async function refreshGitReviewMergeTargets() {
     return;
   }
   const current = response.currentBranch;
-  const select = elements.gitReviewMergeTarget;
-  select.textContent = "";
-  for (const branch of response.branches.filter((name) => name !== current)) {
+  const branches = response.branches.filter((name) => name !== current);
+  worktreeReview.mergeBranches = branches;
+  const list = elements.gitReviewMergeTargetList;
+  list.textContent = "";
+  for (const branch of branches) {
     const option = document.createElement("option");
     option.value = branch;
-    option.textContent = branch;
-    select.append(option);
+    list.append(option);
   }
-  if (!select.options.length) {
+  if (!branches.length) {
+    elements.gitReviewMergeTarget.value = "";
+    elements.gitReviewMergeTarget.disabled = true;
     elements.gitReviewMergePreview.textContent = "This repository has no other branch to merge into.";
     delete elements.gitReviewMergePreview.dataset.tone;
     elements.gitReviewMergeLocal.disabled = true;
     elements.gitReviewPullRequest.disabled = true;
     return;
   }
+  elements.gitReviewMergeTarget.disabled = false;
   elements.gitReviewMergeLocal.disabled = false;
   elements.gitReviewPullRequest.disabled = false;
   const suggested = response.suggestedTarget || worktreeReview.staging.parentBranch || "";
-  if (suggested && [...select.options].some((option) => option.value === suggested)) select.value = suggested;
+  elements.gitReviewMergeTarget.value = branches.includes(suggested) ? suggested : branches[0];
   await refreshGitReviewMergePreview();
+}
+
+// Only a name the branch list actually holds may reach Git, so a half-typed
+// filter cannot be merged or opened as a pull request.
+function gitReviewMergeTargetBranch() {
+  const value = elements.gitReviewMergeTarget.value.trim();
+  return worktreeReview.mergeBranches.includes(value) ? value : "";
+}
+
+// Typing filters the list, so the merge probe waits for a pause rather than
+// running for every keystroke.
+function scheduleGitReviewMergePreview() {
+  clearTimeout(worktreeReview.mergePreviewTimer);
+  const target = gitReviewMergeTargetBranch();
+  elements.gitReviewMergeLocal.disabled = !target;
+  elements.gitReviewPullRequest.disabled = !target;
+  if (!target) {
+    delete elements.gitReviewMergePreview.dataset.tone;
+    elements.gitReviewMergePreview.textContent = worktreeReview.mergeBranches.length
+      ? "Pick a branch from the list."
+      : "";
+    return;
+  }
+  worktreeReview.mergePreviewTimer = setTimeout(refreshGitReviewMergePreview, 250);
 }
 
 const GIT_MERGE_OUTCOMES = Object.freeze({
@@ -18722,7 +18818,7 @@ const GIT_MERGE_OUTCOMES = Object.freeze({
 
 async function refreshGitReviewMergePreview() {
   if (!gitReviewStagingActive()) return;
-  const target = elements.gitReviewMergeTarget.value;
+  const target = gitReviewMergeTargetBranch();
   const source = worktreeReview.status?.branch || worktreeReview.staging.branch;
   if (!target || !source) return;
   const generation = worktreeReview.generation;
@@ -18750,7 +18846,7 @@ async function refreshGitReviewMergePreview() {
 
 async function mergeGitReviewLocally() {
   if (!gitReviewStagingActive() || worktreeReview.busy) return;
-  const target = elements.gitReviewMergeTarget.value;
+  const target = gitReviewMergeTargetBranch();
   const source = worktreeReview.status?.branch || worktreeReview.staging.branch;
   if (!target || !source) return;
   const generation = worktreeReview.generation;
@@ -18788,7 +18884,7 @@ async function mergeGitReviewLocally() {
 
 async function finishGitReviewMerge() {
   if (!worktreeMerge.sessionId) return;
-  const target = elements.gitReviewMergeTarget.value;
+  const target = gitReviewMergeTargetBranch();
   const source = worktreeReview.status?.branch || worktreeReview.staging?.branch;
   const generation = worktreeReview.generation;
   setGitReviewBusy(true);
@@ -18818,7 +18914,7 @@ async function abortGitReviewMerge() {
 
 async function createGitReviewPullRequest() {
   if (!gitReviewStagingActive() || worktreeReview.busy) return;
-  const target = elements.gitReviewMergeTarget.value;
+  const target = gitReviewMergeTargetBranch();
   const source = worktreeReview.status?.branch || worktreeReview.staging.branch;
   if (!target || !source) return;
   const generation = worktreeReview.generation;
@@ -18851,7 +18947,8 @@ function bindGitReviewPublish() {
   elements.gitReviewPush.addEventListener("click", pushGitReviewBranch);
   elements.gitReviewPushTerminal.addEventListener("click", runGitReviewPushInTerminal);
   elements.gitReviewMergeToggle.addEventListener("click", toggleGitReviewMergeRow);
-  elements.gitReviewMergeTarget.addEventListener("change", refreshGitReviewMergePreview);
+  elements.gitReviewMergeTarget.addEventListener("input", scheduleGitReviewMergePreview);
+  elements.gitReviewMergeTarget.addEventListener("change", scheduleGitReviewMergePreview);
   elements.gitReviewMergeLocal.addEventListener("click", mergeGitReviewLocally);
   elements.gitReviewPullRequest.addEventListener("click", createGitReviewPullRequest);
 }
@@ -20456,6 +20553,9 @@ function loadPageGroups(pages) {
         id,
         name: String(group.name || "Group"),
         collapsed: group.collapsed === true,
+        ...(normalizeHeaderBackground(group.headerBackground)
+          ? { headerBackground: normalizeHeaderBackground(group.headerBackground) }
+          : {}),
         ...(keepEmpty ? { keepEmpty: true } : {})
       });
     }
@@ -21002,6 +21102,17 @@ function setPageGroupCollapsed(id, collapsed) {
   const group = pageGroupById(id);
   if (!group || group.collapsed === collapsed) return false;
   group.collapsed = collapsed;
+  savePages();
+  renderPager();
+  return true;
+}
+
+function setPageGroupHeaderBackground(id, background) {
+  const group = pageGroupById(id);
+  if (!group) return false;
+  const next = cloneHeaderBackground(background);
+  if (next) group.headerBackground = next;
+  else delete group.headerBackground;
   savePages();
   renderPager();
   return true;
@@ -21738,7 +21849,25 @@ function appendPageGroupBand(list, group) {
     empty.textContent = "Drop pages here";
     chips.append(empty);
   }
-  band.append(header, chips);
+
+  // A separate control rather than part of the header, because the header is
+  // itself a button and buttons cannot nest.
+  const color = document.createElement("button");
+  color.type = "button";
+  color.className = "pager-group-color";
+  color.dataset.groupColor = group.id;
+  color.title = `Colour for ${group.name}`;
+  color.setAttribute("aria-label", `Colour for ${group.name}`);
+  color.setAttribute("aria-haspopup", "dialog");
+  color.setAttribute("aria-expanded", "false");
+  color.innerHTML = '<i data-lucide="palette"></i>';
+
+  const background = headerBackgroundCss(group.headerBackground);
+  band.classList.toggle("has-color", Boolean(background));
+  if (background) band.style.setProperty("--pager-group-color", background);
+  else band.style.removeProperty("--pager-group-color");
+
+  band.append(header, color, chips);
   list.append(band);
   return chips;
 }
@@ -21944,6 +22073,13 @@ function bindPager() {
       event.stopPropagation();
       if (close.getAttribute("aria-disabled") === "true") return;
       requestPageClose(close.dataset.pageClose);
+      return;
+    }
+    const groupColor = event.target.closest("[data-group-color]");
+    if (groupColor) {
+      event.stopPropagation();
+      const group = pageGroupById(groupColor.dataset.groupColor);
+      if (group) togglePageGroupHeaderBackgroundFlyout(group, groupColor);
       return;
     }
     const groupHeader = event.target.closest("[data-group-toggle]");
@@ -22333,6 +22469,10 @@ function syncControlsFromSettings() {
     state.settings.copilotSessionListTimeoutSeconds,
     elements.copilotSessionListTimeoutSeconds
   );
+  state.settings.copilotSessionNotePageSize = clampCopilotSessionNotePageSize(
+    state.settings.copilotSessionNotePageSize,
+    elements.copilotSessionNotePageSize
+  );
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
   elements.restoreSession.checked = state.settings.restoreSession;
@@ -22698,7 +22838,10 @@ function loadTerminalAppearanceDraft(profile = null) {
   setTerminalAppearanceColorControls("foreground", terminalAppearanceDraft.foreground);
   elements.terminalAppearanceFontFamily.value = terminalAppearanceDraft.fontFamily;
   elements.terminalAppearanceFontFamily.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
-  headerBackgroundDraft = cloneHeaderBackground(normalizedProfile?.headerBackground || (
+  const groupBackground = terminalAppearanceEditorContext === "pageGroup"
+    ? pageGroupById(headerBackgroundPageGroupId)?.headerBackground
+    : null;
+  headerBackgroundDraft = cloneHeaderBackground(normalizedProfile?.headerBackground || groupBackground || (
     terminalAppearanceScope === "all" ? state.settings.terminalHeaderBackground : terminal?.headerBackground || state.settings.terminalHeaderBackground
   )) || defaultHeaderBackground(terminal);
   elements.headerAppearanceFontFamily.value = headerBackgroundDraft.fontFamily;
@@ -22732,6 +22875,10 @@ function setTerminalAppearanceApplyChoices(open) {
 }
 
 function commitTerminalAppearance(scope) {
+  if (terminalAppearanceEditorContext === "pageGroup") {
+    applyHeaderBackgroundEditor();
+    return;
+  }
   if (terminalAppearanceEditorContext === "automation") {
     const profile = automationApi.normalizeAppearance({
       ...terminalAppearanceDraft,
@@ -23051,10 +23198,12 @@ function openTerminalAppearanceDialog(terminal, tab = "terminal") {
   window.clearTimeout(headerBackgroundCloseTimer);
   headerBackgroundCloseTimer = 0;
   headerBackgroundTerminalId = terminal.id;
+  headerBackgroundPageGroupId = null;
   headerBackgroundOpen = true;
   terminalAppearanceEditorContext = "terminal";
   headerBackgroundReturnFocus = terminal.term.textarea || terminal.screen;
   terminalAppearanceScope = "terminal";
+  elements.terminalAppearanceTabTerminal.hidden = false;
   elements.headerBackgroundApply.textContent = "Apply";
   elements.headerBackgroundSubtitle.textContent = terminal.titleInput.value || "Terminal";
   const bar = terminal.pane?.querySelector(".pane-bar");
@@ -23116,17 +23265,47 @@ function openHeaderBackgroundEditor(terminal) {
   openTerminalAppearanceDialog(terminal, "header");
 }
 
+// A page group owns only a header background, so the dialog opens on that tab
+// with the body tab withdrawn rather than showing controls it cannot apply.
+function openPageGroupAppearanceDialog(group) {
+  if (!group || !headerBackgroundReady) return;
+  hideContextMenu();
+  window.clearTimeout(headerBackgroundCloseTimer);
+  headerBackgroundCloseTimer = 0;
+  headerBackgroundTerminalId = null;
+  headerBackgroundPageGroupId = group.id;
+  headerBackgroundOpen = true;
+  terminalAppearanceEditorContext = "pageGroup";
+  terminalAppearanceScope = "pageGroup";
+  headerBackgroundReturnFocus = elements.pagerList?.querySelector(`[data-group-color="${CSS.escape(group.id)}"]`) || null;
+  elements.headerBackgroundApply.textContent = "Apply";
+  elements.headerBackgroundSubtitle.textContent = group.name;
+  elements.headerBackgroundPreview.style.removeProperty("--header-preview-height");
+  elements.terminalAppearanceTabTerminal.hidden = true;
+  loadTerminalAppearanceDraft();
+  setTerminalAppearanceApplyChoices(false);
+  setTerminalAppearanceTab("header");
+  elements.headerBackgroundOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.headerBackgroundOverlay.classList.add("is-open");
+    elements.terminalAppearanceTabHeader.focus();
+  });
+  refreshIcons(elements.headerBackgroundOverlay);
+}
+
 function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
   if (!elements.headerBackgroundOverlay || !headerBackgroundOpen) return;
   const returnFocus = headerBackgroundReturnFocus;
   const editorContext = terminalAppearanceEditorContext;
   const terminal = state.terminals.get(headerBackgroundTerminalId);
   headerBackgroundTerminalId = null;
+  headerBackgroundPageGroupId = null;
   headerBackgroundReturnFocus = null;
   headerBackgroundDraft = null;
   terminalAppearanceDraft = null;
   terminalAppearanceEditorContext = "terminal";
   terminalAppearanceScope = "terminal";
+  elements.terminalAppearanceTabTerminal.hidden = false;
   setTerminalAppearanceApplyChoices(false);
   headerBackgroundOpen = false;
   // Repaint from the terminal's stored value. That discards an uncommitted
@@ -23147,6 +23326,18 @@ function closeHeaderBackgroundEditor({ restoreFocus = true } = {}) {
 }
 
 function applyHeaderBackgroundEditor() {
+  if (terminalAppearanceEditorContext === "pageGroup") {
+    const group = pageGroupById(headerBackgroundPageGroupId);
+    if (!group) {
+      closeHeaderBackgroundEditor();
+      toast("That group is gone; colour not saved", "warn", 2600);
+      return;
+    }
+    setPageGroupHeaderBackground(group.id, headerBackgroundDraft);
+    closeHeaderBackgroundEditor();
+    toast("Group colour updated", "success", 1800);
+    return;
+  }
   const terminal = state.terminals.get(headerBackgroundTerminalId);
   if (!terminal) {
     closeHeaderBackgroundEditor();
@@ -23196,6 +23387,12 @@ function applyHeaderBackgroundEditor() {
 
 function resetHeaderBackgroundEditor() {
   const terminal = state.terminals.get(headerBackgroundTerminalId);
+  if (terminalAppearanceEditorContext === "pageGroup") {
+    const group = pageGroupById(headerBackgroundPageGroupId);
+    if (group) setPageGroupHeaderBackground(group.id, null);
+    closeHeaderBackgroundEditor();
+    return;
+  }
   if (terminalAppearanceEditorContext === "automation") {
     loadTerminalAppearanceDraft(automationAppearanceProfileSeed(terminal));
     toast("Appearance profile reset to current defaults", "info", 1800);
@@ -23396,6 +23593,11 @@ function bindHeaderBackgroundEditor() {
         commitTerminalAppearance("automation");
         return;
       }
+      // A group has one place to apply to, so the scope choices never open.
+      if (terminalAppearanceEditorContext === "pageGroup") {
+        commitTerminalAppearance("pageGroup");
+        return;
+      }
       const open = elements.headerBackgroundApply.getAttribute("aria-expanded") === "true";
       setTerminalAppearanceApplyChoices(!open);
       if (!open) elements.terminalAppearanceApplyTerminal.focus();
@@ -23451,19 +23653,50 @@ function headerBackgroundFromColor(hex) {
   });
 }
 
+// The flyout paints identical swatches for anything that owns a header
+// background; only reading and writing the value differs.
+function headerBackgroundFlyoutSubject() {
+  const target = headerBackgroundFlyoutTarget;
+  if (!target) return null;
+  if (target.kind === "pageGroup") {
+    const group = pageGroupById(target.id);
+    if (!group) return null;
+    return {
+      label: group.name,
+      background: group.headerBackground || null,
+      set: (background) => setPageGroupHeaderBackground(group.id, background),
+      openEditor: () => openPageGroupAppearanceDialog(group)
+    };
+  }
+  const terminal = state.terminals.get(target.id);
+  if (!terminal) return null;
+  return {
+    label: terminal.titleInput.value || "Terminal",
+    background: terminal.headerBackground || null,
+    set: (background, persist) => {
+      terminal.headerBackground = background;
+      applyTerminalHeaderBackground(terminal);
+      // Dragging the colour well fires continuously, so the snapshot waits for
+      // the committed value rather than rewriting storage on every hue.
+      if (persist) saveSessionSnapshot();
+    },
+    openEditor: () => openHeaderBackgroundEditor(terminal)
+  };
+}
+
 function renderHeaderBackgroundFlyout() {
-  const terminal = state.terminals.get(headerBackgroundFlyoutId);
-  if (!terminal) {
+  const subject = headerBackgroundFlyoutSubject();
+  if (!subject) {
     closeHeaderBackgroundFlyout();
     return;
   }
-  elements.headerBackgroundFlyoutSubtitle.textContent = terminal.titleInput.value || "Terminal";
-  const current = headerBackgroundCss(terminal.headerBackground);
+  elements.headerBackgroundFlyoutSubtitle.textContent = subject.label;
+  const current = headerBackgroundCss(subject.background);
   renderHeaderBackgroundSwatches(elements.headerBackgroundFlyoutSwatches, HEADER_BACKGROUND_QUICK_COLORS, current);
   const custom = headerBackgroundCustomColors();
   renderHeaderBackgroundCustomColors(custom, current);
   elements.headerBackgroundFlyoutAddColor.hidden = custom.length >= HEADER_BACKGROUND_CUSTOM_LIMIT;
-  elements.headerBackgroundFlyoutReset.disabled = !terminal.headerBackground;
+  elements.headerBackgroundFlyoutReset.disabled = !subject.background;
 }
 
 function renderHeaderBackgroundSwatches(container, colors, current) {
@@ -23558,23 +23791,17 @@ function removeHeaderBackgroundCustomColor(hex) {
 }
 
 function setHeaderBackgroundFromFlyout(color, { persist = true } = {}) {
-  const terminal = state.terminals.get(headerBackgroundFlyoutId);
+  const subject = headerBackgroundFlyoutSubject();
   const background = headerBackgroundFromColor(color);
-  if (!terminal || !background) return;
-  terminal.headerBackground = background;
-  applyTerminalHeaderBackground(terminal);
-  // Dragging the color well fires continuously, so the snapshot waits for the
-  // committed value rather than rewriting storage on every intermediate hue.
-  if (persist) saveSessionSnapshot();
+  if (!subject || !background) return;
+  subject.set(background, persist);
   renderHeaderBackgroundFlyout();
 }
 
 function clearHeaderBackgroundFromFlyout() {
-  const terminal = state.terminals.get(headerBackgroundFlyoutId);
-  if (!terminal) return;
-  terminal.headerBackground = null;
-  applyTerminalHeaderBackground(terminal);
-  saveSessionSnapshot();
+  const subject = headerBackgroundFlyoutSubject();
+  if (!subject) return;
+  subject.set(null, true);
   renderHeaderBackgroundFlyout();
 }
 
@@ -23597,8 +23824,8 @@ function positionHeaderBackgroundFlyout(anchor) {
   flyout.classList.remove("is-positioning");
 }
 
-function openHeaderBackgroundFlyout(terminal, anchor) {
-  if (!terminal || !anchor) return;
+function openHeaderBackgroundFlyoutFor(target, anchor) {
+  if (!target || !anchor) return;
   closeHeaderActionScopeFlyout();
   closeTerminalNotificationFlyout();
   closeTerminalNotesFlyout();
@@ -23607,7 +23834,7 @@ function openHeaderBackgroundFlyout(terminal, anchor) {
   if (headerBackgroundFlyoutAnchor && headerBackgroundFlyoutAnchor !== anchor) {
     headerBackgroundFlyoutAnchor.setAttribute("aria-expanded", "false");
   }
-  headerBackgroundFlyoutId = terminal.id;
+  headerBackgroundFlyoutTarget = target;
   headerBackgroundFlyoutAnchor = anchor;
   if (anchor.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "true");
   renderHeaderBackgroundFlyout();
@@ -23616,22 +23843,37 @@ function openHeaderBackgroundFlyout(terminal, anchor) {
   elements.headerBackgroundFlyout.querySelector(".header-background-swatch")?.focus({ preventScroll: true });
 }
 
+function openHeaderBackgroundFlyout(terminal, anchor) {
+  if (!terminal) return;
+  openHeaderBackgroundFlyoutFor({ kind: "terminal", id: terminal.id }, anchor);
+}
+
 function closeHeaderBackgroundFlyout({ restoreFocus = false } = {}) {
   const anchor = headerBackgroundFlyoutAnchor;
   elements.headerBackgroundFlyout.hidden = true;
-  headerBackgroundFlyoutId = null;
+  headerBackgroundFlyoutTarget = null;
   headerBackgroundFlyoutAnchor = null;
   if (anchor?.getAttribute("aria-haspopup") === "dialog") anchor.setAttribute("aria-expanded", "false");
   if (restoreFocus && anchor?.isConnected) anchor.focus({ preventScroll: true });
 }
 
-function toggleHeaderBackgroundFlyout(terminal, anchor) {
-  if (headerBackgroundFlyoutId === terminal.id && headerBackgroundFlyoutAnchor === anchor
+function toggleHeaderBackgroundFlyoutFor(target, anchor) {
+  if (headerBackgroundFlyoutTarget?.kind === target.kind
+      && headerBackgroundFlyoutTarget?.id === target.id
+      && headerBackgroundFlyoutAnchor === anchor
       && !elements.headerBackgroundFlyout.hidden) {
     closeHeaderBackgroundFlyout({ restoreFocus: true });
     return;
   }
-  openHeaderBackgroundFlyout(terminal, anchor);
+  openHeaderBackgroundFlyoutFor(target, anchor);
+}
+
+function toggleHeaderBackgroundFlyout(terminal, anchor) {
+  toggleHeaderBackgroundFlyoutFor({ kind: "terminal", id: terminal.id }, anchor);
+}
+
+function togglePageGroupHeaderBackgroundFlyout(group, anchor) {
+  toggleHeaderBackgroundFlyoutFor({ kind: "pageGroup", id: group.id }, anchor);
 }
 
 function bindHeaderBackgroundFlyout() {
@@ -23660,9 +23902,9 @@ function bindHeaderBackgroundFlyout() {
   });
   elements.headerBackgroundFlyoutReset.addEventListener("click", clearHeaderBackgroundFromFlyout);
   elements.headerBackgroundFlyoutMore.addEventListener("click", () => {
-    const terminal = state.terminals.get(headerBackgroundFlyoutId);
+    const subject = headerBackgroundFlyoutSubject();
     closeHeaderBackgroundFlyout();
-    if (terminal) openHeaderBackgroundEditor(terminal);
+    subject?.openEditor();
   });
   document.addEventListener("pointerdown", (event) => {
     if (elements.headerBackgroundFlyout.hidden) return;

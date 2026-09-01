@@ -573,7 +573,7 @@ test.describe("Terminal header background quick picker", () => {
     await expect(page.locator("#headerBackgroundFlyout")).toBeVisible();
     await page.evaluate(() => removeTerminal([...state.terminals.values()][0].id));
     await expect(page.locator("#headerBackgroundFlyout")).toBeHidden();
-    expect(await page.evaluate(() => headerBackgroundFlyoutId)).toBeNull();
+    expect(await page.evaluate(() => headerBackgroundFlyoutTarget)).toBeNull();
 
     await page.evaluate(() => {
       state.settings.headerActionsInMenu = [...state.settings.headerActionsInMenu, "header-background"];

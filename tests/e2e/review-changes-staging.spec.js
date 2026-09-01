@@ -778,6 +778,24 @@ test.describe("Review Changes dialog size", () => {
     expect((await geometry()).cardHeight).toBe(collapsed.cardHeight);
     await page.locator("#worktreeReviewDone").click();
   });
+
+  test("draws the header controls as flat chrome rather than filled buttons", async ({ page }) => {
+    resetRepository();
+    fs.writeFileSync(path.join(repo, "alpha.txt"), "one\nFLAT\nthree\n");
+    await openReview(page);
+
+    for (const id of ["#gitReviewExpand", "#worktreeReviewClose"]) {
+      const paint = await page.evaluate((selector) => {
+        const style = getComputedStyle(document.querySelector(selector));
+        return { background: style.backgroundColor, width: style.borderTopWidth, shadow: style.boxShadow };
+      }, id);
+      expect(paint.background).toBe("rgba(0, 0, 0, 0)");
+      expect(paint.width).toBe("0px");
+      expect(paint.shadow).toBe("none");
+    }
+
+    await page.locator("#worktreeReviewDone").click();
+  });
 });
 
 test.describe("Review Changes search", () => {

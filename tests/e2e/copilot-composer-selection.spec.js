@@ -40,8 +40,12 @@ test.describe("Copilot composer text selection", () => {
     await startRendererCoverage(page);
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
-    await page.evaluate(() => closeAllTerminals());
-    await expect(page.locator(".terminal-pane")).toHaveCount(0, { timeout: 30000 });
+    // A fresh renderer opens its own welcome terminal, which can arrive after the
+    // first close, so keep closing until the stage is genuinely empty.
+    await expect.poll(async () => {
+      await page.evaluate(() => closeAllTerminals());
+      return page.locator(".terminal-pane").count();
+    }, { timeout: 30000 }).toBe(0);
     id = await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }).id);
     await expect.poll(() => page.evaluate((terminalId) => state.terminals.get(terminalId)?.status, id),
       { timeout: 30000 }).toBe("live");
@@ -49,8 +53,21 @@ test.describe("Copilot composer text selection", () => {
     await page.evaluate((terminalId) => {
       sendBridge({ type: "input", id: terminalId, data: "copilot\r" });
     }, id);
-    await expect.poll(() => page.evaluate((terminalId) => Boolean(copilotComposerRegion(state.terminals.get(terminalId))), id),
-      { timeout: 180000 }).toBe(true);
+    // A newer CLI offers to restore interrupted sessions before it shows the
+    // composer, and that screen waits for an answer; Escape starts fresh.
+    await expect.poll(() => page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      if (!terminal) return "missing";
+      if (copilotComposerRegion(terminal)) return "composer";
+      const buffer = terminal.term.buffer.active;
+      const screen = Array.from({ length: terminal.term.rows },
+        (unused, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "").join("\n");
+      if (/start fresh/i.test(screen) && !window.__composerRestoreDismissed) {
+        window.__composerRestoreDismissed = true;
+        sendBridge({ type: "input", id: terminalId, data: "\u001b" });
+      }
+      return "waiting";
+    }, id), { timeout: 180000 }).toBe("composer");
     await page.locator(`.terminal-pane[data-id="${id}"] .xterm-helper-textarea`).focus();
   });
 
@@ -134,6 +151,71 @@ test.describe("Copilot composer text selection", () => {
     await page.keyboard.press("Backspace");
     await expect.poll(async () => (await composer()).text.trim(), { timeout: 15000 }).toBe("");
     expect((await composer()).bandCount).toBe(0);
+  });
+
+  test("replaces the whole composer when you type over a Ctrl+A selection", async () => {
+    await clearComposer();
+    await page.keyboard.type("CHARLIE DELTA", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("CHARLIE DELTA");
+
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+
+    await page.keyboard.type("Z", { delay: 40 });
+    await expect.poll(async () => (await composer()).text.trim(), { timeout: 15000 }).toBe("Z");
+    const after = await composer();
+    expect(after.selection).toBeFalsy();
+    expect(after.bandCount).toBe(0);
+  });
+
+  test("replaces a shift-selected range with the character typed", async () => {
+    await clearComposer();
+    await page.keyboard.type("ALPHA BRAVO", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("ALPHA BRAVO");
+    for (let press = 0; press < 5; press += 1) {
+      await page.keyboard.press("Shift+ArrowLeft");
+    }
+    await expect.poll(async () => (await composer()).selectedCells, { timeout: 15000 }).toBe(5);
+
+    await page.keyboard.type("Z", { delay: 40 });
+    await expect.poll(async () => (await composer()).text.trimEnd(), { timeout: 15000 }).toBe("ALPHA Z");
+    expect((await composer()).selection).toBeFalsy();
+  });
+
+  test("replaces a selection dragged out with the mouse", async () => {
+    await clearComposer();
+    await page.keyboard.type("ALPHA BRAVO", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("ALPHA BRAVO");
+
+    // A drag selects in xterm alone, which Copilot never sees.
+    await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      const region = copilotComposerRegion(terminal);
+      const row = region.rows[0];
+      terminal.term.select(row.start + 6, terminal.term.buffer.active.viewportY + row.row, 5);
+    }, id);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("BRAVO");
+
+    await page.keyboard.type("Z", { delay: 40 });
+    await expect.poll(async () => (await composer()).text.trimEnd(), { timeout: 15000 }).toBe("ALPHA Z");
+  });
+
+  test("types normally when the selection is output rather than composer text", async () => {
+    await clearComposer();
+    await page.keyboard.type("ALPHA", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("ALPHA");
+
+    // The composer border is not editable text, so nothing may be deleted here.
+    await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      const region = copilotComposerRegion(terminal);
+      const buffer = terminal.term.buffer.active;
+      terminal.term.select(2, buffer.viewportY + region.rows[0].row - 1, 4);
+    }, id);
+
+    await page.keyboard.type("Z", { delay: 40 });
+    await expect.poll(async () => (await composer()).text.trimEnd(), { timeout: 15000 }).toBe("ALPHAZ");
+    await clearComposer();
   });
 
   test("leaves an empty composer unselected and cancels on an unmodified arrow", async () => {

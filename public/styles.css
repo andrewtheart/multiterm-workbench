@@ -3952,6 +3952,21 @@ body.header-hidden .status-hint kbd,
   gap: 8px;
 }
 
+/* Dialog-chrome controls, so they stay flat like the top bar's cluster and only
+   surface on hover via the shared state layer. */
+.git-review-head-tools > .icon-button {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.git-review-head-tools > .icon-button:hover,
+.git-review-head-tools > .icon-button:focus-visible {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .git-review-search {
   align-items: center;
   background: var(--surface-high);
@@ -4420,6 +4435,13 @@ body.header-hidden .status-hint kbd,
 
 .git-review-publish-row label {
   font-size: 12px;
+}
+
+.git-review-merge-target {
+  flex: 0 1 240px;
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 140px;
 }
 
 .git-review-branch {
@@ -5838,6 +5860,10 @@ body[data-pager-placement="right"] .pager-name {
   gap: 4px;
   min-width: 0;
   padding: 2px 4px;
+  /* Row bands flow tabs into the corner the colour control is pinned to, so the
+     band reserves it. Column bands reserve it on the header instead. */
+  padding-right: 22px;
+  position: relative;
 }
 
 .pager-group:has(.pager-chip.is-active) {
@@ -5896,6 +5922,46 @@ body[data-pager-placement="right"] .pager-name {
   text-align: center;
 }
 
+.pager-group-color {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 18px;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  width: 18px;
+}
+
+.pager-group-color:hover,
+.pager-group-color:focus-visible {
+  background: var(--surface-high);
+  color: var(--text);
+}
+
+.pager-group-color svg {
+  height: 12px;
+  width: 12px;
+}
+
+/* Mirrors a terminal's header background: the group's own label carries the
+   colour, so the page tabs inside keep their normal contrast. */
+.pager-group.has-color {
+  border-color: color-mix(in srgb, var(--border-strong) 70%, transparent);
+}
+
+.pager-group.has-color .pager-group-header {
+  background-image: var(--pager-group-color);
+  color: #fff;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 45%);
+}
+
 .pager-group-chips {
   align-items: center;
   display: flex;
@@ -5941,6 +6007,7 @@ body[data-pager-placement="left"] .pager-group,
 body[data-pager-placement="right"] .pager-group {
   align-items: stretch;
   flex-direction: column;
+  padding-right: 4px;
   width: 100%;
 }
 
@@ -5958,6 +6025,7 @@ body[data-pager-placement="right"] .pager-group-empty {
 body[data-pager-placement="left"] .pager-group-header,
 body[data-pager-placement="right"] .pager-group-header {
   justify-content: flex-start;
+  padding-right: 20px;
 }
 
 body[data-pager-placement="left"] .pager-group-name,
@@ -6965,6 +7033,12 @@ button.shortcut-binding.is-capturing {
   padding: 0 10px;
   text-align: left;
   width: 100%;
+}
+
+/* The author display above beats the UA [hidden] rule, so a withdrawn tab needs
+   this restatement to actually disappear. */
+.terminal-appearance-blade button[hidden] {
+  display: none;
 }
 
 .terminal-appearance-blade button[aria-selected="true"] {

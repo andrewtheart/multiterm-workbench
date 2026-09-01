@@ -242,6 +242,85 @@ test.describe("Page groups", () => {
     expect(await page.evaluate(() => state.pageGroups[0].name)).toBe("Shipping");
   });
 
+  test("colours a group from the same flyout a terminal header uses", async () => {
+    await page.evaluate(() => createPageGroup("Release", ["page-1", "page-2"]));
+    const control = page.locator(".pager-group-color");
+    await expect(control).toHaveAttribute("aria-label", "Colour for Release");
+
+    // The control belongs in the band's top-right corner, in every placement: a
+    // side pager stacks the band into a column, which once pushed it to the foot.
+    for (const placement of ["top", "left"]) {
+      await page.evaluate((value) => setPagerPlacement(value), placement);
+      const band = await page.locator(".pager-group").boundingBox();
+      const corner = await control.boundingBox();
+      expect(band.x + band.width - (corner.x + corner.width)).toBeLessThan(8);
+      expect(corner.y - band.y).toBeLessThan(8);
+    }
+
+    // Only the header shares the corner in a column band, so the tabs below it
+    // keep the band's full width rather than being inset by the control.
+    const band = await page.locator(".pager-group").boundingBox();
+    const chips = await page.locator(".pager-group-chips").boundingBox();
+    expect(band.x + band.width - (chips.x + chips.width)).toBeLessThan(8);
+    await page.evaluate(() => setPagerPlacement("top"));
+
+    await control.click();
+    const flyout = page.locator("#headerBackgroundFlyout");
+    await expect(flyout).toBeVisible();
+    // The flyout names its subject, so it is clear which thing is being coloured.
+    await expect(flyout.locator("#headerBackgroundFlyoutSubtitle")).toHaveText("Release");
+    await expect(page.locator("#headerBackgroundFlyoutReset")).toBeDisabled();
+
+    await flyout.locator(".header-background-swatch").nth(2).click();
+    await expect(page.locator(".pager-group")).toHaveClass(/has-color/);
+    const stored = await page.evaluate(() => state.pageGroups[0].headerBackground);
+    expect(stored).toMatchObject({ type: "linear" });
+    expect(stored.stops.length).toBeGreaterThan(1);
+    // A group colour belongs to the group, never to a terminal.
+    expect(await page.evaluate(() => [...state.terminals.values()].some((entry) => entry.headerBackground))).toBe(false);
+
+    await page.locator("#headerBackgroundFlyoutReset").click();
+    expect(await page.evaluate(() => state.pageGroups[0].headerBackground)).toBeUndefined();
+    await expect(page.locator(".pager-group")).not.toHaveClass(/has-color/);
+    await page.keyboard.press("Escape");
+  });
+
+  test("opens the gradient editor for the group from More options", async () => {
+    await page.evaluate(() => createPageGroup("Release", ["page-1", "page-2"]));
+    await page.locator(".pager-group-color").click();
+    await page.locator("#headerBackgroundFlyoutMore").click();
+
+    const dialog = page.locator("#headerBackgroundOverlay");
+    await expect(dialog).toBeVisible();
+    await expect(page.locator("#headerBackgroundSubtitle")).toHaveText("Release");
+    // A group has no body appearance, so that tab is withdrawn entirely.
+    await expect(page.locator("#terminalAppearanceTabTerminal")).toBeHidden();
+    await expect(page.locator("#terminalHeaderAppearancePanel")).toBeVisible();
+
+    await page.evaluate(() => {
+      headerBackgroundDraft.stops[0].color = "#123456";
+      updateHeaderBackgroundPreview();
+    });
+    // Apply commits straight to the group rather than asking for a scope.
+    await page.locator("#headerBackgroundApply").click();
+    await expect(dialog).toBeHidden();
+    expect(await page.evaluate(() => state.pageGroups[0].headerBackground.stops[0].color)).toBe("#123456");
+    await expect(page.locator(".pager-group")).toHaveClass(/has-color/);
+    // The dialog must hand the body tab back for the next terminal that uses it.
+    expect(await page.evaluate(() => elements.terminalAppearanceTabTerminal.hidden)).toBe(false);
+  });
+
+  test("keeps a group colour across a reload", async () => {
+    await page.evaluate(() => {
+      const id = createPageGroup("Release", ["page-1", "page-2"]);
+      setPageGroupHeaderBackground(id, headerBackgroundFromColor("#4F8A5B"));
+    });
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator(".pager-group")).toHaveClass(/has-color/);
+    expect(await page.evaluate(() => state.pageGroups[0].headerBackground.stops[0].color)).toBe("#4F8A5B");
+  });
+
   test("carries membership and order through a reload", async () => {
     const id = await page.evaluate(() => {
       const groupId = createPageGroup("Release", ["page-1", "page-2"]);

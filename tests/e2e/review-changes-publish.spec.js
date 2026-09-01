@@ -198,8 +198,37 @@ test.describe("Review Changes merge", () => {
 
     await page.locator("#gitReviewMergeToggle").click();
     await expect(page.locator("#gitReviewMergeTarget")).toHaveValue("release", { timeout: 60000 });
-    const options = await page.locator("#gitReviewMergeTarget option").allTextContents();
+    const options = await page.locator("#gitReviewMergeTargetList option").evaluateAll(
+      (nodes) => nodes.map((node) => node.value)
+    );
     expect(options).toEqual(["release"]);
+
+    await page.locator("#worktreeReviewDone").click();
+  });
+
+  test("filters branches by typing and refuses a target that is not one", async ({ page }) => {
+    for (const branch of ["release", "release-candidate", "hotfix"]) git(["branch", branch]);
+    await openReview(page);
+    await expect(page.locator("#gitReviewBranchLabel")).toHaveText("main", { timeout: 60000 });
+
+    await page.locator("#gitReviewMergeToggle").click();
+    const target = page.locator("#gitReviewMergeTarget");
+    await expect(target).toHaveValue(/.+/, { timeout: 60000 });
+    // The whole branch list is offered, so typing narrows rather than replaces it.
+    const offered = await page.locator("#gitReviewMergeTargetList option").evaluateAll(
+      (nodes) => nodes.map((node) => node.value).sort()
+    );
+    expect(offered).toEqual(["hotfix", "release", "release-candidate"]);
+
+    // A partial name matches no branch, so neither action may run on it.
+    await target.fill("release-can");
+    await expect(page.locator("#gitReviewMergePreview")).toHaveText("Pick a branch from the list.");
+    await expect(page.locator("#gitReviewMergeLocal")).toBeDisabled();
+    await expect(page.locator("#gitReviewPullRequest")).toBeDisabled();
+
+    await target.fill("release-candidate");
+    await expect(page.locator("#gitReviewMergeLocal")).toBeEnabled();
+    await expect(page.locator("#gitReviewMergePreview")).toContainText("already contains", { timeout: 60000 });
 
     await page.locator("#worktreeReviewDone").click();
   });

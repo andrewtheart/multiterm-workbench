@@ -94,7 +94,7 @@ test.describe("Copilot session notes", () => {
       copilotResume.scope = "local";
       copilotResume.filters = { origin: "all", source: "cli", project: "all", updated: "any" };
       copilotResume.sessions = sessions;
-      copilotResume.expandedNotes.clear();
+      copilotResume.visibleNotes.clear();
       elements.copilotResumeOverlay.hidden = false;
       renderCopilotSessions();
     }, { sessions: SESSIONS, linked: LINKED });
@@ -139,13 +139,54 @@ test.describe("Copilot session notes", () => {
     await expect(notes.locator(".copilot-session-note-text").nth(1)).not.toHaveText("R".repeat(400));
   });
 
+  test("reveals notes a page at a time instead of all at once", async () => {
+    // A terminal reused across many short sessions produced a card that listed
+    // every note it had ever collected.
+    await page.evaluate(({ sessions, linked }) => {
+      state.terminalArtifacts.terminals = {};
+      state.terminalArtifacts.recoveredNotes = Array.from({ length: 13 }, (unused, index) => ({
+        id: `page-${index}`,
+        title: "Ended terminal",
+        cwd: "D:\\multiTerm",
+        aiSessionId: linked,
+        notes: `note ${index}`,
+        recoveredAt: "2026-08-09T19:31:00.000Z"
+      }));
+      saveTerminalArtifacts();
+      copilotResume.provider = "copilot";
+      copilotResume.scope = "local";
+      copilotResume.filters = { origin: "all", source: "cli", project: "all", updated: "any" };
+      copilotResume.sessions = sessions;
+      copilotResume.visibleNotes.clear();
+      elements.copilotResumeOverlay.hidden = false;
+      renderCopilotSessions();
+    }, { sessions: SESSIONS, linked: LINKED });
+
+    const notes = card(LINKED).locator(".copilot-session-notes");
+    const more = notes.locator(".copilot-session-notes-more");
+    await expect(notes.locator(".copilot-session-note")).toHaveCount(5);
+    await expect(more).toHaveText("Show 5 more notes\u2026");
+
+    await more.click();
+    await expect(notes.locator(".copilot-session-note")).toHaveCount(10);
+    // The label counts what the next click reveals, not the total still hidden.
+    await expect(more).toHaveText("Show 3 more notes\u2026");
+
+    await more.click();
+    await expect(notes.locator(".copilot-session-note")).toHaveCount(13);
+    await expect(more).toHaveText("Show less");
+
+    await more.click();
+    await expect(notes.locator(".copilot-session-note")).toHaveCount(5);
+  });
+
   test("shows nothing when no note belongs to the session", async () => {
     await page.evaluate(({ sessions }) => {
       state.terminalArtifacts.terminals = {};
       state.terminalArtifacts.recoveredNotes = [];
       saveTerminalArtifacts();
       copilotResume.sessions = sessions;
-      copilotResume.expandedNotes.clear();
+      copilotResume.visibleNotes.clear();
       elements.copilotResumeOverlay.hidden = false;
       renderCopilotSessions();
     }, { sessions: SESSIONS });
@@ -338,23 +379,26 @@ test.describe("Copilot session notes", () => {
   test("renders singular and plural hidden-note counts", async () => {
     const result = await page.evaluate(({ linked }) => {
       const session = { id: linked, key: `cli:${linked}`, cwd: "D:\\multiTerm" };
+      const pageSize = copilotSessionNotePageSize();
       state.terminalArtifacts.terminals = {
         one: { terminalId: "one", aiSessionId: linked, title: "One", cwd: "D:\\multiTerm", notes: "x".repeat(300), queue: [] }
       };
-      state.terminalArtifacts.recoveredNotes = [{
-        id: "two", aiSessionId: linked, title: "Two", cwd: "D:\\multiTerm", notes: "second", recoveredAt: null
-      }];
-      copilotResume.expandedNotes.delete(session.key);
+      // Exactly one note more than a page holds, so exactly one stays hidden.
+      state.terminalArtifacts.recoveredNotes = Array.from({ length: pageSize }, (unused, index) => ({
+        id: `rec-${index}`, aiSessionId: linked, title: `T${index}`, cwd: "D:\\multiTerm", notes: `note ${index}`, recoveredAt: null
+      }));
+      copilotResume.visibleNotes.delete(session.key);
       const singular = buildCopilotSessionNotes(session);
       const singularText = singular.querySelector(".copilot-session-notes-more")?.textContent;
       state.terminalArtifacts.recoveredNotes.push({
-        id: "three", aiSessionId: linked, title: "Three", cwd: "D:\\multiTerm", notes: "third", recoveredAt: null
+        id: "extra", aiSessionId: linked, title: "Extra", cwd: "D:\\multiTerm", notes: "one more", recoveredAt: null
       });
       const plural = buildCopilotSessionNotes(session);
       const pluralText = plural.querySelector(".copilot-session-notes-more")?.textContent;
-      copilotResume.expandedNotes.add(session.key);
+      copilotResume.visibleNotes.set(session.key, 999);
       const expanded = buildCopilotSessionNotes(session);
       return {
+        pageSize,
         singularText,
         pluralText,
         expandedText: expanded.querySelector(".copilot-session-notes-more")?.textContent,
@@ -366,7 +410,7 @@ test.describe("Copilot session notes", () => {
     expect(result.singularText).toBe("Show 1 more note…");
     expect(result.pluralText).toBe("Show 2 more notes…");
     expect(result.expandedText).toBe("Show less");
-    expect(result.recoveredClasses.filter((value) => value.includes("is-recovered"))).toHaveLength(2);
+    expect(result.recoveredClasses.filter((value) => value.includes("is-recovered"))).toHaveLength(result.pageSize + 1);
     expect(result.noNotes).toBeNull();
   });
 
