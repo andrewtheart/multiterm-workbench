@@ -21,6 +21,7 @@
 
 const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
 const WORKSPACE_ZOOM_BOUNDS = { min: 25, max: 200, step: 5, fallback: 100 };
+const CONTEXT_MENU_SCALE_BOUNDS = { min: 80, max: 160, step: 5, fallback: 100 };
 const SIDECAR_WIDTH_BOUNDS = { min: 240, max: 720, step: 10, fallback: 300 };
 
 const defaultSettings = {
@@ -79,6 +80,7 @@ const defaultSettings = {
   closeAction: "ask",
   columns: 2,
   compactChrome: false,
+  contextMenuScale: CONTEXT_MENU_SCALE_BOUNDS.fallback,
   copilotImportContextKb: 64,
   copilotLogInitialTailKb: 256,
   copilotLogViewerEnabled: false,
@@ -240,6 +242,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   fontSize: "text size type scale zoom terminal typography larger smaller",
   terminalTheme: "terminal console colors colours color scheme palette background foreground contrast appearance",
   compactChrome: "dense compact chrome ui toolbar header controls small spacing slim",
+  contextMenuScale: "context menu right-click right click popup size scale zoom font text bigger smaller larger enlarge magnify readable legible density group headers",
   copilotImportContextKb: "copilot session import context transcript history vscode visual studio cli size kilobytes kb continuation",
   copilotTitleModel: "copilot ai generated automatic terminal title name model opus sonnet gpt",
   copilotTitleEffort: "copilot title thinking reasoning effort medium high low",
@@ -808,6 +811,8 @@ const elements = {
   commandQueueInput: document.querySelector("#commandQueueInput"),
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
+  contextMenuScale: document.querySelector("#contextMenuScale"),
+  contextMenuScaleValue: document.querySelector("#contextMenuScaleValue"),
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
   copilotCwdQueryTimeoutSeconds: document.querySelector("#copilotCwdQueryTimeoutSeconds"),
   copilotSessionListTimeoutSeconds: document.querySelector("#copilotSessionListTimeoutSeconds"),
@@ -2228,6 +2233,9 @@ function bindControls() {
   bindSetting(elements.paneGap, "gap", "input", Number);
   elements.workspaceZoom.addEventListener("input", () => {
     setWorkspaceZoom(elements.workspaceZoom.value, { announce: true });
+  });
+  elements.contextMenuScale.addEventListener("input", () => {
+    setContextMenuScale(elements.contextMenuScale.value);
   });
   bindSetting(elements.fontSize, "fontSize", "input", Number);
   bindSetting(elements.titleFontScale, "titleFontScale", "input", normalizeTitleFontScale);
@@ -4684,6 +4692,57 @@ function setWorkspaceZoom(value, { announce = false } = {}) {
   applySettings();
   saveSettings();
   if (announce) showWorkspaceZoomIndicator();
+}
+
+function contextMenuScaleFactor() {
+  return normalizeContextMenuScale(state.settings.contextMenuScale) / 100;
+}
+
+// CSS zoom scales the whole menu -- rows, icons, group headers, and search --
+// where a font-size change would only move the text. Viewport clamps inside the
+// menu divide by the same factor so a scaled menu still fits the screen.
+function applyContextMenuScale() {
+  const scale = contextMenuScaleFactor();
+  document.documentElement.style.setProperty("--ctx-scale", String(scale));
+  for (const menu of [elements.contextMenu, elements.contextSubmenu]) {
+    if (!menu) continue;
+    if (scale === 1) menu.style.removeProperty("zoom");
+    else menu.style.zoom = String(scale);
+  }
+}
+
+function syncContextMenuScaleControls() {
+  const scale = normalizeContextMenuScale(state.settings.contextMenuScale);
+  if (elements.contextMenuScale) elements.contextMenuScale.value = scale;
+  if (elements.contextMenuScaleValue) elements.contextMenuScaleValue.textContent = `${scale}%`;
+  const slider = elements.contextMenu?.querySelector(".ctx-menu-scale-slider");
+  if (slider && slider !== document.activeElement) slider.value = String(scale);
+  const readout = elements.contextMenu?.querySelector(".ctx-menu-scale-value");
+  if (readout) readout.textContent = `${scale}%`;
+}
+
+// Deliberately not applySettings(): the scale changes nothing about the panes,
+// and a slider dragged inside the open menu would relayout every terminal.
+function setContextMenuScale(value) {
+  state.settings.contextMenuScale = normalizeContextMenuScale(value);
+  applyContextMenuScale();
+  syncContextMenuScaleControls();
+  clampContextMenuPosition();
+  saveSettings();
+}
+
+// A menu already on screen grows from its top-left corner, so rescaling can push
+// it past an edge; re-clamp it in place rather than moving it back to the cursor.
+function clampContextMenuPosition() {
+  const scale = contextMenuScaleFactor();
+  for (const menu of [elements.contextMenu, elements.contextSubmenu]) {
+    if (!menu || menu.hidden) continue;
+    const rect = menu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(rect.top, window.innerHeight - rect.height - 8));
+    menu.style.left = `${left / scale}px`;
+    menu.style.top = `${top / scale}px`;
+  }
 }
 
 function bindWorkspaceBackgroundZoom() {
@@ -9648,6 +9707,8 @@ function applySettings() {
   elements.statusWorkspaceZoomValue.textContent = `${state.settings.workspaceZoom}%`;
   elements.fontSizeValue.textContent = `${state.settings.fontSize}px`;
   elements.titleFontScaleValue.textContent = `${state.settings.titleFontScale}%`;
+  applyContextMenuScale();
+  syncContextMenuScaleControls();
   updateChromeToggles();
   applySnapLayout();
 
@@ -15791,6 +15852,26 @@ function composerText(terminal, region) {
     .join("");
 }
 
+function composerSelectionText(terminal, region, selection) {
+  const { from, to } = composerSelectionRange(selection);
+  return composerText(terminal, region).slice(from, to);
+}
+
+// The text is read before the deletion is sent, because the buffer only catches
+// up once Copilot redraws.
+function cutComposerSelection(terminal, region, selection) {
+  const text = composerSelectionText(terminal, region, selection);
+  if (!deleteComposerSelection(terminal, region, selection)) return false;
+  forgetTerminalSelection(terminal);
+  if (text) {
+    writeClipboardText(text).catch((error) => {
+      log.warn("clipboard", "Cut text could not be written to the clipboard", { error: String(error?.message || error) });
+      toast("Clipboard unavailable", "error");
+    });
+  }
+  return true;
+}
+
 function selectAllComposerText(terminal) {
   const region = copilotComposerRegion(terminal);
   if (!region) return false;
@@ -15834,6 +15915,17 @@ function handleComposerSelectionKey(terminal, event) {
   }
 
   const selection = terminal.composerSelection;
+
+  if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyX") {
+    const region = copilotComposerRegion(terminal);
+    const cutting = region && (selection || composerSelectionFromViewport(terminal, region));
+    if (!cutting) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    cutComposerSelection(terminal, region, cutting);
+    return true;
+  }
+
   if (selection && plain && !event.shiftKey && (event.key === "Delete" || event.key === "Backspace")) {
     const region = copilotComposerRegion(terminal);
     if (!region) {
@@ -22435,6 +22527,7 @@ function syncControlsFromSettings() {
   elements.paneGap.value = state.settings.gap;
   elements.workspaceZoom.value = state.settings.workspaceZoom;
   elements.statusWorkspaceZoom.value = state.settings.workspaceZoom;
+  elements.contextMenuScale.value = normalizeContextMenuScale(state.settings.contextMenuScale);
   elements.fontSize.value = state.settings.fontSize;
   elements.titleFontScale.value = state.settings.titleFontScale;
   elements.terminalTheme.value = state.settings.theme;
@@ -32532,6 +32625,40 @@ function renderContextMenu(items, {
     }
     elements.contextMenu.append(footer);
   }
+  if (searchable) {
+    let footer = elements.contextMenu.querySelector(".ctx-customize-footer");
+    if (!footer) {
+      footer = document.createElement("div");
+      footer.className = "ctx-customize-footer";
+      elements.contextMenu.append(footer);
+    }
+    footer.append(buildContextMenuScaleControl());
+  }
+}
+
+// Sits at the foot of the large menu so it is reachable without competing with
+// the actions above it.
+function buildContextMenuScaleControl() {
+  const scale = normalizeContextMenuScale(state.settings.contextMenuScale);
+  const control = document.createElement("label");
+  control.className = "ctx-menu-scale";
+  control.title = `Menu size (${CONTEXT_MENU_SCALE_BOUNDS.min}-${CONTEXT_MENU_SCALE_BOUNDS.max}%)`;
+  const icon = document.createElement("i");
+  icon.dataset.lucide = "case-sensitive";
+  const slider = document.createElement("input");
+  slider.className = "ctx-menu-scale-slider";
+  slider.type = "range";
+  slider.min = String(CONTEXT_MENU_SCALE_BOUNDS.min);
+  slider.max = String(CONTEXT_MENU_SCALE_BOUNDS.max);
+  slider.step = String(CONTEXT_MENU_SCALE_BOUNDS.step);
+  slider.value = String(scale);
+  slider.setAttribute("aria-label", "Menu size");
+  slider.addEventListener("input", () => setContextMenuScale(slider.value));
+  const readout = document.createElement("output");
+  readout.className = "ctx-menu-scale-value";
+  readout.textContent = `${scale}%`;
+  control.append(icon, slider, readout);
+  return control;
 }
 
 function filterContextMenu(value) {
@@ -32660,8 +32787,9 @@ function showContextSubmenuAt(x, y) {
   const rect = menu.getBoundingClientRect();
   const left = Math.max(8, Math.min(x, window.innerWidth - rect.width - 8));
   const top = Math.max(8, Math.min(y, window.innerHeight - rect.height - 8));
-  menu.style.left = `${left}px`;
-  menu.style.top = `${top}px`;
+  const scale = contextMenuScaleFactor();
+  menu.style.left = `${left / scale}px`;
+  menu.style.top = `${top / scale}px`;
   menu.classList.remove("is-positioning");
 }
 
@@ -32779,7 +32907,7 @@ function moveContextFocus(delta) {
 function onContextMenuKeydown(event) {
   if (elements.contextMenu.hidden) return;
   if (event.target instanceof Element
-    && event.target.closest(".ctx-command-input, .ctx-command-suggestion, .ctx-inline-command-input, .ctx-inline-command-mode, .ctx-customization-control, .ctx-group-title.is-editable")) return;
+    && event.target.closest(".ctx-command-input, .ctx-command-suggestion, .ctx-inline-command-input, .ctx-inline-command-mode, .ctx-customization-control, .ctx-menu-scale-slider, .ctx-group-title.is-editable")) return;
   const key = event.key;
   const stop = () => {
     event.preventDefault();
@@ -33073,8 +33201,11 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false, r
   const desiredTop = alignBottom ? y - rect.height : y;
   const left = Math.max(8, Math.min(desiredLeft, window.innerWidth - rect.width - 8));
   const top = Math.max(8, Math.min(desiredTop, window.innerHeight - rect.height - 8));
-  menu.style.left = `${left}px`;
-  menu.style.top = `${top}px`;
+  // getBoundingClientRect reports scaled pixels, but the menu's own left/top are
+  // multiplied by its zoom, so the placement has to be divided back out.
+  const scale = contextMenuScaleFactor();
+  menu.style.left = `${left / scale}px`;
+  menu.style.top = `${top / scale}px`;
   menu.classList.remove("is-positioning");
   const searchInput = menu.querySelector(".ctx-menu-search-input");
   if (searchInput) {
@@ -33701,6 +33832,19 @@ function normalizeWorkspaceZoom(value) {
         )
       )
     : WORKSPACE_ZOOM_BOUNDS.fallback;
+}
+
+function normalizeContextMenuScale(value) {
+  const requested = Number(value);
+  return Number.isFinite(requested)
+    ? Math.min(
+        CONTEXT_MENU_SCALE_BOUNDS.max,
+        Math.max(
+          CONTEXT_MENU_SCALE_BOUNDS.min,
+          Math.round(requested / CONTEXT_MENU_SCALE_BOUNDS.step) * CONTEXT_MENU_SCALE_BOUNDS.step
+        )
+      )
+    : CONTEXT_MENU_SCALE_BOUNDS.fallback;
 }
 
 async function refreshAiProviders(options = {}) {

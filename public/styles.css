@@ -6028,6 +6028,14 @@ body[data-pager-placement="right"] .pager-group-header {
   padding-right: 20px;
 }
 
+/* A column band stacks the header above the tabs, so the control centres on
+   that header row (band padding plus half the header) instead of the band top. */
+body[data-pager-placement="left"] .pager-group-color,
+body[data-pager-placement="right"] .pager-group-color {
+  top: calc(2px + 24px / 2);
+  transform: translateY(-50%);
+}
+
 body[data-pager-placement="left"] .pager-group-name,
 body[data-pager-placement="right"] .pager-group-name {
   flex: 1;
@@ -11094,12 +11102,14 @@ button.shortcut-binding.is-capturing {
 
 /* Compact menus stay opaque on the right-click critical path. The large grouped
   terminal menus opt into a scoped glass surface below. */
+/* --ctx-scale mirrors the CSS zoom applied to these menus, so every clamp below
+   divides by it to stay a real viewport bound rather than a scaled one. */
 .context-menu {
   background: var(--surface-high);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   box-shadow: var(--elev-4);
-  max-height: calc(100vh - 16px);
+  max-height: calc((100vh - 16px) / var(--ctx-scale, 1));
   min-width: 210px;
   overflow-y: auto;
   padding: 6px;
@@ -11107,7 +11117,10 @@ button.shortcut-binding.is-capturing {
   z-index: 130;
 }
 
-.context-menu[hidden] {
+/* The author display rules below outrank the user-agent [hidden] rule, so it has
+   to be restated for every variant that sets display. */
+.context-menu[hidden],
+.context-menu.is-grouped[hidden] {
   display: none;
 }
 
@@ -11119,18 +11132,25 @@ button.shortcut-binding.is-capturing {
   -webkit-backdrop-filter: blur(12px) saturate(135%);
   backdrop-filter: blur(12px) saturate(135%);
   background: var(--context-menu-glass);
-  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  max-width: calc((100vw - 16px) / var(--ctx-scale, 1));
   overflow: hidden;
   padding: 8px;
-  width: min(760px, calc(100vw - 16px));
+  width: min(760px, calc((100vw - 16px) / var(--ctx-scale, 1)));
 }
 
-.context-menu.is-customizable .ctx-groups {
-  max-height: calc(100vh - 116px);
+/* The toolbar and footer keep their intrinsic height and the group area absorbs
+   whatever is left, so a scaled menu can never push its footer out of view. */
+.context-menu.is-grouped > .ctx-groups {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.context-menu.is-customizable.is-shortcut-editing .ctx-groups {
-  max-height: calc(100vh - 164px);
+.context-menu.is-grouped > .ctx-menu-toolbar,
+.context-menu.is-grouped > .ctx-shortcut-capture,
+.context-menu.is-grouped > .ctx-customize-footer {
+  flex: 0 0 auto;
 }
 
 .header-action-scope-flyout {
@@ -11744,12 +11764,14 @@ button.shortcut-binding.is-capturing {
   text-align: center;
 }
 
+/* Height is governed by the menu's own flex column; this bound only applies when
+   the group list is used outside that layout. */
 .ctx-groups {
   align-items: start;
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  max-height: calc(100vh - 78px);
+  max-height: max(0px, calc((100vh - 16px) / var(--ctx-scale, 1) - 62px));
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -12028,6 +12050,45 @@ button.shortcut-binding.is-capturing {
   padding: 7px 2px 0;
 }
 
+/* Last in the footer and pushed right, so it never displaces the actions. */
+.ctx-menu-scale {
+  align-items: center;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+}
+
+/* One auto margin only: two would split the free space and strand the trailing
+   cluster in the middle. */
+.ctx-customize-footer > .ctx-menu-scale:first-child {
+  margin-left: auto;
+}
+
+.ctx-menu-scale:hover {
+  color: var(--text);
+}
+
+.ctx-menu-scale svg {
+  height: 13px;
+  width: 13px;
+}
+
+.ctx-menu-scale-slider {
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 14px;
+  margin: 0;
+  width: 84px;
+}
+
+.ctx-menu-scale-value {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
 .ctx-add-section,
 .ctx-show-hidden {
   appearance: none;
@@ -12042,8 +12103,8 @@ button.shortcut-binding.is-capturing {
   text-underline-offset: 2px;
 }
 
-.ctx-show-hidden {
-  margin-left: auto;
+.ctx-add-section {
+  margin-right: auto;
 }
 
 .ctx-add-section:hover,
@@ -12060,7 +12121,7 @@ button.shortcut-binding.is-capturing {
 
 @media (max-width: 720px) {
   .context-menu.is-grouped {
-    width: min(380px, calc(100vw - 16px));
+    width: min(380px, calc((100vw - 16px) / var(--ctx-scale, 1)));
   }
 
   .ctx-groups {

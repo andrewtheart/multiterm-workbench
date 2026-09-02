@@ -112,6 +112,88 @@ test.describe("Surface context menu", () => {
     await expect(menu.locator(".ctx-item", { hasText: "Split (duplicate)" })).toHaveCount(0);
   });
 
+  test("scales the terminal menu from its own slider and remembers the size", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    if ((await page.locator(".terminal-pane").count()) === 0) {
+      await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }));
+      await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    }
+    const original = await page.evaluate(() => state.settings.contextMenuScale);
+    const viewport = page.viewportSize();
+    try {
+      let menu = await openTerminalMenu(page);
+      const slider = menu.locator(".ctx-menu-scale-slider");
+      // Bottom-right, so it never displaces the actions it sits under.
+      const menuBox = await menu.boundingBox();
+      const sliderBox = await slider.boundingBox();
+      expect(sliderBox.x + sliderBox.width).toBeGreaterThan(menuBox.x + menuBox.width * 0.6);
+      expect(sliderBox.y).toBeGreaterThan(menuBox.y + menuBox.height * 0.75);
+
+      const rowBefore = await menu.locator(".ctx-item").first().boundingBox();
+      const headerBefore = await menu.locator(".ctx-group-title").first().boundingBox();
+      await setNative(page, ".ctx-menu-scale-slider", "140", "input");
+      await expect(menu.locator(".ctx-menu-scale-value")).toHaveText("140%");
+      expect(await page.evaluate(() => state.settings.contextMenuScale)).toBe(140);
+
+      // Rows and group headers grow together, rather than only the row text.
+      const rowAfter = await menu.locator(".ctx-item").first().boundingBox();
+      const headerAfter = await menu.locator(".ctx-group-title").first().boundingBox();
+      expect(rowAfter.height / rowBefore.height).toBeGreaterThan(1.3);
+      expect(headerAfter.height / headerBefore.height).toBeGreaterThan(1.3);
+
+      // A scaled menu is still positioned inside the window.
+      const scaled = await menu.boundingBox();
+      expect(scaled.x).toBeGreaterThanOrEqual(0);
+      expect(scaled.y).toBeGreaterThanOrEqual(0);
+      expect(scaled.x + scaled.width).toBeLessThanOrEqual(viewport.width);
+      expect(scaled.y + scaled.height).toBeLessThanOrEqual(viewport.height);
+
+      // The menu clips its own overflow, so growing chrome must come out of the
+      // scrolling group area rather than pushing the control past the edge.
+      const containment = await menu.evaluate((element) => {
+        const control = element.querySelector(".ctx-menu-scale").getBoundingClientRect();
+        const box = element.getBoundingClientRect();
+        return {
+          belowMenu: control.bottom - box.bottom,
+          offScreen: control.bottom - window.innerHeight
+        };
+      });
+      expect(containment.belowMenu).toBeLessThanOrEqual(0);
+      expect(containment.offScreen).toBeLessThanOrEqual(0);
+
+      // The next right-click opens at the chosen size.
+      await page.keyboard.press("Escape");
+      await expect(menu).toBeHidden();
+      menu = await openTerminalMenu(page);
+      await expect(menu.locator(".ctx-menu-scale-slider")).toHaveValue("140");
+      const reopened = await menu.locator(".ctx-group-title").first().boundingBox();
+      expect(Math.abs(reopened.height - headerAfter.height)).toBeLessThan(1);
+
+      // Settings drives the same setting for every terminal.
+      await expect(page.locator("#contextMenuScale")).toHaveValue("140");
+      await page.keyboard.press("Escape");
+      await setNative(page, "#contextMenuScale", "90", "input");
+      menu = await openTerminalMenu(page);
+      await expect(menu.locator(".ctx-menu-scale-slider")).toHaveValue("90");
+      const shrunk = await menu.locator(".ctx-group-title").first().boundingBox();
+      expect(shrunk.height).toBeLessThan(headerBefore.height);
+
+      await page.keyboard.press("Escape");
+      await page.reload();
+      await expect(page.locator("#statusConn")).toHaveText("Connected");
+      expect(await page.evaluate(() => state.settings.contextMenuScale)).toBe(90);
+      await expect(page.locator("#contextMenuScale")).toHaveValue("90");
+    } finally {
+      // Settings persist per origin, so a leftover scale would follow every later spec.
+      await page.evaluate((value) => {
+        state.settings.contextMenuScale = value;
+        applySettings();
+        saveSettings();
+      }, original);
+    }
+  });
+
   test("keeps setup-recoverable assistant actions available in both menus", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -759,12 +841,19 @@ test.describe("Surface context menu", () => {
     await expect(menu.locator('[data-customization-id="terminal.clear"]')).toHaveCount(0);
     const showHidden = menu.locator(".ctx-show-hidden");
     await expect(showHidden).toHaveText("Show hidden items");
+    // Trailing end of the footer, immediately before the menu-size control that
+    // owns the corner itself.
     const footerAlignment = await showHidden.evaluate((button) => {
       const buttonRect = button.getBoundingClientRect();
       const footerRect = button.parentElement.getBoundingClientRect();
-      return Math.abs(footerRect.right - buttonRect.right);
+      const scaleRect = button.parentElement.querySelector(".ctx-menu-scale").getBoundingClientRect();
+      return {
+        gapToScale: scaleRect.left - buttonRect.right,
+        scaleToFooterRight: Math.abs(footerRect.right - scaleRect.right)
+      };
     });
-    expect(footerAlignment).toBeLessThan(8);
+    expect(footerAlignment.gapToScale).toBeLessThan(16);
+    expect(footerAlignment.scaleToFooterRight).toBeLessThan(8);
     expect(await page.evaluate(() =>
       JSON.parse(localStorage.getItem("multiterm.contextMenuLayout")).hidden
     )).toContain("terminal.clear");

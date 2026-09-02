@@ -37,6 +37,7 @@ test.describe("Copilot composer text selection", () => {
   test.beforeAll(async ({ browser }) => {
     test.setTimeout(240000);
     page = await browser.newPage();
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:3199" });
     await startRendererCoverage(page);
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -198,6 +199,45 @@ test.describe("Copilot composer text selection", () => {
 
     await page.keyboard.type("Z", { delay: 40 });
     await expect.poll(async () => (await composer()).text.trimEnd(), { timeout: 15000 }).toBe("ALPHA Z");
+  });
+
+  test("cuts a highlighted range to the clipboard with Ctrl+X", async () => {
+    await clearComposer();
+    await page.evaluate(() => navigator.clipboard.writeText("PLACEHOLDER"));
+    await page.keyboard.type("ALPHA BRAVO", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("ALPHA BRAVO");
+    for (let press = 0; press < 5; press += 1) {
+      await page.keyboard.press("Shift+ArrowLeft");
+    }
+    await expect.poll(async () => (await composer()).selectedCells, { timeout: 15000 }).toBe(5);
+
+    await page.keyboard.press("Control+x");
+    await expect.poll(async () => (await composer()).text.trimEnd(), { timeout: 15000 }).toBe("ALPHA");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), { timeout: 15000 }).toBe("BRAVO");
+    const after = await composer();
+    expect(after.selection).toBeFalsy();
+    expect(after.bandCount).toBe(0);
+  });
+
+  test("cuts a mouse-dragged composer range with Ctrl+X", async () => {
+    await clearComposer();
+    await page.evaluate(() => navigator.clipboard.writeText("PLACEHOLDER"));
+    await page.keyboard.type("ALPHA BRAVO", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("ALPHA BRAVO");
+
+    await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      const region = copilotComposerRegion(terminal);
+      const row = region.rows[0];
+      terminal.term.select(row.start + 6, terminal.term.buffer.active.viewportY + row.row, 5);
+    }, id);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("BRAVO");
+
+    await page.keyboard.press("Control+x");
+    await expect.poll(async () => (await composer()).text.trimEnd(), { timeout: 15000 }).toBe("ALPHA");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText()), { timeout: 15000 }).toBe("BRAVO");
+    // The highlight has to go with the text, or the selection restorer paints it back.
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("");
   });
 
   test("types normally when the selection is output rather than composer text", async () => {

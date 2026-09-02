@@ -257,6 +257,12 @@ test.describe("Page groups", () => {
       expect(corner.y - band.y).toBeLessThan(8);
     }
 
+    // The header owns its own row in a column band, so the control is centred on
+    // that row rather than riding the band's top edge.
+    const headerRow = await page.locator(".pager-group-header").boundingBox();
+    const centred = await control.boundingBox();
+    expect(Math.abs((centred.y + centred.height / 2) - (headerRow.y + headerRow.height / 2))).toBeLessThan(1);
+
     // Only the header shares the corner in a column band, so the tabs below it
     // keep the band's full width rather than being inset by the control.
     const band = await page.locator(".pager-group").boundingBox();
