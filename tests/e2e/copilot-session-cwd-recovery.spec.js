@@ -312,7 +312,7 @@ test.describe("Copilot session working-directory recovery", () => {
         activeId: state.activeId,
         queryWasToolFree: window.__cwdRecoveryFrames.some((frame) => frame.type === "input"
           && String(frame.data || "").includes("--resume")
-          && String(frame.data || "").includes("--available-tools=")),
+          && String(frame.data || "").includes('--excluded-tools="builtin:*,mcp:*,custom:*"')),
         pendingCwdChange: terminal?.pendingCwdChange,
         transient: terminal?.transient,
         resumeCommands: window.__cwdRecoveryFrames.filter((frame) => frame.type === "input" && String(frame.data || "").includes("--resume")).length

@@ -30634,6 +30634,10 @@ function registerCopilotLogTerminal(key, terminal) {
   });
 }
 
+// The CLI silently ignores an empty --available-tools value, so a tool-free session
+// must exclude by pattern; these are the same patterns src/server.js gives the SDK.
+const COPILOT_TOOL_FREE_EXCLUSIONS = "builtin:*,mcp:*,custom:*";
+
 function buildAiAssistantCommand({
   provider = state.settings.aiSessionProvider,
   resumeId = "",
@@ -30686,7 +30690,7 @@ function buildAiAssistantCommand({
     parts.push("--context", context);
   }
   if (provider === "copilot" && initialPrompt) parts.push("-i", powerShellLiteral(initialPrompt));
-  if (provider === "copilot" && !tools) parts.push("--available-tools=");
+  if (provider === "copilot" && !tools) parts.push(`--excluded-tools="${COPILOT_TOOL_FREE_EXCLUSIONS}"`);
   return parts.filter(Boolean).join(" ");
 }
 

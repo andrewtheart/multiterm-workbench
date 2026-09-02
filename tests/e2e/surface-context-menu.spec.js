@@ -2347,7 +2347,8 @@ test.describe("Surface context menu", () => {
       tools: false,
       yolo: false
     }));
-    expect(supervisedProbe).toContain("--available-tools=");
+    expect(supervisedProbe).toContain('--excluded-tools="builtin:*,mcp:*,custom:*"');
+    expect(supervisedProbe).not.toContain("--available-tools=");
     expect(supervisedProbe).not.toContain("--yolo");
 
     // Row-local choices never rewrite the persisted default or Settings control.
