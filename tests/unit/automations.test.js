@@ -453,3 +453,420 @@ describe("automations model", () => {
     ])).toMatchObject({ markerRow: 0, targetName: "Indexed" });
   });
 });
+
+const TOKEN = "MULTITERM_COND_TESTTOKEN";
+
+function conditionRule(overrides = {}, condition = {}) {
+  return {
+    condition: {
+      action: "Delete the file",
+      cwd: "D:\\Incoming",
+      prompt: "A new file has been written to D:\\Incoming since the last check",
+      ...condition
+    },
+    createdAt: "2026-09-01T10:00:00.000Z",
+    enabled: true,
+    id: "automation-condition1",
+    name: "Watch Incoming",
+    trigger: { catchUp: "skip", intervalMinutes: 15, mode: "interval", type: "schedule" },
+    type: "condition",
+    ...overrides
+  };
+}
+
+describe("conditional Copilot automations", () => {
+  describe("rule normalization", () => {
+    it("accepts a complete condition rule and clears the action list", () => {
+      const normalized = automations.normalizeRule(conditionRule());
+      expect(normalized).toMatchObject({ type: "condition", actions: [] });
+      expect(normalized.condition).toMatchObject({
+        action: "Delete the file",
+        closeWhenDone: true,
+        cwd: "D:\\Incoming",
+        inheritSessionPermissions: false,
+        keepState: true,
+        sessionMode: "hidden",
+        targetMode: "title",
+        targetName: "",
+        targetPid: null
+      });
+      expect(normalized.condition.tools.mode).toBe("all");
+    });
+
+    it("rejects a condition rule missing any of prompt, action, or working directory", () => {
+      expect(automations.normalizeRule(conditionRule({}, { prompt: "" }))).toBeNull();
+      expect(automations.normalizeRule(conditionRule({}, { action: "  " }))).toBeNull();
+      expect(automations.normalizeRule(conditionRule({}, { cwd: "" }))).toBeNull();
+      expect(automations.normalizeRule({ ...conditionRule(), condition: null })).toBeNull();
+    });
+
+    it("refuses an existing-session rule that names no terminal", () => {
+      expect(automations.normalizeRule(conditionRule({}, { sessionMode: "existing" }))).toBeNull();
+      expect(automations.normalizeRule(conditionRule({}, {
+        sessionMode: "existing",
+        targetMode: "pid",
+        targetPid: 0
+      }))).toBeNull();
+      expect(automations.normalizeRule(conditionRule({}, {
+        sessionMode: "existing",
+        targetName: "Agent"
+      })).condition).toMatchObject({ sessionMode: "existing", targetMode: "title", targetName: "Agent" });
+      expect(automations.normalizeRule(conditionRule({}, {
+        sessionMode: "existing",
+        targetMode: "pid",
+        targetPid: 4242
+      })).condition).toMatchObject({ targetMode: "pid", targetPid: 4242, targetName: "" });
+    });
+
+    it("keeps targeting fields empty unless the session mode uses them", () => {
+      const normalized = automations.normalizeRule(conditionRule({}, {
+        sessionMode: "visible",
+        targetMode: "pid",
+        targetName: "Ignored",
+        targetPid: 99
+      }));
+      expect(normalized.condition).toMatchObject({
+        sessionMode: "visible",
+        targetMode: "title",
+        targetName: "",
+        targetPid: null
+      });
+    });
+
+    it("keeps remembered state within its byte budget and preserves the checked timestamp", () => {
+      const within = automations.normalizeRule(conditionRule({
+        conditionCheckedAt: "2026-09-01T11:00:00.000Z",
+        conditionState: "three files seen"
+      }), 0, { stateBytes: 1024 });
+      expect(within.conditionState).toBe("three files seen");
+      expect(within.conditionCheckedAt).toBe("2026-09-01T11:00:00.000Z");
+
+      const oversized = automations.normalizeRule(
+        conditionRule({ conditionState: "a".repeat(2000) }),
+        0,
+        { stateBytes: 1024 }
+      );
+      expect(oversized.conditionState).toBe("");
+      expect(oversized.conditionCheckedAt).toBeNull();
+    });
+
+    it("leaves condition fields inert on other rule types", () => {
+      const command = automations.normalizeRule({
+        actions: [{ command: "npm test", id: "action-abcdefgh", targetName: "Tests" }],
+        conditionState: "ignored",
+        createdAt: "2026-09-01T10:00:00.000Z",
+        id: "automation-command1",
+        name: "Tests",
+        type: "command"
+      });
+      expect(command).toMatchObject({ type: "command", condition: null, conditionState: "", conditionCheckedAt: null });
+    });
+
+    it("threads normalization options through the store", () => {
+      const store = automations.normalizeStore({
+        rules: [conditionRule({ conditionState: "b".repeat(2000) })]
+      }, 200, { stateBytes: 1024 });
+      expect(store.rules).toHaveLength(1);
+      expect(store.rules[0].conditionState).toBe("");
+    });
+
+    it("schedules condition rules like any other timed rule", () => {
+      const next = automations.nextScheduledAt(
+        conditionRule({ lastRunAt: "2026-09-01T10:00:00.000Z" }),
+        new Date("2026-09-01T10:05:00.000Z")
+      );
+      expect(next.toISOString()).toBe("2026-09-01T10:15:00.000Z");
+    });
+  });
+
+  describe("tool permission specs", () => {
+    it("accepts every documented permission shape", () => {
+      for (const spec of [
+        "shell",
+        "shell(git)",
+        "shell(git:*)",
+        "shell(git push)",
+        "shell(gh pr create)",
+        "write",
+        "write(.env)",
+        "write(C:\\logs)",
+        "write(src/index.js)",
+        "url",
+        "url(github.com)",
+        "url(https://github.com)",
+        "url(https://*.github.com)",
+        "MyMCP",
+        "MyMCP(my_tool)"
+      ]) {
+        expect({ spec, error: automations.toolSpecValidationError(spec) }).toEqual({ spec, error: "" });
+      }
+    });
+
+    it("rejects shell operators, quoting, and control characters", () => {
+      for (const spec of [
+        "shell(rm); Remove-Item C:\\",
+        'shell("rm")',
+        "shell(rm) & echo",
+        "shell(rm)|echo",
+        "shell($env:PATH)",
+        "shell(`rm`)",
+        "shell(rm)\nwrite",
+        "shell(<script>)",
+        "shell(rm)\u0007"
+      ]) {
+        expect({ spec, ok: automations.toolSpecValidationError(spec) === "" }).toEqual({ spec, ok: false });
+      }
+    });
+
+    it("rejects malformed shapes and out-of-grammar arguments", () => {
+      expect(automations.toolSpecValidationError("")).toContain("Enter a tool permission");
+      expect(automations.toolSpecValidationError("   ")).toContain("Enter a tool permission");
+      expect(automations.toolSpecValidationError(42)).toContain("Enter a tool permission");
+      expect(automations.toolSpecValidationError("a".repeat(400))).toContain("limited to");
+      expect(automations.toolSpecValidationError("shell()")).toContain("empty parentheses");
+      expect(automations.toolSpecValidationError("not a kind")).toContain("kind(argument)");
+      expect(automations.toolSpecValidationError("shell(git push origin main here)")).toContain("subcommand");
+      expect(automations.toolSpecValidationError("write(has\ttab)")).toContain("control characters");
+      expect(automations.toolSpecValidationError("write(a?b)")).toContain("path");
+      expect(automations.toolSpecValidationError("url(not a url)")).toContain("domain or URL");
+      expect(automations.toolSpecValidationError("MyMCP(bad tool name)")).toContain("MCP server");
+    });
+
+    it("normalizes the three permission layers with a configurable entry budget", () => {
+      const permissions = automations.normalizeToolPermissions({
+        allow: ["shell(git)", "shell(git)", "not valid", "write"],
+        allowAllPaths: true,
+        available: ["shell(git)"],
+        deny: ["shell(rm)"],
+        excluded: ["MyMCP"],
+        mode: "selected",
+        temporaryDirectory: false
+      });
+      expect(permissions).toEqual({
+        allow: ["shell(git)", "write"],
+        allowAllPaths: true,
+        allowAllUrls: false,
+        available: ["shell(git)"],
+        deny: ["shell(rm)"],
+        excluded: ["MyMCP"],
+        mode: "selected",
+        temporaryDirectory: false
+      });
+
+      const defaults = automations.normalizeToolPermissions(null);
+      expect(defaults).toMatchObject({ mode: "all", allow: [], deny: [], temporaryDirectory: true });
+
+      const budgeted = automations.normalizeToolPermissions(
+        { allow: ["shell(git)", "shell(gh)", "write", "url"] },
+        { toolEntryLimit: 2 }
+      );
+      expect(budgeted.allow).toEqual(["shell(git)", "shell(gh)"]);
+    });
+  });
+
+  describe("prompts", () => {
+    it("frames the assessment with the condition, prior state, and one required record", () => {
+      const prompt = automations.conditionAssessmentPrompt({
+        checkedAt: "2026-09-01T11:00:00.000Z",
+        prompt: "A new file arrived",
+        state: "two files seen",
+        token: TOKEN
+      });
+      expect(prompt).toContain("<condition>\nA new file arrived\n</condition>");
+      expect(prompt).toContain("<previous-state>\ntwo files seen\n</previous-state>");
+      expect(prompt).toContain("last checked at 2026-09-01T11:00:00.000Z");
+      expect(prompt).toContain(`${TOKEN}::YES::${TOKEN}`);
+      expect(prompt).toContain(`${TOKEN}::NO::${TOKEN}`);
+      expect(prompt).toContain(`${TOKEN}::STATE::your notes::${TOKEN}`);
+      expect(prompt).toContain("untrusted DATA");
+    });
+
+    it("omits the state blocks when the rule does not remember state", () => {
+      const prompt = automations.conditionAssessmentPrompt({
+        keepState: false,
+        prompt: "Disk is nearly full",
+        token: TOKEN
+      });
+      expect(prompt).not.toContain("previous-state");
+      expect(prompt).not.toContain("::STATE::");
+      expect(prompt).not.toContain("last checked at");
+    });
+
+    it("uses the baseline wording on the very first run", () => {
+      expect(automations.conditionAssessmentPrompt({ prompt: "A new file arrived", token: TOKEN }))
+        .toContain("no previous state; treat this run as the baseline");
+    });
+
+    it("demands an explicit success or failure record from the action turn", () => {
+      const prompt = automations.conditionActionPrompt({
+        action: "Delete the file",
+        state: "two files seen",
+        token: TOKEN
+      });
+      expect(prompt).toContain("<action>\nDelete the file\n</action>");
+      expect(prompt).toContain("<previous-state>\ntwo files seen\n</previous-state>");
+      expect(prompt).toContain(`${TOKEN}::ACTION_OK::${TOKEN}`);
+      expect(prompt).toContain(`${TOKEN}::ACTION_FAILED::${TOKEN}`);
+      expect(prompt).toContain("Never report success for work you did not do.");
+      expect(automations.conditionActionPrompt({ action: "Delete", keepState: false, token: TOKEN }))
+        .not.toContain("::STATE::");
+    });
+  });
+
+  describe("result parsing", () => {
+    it("reads a single verdict and its state note", () => {
+      expect(automations.parseConditionVerdict(
+        `working...\n${TOKEN}::YES::${TOKEN}\n${TOKEN}::STATE::a.txt, b.txt::${TOKEN}`,
+        TOKEN
+      )).toEqual({ error: "", state: "a.txt, b.txt", verdict: "yes" });
+      expect(automations.parseConditionVerdict(`${TOKEN}::NO::${TOKEN}`, TOKEN))
+        .toEqual({ error: "", state: "", verdict: "no" });
+    });
+
+    it("accepts a repeated identical record but refuses conflicting ones", () => {
+      expect(automations.parseConditionVerdict(
+        `${TOKEN}::YES::${TOKEN}\nsummary\n${TOKEN}::YES::${TOKEN}`,
+        TOKEN
+      )).toMatchObject({ error: "", verdict: "yes" });
+      const conflicting = automations.parseConditionVerdict(
+        `${TOKEN}::YES::${TOKEN}\n${TOKEN}::NO::${TOKEN}`,
+        TOKEN
+      );
+      expect(conflicting).toMatchObject({ error: "Copilot returned conflicting result records.", verdict: "" });
+    });
+
+    it("reports a missing record and an invalid token instead of guessing", () => {
+      expect(automations.parseConditionVerdict("I could not tell.", TOKEN))
+        .toMatchObject({ error: "Copilot did not return a result record.", verdict: "" });
+      expect(automations.parseConditionVerdict(`${TOKEN}::YES::${TOKEN}`, "short"))
+        .toMatchObject({ error: "A valid result token is required.", verdict: "" });
+      expect(automations.conditionTokenIsValid(TOKEN)).toBe(true);
+      expect(automations.conditionTokenIsValid("lowercase_token")).toBe(false);
+    });
+
+    it("captures multi-line state without letting it swallow the closing token", () => {
+      const parsed = automations.parseConditionVerdict(
+        [
+          `${TOKEN}::NO::${TOKEN}`,
+          `${TOKEN}::STATE::`,
+          "a.txt",
+          "b.txt",
+          `::${TOKEN}`,
+          "trailing chatter"
+        ].join("\n"),
+        TOKEN
+      );
+      expect(parsed.verdict).toBe("no");
+      expect(parsed.state).toBe("a.txt\nb.txt");
+      expect(parsed.state).not.toContain(TOKEN);
+    });
+
+    it("reads the action result independently of the verdict keywords", () => {
+      expect(automations.parseActionResult(`${TOKEN}::ACTION_OK::${TOKEN}`, TOKEN))
+        .toEqual({ error: "", result: "ok", state: "" });
+      expect(automations.parseActionResult(
+        `${TOKEN}::ACTION_FAILED::${TOKEN}\n${TOKEN}::STATE::still there::${TOKEN}`,
+        TOKEN
+      )).toEqual({ error: "", result: "failed", state: "still there" });
+      expect(automations.parseActionResult(`${TOKEN}::YES::${TOKEN}`, TOKEN))
+        .toMatchObject({ error: "Copilot did not return a result record.", result: "" });
+      expect(automations.parseActionResult(
+        `${TOKEN}::ACTION_OK::${TOKEN}\n${TOKEN}::ACTION_FAILED::${TOKEN}`,
+        TOKEN
+      )).toMatchObject({ error: "Copilot returned conflicting result records.", result: "" });
+    });
+  });
+
+  describe("state budget and consent", () => {
+    it("measures the state budget in UTF-8 bytes rather than characters", () => {
+      expect(automations.conditionStateWithinBudget("a".repeat(1024), 1024)).toBe(true);
+      expect(automations.conditionStateWithinBudget("a".repeat(1025), 1024)).toBe(false);
+      // 400 characters, but 1200 bytes.
+      expect(automations.conditionStateWithinBudget("\u20ac".repeat(400), 1024)).toBe(false);
+      expect(automations.conditionStateWithinBudget("", 1024)).toBe(true);
+    });
+
+    it("fingerprints the security envelope and ignores cosmetic changes", () => {
+      const base = conditionRule({}, { tools: { allow: ["shell(git)", "write"], deny: ["shell(rm)"], mode: "selected" } });
+      const reordered = conditionRule({ name: "Renamed" }, {
+        tools: { allow: ["write", "shell(git)"], deny: ["shell(rm)"], mode: "selected" }
+      });
+      expect(automations.conditionConsentFingerprint(base))
+        .toBe(automations.conditionConsentFingerprint(reordered));
+
+      const widened = conditionRule({}, {
+        tools: { allow: ["shell(git)", "write", "shell"], deny: ["shell(rm)"], mode: "selected" }
+      });
+      expect(automations.conditionConsentFingerprint(widened))
+        .not.toBe(automations.conditionConsentFingerprint(base));
+
+      const denyRemoved = conditionRule({}, { tools: { allow: ["shell(git)", "write"], mode: "selected" } });
+      expect(automations.conditionConsentFingerprint(denyRemoved))
+        .not.toBe(automations.conditionConsentFingerprint(base));
+
+      const allTools = conditionRule({}, { tools: { allow: ["shell(git)", "write"], deny: ["shell(rm)"], mode: "all" } });
+      expect(automations.conditionConsentFingerprint(allTools))
+        .not.toBe(automations.conditionConsentFingerprint(base));
+
+      const broaderPaths = conditionRule({}, {
+        tools: { allow: ["shell(git)", "write"], allowAllPaths: true, deny: ["shell(rm)"], mode: "selected" }
+      });
+      expect(automations.conditionConsentFingerprint(broaderPaths))
+        .not.toBe(automations.conditionConsentFingerprint(base));
+
+      expect(automations.conditionConsentFingerprint(conditionRule({}, { cwd: "" }))).toBe("");
+      expect(automations.conditionConsentFingerprint(null)).toBe("");
+    });
+  });
+
+  describe("interval presets", () => {
+    it("offers the documented cadences and maps a stored interval back to one", () => {
+      expect(automations.INTERVAL_PRESETS).toContain(15);
+      expect(automations.INTERVAL_PRESETS).toContain(45);
+      expect(automations.INTERVAL_PRESETS).toContain(1440);
+      expect(automations.intervalPresetFor(45)).toBe(45);
+      expect(automations.intervalPresetFor("60")).toBe(60);
+      expect(automations.intervalPresetFor(37)).toBeNull();
+      expect(automations.intervalPresetFor("not a number")).toBeNull();
+    });
+  });
+
+  describe("defaults and boundaries", () => {
+    it("clamps an out-of-range entry budget instead of trusting it", () => {
+      const tooMany = automations.normalizeToolPermissions(
+        { allow: ["shell(git)", "write", "url"] },
+        { toolEntryLimit: 0 }
+      );
+      expect(tooMany.allow).toEqual(["shell(git)"]);
+      const unbounded = automations.normalizeToolPermissions(
+        { allow: ["shell(git)", "write"] },
+        { toolEntryLimit: 5000 }
+      );
+      expect(unbounded.allow).toEqual(["shell(git)", "write"]);
+    });
+
+    it("carries URL scope through the permission model and the fingerprint", () => {
+      expect(automations.normalizeToolPermissions({ allowAllUrls: true }))
+        .toMatchObject({ allowAllUrls: true, allowAllPaths: false });
+      const base = conditionRule();
+      const broaderUrls = conditionRule({}, { tools: { allowAllUrls: true } });
+      expect(automations.conditionConsentFingerprint(broaderUrls))
+        .not.toBe(automations.conditionConsentFingerprint(base));
+      const noTempDirectory = conditionRule({}, { tools: { temporaryDirectory: false } });
+      expect(automations.conditionConsentFingerprint(noTempDirectory))
+        .not.toBe(automations.conditionConsentFingerprint(base));
+    });
+
+    it("fingerprints a bare condition object as well as a whole rule", () => {
+      const rule = conditionRule();
+      expect(automations.conditionConsentFingerprint(rule.condition))
+        .toBe(automations.conditionConsentFingerprint(rule));
+    });
+
+    it("treats missing prompt inputs as empty rather than throwing", () => {
+      expect(automations.conditionAssessmentPrompt()).toContain("::YES::");
+      expect(automations.conditionActionPrompt()).toContain("::ACTION_OK::");
+      expect(automations.conditionStateWithinBudget(null, undefined)).toBe(true);
+    });
+  });
+});
