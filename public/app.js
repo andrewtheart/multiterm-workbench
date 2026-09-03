@@ -1941,6 +1941,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindWorkspaceBackgroundZoom();
   bindPageSwipeGestures();
   bindGlobalShortcuts();
+  promoteContextShortcutsToGlobal();
   refreshGlobalShortcutHints();
   bindFullscreenEvents();
   bindFindAll();
@@ -11712,6 +11713,17 @@ async function copyTerminalOutput(id, selectionOverride) {
   }
 }
 
+// "Copy all output" names a visible result, so the buffer is selected first and
+// the highlight is left behind to show exactly what was taken. Passing an empty
+// selection means the copy still reads the whole buffer rather than the
+// highlight, which xterm caps at the active screen.
+async function copyAllTerminalOutput(terminal) {
+  if (!terminal) return;
+  forgetTerminalSelection(terminal);
+  terminal.term.selectAll();
+  await copyTerminalOutput(terminal.id, "");
+}
+
 function writeClipboardText(text) {
   if (window.multiterm?.writeClipboardText) {
     return window.multiterm.writeClipboardText(text);
@@ -14527,6 +14539,7 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
   { id: "terminal.clear", section: "Terminal", label: "Clear active terminal", detail: "Clears the active terminal display.", defaults: [{ ctrl: true, shift: true, key: "l" }], run: () => clearActiveTerminal() },
   { id: "terminal.pane-zoom", section: "Terminal", label: "Maximize or restore pane", detail: "Toggles the active pane size.", defaults: [{ ctrl: true, shift: true, key: "x" }], run: () => toggleZoomPane(state.activeId) },
   { id: "terminal.copy", section: "Terminal", label: "Copy output", detail: "Copies selected terminal output.", defaults: [{ ctrl: true, key: "c" }, { ctrl: true, shift: true, key: "c" }], run: () => { const active = state.activeId ? state.terminals.get(state.activeId) : null; if (active) copyTerminalOutput(active.id, active.term.getSelection() || active.contextSelection || active.selectionSnapshot || undefined); } },
+  { id: "terminal.copy-all", section: "Terminal", label: "Copy all output", detail: "Selects the active terminal's whole buffer and copies it.", defaults: [], run: () => copyAllTerminalOutput(state.activeId ? state.terminals.get(state.activeId) : null) },
   { id: "terminal.dequeue", section: "Terminal", label: "Dequeue next command", detail: "Inserts and runs the next staged command.", defaults: [{ ctrl: true, shift: true, key: "q" }], run: () => dequeueNextTerminalCommand(state.activeId ? state.terminals.get(state.activeId) : null) },
   { id: "terminal.next", section: "Terminal", label: "Next terminal", detail: "Moves focus to the next terminal.", defaults: [{ ctrl: true, alt: true, key: "arrowright" }], run: () => cycleTerminal(1) },
   { id: "terminal.previous", section: "Terminal", label: "Previous terminal", detail: "Moves focus to the previous terminal.", defaults: [{ ctrl: true, alt: true, key: "arrowleft" }], run: () => cycleTerminal(-1) },
@@ -14847,11 +14860,12 @@ function bindGlobalShortcuts() {
     if (runGlobalShortcut(event, [
       ...TOP_BAR_SHORTCUT_ACTION_IDS, "terminal.close", "terminal.find", "terminal.find-all", "terminal.filter",
       "terminal.restart", "terminal.paste", "terminal.clear", "terminal.pane-zoom",
-      "terminal.copy", "terminal.dequeue", "terminal.next", "terminal.previous", "terminal.zoom-in",
+      "terminal.copy", "terminal.copy-all", "terminal.dequeue", "terminal.next", "terminal.previous", "terminal.zoom-in",
       "terminal.zoom-out", "terminal.zoom-reset", "page.next", "page.previous", "app.zoom-in",
       "app.zoom-out", "app.zoom-reset"
     ])) return;
     if (runHeaderActionShortcut(event)) return;
+    if (runTerminalContextShortcut(event)) return;
     if (event.altKey && !event.ctrlKey && !event.metaKey && /^[1-9]$/.test(event.key)) {
       const page = state.pages[Number(event.key) - 1];
       if (page) {
@@ -32249,6 +32263,15 @@ function stableContextActionToken(value) {
 }
 
 function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
+  renderContextMenu(terminalContextMenuItems(terminal, selection), {
+    customizable: true,
+    grouped: true,
+    searchable: true,
+    shortcutEditor: true
+  });
+}
+
+function terminalContextMenuItems(terminal, selection = terminal.term.getSelection()) {
   const hasSelection = Boolean(selection);
   const isZoomed = state.zoomedId === terminal.id;
   const assistantName = aiAssistantName();
@@ -32271,7 +32294,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     { group: "Clipboard", groupId: "clipboard" },
     { label: "Copy", ...shortcutHint("terminal.copy"), icon: "clipboard-copy", shortcutId: "terminal.copy", disabled: !hasSelection, run: () => copyTerminalOutput(terminal.id, selection) },
     { label: "Copy and prepare\u2026", icon: "notebook-pen", shortcutId: "terminal.copy-prepare", disabled: !hasSelection, run: () => openPrepareEditor(selection, terminal.id) },
-    { label: "Copy all output", icon: "copy", shortcutId: "terminal.copy-all", run: () => { forgetTerminalSelection(terminal); copyTerminalOutput(terminal.id); } },
+    { label: "Copy all output", ...shortcutHint("terminal.copy-all"), icon: "copy", shortcutId: "terminal.copy-all", run: () => copyAllTerminalOutput(terminal) },
     { label: "Paste", ...shortcutHint("terminal.paste"), icon: "clipboard-paste", shortcutId: "terminal.paste", run: () => pasteIntoTerminal(terminal.id) },
     { label: "Prepare and paste\u2026", icon: "clipboard-pen", shortcutId: "terminal.prepare-paste", run: () => openPrepareAndPaste(terminal) },
     {
@@ -32399,12 +32422,7 @@ function buildContextMenu(terminal, selection = terminal.term.getSelection()) {
     ...buildMoveToPageItems(terminal)
   ];
 
-  renderContextMenu(items, {
-    customizable: true,
-    grouped: true,
-    searchable: true,
-    shortcutEditor: true
-  });
+  return items;
 }
 
 // The value arrives from a free-text field in the context menu, so it is filtered
@@ -33400,9 +33418,32 @@ function assignContextMenuShortcut(actionId, binding) {
     displacedActionId = otherActionId;
     break;
   }
+  const displacedGlobals = releaseGlobalShortcutSignature(normalized);
   contextMenuShortcuts.set(actionId, normalized);
   saveContextMenuShortcuts();
-  return displacedActionId;
+  return displacedActionId || (displacedGlobals.length ? { globals: displacedGlobals } : null);
+}
+
+// App-wide shortcuts are dispatched first, so a chord an app action still owns
+// would silently beat the menu binding assigned to it. Only chords that are
+// actually dispatched from the terminal may take one; a bare digit stays
+// menu-only and has no claim.
+function releaseGlobalShortcutSignature(binding) {
+  if (!binding || !(binding.alt || binding.ctrl || binding.meta || binding.shift)) return [];
+  const signature = globalShortcutSignature(normalizeGlobalShortcutBinding(binding));
+  if (!signature) return [];
+  const overrides = state.settings.keyboardShortcuts && typeof state.settings.keyboardShortcuts === "object"
+    && !Array.isArray(state.settings.keyboardShortcuts) ? { ...state.settings.keyboardShortcuts } : {};
+  const displaced = [];
+  for (const action of GLOBAL_SHORTCUT_ACTIONS) {
+    const current = globalShortcutBindings(action.id);
+    const next = current.filter((candidate) => globalShortcutSignature(candidate) !== signature);
+    if (next.length === current.length) continue;
+    setGlobalShortcutOverride(overrides, action.id, next);
+    displaced.push(action.label);
+  }
+  if (displaced.length) persistGlobalShortcutOverrides(overrides);
+  return displaced;
 }
 
 function clearContextMenuShortcut(actionId) {
@@ -33412,6 +33453,54 @@ function clearContextMenuShortcut(actionId) {
 }
 
 let contextMenuShortcuts = loadContextMenuShortcuts();
+
+// A shortcut assigned in the terminal menu is expected to work from the terminal
+// too, not only while that menu is open. Bare digits stay menu-only because
+// outside the menu they are ordinary typing.
+function runTerminalContextShortcut(event) {
+  if (!contextMenuShortcuts.size) return false;
+  const binding = contextShortcutFromEvent(event);
+  if (!binding || !(binding.alt || binding.ctrl || binding.meta || binding.shift)) return false;
+  const signature = contextShortcutSignature(binding);
+  if (!signature) return false;
+  let actionId = "";
+  for (const [candidateId, candidate] of contextMenuShortcuts) {
+    if (contextShortcutSignature(candidate) !== signature) continue;
+    actionId = candidateId;
+    break;
+  }
+  if (!actionId) return false;
+  const terminal = state.activeId ? state.terminals.get(state.activeId) : null;
+  if (!terminal) return false;
+  const item = terminalContextMenuItems(terminal)
+    .find((candidate) => candidate.shortcutId === actionId && typeof candidate.run === "function");
+  if (!item || item.disabled) return false;
+  event.preventDefault();
+  // preventDefault alone leaves xterm's own handler free to type the chord.
+  if (event.target instanceof Element && event.target.closest(".terminal-pane")) {
+    event.stopImmediatePropagation();
+  }
+  item.run();
+  return true;
+}
+
+// Actions that used to be menu-only accelerators but are now dispatched from
+// the terminal. Without this an existing binding would still be listed by the
+// menu editor while silently never firing.
+const PROMOTED_CONTEXT_SHORTCUTS = ["terminal.copy-all"];
+
+function promoteContextShortcutsToGlobal() {
+  for (const actionId of PROMOTED_CONTEXT_SHORTCUTS) {
+    const binding = contextMenuShortcuts.get(actionId);
+    if (!binding) continue;
+    clearContextMenuShortcut(actionId);
+    if (!globalShortcutBindings(actionId).length) assignGlobalShortcutBinding(actionId, 0, binding);
+  }
+  // Bindings stored before menu shortcuts were dispatched from the terminal can
+  // still collide with an app action, which is checked first and would keep
+  // winning. The menu binding is the explicit choice, so it takes the chord.
+  for (const binding of contextMenuShortcuts.values()) releaseGlobalShortcutSignature(binding);
+}
 
 // Keyboard activation state for the open menu. Compact menus retain automatic
 // letter/number accelerators; the full terminal menu can additionally expose
@@ -33907,9 +33996,12 @@ function commitContextShortcutCapture() {
       ? `Assigned ${formatted} to ${capture.label}; removed it from ${displaced.join(", ")}.`
       : `Assigned ${formatted} to ${capture.label}.`;
   } else {
-    const displacedActionId = assignContextMenuShortcut(capture.actionId, capture.pending);
-    ctxShortcutStatus = displacedActionId
-      ? `Assigned ${formatted} to ${capture.label}; removed it from ${contextShortcutActionLabel(displacedActionId)}.`
+    const displaced = assignContextMenuShortcut(capture.actionId, capture.pending);
+    const displacedLabel = displaced?.globals
+      ? displaced.globals.join(", ")
+      : (displaced ? contextShortcutActionLabel(displaced) : "");
+    ctxShortcutStatus = displacedLabel
+      ? `Assigned ${formatted} to ${capture.label}; removed it from ${displacedLabel}.`
       : `Assigned ${formatted} to ${capture.label}.`;
   }
   rerenderOpenContextMenu();

@@ -1557,6 +1557,194 @@ test.describe("Surface context menu", () => {
     }
   });
 
+  // A binding assigned in the menu used to be dispatched only by the open
+  // menu's own key handler, so pressing it in a terminal did nothing and the
+  // chord fell through to the shell.
+  test("runs a menu shortcut from the terminal while the menu is closed", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator(".terminal-pane").first()).toBeVisible();
+
+    try {
+      await page.evaluate(() => {
+        const terminal = state.terminals.values().next().value;
+        setActiveTerminal(terminal.id);
+        hideContextMenu();
+        assignContextMenuShortcut("terminal.statistics", { alt: true, ctrl: true, key: "j", meta: false, shift: true });
+        window.__menuShortcutRan = 0;
+        window.__menuShortcutOriginal = openStatistics;
+        openStatistics = () => { window.__menuShortcutRan += 1; };
+      });
+
+      await page.locator(".xterm-helper-textarea").first().focus();
+      await page.evaluate(() => {
+        window.__menuShortcutFrames = [];
+        window.__menuShortcutSend = state.socket.send;
+        state.socket.send = (payload) => window.__menuShortcutFrames.push(JSON.parse(payload));
+      });
+      await page.keyboard.press("Control+Alt+Shift+J");
+
+      const result = await page.evaluate(() => {
+        const frames = window.__menuShortcutFrames;
+        state.socket.send = window.__menuShortcutSend;
+        openStatistics = window.__menuShortcutOriginal;
+        return { ran: window.__menuShortcutRan, input: frames.filter((frame) => frame.type === "input") };
+      });
+      expect(result.ran).toBe(1);
+      // The chord must not also reach the shell.
+      expect(result.input).toEqual([]);
+    } finally {
+      await page.evaluate(() => {
+        contextMenuShortcuts.clear();
+        saveContextMenuShortcuts();
+        hideContextMenu();
+      });
+    }
+  });
+
+  // Outside the menu a bare digit is ordinary typing, so only modifier chords
+  // may be claimed from the terminal.
+  test("leaves an unmodified menu accelerator to the terminal", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(page.locator(".terminal-pane").first()).toBeVisible();
+
+    try {
+      const claimed = await page.evaluate(() => {
+        const terminal = state.terminals.values().next().value;
+        setActiveTerminal(terminal.id);
+        hideContextMenu();
+        assignContextMenuShortcut("terminal.statistics", { alt: false, ctrl: false, key: "5", meta: false, shift: false });
+        return runTerminalContextShortcut(new KeyboardEvent("keydown", { key: "5" }));
+      });
+      expect(claimed).toBe(false);
+    } finally {
+      await page.evaluate(() => {
+        contextMenuShortcuts.clear();
+        saveContextMenuShortcuts();
+        hideContextMenu();
+      });
+    }
+  });
+
+  // App-wide shortcuts are dispatched first, so a chord an app action still
+  // owns would silently beat the menu binding just assigned to it.
+  test("takes a chord away from the app action that already owned it", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    try {
+      const owners = await page.evaluate(() => {
+        const signature = globalShortcutSignature({ ctrl: true, shift: true, key: "l" });
+        const holders = () => GLOBAL_SHORTCUT_ACTIONS
+          .filter((action) => globalShortcutBindings(action.id)
+            .some((binding) => globalShortcutSignature(binding) === signature))
+          .map((action) => action.id);
+        const before = holders();
+        assignContextMenuShortcut("terminal.copilot-yolo", { alt: false, ctrl: true, key: "l", meta: false, shift: true });
+        return { before, after: holders() };
+      });
+      // Ctrl+Shift+L ships as the Clear active terminal default.
+      expect(owners.before).toEqual(["terminal.clear"]);
+      expect(owners.after).toEqual([]);
+    } finally {
+      await page.evaluate(() => {
+        contextMenuShortcuts.clear();
+        saveContextMenuShortcuts();
+        state.settings.keyboardShortcuts = {};
+        saveSettings();
+        refreshGlobalShortcutHints();
+        hideContextMenu();
+      });
+    }
+  });
+
+  // A binding saved before menu shortcuts were dispatched from the terminal can
+  // still collide with an app action. App actions are checked first, so the
+  // stored collision kept winning and the menu row never ran.
+  test("heals a stored collision so the menu row wins the chord", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    try {
+      // Written straight to storage, bypassing the editor's conflict handling.
+      await page.evaluate(() => localStorage.setItem("multiterm.contextMenuShortcuts", JSON.stringify({
+        "terminal.copilot-yolo": { alt: false, ctrl: true, key: "l", meta: false, shift: true }
+      })));
+      await page.reload();
+      await expect(page.locator("#statusConn")).toHaveText("Connected");
+      await page.evaluate(() => { closeAllTerminals(); addTerminal({ runStartup: false }); });
+      await expect(page.locator(".terminal-pane")).toHaveCount(1);
+
+      const owners = await page.evaluate(() => {
+        const signature = globalShortcutSignature({ ctrl: true, shift: true, key: "l" });
+        return GLOBAL_SHORTCUT_ACTIONS
+          .filter((action) => globalShortcutBindings(action.id)
+            .some((binding) => globalShortcutSignature(binding) === signature))
+          .map((action) => action.id);
+      });
+      // Ctrl+Shift+L ships as the Clear active terminal default.
+      expect(owners).toEqual([]);
+
+      await page.evaluate(() => {
+        setActiveTerminal([...state.terminals.values()][0].id);
+        window.__ran = [];
+        window.__clear = clearActiveTerminal;
+        window.__launch = launchAiAssistant;
+        window.__available = aiAssistantAvailable;
+        aiAssistantAvailable = () => true;
+        clearActiveTerminal = () => window.__ran.push("clear");
+        launchAiAssistant = () => window.__ran.push("copilot");
+      });
+      await page.locator(".xterm-helper-textarea").first().focus();
+      await page.keyboard.press("Control+Shift+L");
+      const ran = await page.evaluate(() => {
+        clearActiveTerminal = window.__clear;
+        launchAiAssistant = window.__launch;
+        aiAssistantAvailable = window.__available;
+        return window.__ran;
+      });
+      expect(ran).toEqual(["copilot"]);
+    } finally {
+      await page.evaluate(() => {
+        localStorage.removeItem("multiterm.contextMenuShortcuts");
+        contextMenuShortcuts.clear();
+        state.settings.keyboardShortcuts = {};
+        saveSettings();
+        refreshGlobalShortcutHints();
+        hideContextMenu();
+      });
+    }
+  });
+
+  // An unavailable row is skipped rather than silently doing nothing halfway.
+  test("does not claim the chord for a disabled menu row", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    try {
+      const claimed = await page.evaluate(() => {
+        setActiveTerminal(state.terminals.values().next().value.id);
+        hideContextMenu();
+        const original = aiAssistantAvailable;
+        aiAssistantAvailable = () => false;
+        assignContextMenuShortcut("terminal.copilot-yolo", { alt: true, ctrl: true, key: "y", meta: false, shift: true });
+        const result = runTerminalContextShortcut(
+          new KeyboardEvent("keydown", { key: "Y", altKey: true, ctrlKey: true, shiftKey: true }));
+        aiAssistantAvailable = original;
+        return result;
+      });
+      expect(claimed).toBe(false);
+    } finally {
+      await page.evaluate(() => {
+        contextMenuShortcuts.clear();
+        saveContextMenuShortcuts();
+        state.settings.keyboardShortcuts = {};
+        saveSettings();
+        refreshGlobalShortcutHints();
+        hideContextMenu();
+      });
+    }
+  });
+
   test("changes a keybinding inline from a row's own right-click menu", async ({ page }) => {
     const menu = page.locator("#contextMenu");
     const submenu = page.locator("#contextSubmenu");
