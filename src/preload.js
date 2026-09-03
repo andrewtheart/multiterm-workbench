@@ -31,6 +31,22 @@ contextBridge.exposeInMainWorld("multiterm", {
   getBridgeStartupPreference: () => ipcRenderer.invoke("multiterm:get-bridge-startup-preference"),
   setBridgeStartupAsk: (enabled) => ipcRenderer.invoke("multiterm:set-bridge-startup-ask", Boolean(enabled)),
   chooseBridgeNow: () => ipcRenderer.invoke("multiterm:choose-bridge-now"),
+  // Asks the main process to bring the owned bridge back up, for a background
+  // automation that came due with no live socket.
+  ensureBridge: () => ipcRenderer.invoke("multiterm:ensure-bridge"),
+  // Registers or removes the per-user scheduled task that relaunches MultiTerm
+  // for automations set to keep running while it is closed.
+  syncBackgroundTask: (request) => ipcRenderer.invoke("multiterm:sync-background-task", {
+    enabled: request?.enabled === true,
+    intervalMinutes: Number(request?.intervalMinutes)
+  }),
+  isBackgroundLaunch: () => ipcRenderer.invoke("multiterm:background-launch"),
+  isBackgroundWindow: () => ipcRenderer.invoke("multiterm:background-window"),
+  onBackgroundWindowChange: (handler) => {
+    if (typeof handler !== "function") return;
+    ipcRenderer.on("multiterm:background-window", (_event, background) => handler(Boolean(background)));
+  },
+  finishBackgroundRun: () => ipcRenderer.invoke("multiterm:finish-background-run"),
   onFullscreenChange: (handler) => {
     if (typeof handler !== "function") return;
     ipcRenderer.on("multiterm:fullscreen-change", (_event, enabled) => handler(Boolean(enabled)));

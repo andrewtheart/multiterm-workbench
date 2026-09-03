@@ -132,6 +132,12 @@ describe("PowerShell bridge control dashboard", () => {
     expect(bridgeScript).not.toMatch(/--guest|--incognito/);
   });
 
+  it("keeps a minimized app window scheduling automations instead of throttling its timers", () => {
+    expect(bridgeScript).toContain('+ " --disable-background-timer-throttling"');
+    expect(bridgeScript).toContain('+ " --disable-backgrounding-occluded-windows"');
+    expect(bridgeScript).toContain('+ " --disable-renderer-backgrounding"');
+  });
+
   it("launches installed app shortcuts with the visible dashboard while Stop stays hidden", () => {
     const dashboardLaunches = installer.match(/-ConsoleDashboard/g) || [];
     const newInstanceLaunches = installer.match(/-ConsoleDashboard -NewInstance/g) || [];

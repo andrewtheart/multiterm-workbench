@@ -27,6 +27,7 @@ param(
     [switch]$ShowConsole,
     [switch]$ConsoleDashboard,
     [switch]$NewInstance,
+    [switch]$Background,
     [switch]$Stop,
     [switch]$RequireStopped,
     [string]$ElevatedHost = "",
@@ -2041,6 +2042,7 @@ namespace MultiTerm.PowerShellBridge
         private readonly int maximumAutoPort;
         private readonly bool consoleDashboardEnabled;
         private readonly bool openBrowser;
+        private readonly bool backgroundLaunch;
         private readonly string publicDir;
         private readonly object openFolderLock = new object();
         private readonly ConcurrentQueue<string> pendingOpenFolders = new ConcurrentQueue<string>();
@@ -2146,7 +2148,7 @@ namespace MultiTerm.PowerShellBridge
         // pseudo-console, so we need to know where we came from.
         public static string ScriptPath;
 
-        public BridgeServer(string host, int port, bool autoPort, string publicDir, bool openBrowser, bool consoleDashboardEnabled, string startupOpenFolder, string startupOpenTerminal)
+        public BridgeServer(string host, int port, bool autoPort, string publicDir, bool openBrowser, bool consoleDashboardEnabled, string startupOpenFolder, string startupOpenTerminal, bool backgroundLaunch = false)
         {
             this.host = host;
             this.port = port;
@@ -2155,6 +2157,7 @@ namespace MultiTerm.PowerShellBridge
             this.maximumAutoPort = Math.Min(UInt16.MaxValue, port + 1000);
             this.publicDir = Path.GetFullPath(publicDir);
             this.openBrowser = openBrowser;
+            this.backgroundLaunch = backgroundLaunch;
             this.consoleDashboardEnabled = consoleDashboardEnabled;
             this.copilotLogs = new CopilotLogAggregator(this.runtimeDiagnostics, this.Broadcast);
             string folder = this.NormalizeOpenFolder(startupOpenFolder);
@@ -2178,6 +2181,20 @@ namespace MultiTerm.PowerShellBridge
         public string Url
         {
             get { return "http://" + this.host + ":" + this.port + "/"; }
+        }
+
+        // A scheduled background launch that found a live bridge with no window
+        // needs a minimized window pointed back at it, not a second bridge.
+        public static void OpenBackgroundWindow(string url, string publicDir)
+        {
+            Uri parsed = new Uri(url);
+            BridgeServer shell = new BridgeServer(parsed.Host, parsed.Port, false, publicDir, false, false, "", "", true);
+            Thread worker = shell.OpenBrowser(true);
+            if (worker != null)
+            {
+                try { worker.Join(TimeSpan.FromSeconds(40)); }
+                catch { }
+            }
         }
 
         public void Run()
@@ -2234,7 +2251,7 @@ namespace MultiTerm.PowerShellBridge
                         // process moments later, which would kill that thread before it
                         // ever found the window - leaving the taskbar showing the host
                         // browser's icon. Wait for it to finish before returning.
-                        Thread brander = this.OpenBrowser();
+                        Thread brander = this.OpenBrowser(this.backgroundLaunch);
                         if (brander != null)
                         {
                             try { brander.Join(TimeSpan.FromSeconds(40)); }
@@ -2279,7 +2296,7 @@ namespace MultiTerm.PowerShellBridge
 
             if (this.openBrowser)
             {
-                this.OpenBrowser();
+                this.OpenBrowser(this.backgroundLaunch);
             }
 
             this.StartClientLivenessSweep();
@@ -2492,6 +2509,114 @@ namespace MultiTerm.PowerShellBridge
             {
                 this.Log("warn", "Could not record assistant sessions: " + error.Message);
             }
+        }
+
+        private volatile bool backgroundPlanEnabled;
+        private int backgroundPlanCount;
+        private string backgroundPlanNextDueAt = "";
+
+        // Kept per bridge id beside the assistant-session records, so a bridge
+        // that loses its last renderer knows whether automations still need it.
+        private string BackgroundAutomationPath()
+        {
+            if (string.IsNullOrEmpty(this.BridgeId))
+            {
+                return null;
+            }
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "MultiTerm", "BackgroundAutomations", this.BridgeId + ".json");
+        }
+
+        // Flat scalars only: client messages arrive as a string map.
+        private void WriteBackgroundAutomationPlan(Dictionary<string, string> message)
+        {
+            bool enabled = string.Equals(Json.Get(message, "enabled"), "true", StringComparison.OrdinalIgnoreCase);
+            int count = 0;
+            int.TryParse(Json.Get(message, "count"), NumberStyles.Integer, CultureInfo.InvariantCulture, out count);
+            if (count < 0)
+            {
+                count = 0;
+            }
+            if (count > 10000)
+            {
+                count = 10000;
+            }
+            string nextDueAt = Json.Get(message, "nextDueAt");
+            if (nextDueAt == null)
+            {
+                nextDueAt = "";
+            }
+            if (nextDueAt.Length > 40)
+            {
+                nextDueAt = nextDueAt.Substring(0, 40);
+            }
+            this.backgroundPlanEnabled = enabled;
+            this.backgroundPlanCount = count;
+            this.backgroundPlanNextDueAt = nextDueAt;
+            string path = this.BackgroundAutomationPath();
+            if (path == null)
+            {
+                return;
+            }
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                StringBuilder builder = new StringBuilder();
+                builder.Append("{\"savedAt\":");
+                builder.Append(Json.Quote(DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)));
+                builder.Append(",\"pid\":");
+                builder.Append(Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture));
+                builder.Append(",\"enabled\":");
+                builder.Append(enabled ? "true" : "false");
+                builder.Append(",\"count\":");
+                builder.Append(count.ToString(CultureInfo.InvariantCulture));
+                builder.Append(",\"nextDueAt\":");
+                builder.Append(Json.Quote(nextDueAt));
+                builder.Append("}");
+                File.WriteAllText(path, builder.ToString());
+            }
+            catch (Exception error)
+            {
+                this.Log("warn", "Could not record the background automation plan: " + error.Message);
+            }
+        }
+
+        private bool BackgroundAutomationPlanActive()
+        {
+            return this.backgroundPlanEnabled && this.backgroundPlanCount > 0;
+        }
+
+        private long lastBackgroundRelaunchTicks;
+        private static readonly long BackgroundRelaunchFloorTicks = TimeSpan.TicksPerMinute;
+
+        // A bridge holding a live background plan is the only thing keeping those
+        // automations alive, so losing the last renderer means bringing a
+        // minimized one back rather than waiting for the watchdog to offer to
+        // close it.
+        private void EnsureBackgroundRenderer(bool lostRenderer)
+        {
+            if (!lostRenderer || this.stopping || !this.BackgroundAutomationPlanActive() || this.RendererClientCount() > 0)
+            {
+                return;
+            }
+            long now = DateTime.UtcNow.Ticks;
+            long previous = Interlocked.Read(ref this.lastBackgroundRelaunchTicks);
+            if (previous > 0 && now - previous < BackgroundRelaunchFloorTicks)
+            {
+                return;
+            }
+            Interlocked.Exchange(ref this.lastBackgroundRelaunchTicks, now);
+            this.watchdogSuppressed = true;
+            this.Log("info", "Relaunching a minimized window for "
+                + this.backgroundPlanCount.ToString(CultureInfo.InvariantCulture) + " background automation(s).");
+            Thread worker = new Thread(new ThreadStart(delegate()
+            {
+                try { this.OpenBrowser(true); }
+                catch (Exception error) { this.Log("warn", "Could not relaunch a background window: " + error.Message); }
+            }));
+            worker.IsBackground = true;
+            worker.Start();
         }
 
         private static bool ProcessIsAlive(int processId)
@@ -4950,6 +5075,8 @@ namespace MultiTerm.PowerShellBridge
                         + ",\"rendererClients\":" + rendererClients
                         + ",\"transport\":" + this.TransportSnapshotJson()
                         + ",\"watchdogSuppressed\":" + (this.watchdogSuppressed ? "true" : "false")
+                        + ",\"backgroundAutomations\":" + (this.BackgroundAutomationPlanActive()
+                            ? this.backgroundPlanCount.ToString(CultureInfo.InvariantCulture) : "0")
                         + ",\"cwd\":" + Json.Quote(Directory.GetCurrentDirectory()) + "}";
                     this.SendText(context.Response, 200, body, "application/json; charset=utf-8");
                     return;
@@ -5134,7 +5261,7 @@ namespace MultiTerm.PowerShellBridge
         // Returns the background thread that re-brands the browser window, or null
         // if none was started. Callers that exit the process straight afterwards
         // must join it, or the branding never lands.
-        private Thread OpenBrowser()
+        private Thread OpenBrowser(bool minimized = false)
         {
             try
             {
@@ -5163,10 +5290,19 @@ namespace MultiTerm.PowerShellBridge
                     // with no renderer at all when that happens, so the pane turns
                     // blank. app.js also caps how many renderers it hands out; this
                     // is extra headroom so terminals never compete for contexts.
+                    //
+                    // The three backgrounding switches are the browser counterpart
+                    // of Electron's backgroundThrottling:false. Without them a
+                    // minimized or occluded window has its timers clamped, so
+                    // scheduled automations stall and buffered output arrives in
+                    // one blocking write when the window is restored.
                     string args = "--app=" + this.Url
                         + " --user-data-dir=\"" + dataDir + "\""
                         + " --window-size=1200,800"
                         + " --max-active-webgl-contexts=64"
+                        + " --disable-background-timer-throttling"
+                        + " --disable-backgrounding-occluded-windows"
+                        + " --disable-renderer-backgrounding"
                         + " --disable-sync"
                         + " --no-first-run --no-default-browser-check";
 
@@ -5182,6 +5318,17 @@ namespace MultiTerm.PowerShellBridge
                     // identify the window this launch actually created.
                     HashSet<IntPtr> preexisting = WindowBrander.SnapshotAppWindows("MultiTerm Workbench");
                     Process started = Process.Start(appInfo);
+
+                    if (minimized)
+                    {
+                        Thread minimizer = new Thread(new ThreadStart(delegate()
+                        {
+                            try { WindowBrander.Minimize(started, "MultiTerm Workbench", preexisting); }
+                            catch { }
+                        }));
+                        minimizer.IsBackground = true;
+                        minimizer.Start();
+                    }
 
                     // Windows groups a Chromium "--app" window under the host
                     // browser's identity, so the taskbar shows (for example) the
@@ -5574,6 +5721,7 @@ namespace MultiTerm.PowerShellBridge
             private const uint GW_OWNER = 4;
             private const uint TH32CS_SNAPPROCESS = 0x00000002;
             private const ushort VT_LPWSTR = 31;
+            private const int SW_MINIMIZE = 6;
 
             // PKEY_AppUserModel_* live under this format id. pid 2 = RelaunchCommand,
             // pid 3 = RelaunchIconResource, pid 4 = RelaunchDisplayNameResource,
@@ -5596,6 +5744,35 @@ namespace MultiTerm.PowerShellBridge
                 }
                 catch { }
                 return found;
+            }
+
+            // Minimizes the window this launch created. A background renderer is
+            // minimized rather than hidden: an invisible browser process the user
+            // cannot find reads as hostile.
+            public static bool Minimize(Process started, string titleFragment, HashSet<IntPtr> preexisting)
+            {
+                if (preexisting == null)
+                {
+                    preexisting = new HashSet<IntPtr>();
+                }
+                for (int attempt = 0; attempt < 40; attempt++)
+                {
+                    try
+                    {
+                        foreach (IntPtr candidate in FindAppWindows(started, titleFragment))
+                        {
+                            if (preexisting.Contains(candidate))
+                            {
+                                continue;
+                            }
+                            ShowWindow(candidate, SW_MINIMIZE);
+                            return true;
+                        }
+                    }
+                    catch { }
+                    Thread.Sleep(500);
+                }
+                return false;
             }
 
             public static void Apply(Process started, string titleFragment, string aumid, string iconPath, string relaunchCommand, HashSet<IntPtr> preexisting)
@@ -5975,6 +6152,9 @@ namespace MultiTerm.PowerShellBridge
             [DllImport("user32.dll")]
             private static extern bool IsWindowVisible(IntPtr hWnd);
 
+            [DllImport("user32.dll")]
+            private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
             [DllImport("user32.dll", SetLastError = true)]
             private static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
 
@@ -6096,6 +6276,7 @@ namespace MultiTerm.PowerShellBridge
                 if (client.ForcedDrop && client.TryCountForcedDisconnect()) Interlocked.Increment(ref this.forcedDisconnects);
                 client.Close();
                 this.Log("info", "Client disconnected: " + client.Id + "; " + this.clients.Count + " active");
+                this.EnsureBackgroundRenderer(client.IsRenderer);
             }
         }
 
@@ -6338,6 +6519,10 @@ namespace MultiTerm.PowerShellBridge
             else if (type == "saveAssistantSessions")
             {
                 this.WriteAssistantSessions(Json.Get(message, "sessions"));
+            }
+            else if (type == "backgroundAutomationPlan")
+            {
+                this.WriteBackgroundAutomationPlan(message);
             }
             else if (type == "getAssistantSessions")
             {
@@ -14332,6 +14517,22 @@ if ($ElevatedHost) {
 
 [MultiTerm.PowerShellBridge.BridgeServer]::ScriptPath = $PSCommandPath
 
+# The scheduled task repeats on a coarse timer, so a background launch must never
+# pile up windows: an instance that already has a window needs nothing, and one
+# that lost its window only needs a minimized one pointed back at it.
+if ($Background.IsPresent -and -not $Stop.IsPresent) {
+  $liveInstance = @(Get-RunningMultiTermInstances) | Select-Object -First 1
+  if ($liveInstance) {
+    if ($liveInstance.HasRenderer) {
+      Write-Host "MultiTerm is already running with a window on $($liveInstance.url)."
+      exit 0
+    }
+    Write-Host "Reopening a minimized MultiTerm window on $($liveInstance.url)."
+    [MultiTerm.PowerShellBridge.BridgeServer]::OpenBackgroundWindow([string]$liveInstance.url, $publicDir)
+    exit 0
+  }
+}
+
 $bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new(
     $HostName,
     $Port,
@@ -14340,7 +14541,8 @@ $bridge = [MultiTerm.PowerShellBridge.BridgeServer]::new(
     -not $NoBrowser.IsPresent,
     $ConsoleDashboard.IsPresent,
     $resolvedOpenFolder,
-    $(if ($hasOpenTerminalOptions) { $openTerminalPayload } else { "" }))
+    $(if ($hasOpenTerminalOptions) { $openTerminalPayload } else { "" }),
+    $Background.IsPresent)
 try {
   $bridge.Run()
 } catch {

@@ -439,6 +439,17 @@ try {
           $state.NoRendererSince = $null
           continue
         }
+        # A bridge with scheduled background automations is not an orphan: it is
+        # the only thing keeping them alive, so never offer to close it.
+        $backgroundAutomations = 0
+        if ($health.PSObject.Properties['backgroundAutomations']) {
+          $backgroundAutomations = [int]$health.backgroundAutomations
+        }
+        if ($backgroundAutomations -gt 0) {
+          Write-WatchdogLog ("Leaving {0} alone: {1} background automation(s) still scheduled." -f $recordUri.AbsoluteUri, $backgroundAutomations)
+          $state.NoRendererSince = $null
+          continue
+        }
         if ([bool]$health.watchdogSuppressed) {
           $state.Dismissed = $true
           continue

@@ -345,6 +345,60 @@ function writeAssistantSessions(sessions) {
   }
 }
 
+// Kept per bridge id beside the assistant-session records: a bridge that loses
+// its last renderer needs to know whether automations were still expecting it.
+function getBackgroundAutomationPath() {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData || !bridgeIdentifier) return null; else { void 0; }
+  return path.join(localAppData, "MultiTerm", "BackgroundAutomations", `${bridgeIdentifier}.json`);
+}
+
+// Flat scalars only: the installed bridge parses messages into a string map.
+function normalizeBackgroundAutomationPlan(message) {
+  const count = Number(message?.count);
+  const nextDueAt = typeof message?.nextDueAt === "string" ? message.nextDueAt.slice(0, 40) : "";
+  return {
+    count: Number.isFinite(count) && count > 0 ? Math.min(Math.round(count), 10000) : 0,
+    enabled: message?.enabled === true || message?.enabled === "true",
+    nextDueAt
+  };
+}
+
+function readBackgroundAutomationPlan() {
+  const file = getBackgroundAutomationPath();
+  if (!file) return normalizeBackgroundAutomationPlan(null); else { void 0; }
+  try {
+    return normalizeBackgroundAutomationPlan(JSON.parse(fs.readFileSync(file, "utf8")));
+  } catch {
+    return normalizeBackgroundAutomationPlan(null);
+  }
+}
+
+let backgroundAutomationPlan = normalizeBackgroundAutomationPlan(null);
+
+function writeBackgroundAutomationPlan(message) {
+  const file = getBackgroundAutomationPath();
+  if (!file) return false; else { void 0; }
+  const plan = normalizeBackgroundAutomationPlan(message);
+  backgroundAutomationPlan = plan;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ...plan, pid: process.pid, savedAt: new Date().toISOString() }), { mode: 0o600 });
+    return true;
+  } catch (error) {
+    console.warn(`[bridge] Could not record the background automation plan: ${error.message}`);
+    return false;
+  }
+}
+
+function backgroundAutomationCount() {
+  if (backgroundAutomationPlan.enabled) {
+    return backgroundAutomationPlan.count;
+  } else {
+    return 0;
+  }
+}
+
 function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
@@ -1724,6 +1778,7 @@ const server = http.createServer((request, response) => {
       rendererClients: countRendererClients(),
       transport: bridgeTransportSnapshot(),
       watchdogSuppressed,
+      backgroundAutomations: backgroundAutomationCount(),
       cwd: process.cwd()
     });
     return;
@@ -2066,6 +2121,7 @@ function start(callback, overridePort, overrideHost) {
     const address = server.address();
     const boundPort = address && typeof address === "object" ? address.port : listenPort;
     claimBridgeIdentifier();
+    backgroundAutomationPlan = readBackgroundAutomationPlan();
     registerInstance(listenHost, boundPort);
     console.log(`MultiTerm bridge running on ${listenHost}:${boundPort}`);
     if (bridgeIdentifier) {
@@ -2556,6 +2612,9 @@ function handleClientMessage(client, rawMessage, dependencies = defaultSessionDe
       break;
     case "saveAssistantSessions":
       writeAssistantSessions(message.sessions);
+      break;
+    case "backgroundAutomationPlan":
+      writeBackgroundAutomationPlan(message);
       break;
     case "getAssistantSessions":
       client.send({ type: "assistantSessions", requestId: message.requestId, sessions: readAssistantSessions() });
@@ -8646,6 +8705,8 @@ module.exports = {
     releaseBridgeIdentifier,
     formatBridgeIdentifier,
     getBridgeIdentifier: () => bridgeIdentifier,
+    readBackgroundAutomationPlan,
+    backgroundAutomationCount,
     registerInstance,
     unregisterInstance,
     handleShutdownRequest,

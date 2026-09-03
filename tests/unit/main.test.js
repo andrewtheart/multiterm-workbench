@@ -1385,6 +1385,303 @@ describe("bridge startup selection integration", () => {
   });
 });
 
+describe("on-demand bridge restart for background automations", () => {
+  function mockHealth(handler) {
+    vi.spyOn(http, "get").mockImplementation((options, callback) => {
+      const request = new EventEmitter();
+      request.destroy = vi.fn();
+      handler(options, callback, request);
+      return request;
+    });
+  }
+
+  it("reports a healthy bridge without spawning another", async () => {
+    mockHealth((options, callback) => sendHealthyResponse(callback, { port: Number(options.port) }));
+    childProcess.spawn.mockClear();
+    await expect(main.ensureBridgeAvailable())
+      .resolves.toMatchObject({ ok: true, restarted: false, navigated: false, port: 3177 });
+    expect(childProcess.spawn).not.toHaveBeenCalled();
+  });
+
+  it("reclaims the same port so the hidden renderer keeps its origin", async () => {
+    let started = false;
+    mockHealth((options, callback, request) => {
+      if (started) sendHealthyResponse(callback, { port: Number(options.port) });
+      else process.nextTick(() => request.emit("error", new Error("refused")));
+    });
+    vi.spyOn(net, "createServer").mockImplementation(() => {
+      const listener = new EventEmitter();
+      listener.listen = vi.fn((_port, _host, callback) => callback());
+      listener.close = vi.fn((callback) => callback());
+      return listener;
+    });
+    childProcess.spawn.mockImplementation(() => { started = true; return makeChild(); });
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.loadURL.mockClear();
+
+    await expect(main.ensureBridgeAvailable())
+      .resolves.toMatchObject({ ok: true, restarted: true, navigated: false, port: 3177 });
+    expect(childProcess.spawn).toHaveBeenCalled();
+    expect(win.loadURL).not.toHaveBeenCalled();
+  });
+
+  it("moves the hidden window to a new origin when a real listener holds the port", async () => {
+    const squatter = net.createServer();
+    await new Promise((resolve, reject) => {
+      squatter.once("error", reject);
+      squatter.listen(3177, "127.0.0.1", resolve);
+    });
+    try {
+      let startedPort = 0;
+      mockHealth((options, callback, request) => {
+        if (Number(options.port) === startedPort) sendHealthyResponse(callback, { port: Number(options.port) });
+        else process.nextTick(() => request.emit("error", new Error("refused")));
+      });
+      childProcess.spawn.mockImplementation((_exe, _args, options) => {
+        startedPort = Number(options.env.PORT);
+        return makeChild();
+      });
+      main.createWindow();
+      const win = main.getMainWindow();
+      win.loadURL.mockClear();
+
+      const result = await main.ensureBridgeAvailable();
+      expect(result).toMatchObject({ ok: true, restarted: true, navigated: true });
+      expect(result.port).toBeGreaterThan(3177);
+      expect(win.loadURL).toHaveBeenCalledWith(`http://127.0.0.1:${result.port}/`);
+      expect(main.bridgeOrigin()).toBe(`http://127.0.0.1:${result.port}`);
+    } finally {
+      await new Promise((resolve) => squatter.close(resolve));
+    }
+  });
+
+  it("waits out a transient holder before giving up the origin", async () => {
+    let attempts = 0;
+    vi.spyOn(net, "createServer").mockImplementation(() => {
+      const listener = new EventEmitter();
+      listener.listen = vi.fn((port, _host, callback) => {
+        attempts += 1;
+        // The first two probes see the port held, the third finds it released.
+        if (attempts <= 2 && port === 3177) process.nextTick(() => listener.emit("error", new Error("occupied")));
+        else callback();
+      });
+      listener.close = vi.fn((callback) => callback());
+      return listener;
+    });
+
+    await expect(main.reclaimBridgePort(3177, "127.0.0.1", 6, 0)).resolves.toBe(3177);
+    expect(attempts).toBeGreaterThan(2);
+  });
+
+  it("accepts a different port once the holder outlasts every retry", async () => {
+    vi.spyOn(net, "createServer").mockImplementation(() => {
+      const listener = new EventEmitter();
+      listener.listen = vi.fn((port, _host, callback) => {
+        if (port === 3177) process.nextTick(() => listener.emit("error", new Error("occupied")));
+        else callback();
+      });
+      listener.close = vi.fn((callback) => callback());
+      return listener;
+    });
+
+    await expect(main.reclaimBridgePort(3177, "127.0.0.1", 2, 0)).resolves.toBe(3178);
+  });
+
+  it("throttles repeated attempts after a failure instead of spawn-looping", async () => {
+    mockHealth((_options, _callback, request) => process.nextTick(() => request.emit("error", new Error("refused"))));
+    vi.spyOn(net, "createServer").mockImplementation(() => { throw new Error("network is unavailable"); });
+
+    const first = await main.ensureBridgeAvailable();
+    expect(first).toMatchObject({ ok: false, error: "network is unavailable" });
+    const spawnCalls = childProcess.spawn.mock.calls.length;
+
+    const second = await main.ensureBridgeAvailable();
+    expect(second).toMatchObject({ ok: false, throttled: true });
+    expect(childProcess.spawn.mock.calls.length).toBe(spawnCalls);
+  });
+
+  it("shares one in-flight restart between concurrent callers", async () => {
+    mockHealth((options, callback) => sendHealthyResponse(callback, { port: Number(options.port) }));
+    const [left, right] = await Promise.all([main.ensureBridgeAvailable(), main.ensureBridgeAvailable()]);
+    expect(left).toBe(right);
+  });
+
+  it("registers the ensure-bridge channel only when ipcMain can handle invocations", () => {
+    main.__setElectron({ ...electron, ipcMain: null });
+    expect(() => main.registerEnsureBridgeIpc()).not.toThrow();
+
+    main.__setElectron(electron);
+    electron.ipcMain.removeHandler.mockImplementation(() => { throw new Error("no existing handler"); });
+    main.registerEnsureBridgeIpc();
+    const handler = electron.ipcMain.handle.mock.calls.find(([channel]) => channel === "multiterm:ensure-bridge")[1];
+    expect(() => handler({ sender: {}, senderFrame: { url: "https://evil.example" } })).toThrow();
+  });
+});
+
+describe("background scheduled task and launch lifetime", () => {
+  it("recognizes the scheduled task's argv only when the switch is present", () => {
+    expect(main.hasBackgroundArgv(["electron.exe", "D:\\multiTerm", "--background"])).toBe(true);
+    expect(main.hasBackgroundArgv(["electron.exe", "D:\\multiTerm"])).toBe(false);
+    expect(main.hasBackgroundArgv(undefined)).toBe(false);
+  });
+
+  it("constructs the window hidden on the scheduled-task path", () => {
+    main.__reset();
+    main.createWindow();
+    expect(electron.BrowserWindow.mock.calls.at(-1)[0]).toMatchObject({ show: true });
+
+    main.__reset();
+    main.__setStartedInBackground(true);
+    main.createWindow();
+    expect(electron.BrowserWindow.mock.calls.at(-1)[0]).toMatchObject({ show: false });
+  });
+
+  it("never pulls the window forward when the task launches a second instance", () => {
+    main.__reset();
+    main.bootstrap();
+    const secondInstance = handlerFor("second-instance");
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.isMinimized.mockReturnValue(true);
+
+    secondInstance({}, ["electron.exe", "D:\\multiTerm", "--background"]);
+    expect(win.restore).not.toHaveBeenCalled();
+    expect(win.focus).not.toHaveBeenCalled();
+
+    secondInstance({}, ["electron.exe", "D:\\multiTerm"]);
+    expect(win.restore).toHaveBeenCalled();
+    expect(win.focus).toHaveBeenCalled();
+  });
+
+  it("clamps the repeat interval and keeps it inside its documented range", () => {
+    expect(main.backgroundTaskIntervalMinutes(30)).toBe(30);
+    expect(main.backgroundTaskIntervalMinutes(1)).toBe(5);
+    expect(main.backgroundTaskIntervalMinutes(99999)).toBe(1440);
+    expect(main.backgroundTaskIntervalMinutes("nonsense")).toBe(15);
+  });
+
+  it("registers a per-user logon task that repeats and catches up after sleep", () => {
+    const xml = main.backgroundTaskXml(20, "CONTOSO\\andre & co", { executable: "C:\\a b\\electron.exe", args: ["D:\\multiTerm", "--background"] });
+    expect(xml).toContain("<Interval>PT20M</Interval>");
+    expect(xml).toContain("<StartWhenAvailable>true</StartWhenAvailable>");
+    expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
+    expect(xml).toContain("<UserId>CONTOSO\\andre &amp; co</UserId>");
+    expect(xml).toContain("<Command>C:\\a b\\electron.exe</Command>");
+    expect(xml).toContain("<Arguments>&quot;D:\\multiTerm&quot; &quot;--background&quot;</Arguments>");
+    // Never SYSTEM: the CLI would read config\systemprofile instead of the user's own.
+    expect(xml).not.toContain("S-1-5-18");
+    expect(xml).not.toContain("HighestAvailable");
+  });
+
+  it("omits the repository argument once the app is packaged", () => {
+    expect(main.backgroundTaskInvocation(false).args).toEqual([expect.stringContaining("multiTerm"), "--background"]);
+    expect(main.backgroundTaskInvocation(true).args).toEqual(["--background"]);
+  });
+
+  it("creates the task while a rule wants it and deletes it when the last one clears", () => {
+    const calls = [];
+    const execute = vi.fn((exe, args) => { calls.push([exe, ...args]); });
+
+    const created = main.syncBackgroundAutomationTask({ enabled: true, intervalMinutes: 20 }, execute);
+    expect(created).toMatchObject({ ok: true, action: "created" });
+    expect(calls[0].slice(0, 4)).toEqual(["schtasks.exe", "/Create", "/TN", "MultiTerm Background Automations"]);
+    expect(calls[0]).toContain("/XML");
+    expect(calls[0]).toContain("/F");
+    expect(fs.existsSync(calls[0][calls[0].indexOf("/XML") + 1])).toBe(false);
+
+    const removed = main.syncBackgroundAutomationTask({ enabled: false }, execute);
+    expect(removed).toMatchObject({ ok: true, action: "removed" });
+    expect(calls[1]).toEqual(["schtasks.exe", "/Delete", "/TN", "MultiTerm Background Automations", "/F"]);
+  });
+
+  it("reports a refused registration instead of throwing", () => {
+    const failure = Object.assign(new Error("Access is denied."), { status: 5 });
+    const created = main.syncBackgroundAutomationTask({ enabled: true }, () => { throw failure; });
+    expect(created).toMatchObject({ ok: false, action: "created", code: 5, error: "Access is denied." });
+
+    // A delete for a task that was never created is the normal path, not a failure.
+    const removed = main.syncBackgroundAutomationTask({ enabled: false }, () => { throw new Error("cannot find the file"); });
+    expect(removed).toMatchObject({ ok: true, action: "removed" });
+
+    const staging = vi.spyOn(fs, "mkdtempSync").mockImplementation(() => { throw new Error("no temp"); });
+    expect(main.syncBackgroundAutomationTask({ enabled: true }, vi.fn()))
+      .toMatchObject({ ok: false, action: "created", error: "no temp" });
+    staging.mockRestore();
+
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      expect(main.syncBackgroundAutomationTask({ enabled: true }, vi.fn())).toMatchObject({ action: "unsupported", ok: false });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("retires only a task-started instance, and only before the user opens it", () => {
+    main.__reset();
+    main.createWindow();
+    expect(main.finishBackgroundRun()).toBe(false);
+    expect(electron.app.quit).not.toHaveBeenCalled();
+
+    main.__setStartedInBackground(true);
+    main.showMainWindow();
+    expect(main.finishBackgroundRun()).toBe(false);
+
+    main.__setStartedInBackground(true);
+    expect(main.finishBackgroundRun()).toBe(true);
+    expect(main.finishBackgroundRun()).toBe(false);
+  });
+
+  it("tells the renderer the window is unattended, because Electron keeps the page visible", () => {
+    main.__reset();
+    expect(main.publishBackgroundWindowState()).toBe(false);
+
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.webContents.send.mockClear();
+    expect(main.windowIsUnattended()).toBe(false);
+
+    main.handleCloseResponse("background");
+    expect(main.windowIsUnattended()).toBe(true);
+    expect(win.webContents.send).toHaveBeenLastCalledWith("multiterm:background-window", true);
+
+    main.showMainWindow();
+    expect(main.windowIsUnattended()).toBe(false);
+    expect(win.webContents.send).toHaveBeenLastCalledWith("multiterm:background-window", false);
+
+    // A task-started instance counts even before any close decision.
+    main.__setStartedInBackground(true);
+    expect(main.windowIsUnattended()).toBe(true);
+
+    win.webContents.isDestroyed.mockReturnValue(true);
+    expect(main.publishBackgroundWindowState()).toBe(false);
+  });
+
+  it("registers the background channels only when ipcMain can handle invocations", () => {
+    main.__setElectron({ ...electron, ipcMain: null });
+    expect(() => main.registerBackgroundTaskIpc()).not.toThrow();
+
+    main.__setElectron(electron);
+    electron.ipcMain.removeHandler.mockImplementation(() => { throw new Error("no existing handler"); });
+    main.registerBackgroundTaskIpc();
+    const ipcHandlerFor = (channel) => electron.ipcMain.handle.mock.calls.find(([name]) => name === channel)[1];
+    const hostile = { sender: {}, senderFrame: { url: "https://evil.example" } };
+    expect(() => ipcHandlerFor("multiterm:sync-background-task")(hostile, { enabled: true })).toThrow();
+    expect(() => ipcHandlerFor("multiterm:background-launch")(hostile)).toThrow();
+    expect(() => ipcHandlerFor("multiterm:background-window")(hostile)).toThrow();
+    expect(() => ipcHandlerFor("multiterm:finish-background-run")(hostile)).toThrow();
+
+    main.__reset();
+    main.createWindow();
+    main.__setStartedInBackground(true);
+    expect(ipcHandlerFor("multiterm:background-launch")(trustedIpcEvent())).toBe(true);
+    expect(ipcHandlerFor("multiterm:background-window")(trustedIpcEvent())).toBe(true);
+    expect(ipcHandlerFor("multiterm:finish-background-run")(trustedIpcEvent())).toBe(true);
+  });
+});
+
 describe("formatError", () => {
   it("uses the error message when present", () => {
     expect(main.formatError(new Error("boom"))).toBe("boom");
@@ -1466,6 +1763,38 @@ describe("showMainWindow / createTray / close handling edge cases", () => {
     main.handleCloseResponse("something-else");
     expect(win.hide).not.toHaveBeenCalled();
     expect(electron.app.quit).not.toHaveBeenCalled();
+  });
+
+  it("hides the window for background mode and advertises it in the tray", () => {
+    main.__reset();
+    main.createWindow();
+    const win = main.getMainWindow();
+    electron.Menu.buildFromTemplate.mockClear();
+    main.handleCloseResponse("background");
+
+    expect(win.hide).toHaveBeenCalled();
+    expect(win.destroy).not.toHaveBeenCalled();
+    expect(electron.app.quit).not.toHaveBeenCalled();
+    const tray = main.getTray();
+    expect(tray.setToolTip).toHaveBeenLastCalledWith("MultiTerm Workbench - running automations in the background");
+    const backgroundTemplate = electron.Menu.buildFromTemplate.mock.calls.at(-1)[0];
+    expect(backgroundTemplate.find((item) => item.label === "Automations are running in the background"))
+      .toMatchObject({ enabled: false });
+
+    electron.Menu.buildFromTemplate.mockClear();
+    main.showMainWindow();
+    expect(tray.setToolTip).toHaveBeenLastCalledWith("MultiTerm Workbench");
+    const clearedTemplate = electron.Menu.buildFromTemplate.mock.calls.at(-1)[0];
+    expect(clearedTemplate.some((item) => item.label === "Automations are running in the background")).toBe(false);
+  });
+
+  it("tolerates background state changes before a tray exists", () => {
+    main.__setElectron({ ...electron, Tray: undefined });
+    main.__reset();
+    expect(() => main.setBackgroundMode(true)).not.toThrow();
+    expect(main.setBackgroundMode(true)).toBe(true);
+    expect(main.setBackgroundMode(false)).toBe(false);
+    expect(() => main.applyTrayBackgroundState()).not.toThrow();
   });
 
   it("registerCloseHandler is a no-op without an ipcMain.on", () => {

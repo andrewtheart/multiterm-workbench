@@ -54,6 +54,12 @@ test("exposes every isolated renderer API over the expected IPC channels", async
   await expect(api.getBridgeStartupPreference()).resolves.toBe("result");
   await expect(api.setBridgeStartupAsk(1)).resolves.toBe("result");
   await expect(api.chooseBridgeNow()).resolves.toBe("result");
+  await expect(api.ensureBridge()).resolves.toBe("result");
+  await expect(api.syncBackgroundTask({ enabled: true, intervalMinutes: "15" })).resolves.toBe("result");
+  await expect(api.syncBackgroundTask()).resolves.toBe("result");
+  await expect(api.isBackgroundLaunch()).resolves.toBe("result");
+  await expect(api.isBackgroundWindow()).resolves.toBe("result");
+  await expect(api.finishBackgroundRun()).resolves.toBe("result");
   await expect(api.pickScript()).resolves.toBe("result");
   await expect(api.pickFolder("C:\\work")).resolves.toBe("result");
   await expect(api.pickFolder()).resolves.toBe("result");
@@ -72,6 +78,12 @@ test("exposes every isolated renderer API over the expected IPC channels", async
     ["multiterm:get-bridge-startup-preference"],
     ["multiterm:set-bridge-startup-ask", true],
     ["multiterm:choose-bridge-now"],
+    ["multiterm:ensure-bridge"],
+    ["multiterm:sync-background-task", { enabled: true, intervalMinutes: 15 }],
+    ["multiterm:sync-background-task", { enabled: false, intervalMinutes: NaN }],
+    ["multiterm:background-launch"],
+    ["multiterm:background-window"],
+    ["multiterm:finish-background-run"],
     ["multiterm:pick-script"],
     ["multiterm:pick-folder", "C:\\work"],
     ["multiterm:pick-folder", ""],
@@ -94,21 +106,27 @@ test("registers close, fullscreen, and progress callbacks and ignores invalid ha
   const close = vi.fn();
   const fullscreen = vi.fn();
   const progress = vi.fn();
+  const background = vi.fn();
   api.onCloseRequest(close);
   api.onFullscreenChange(fullscreen);
   api.onUpdateProgress(progress);
+  api.onBackgroundWindowChange(background);
   api.onCloseRequest(null);
   api.onFullscreenChange(null);
   api.onUpdateProgress("invalid");
+  api.onBackgroundWindowChange(null);
 
-  expect(ipcRenderer.on).toHaveBeenCalledTimes(3);
+  expect(ipcRenderer.on).toHaveBeenCalledTimes(4);
   const closeListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:close-request")[1];
   const fullscreenListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:fullscreen-change")[1];
   const progressListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:update-progress")[1];
+  const backgroundListener = ipcRenderer.on.mock.calls.find(([channel]) => channel === "multiterm:background-window")[1];
   closeListener({}, "ignored");
   fullscreenListener({}, 1);
   progressListener({}, { received: 5, total: 10 });
+  backgroundListener({}, 1);
   expect(close).toHaveBeenCalledWith("ignored");
   expect(fullscreen).toHaveBeenCalledWith(true);
   expect(progress).toHaveBeenCalledWith({ received: 5, total: 10 });
+  expect(background).toHaveBeenCalledWith(true);
 });

@@ -81,6 +81,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 Name: "watchdog"; Description: "Install the MultiTerm watchdog (recommended; monitors bridges and asks before closing orphaned terminal sessions)"; GroupDescription: "Background monitoring:"
+Name: "backgroundautomations"; Description: "Bring MultiTerm back after a quit, a crash, or a reboot so automations set to keep running while it is closed still fire (per-user scheduled task, no administrator rights)"; GroupDescription: "Background monitoring:"
 Name: "explorercontext"; Description: "Add 'Open in MultiTerm' to File Explorer folder context menus (Windows 11 requires administrator approval)"; GroupDescription: "File Explorer integration:"
 Name: "vscodeextension"; Description: "Visual Studio Code extension (experimental) - adds 'Open in MultiTerm' to Explorer menus"; GroupDescription: "Editor extensions (experimental; clear a box to skip or remove one):"
 Name: "visualstudioextension"; Description: "Visual Studio extension (experimental) - adds 'Open in MultiTerm' to Solution Explorer and Tools"; GroupDescription: "Editor extensions (experimental; clear a box to skip or remove one):"
@@ -154,6 +155,7 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile
 
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\Watchdog\MultiTerm-Watchdog.ps1"" -Stop"; Flags: runhidden waituntilterminated; RunOnceId: "StopMultiTermWatchdog"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""MultiTerm Background Automations"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveMultiTermBackgroundTask"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\CLI\Manage-SystemPath.ps1"" -Action Uninstall -AppPath ""{app}"""; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldUninstallSystemPath; RunOnceId: "RemoveMultiTermSystemPath"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\Explorer\Install-ExplorerIntegration.ps1"" -AppPath ""{app}"" -Uninstall"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveMultiTermExplorerIntegration"
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {#ExplorerCertificateRemoveCommand}"; Verb: "runas"; Flags: shellexec runhidden waituntilterminated; Check: ShouldRemoveExplorerCertificate; MinVersion: 10.0.22000; RunOnceId: "RemoveMultiTermExplorerCertificate"
@@ -170,6 +172,7 @@ var
   VisualStudioRestartNotice: Boolean;
   EditorIntegrationProblem: String;
   ExplorerIntegrationProblem: String;
+  BackgroundTaskProblem: String;
 
 function PreferArm64PromptLibraryFiles: Boolean;
 begin
@@ -267,6 +270,9 @@ begin
     if ExplorerIntegrationProblem <> '' then
       WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 +
         ExplorerIntegrationProblem;
+    if BackgroundTaskProblem <> '' then
+      WizardForm.FinishedLabel.Caption := WizardForm.FinishedLabel.Caption + #13#10 +
+        BackgroundTaskProblem;
   end;
 end;
 
@@ -487,12 +493,109 @@ begin
       IntToStr(ResultCode) + '). MultiTerm itself installed normally.';
 end;
 
+// The task is a launcher, not a scheduler: it knows nothing about rule
+// schedules, so it never needs re-registering when a rule is edited. Per-user
+// (never /RU SYSTEM), so it needs no elevation and the CLI still reads the
+// user's own profile. A nonzero exit is reported on the finish page; it must
+// never abort Setup.
+procedure RegisterBackgroundAutomationTask;
+var
+  ResultCode: Integer;
+  XmlPath: String;
+  Xml: TStringList;
+  Command: String;
+begin
+  if not WizardIsTaskSelected('backgroundautomations') then
+  begin
+    Exec(ExpandConstant('{sys}\schtasks.exe'),
+      '/Delete /TN "MultiTerm Background Automations" /F',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exit;
+  end;
+
+  WizardForm.StatusLabel.Caption := 'Registering the background automation task...';
+  XmlPath := ExpandConstant('{tmp}\multiterm-background-task.xml');
+  Command := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  Xml := TStringList.Create;
+  try
+    Xml.Add('<?xml version="1.0" encoding="UTF-16"?>');
+    Xml.Add('<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">');
+    Xml.Add('  <RegistrationInfo>');
+    Xml.Add('    <Description>Runs MultiTerm Workbench automations that were set to keep running while the window is closed.</Description>');
+    Xml.Add('  </RegistrationInfo>');
+    Xml.Add('  <Triggers>');
+    Xml.Add('    <LogonTrigger>');
+    Xml.Add('      <Enabled>true</Enabled>');
+    Xml.Add('      <UserId>' + GetUserNameString + '</UserId>');
+    Xml.Add('      <Repetition>');
+    Xml.Add('        <Interval>PT15M</Interval>');
+    Xml.Add('        <StopAtDurationEnd>false</StopAtDurationEnd>');
+    Xml.Add('      </Repetition>');
+    Xml.Add('    </LogonTrigger>');
+    Xml.Add('  </Triggers>');
+    Xml.Add('  <Principals>');
+    Xml.Add('    <Principal id="Author">');
+    Xml.Add('      <UserId>' + GetUserNameString + '</UserId>');
+    Xml.Add('      <LogonType>InteractiveToken</LogonType>');
+    Xml.Add('      <RunLevel>LeastPrivilege</RunLevel>');
+    Xml.Add('    </Principal>');
+    Xml.Add('  </Principals>');
+    Xml.Add('  <Settings>');
+    Xml.Add('    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>');
+    Xml.Add('    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>');
+    Xml.Add('    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>');
+    Xml.Add('    <StartWhenAvailable>true</StartWhenAvailable>');
+    Xml.Add('    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>');
+    Xml.Add('    <Enabled>true</Enabled>');
+    Xml.Add('    <Hidden>false</Hidden>');
+    Xml.Add('    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>');
+    Xml.Add('  </Settings>');
+    Xml.Add('  <Actions Context="Author">');
+    Xml.Add('    <Exec>');
+    Xml.Add('      <Command>' + Command + '</Command>');
+    Xml.Add('      <Arguments>-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
+      ExpandConstant('{app}\{#MyScriptFile}') + '" -Background</Arguments>');
+    Xml.Add('      <WorkingDirectory>' + ExpandConstant('{app}') + '</WorkingDirectory>');
+    Xml.Add('    </Exec>');
+    Xml.Add('  </Actions>');
+    Xml.Add('</Task>');
+    try
+      Xml.SaveToFile(XmlPath);
+    except
+      BackgroundTaskProblem := #13#10 +
+        'Setup could not stage the background automation task. MultiTerm itself installed normally.';
+      Exit;
+    end;
+  finally
+    Xml.Free;
+  end;
+
+  if not ExecAsOriginalUser(
+    ExpandConstant('{sys}\schtasks.exe'),
+    '/Create /TN "MultiTerm Background Automations" /XML "' + XmlPath + '" /F',
+    ExpandConstant('{app}'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then
+  begin
+    BackgroundTaskProblem := #13#10 +
+      'Setup could not start the Windows task scheduler. MultiTerm itself installed normally.';
+    Exit;
+  end;
+  if ResultCode <> 0 then
+    BackgroundTaskProblem := #13#10 +
+      'The background automation task could not be registered (exit code ' +
+      IntToStr(ResultCode) + '). MultiTerm itself installed normally.';
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
     UpdateExplorerIntegration;
     UpdateEditorIntegrations;
+    RegisterBackgroundAutomationTask;
     if not WizardSilent then
       WriteAiProviderBootstrap;
   end;

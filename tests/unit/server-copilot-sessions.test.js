@@ -402,6 +402,97 @@ describe("Copilot CLI session discovery", () => {
     });
   });
 
+  it("records the background automation plan for the claimed bridge id", () => {
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = temporaryRoot;
+    const client = { send: vi.fn() };
+
+    try {
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-001");
+      const storePath = path.join(temporaryRoot, "MultiTerm", "BackgroundAutomations", "BRIDGE-001.json");
+
+      server.handleClientMessage(client, JSON.stringify({
+        type: "backgroundAutomationPlan",
+        enabled: true,
+        count: 3,
+        nextDueAt: "2026-09-03T01:00:00.000Z"
+      }));
+      expect(JSON.parse(fs.readFileSync(storePath, "utf8"))).toMatchObject({
+        count: 3,
+        enabled: true,
+        nextDueAt: "2026-09-03T01:00:00.000Z",
+        pid: process.pid
+      });
+      expect(server.readBackgroundAutomationPlan()).toEqual({
+        count: 3,
+        enabled: true,
+        nextDueAt: "2026-09-03T01:00:00.000Z"
+      });
+      expect(server.backgroundAutomationCount()).toBe(3);
+
+      // The installed bridge sends flat strings, and a disabled plan reports nothing.
+      server.handleClientMessage(client, JSON.stringify({
+        type: "backgroundAutomationPlan",
+        enabled: "true",
+        count: "40000",
+        nextDueAt: "n".repeat(60)
+      }));
+      expect(server.readBackgroundAutomationPlan()).toEqual({
+        count: 10000,
+        enabled: true,
+        nextDueAt: "n".repeat(40)
+      });
+      server.handleClientMessage(client, JSON.stringify({
+        type: "backgroundAutomationPlan",
+        enabled: false,
+        count: -4,
+        nextDueAt: 17
+      }));
+      expect(server.readBackgroundAutomationPlan()).toEqual({ count: 0, enabled: false, nextDueAt: "" });
+      expect(server.backgroundAutomationCount()).toBe(0);
+
+      fs.writeFileSync(storePath, "not json", "utf8");
+      expect(server.readBackgroundAutomationPlan()).toEqual({ count: 0, enabled: false, nextDueAt: "" });
+    } finally {
+      server.releaseBridgeIdentifier();
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+    }
+
+    // No claimed bridge id means no per-bridge record to read or write.
+    expect(server.readBackgroundAutomationPlan()).toEqual({ count: 0, enabled: false, nextDueAt: "" });
+    expect(() => server.handleClientMessage(client, JSON.stringify({
+      type: "backgroundAutomationPlan",
+      enabled: true,
+      count: 1
+    }))).not.toThrow();
+  });
+
+  it("survives a background automation record it cannot write", () => {
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    const blocker = path.join(temporaryRoot, "not-a-directory");
+    fs.writeFileSync(blocker, "", "utf8");
+    process.env.LOCALAPPDATA = blocker;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(server.claimBridgeIdentifier()).toBeNull();
+      process.env.LOCALAPPDATA = temporaryRoot;
+      expect(server.claimBridgeIdentifier()).toBe("BRIDGE-001");
+      process.env.LOCALAPPDATA = blocker;
+      server.handleClientMessage({ send: vi.fn() }, JSON.stringify({
+        type: "backgroundAutomationPlan",
+        enabled: true,
+        count: 1
+      }));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Could not record the background automation plan"));
+    } finally {
+      warn.mockRestore();
+      server.releaseBridgeIdentifier();
+      if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousLocalAppData;
+    }
+  });
+
   it("rejects malformed assistant payloads and storage without local app data", () => {
     const previousLocalAppData = process.env.LOCALAPPDATA;
     delete process.env.LOCALAPPDATA;

@@ -111,6 +111,33 @@ const installedBridge = fs.readFileSync(path.join(root, "Start-MultiTerm.ps1"), 
     expect(installedBridge).toContain('\\"bridgeType\\":\\"installed\\"');
   });
 
+  // A bridge holding scheduled background automations is not an orphan; it is
+  // the only thing keeping them alive.
+  it("never offers to close a bridge that still has background automations scheduled", () => {
+    expect(watchdog).toContain("$health.PSObject.Properties['backgroundAutomations']");
+    expect(watchdog).toContain("$backgroundAutomations = [int]$health.backgroundAutomations");
+    expect(watchdog).toMatch(/if \(\$backgroundAutomations -gt 0\) \{[\s\S]{0,320}?continue\s*\}/);
+    expect(watchdog.indexOf("$backgroundAutomations -gt 0"))
+      .toBeLessThan(watchdog.indexOf("$state.Dismissed = Start-WatchdogPrompt"));
+    for (const source of [nodeBridge, installedBridge]) {
+      expect(source).toContain("backgroundAutomations");
+      expect(source).toContain("backgroundAutomationPlan");
+      expect(source).toContain("BackgroundAutomations");
+    }
+  });
+
+  it("relaunches a minimized installed window instead of idling with a live plan", () => {
+    expect(installedBridge).toContain("private void EnsureBackgroundRenderer(bool lostRenderer)");
+    expect(installedBridge).toContain("this.EnsureBackgroundRenderer(client.IsRenderer);");
+    expect(installedBridge).toMatch(/EnsureBackgroundRenderer\(bool lostRenderer\)[\s\S]{0,900}?this\.watchdogSuppressed = true;/);
+    expect(installedBridge).toMatch(/EnsureBackgroundRenderer\(bool lostRenderer\)[\s\S]{0,1500}?this\.OpenBrowser\(true\)/);
+    expect(installedBridge).toContain("BackgroundRelaunchFloorTicks = TimeSpan.TicksPerMinute");
+    // Minimized, never hidden: an invisible browser the user cannot find reads as hostile.
+    expect(installedBridge).toContain("public static bool Minimize(Process started, string titleFragment, HashSet<IntPtr> preexisting)");
+    expect(installedBridge).toContain("private const int SW_MINIMIZE = 6;");
+    expect(installedBridge).toContain("ShowWindow(candidate, SW_MINIMIZE);");
+  });
+
   it("keeps the installed bridge alive until staged session shutdown completes", () => {
     expect(installedBridge).toContain("this.WaitForSessionsToExit(6000);");
     expect(installedBridge).toMatch(/WaitForSessionsToExit\(6000\);[\s\S]*session\.Kill\(\);[\s\S]*WaitForSessionsToExit\(1000\);/);

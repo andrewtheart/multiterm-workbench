@@ -110,6 +110,10 @@ function formatError(err) {
   return String(err.message || err);
 }
 
+function hasBackgroundArgv(argv) {
+  return Array.isArray(argv) && argv.includes("--background");
+}
+
 function bridgeOrigin(host = activeBridgeHost, port = activeBridgePort) {
   const displayHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   return `http://${displayHost}:${port}`;
@@ -189,6 +193,10 @@ let elevationChecked = false;
 
 let mainWindow = null;
 let tray = null;
+// True once the user chose to keep automations running with the window hidden.
+let backgroundMode = false;
+// True when this instance was launched by the scheduled task rather than a person.
+let startedInBackground = hasBackgroundArgv(process.argv);
 let serverProcess = null;
 const detachedServerProcesses = new Set();
 let runtimeDiagnostics = new RuntimeDiagnostics();
@@ -199,6 +207,13 @@ let bridgeHandledForQuit = false;
 let serverRestarts = [];
 const RESTART_WINDOW_MS = 10000;
 const MAX_RESTARTS = 5;
+// Single-flight guard plus a retry floor for on-demand bridge restarts, so a
+// per-second scheduler tick cannot spawn-loop a bridge that refuses to start.
+let ensureBridgePromise = null;
+let lastEnsureBridgeFailure = null;
+const BRIDGE_ENSURE_RETRY_MS = 15000;
+const BRIDGE_RECLAIM_ATTEMPTS = 6;
+const BRIDGE_RECLAIM_WAIT_MS = 500;
 
 function recordElectronDiagnostic(record) {
   try {
@@ -712,12 +727,239 @@ function waitForServer(timeoutMs = 10000) {
   });
 }
 
+// Brings the owned bridge back up for a background automation that came due
+// while the socket was down. Single-flight, with a floor on retries so a bridge
+// that refuses to start cannot be spawn-looped by a one-second scheduler tick.
+async function ensureBridgeAvailable() {
+  if (ensureBridgePromise) return ensureBridgePromise;
+  const now = Date.now();
+  if (lastEnsureBridgeFailure && now - lastEnsureBridgeFailure.at < BRIDGE_ENSURE_RETRY_MS) {
+    return { ...lastEnsureBridgeFailure.result, throttled: true };
+  }
+  ensureBridgePromise = restartBridgeForBackgroundWork().then((result) => {
+    lastEnsureBridgeFailure = result.ok ? null : { at: Date.now(), result };
+    return result;
+  });
+  try {
+    return await ensureBridgePromise;
+  } finally {
+    ensureBridgePromise = null;
+  }
+}
+
+async function restartBridgeForBackgroundWork() {
+  if (await probeServer(1000)) {
+    return { ok: true, restarted: false, navigated: false, host: activeBridgeHost, port: activeBridgePort };
+  }
+  try {
+    // The renderer's document origin is fixed, so reclaiming the same port is
+    // the only recovery that needs no navigation. Moving origin also moves
+    // localStorage, which is where every setting, page, and automation lives,
+    // so a briefly held port must not cost the user their workspace.
+    const port = await reclaimBridgePort(activeBridgePort, activeBridgeHost);
+    const navigated = port !== activeBridgePort;
+    if (navigated) {
+      activeBridgePort = port;
+      activeBridgeRecord = null;
+    }
+    startServer();
+    await waitForServer();
+    if (navigated && mainWindow) await mainWindow.loadURL(`${bridgeOrigin()}/`);
+    recordElectronDiagnostic({
+      level: "warn",
+      event: "bridge-ensure",
+      message: `Restarted the terminal bridge on ${activeBridgeHost}:${activeBridgePort} for background automations.`,
+      navigated
+    });
+    return { ok: true, restarted: true, navigated, host: activeBridgeHost, port: activeBridgePort };
+  } catch (err) {
+    recordElectronDiagnostic({
+      level: "error",
+      event: "bridge-ensure-failed",
+      message: formatError(err)
+    });
+    return { ok: false, restarted: false, navigated: false, error: formatError(err) };
+  }
+}
+
+// Waits out a transient holder (a slow-exiting predecessor, a lingering socket)
+// before accepting a different port, because a different port is a different
+// origin and therefore a different localStorage.
+async function reclaimBridgePort(preferredPort, bindHost, attempts = BRIDGE_RECLAIM_ATTEMPTS, waitMs = BRIDGE_RECLAIM_WAIT_MS) {
+  let free = await findFreePort(preferredPort, bindHost);
+  for (let attempt = 1; attempt < attempts && free !== preferredPort; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    free = await findFreePort(preferredPort, bindHost);
+  }
+  return free;
+}
+
+function registerEnsureBridgeIpc() {
+  if (!ipcMain || typeof ipcMain.handle !== "function") return;
+  try { ipcMain.removeHandler("multiterm:ensure-bridge"); } catch { /* no existing handler */ }
+  ipcMain.handle("multiterm:ensure-bridge", (event) => {
+    assertTrustedIpcSender(event);
+    return ensureBridgeAvailable();
+  });
+}
+
+const BACKGROUND_TASK_NAME = "MultiTerm Background Automations";
+const BACKGROUND_TASK_INTERVAL_BOUNDS = { min: 5, max: 1440, fallback: 15 };
+
+function backgroundTaskIntervalMinutes(value) {
+  const minutes = Math.round(Number(value));
+  if (!Number.isFinite(minutes)) return BACKGROUND_TASK_INTERVAL_BOUNDS.fallback;
+  return Math.min(Math.max(minutes, BACKGROUND_TASK_INTERVAL_BOUNDS.min), BACKGROUND_TASK_INTERVAL_BOUNDS.max);
+}
+
+// A dev run is `electron .`, so the repository path is a real argument; a
+// packaged build already knows where it lives.
+function backgroundTaskInvocation(packaged = app?.isPackaged === true) {
+  return {
+    executable: process.execPath,
+    args: packaged ? ["--background"] : [repoRoot, "--background"]
+  };
+}
+
+function escapeXmlText(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+// schtasks cannot express "at logon AND every N minutes" on its command line, so
+// the trigger is registered from XML. StartWhenAvailable is what makes a window
+// missed across sleep still fire.
+function backgroundTaskXml(intervalMinutes, userId = `${os.userInfo().username}`, invocation = backgroundTaskInvocation()) {
+  const minutes = backgroundTaskIntervalMinutes(intervalMinutes);
+  const argumentLine = invocation.args.map((value) => `"${value}"`).join(" ");
+  return [
+    '<?xml version="1.0" encoding="UTF-16"?>',
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+    "  <RegistrationInfo>",
+    "    <Description>Runs MultiTerm Workbench automations that were set to keep running while the window is closed.</Description>",
+    "  </RegistrationInfo>",
+    "  <Triggers>",
+    "    <LogonTrigger>",
+    "      <Enabled>true</Enabled>",
+    `      <UserId>${escapeXmlText(userId)}</UserId>`,
+    "      <Repetition>",
+    `        <Interval>PT${minutes}M</Interval>`,
+    "        <StopAtDurationEnd>false</StopAtDurationEnd>",
+    "      </Repetition>",
+    "    </LogonTrigger>",
+    "  </Triggers>",
+    "  <Principals>",
+    '    <Principal id="Author">',
+    `      <UserId>${escapeXmlText(userId)}</UserId>`,
+    "      <LogonType>InteractiveToken</LogonType>",
+    "      <RunLevel>LeastPrivilege</RunLevel>",
+    "    </Principal>",
+    "  </Principals>",
+    "  <Settings>",
+    "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+    "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>",
+    "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+    "    <StartWhenAvailable>true</StartWhenAvailable>",
+    "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>",
+    "    <Enabled>true</Enabled>",
+    "    <Hidden>false</Hidden>",
+    "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+    "  </Settings>",
+    '  <Actions Context="Author">',
+    "    <Exec>",
+    `      <Command>${escapeXmlText(invocation.executable)}</Command>`,
+    `      <Arguments>${escapeXmlText(argumentLine)}</Arguments>`,
+    "    </Exec>",
+    "  </Actions>",
+    "</Task>",
+    ""
+  ].join("\r\n");
+}
+
+function runScheduledTaskCommand(args, execute = childProcess.execFileSync) {
+  try {
+    execute("schtasks.exe", args, { windowsHide: true, stdio: "pipe" });
+    return { ok: true, code: 0, error: "" };
+  } catch (err) {
+    return { ok: false, code: Number.isInteger(err?.status) ? err.status : 1, error: formatError(err) };
+  }
+}
+
+// Registration is opt-in by consequence: the task exists only while at least one
+// rule asked to keep running while MultiTerm is closed.
+function syncBackgroundAutomationTask(request = {}, execute = childProcess.execFileSync) {
+  if (process.platform !== "win32") {
+    return { ok: false, action: "unsupported", code: 0, error: "Scheduled tasks are available on Windows only." };
+  }
+  if (request.enabled !== true) {
+    const removal = runScheduledTaskCommand(["/Delete", "/TN", BACKGROUND_TASK_NAME, "/F"], execute);
+    // Deleting a task that was never created is the normal path, not a failure.
+    return { ...removal, ok: true, action: "removed" };
+  }
+  let file = "";
+  try {
+    file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "multiterm-task-")), "background.xml");
+    fs.writeFileSync(file, `\ufeff${backgroundTaskXml(request.intervalMinutes)}`, "utf16le");
+    const result = runScheduledTaskCommand(["/Create", "/TN", BACKGROUND_TASK_NAME, "/XML", file, "/F"], execute);
+    return { ...result, action: "created" };
+  } catch (err) {
+    return { ok: false, action: "created", code: 1, error: formatError(err) };
+  } finally {
+    if (file) {
+      try { fs.rmSync(path.dirname(file), { recursive: true, force: true }); } catch { /* temp dir already gone */ }
+    } else {
+      // Nothing was staged, so there is nothing to clean up.
+    }
+  }
+}
+
+function registerBackgroundTaskIpc() {
+  if (!ipcMain || typeof ipcMain.handle !== "function") return;
+  try { ipcMain.removeHandler("multiterm:sync-background-task"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:background-launch"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:background-window"); } catch { /* no existing handler */ }
+  try { ipcMain.removeHandler("multiterm:finish-background-run"); } catch { /* no existing handler */ }
+  ipcMain.handle("multiterm:sync-background-task", (event, request) => {
+    assertTrustedIpcSender(event);
+    return syncBackgroundAutomationTask({
+      enabled: request?.enabled === true,
+      intervalMinutes: request?.intervalMinutes
+    });
+  });
+  ipcMain.handle("multiterm:background-launch", (event) => {
+    assertTrustedIpcSender(event);
+    return startedInBackground;
+  });
+  ipcMain.handle("multiterm:background-window", (event) => {
+    assertTrustedIpcSender(event);
+    return windowIsUnattended();
+  });
+  ipcMain.handle("multiterm:finish-background-run", (event) => {
+    assertTrustedIpcSender(event);
+    return finishBackgroundRun();
+  });
+}
+
+// Only an instance the task started may retire itself, and only while the user
+// has not asked for its window.
+function finishBackgroundRun() {
+  if (!startedInBackground) return false;
+  startedInBackground = false;
+  quitApp(Boolean(serverProcess));
+  return true;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 720,
     minHeight: 480,
+    show: !startedInBackground,
     backgroundColor: "#1e1e1e",
     title: "MultiTerm Workbench",
     icon: path.join(repoRoot, "public", "favicon.ico"),
@@ -819,6 +1061,8 @@ function createWindow() {
 
 // Brings the (possibly hidden/minimized) window back to the foreground.
 function showMainWindow() {
+  startedInBackground = false;
+  setBackgroundMode(false);
   if (!mainWindow) {
     createWindow();
     return;
@@ -857,23 +1101,60 @@ function quitApp(closeBridge = true) {
 function createTray() {
   if (tray || !Tray) return tray;
   tray = new Tray(path.join(repoRoot, "public", "favicon.ico"));
-  tray.setToolTip("MultiTerm Workbench");
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Show MultiTerm", click: () => showMainWindow() },
-    { type: "separator" },
-    { label: "Quit MultiTerm", click: () => requestCloseDecision("tray") }
-  ]));
+  applyTrayBackgroundState();
   tray.on("click", () => showMainWindow());
   tray.on("double-click", () => showMainWindow());
   return tray;
 }
 
-// Applies the renderer's close decision: dock to tray, quit, or stay open.
+// Reflects background mode in the tray, which is the only surface left once the
+// window is hidden.
+function applyTrayBackgroundState() {
+  if (!tray) return;
+  tray.setToolTip(backgroundMode
+    ? "MultiTerm Workbench - running automations in the background"
+    : "MultiTerm Workbench");
+  const template = [{ label: "Show MultiTerm", click: () => showMainWindow() }];
+  if (backgroundMode) {
+    template.push({ label: "Automations are running in the background", enabled: false });
+  }
+  template.push({ type: "separator" }, { label: "Quit MultiTerm", click: () => requestCloseDecision("tray") });
+  tray.setContextMenu(Menu.buildFromTemplate(template));
+}
+
+// Electron keeps the page visibility state at "visible" while backgroundThrottling
+// is off, even for a hidden window, so the renderer cannot tell on its own.
+function windowIsUnattended() {
+  return backgroundMode || startedInBackground;
+}
+
+function publishBackgroundWindowState() {
+  const wc = mainWindow && mainWindow.webContents;
+  if (!wc || wc.isDestroyed()) return false;
+  wc.send("multiterm:background-window", windowIsUnattended());
+  return true;
+}
+
+function setBackgroundMode(active) {
+  backgroundMode = active === true;
+  applyTrayBackgroundState();
+  publishBackgroundWindowState();
+  return backgroundMode;
+}
+
+// Applies the renderer's close decision: dock to tray, keep running in the
+// background, quit, or stay open.
 function handleCloseResponse(action) {
   if (action === "quitClose") {
     quitApp(true);
   } else if (action === "quitKeep") {
     quitApp(false);
+  } else if (action === "background") {
+    // The renderer keeps ticking while hidden (backgroundThrottling is off), so
+    // the window is only hidden here - never destroyed - and the bridge stays owned.
+    createTray();
+    setBackgroundMode(true);
+    if (mainWindow) mainWindow.hide();
   } else if (action === "tray") {
     if (mainWindow) mainWindow.hide();
   }
@@ -1137,6 +1418,8 @@ async function onReady() {
     registerCloseHandler();
     registerClipboardIpc();
     registerWindowIpc();
+    registerEnsureBridgeIpc();
+    registerBackgroundTaskIpc();
     registerAdminIpc();
     registerUpdateIpc();
 
@@ -1671,8 +1954,12 @@ function bootstrap() {
   // menu-less tool, so this shaves startup work.
   Menu.setApplicationMenu(null);
 
-  app.on("second-instance", () => {
-    if (mainWindow) {
+  app.on("second-instance", (_event, argv) => {
+    // The scheduled task launches with --background every repeat. Without this
+    // guard it would yank the user's window to the foreground mid-work.
+    if (hasBackgroundArgv(argv)) {
+      return;
+    } else if (mainWindow) {
       if (mainWindow.isMinimized()) {
         mainWindow.restore();
       } else {
@@ -1713,6 +2000,8 @@ module.exports = {
   waitForServer,
   createWindow,
   createTray,
+  applyTrayBackgroundState,
+  setBackgroundMode,
   requestCloseDecision,
   showMainWindow,
   quitApp,
@@ -1737,6 +2026,19 @@ module.exports = {
   appendConfiguredBridgeCandidate,
   selectStartupBridge,
   handleCloseResponse,
+  ensureBridgeAvailable,
+  restartBridgeForBackgroundWork,
+  reclaimBridgePort,
+  registerEnsureBridgeIpc,
+  hasBackgroundArgv,
+  windowIsUnattended,
+  publishBackgroundWindowState,
+  backgroundTaskIntervalMinutes,
+  backgroundTaskInvocation,
+  backgroundTaskXml,
+  syncBackgroundAutomationTask,
+  registerBackgroundTaskIpc,
+  finishBackgroundRun,
   registerCloseHandler,
   registerClipboardIpc,
   registerWindowIpc,
@@ -1787,13 +2089,21 @@ module.exports = {
   getMainWindow: () => mainWindow,
   getTray: () => tray,
   getServerProcess: () => serverProcess,
+  __setStartedInBackground(value) {
+    startedInBackground = value === true;
+    return startedInBackground;
+  },
   __reset() {
     mainWindow = null;
     tray = null;
+    backgroundMode = false;
+    startedInBackground = false;
     serverProcess = null;
     detachedServerProcesses.clear();
     bridgeHandledForQuit = false;
     serverRestarts = [];
+    ensureBridgePromise = null;
+    lastEnsureBridgeFailure = null;
     activeBridgeHost = HOST;
     activeBridgePort = PORT;
     activeBridgeRecord = null;
