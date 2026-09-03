@@ -10,6 +10,9 @@ lib/sqlite3mc/bin/
 lib/sqlite3mc/build/
 integrations/visualstudio/bin/
 integrations/visualstudio/obj/
+# CMake Tools configures here by default; the real SQLite3MC build uses
+# lib/sqlite3mc/build/, so nothing needs this checked in.
+/build/
 
 # Logs
 *.log

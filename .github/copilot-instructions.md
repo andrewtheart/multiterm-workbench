@@ -16,6 +16,7 @@
 ## Running the Playwright suite
 
 - Do not edit `public/*` or `src/server.js` while a full run is in flight. Either restarts the shared 3199 bridge mid-run, which cascades into connection failures and invalidates the renderer coverage merge. Wait for the run to finish.
+- Never stop the dev app while a suite is running, and never stop it as a way to "clean up" before one. Killing a bridge that still holds a live terminal leaves its session recorded in `%LOCALAPPDATA%\MultiTerm\AssistantSessions\BRIDGE-nnn.json`. Bridge ids are reclaimed once the recorded pid is dead, so the next test bridge can claim the same id, read that record as a lost session, and open `#assistantRestoreOverlay` over the test page. Its overlay swallows every click and the first `locator.click` burns the full 60s test timeout, in a spec that has nothing to do with assistant restore. If the app must be stopped, do it between runs and confirm every AssistantSessions record reads `"sessions":[]` before starting the suite. Never delete those files wholesale - they can belong to the user's real installed app.
 - `retries: 1` is set, so anything that passed only on retry is reported as flaky. Treat that as a result to explain, not a pass.
 - A `reset()` helper that calls `closeAllTerminals()` once can race the renderer's welcome terminal and then wait forever for a pane count of 0. Poll the close until the count reaches 0.
 

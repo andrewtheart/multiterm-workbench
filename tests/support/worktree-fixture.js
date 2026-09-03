@@ -7,7 +7,8 @@ const { execFileSync } = require("node:child_process");
 // merge flows have something genuine to work against.
 const conflict = process.argv.includes("--conflict");
 const sandbox = path.join(os.tmpdir(), conflict ? "mt-conflict-fixture" : "mt-review-fixture");
-fs.rmSync(sandbox, { recursive: true, force: true });
+// Windows keeps the directory locked while the previous run's git children exit.
+fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 fs.mkdirSync(sandbox, { recursive: true });
 
 const repo = path.join(sandbox, "demo");

@@ -51,13 +51,28 @@ test.describe("Run in a worktree dialog", () => {
   });
 
   test("inspects a real repository and suggests a name from its branch", async ({ page }) => {
+    // Read the branch rather than naming one, so the check holds on whatever the
+    // repository is checked out to instead of only on the default branch.
+    const branch = execFileSync("git", ["branch", "--show-current"], {
+      cwd: "D:\\multiTerm",
+      encoding: "utf8"
+    }).trim();
+    const base = branch
+      .replace(/[\\/]+/g, "-")
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^[-.]+|[-.]+$/g, "")
+      .slice(0, 80);
+    const quoted = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
     await open(page);
     await page.locator("#worktreeFolderInput").fill("D:\\multiTerm");
-    await expect(page.locator("#worktreeParentBranch")).toHaveText("main");
+    await expect(page.locator("#worktreeParentBranch")).toHaveText(branch);
     await expect(page.locator("#worktreeStatus")).toHaveAttribute("data-tone", "ready");
-    await expect(page.locator("#worktreeNameInput")).toHaveValue(/^main-\d{4}(-\d+)?$/);
+    await expect(page.locator("#worktreeNameInput")).toHaveValue(new RegExp(`^${quoted}-\\d{4}(-\\d+)?$`));
     // The repository already keeps worktrees in <repo>.worktrees.
-    await expect(page.locator("#worktreePathPreview")).toHaveText(/^D:\\multiTerm\.worktrees\\main-\d{4}/);
+    await expect(page.locator("#worktreePathPreview"))
+      .toHaveText(new RegExp(`^D:\\\\multiTerm\\.worktrees\\\\${quoted}-\\d{4}`));
     await expect(page.locator("#worktreeCreate")).toBeEnabled();
   });
 

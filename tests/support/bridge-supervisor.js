@@ -41,6 +41,7 @@
 
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -48,6 +49,30 @@ const serverPath = path.join(__dirname, "..", "..", "src", "server.js");
 const cwd = path.join(__dirname, "..", "..");
 const preferencesPath = path.join(os.tmpdir(), `multiterm-playwright-preferences-${process.pid}.json`);
 const diagnosticsPath = path.join(os.tmpdir(), `multiterm-playwright-diagnostics-${process.pid}`);
+
+// The bridge registers itself like any other instance, so the user's per-user
+// watchdog polls it too. A suite drops to zero renderers between specs while
+// terminals are still alive, which is exactly the state the watchdog raises its
+// "keep terminals running?" dialog for. Suppression is the same protected route
+// the launcher uses, but a renderer connecting clears it again, so it has to be
+// re-asserted -- comfortably inside the watchdog's 12 second grace period.
+const WATCHDOG_KEEP_INTERVAL_MS = 2000;
+const bridgeHost = process.env.HOST || "127.0.0.1";
+const bridgePort = Number(process.env.PORT) || 3177;
+let watchdogTimer = null;
+
+function keepWatchdogQuiet() {
+  const request = http.request({
+    headers: { "content-length": "0", "x-multiterm-request": "Launcher" },
+    host: bridgeHost,
+    method: "POST",
+    path: "/watchdog/keep",
+    port: bridgePort
+  }, (response) => response.resume());
+  // A refused connection just means the bridge is starting or restarting.
+  request.on("error", () => {});
+  request.end();
+}
 
 let child = null;
 let shuttingDown = false;
@@ -104,6 +129,7 @@ function spawnBridge() {
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  if (watchdogTimer) clearInterval(watchdogTimer);
   if (child && !child.killed) {
     child.kill();
   }
@@ -113,9 +139,11 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("exit", () => {
+  if (watchdogTimer) clearInterval(watchdogTimer);
   if (child && !child.killed) child.kill();
   try { fs.rmSync(preferencesPath, { force: true }); } catch { }
   try { fs.rmSync(diagnosticsPath, { force: true, recursive: true }); } catch { }
 });
 
 spawnBridge();
+watchdogTimer = setInterval(keepWatchdogQuiet, WATCHDOG_KEEP_INTERVAL_MS);
