@@ -1,8 +1,8 @@
 "use strict";
 
-// Renders the README's source-control screenshots from the real UI. Each scene
-// runs against a throwaway repository built here, so nothing from the user's
-// working tree can appear in a published image.
+// Renders the README's generated screenshots from the real UI. Each scene runs
+// against throwaway data built here, so nothing from the user's working tree or
+// real automations can appear in a published image.
 
 const fs = require("node:fs");
 const net = require("node:net");
@@ -243,9 +243,9 @@ async function settle(page) {
     requestAnimationFrame(() => requestAnimationFrame(resolve))));
 }
 
-async function shoot(page, name) {
+async function shoot(page, name, target = null) {
   const file = path.join(outputDir, name);
-  await page.screenshot({ path: file });
+  await (target ? page.locator(target) : page).screenshot({ path: file });
   const { size } = fs.statSync(file);
   console.log(`  wrote ${name} (${Math.round(size / 1024)} KB)`);
 }
@@ -342,6 +342,87 @@ async function captureConflictResolver(page, url, fixture) {
   await shoot(page, "git-conflict-resolver.png");
 }
 
+const AUTOMATION_DIALOG = "#automationsOverlay .automation-studio";
+
+// A freshly clicked tile keeps a hover blob and the last field keeps a focus
+// ring and a scrolled-to-the-tail value, none of which belong in a screenshot.
+async function calmForm(page) {
+  await page.mouse.move(12, 12);
+  await page.evaluate(() => {
+    document.activeElement?.blur?.();
+    // Filling the lower fields scrolls the editor past the type tiles.
+    for (const element of document.querySelectorAll("#automationsOverlay *")) {
+      if (element.scrollHeight > element.clientHeight + 4) element.scrollTop = 0;
+      element.scrollLeft = 0;
+    }
+  });
+}
+
+async function openAutomationEditor(page, url, type) {
+  // The editor is a tall form; a short viewport clips its lower half.
+  await page.setViewportSize({ width: 1500, height: 1180 });
+  await prepareStage(page, url);
+  // The studio lists saved rules, so start from a known-empty store.
+  await page.evaluate(() => {
+    localStorage.removeItem("multiterm.automations");
+    state.automations = loadAutomationStore(state.settings);
+  });
+  await page.click("#automationsToggle");
+  await page.locator("#automationsOverlay").waitFor({ state: "visible", timeout: 30000 });
+  await page.click("#automationNew");
+  await page.click(`[data-automation-type='${type}']`);
+}
+
+async function captureCommandAutomation(page, url) {
+  await openAutomationEditor(page, url, "command");
+  await page.fill("#automationName", "Nightly dependency audit");
+  await page.locator("#automationScheduleBlock").waitFor({ state: "visible", timeout: 30000 });
+  await page.click("[data-schedule-mode='daily']");
+  await page.fill("#automationTime", "02:30");
+  await page.fill(".automation-action-command", "npm audit --omit=dev");
+  await calmForm(page);
+  await settle(page);
+  await shoot(page, "automation-command.png", AUTOMATION_DIALOG);
+}
+
+async function captureCopilotAutomation(page, url) {
+  await openAutomationEditor(page, url, "copilot");
+  await page.fill("#automationName", "Morning triage summary");
+  await page.locator("#automationScheduleBlock").waitFor({ state: "visible", timeout: 30000 });
+  await page.click("[data-schedule-mode='weekly']");
+  await page.fill("#automationTime", "08:30");
+  await page.fill(".automation-action-command",
+    "Summarise yesterday's failing builds and list the three most likely causes.");
+  await calmForm(page);
+  await settle(page);
+  await shoot(page, "automation-copilot.png", AUTOMATION_DIALOG);
+}
+
+async function captureConditionAutomation(page, url) {
+  await openAutomationEditor(page, url, "condition");
+  await page.fill("#automationName", "Archive finished exports");
+  await page.locator("#automationConditionBlock").waitFor({ state: "visible", timeout: 30000 });
+  await page.fill("#automationConditionPrompt",
+    "A .csv file finished writing to this folder since the last check");
+  await page.fill("#automationConditionAction",
+    "Move it into the archive subfolder and note the file name");
+  await page.fill("#automationConditionCwd", "D:\\exports");
+  await calmForm(page);
+  await settle(page);
+  await shoot(page, "automation-condition.png", AUTOMATION_DIALOG);
+}
+
+async function captureAppearanceAutomation(page, url) {
+  await openAutomationEditor(page, url, "appearance");
+  await page.fill("#automationName", "Production terminals in red");
+  await page.locator("#automationAppearanceBlock").waitFor({ state: "visible", timeout: 30000 });
+  await page.selectOption("#automationTitleMatchType", "contains");
+  await page.fill("#automationTitleMatchValue", "prod");
+  await calmForm(page);
+  await settle(page);
+  await shoot(page, "automation-appearance.png", AUTOMATION_DIALOG);
+}
+
 async function main() {
   fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   fs.mkdirSync(sandbox, { recursive: true });
@@ -380,6 +461,10 @@ async function main() {
     await captureWorktreeManager(page, url, worktrees.repo);
     await captureWorktreeLaunch(page, url, worktrees.repo);
     await captureConflictResolver(page, url, conflict);
+    await captureCommandAutomation(page, url);
+    await captureCopilotAutomation(page, url);
+    await captureConditionAutomation(page, url);
+    await captureAppearanceAutomation(page, url);
     await page.evaluate(() => closeAllTerminals());
     cleanSandbox = true;
   } catch (error) {

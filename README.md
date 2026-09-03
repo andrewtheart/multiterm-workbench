@@ -233,6 +233,41 @@ file-selection prompts on an interactive Windows desktop.
   </tr>
 </table>
 
+### Automation types
+
+Automation Studio (the workflow button in the top bar, or **Ctrl+Shift+A**) builds
+four kinds of rule. All four share the same **Rules / Handoff routes / Run History**
+tabs, a global **Pause**, and per-rule enable — only the middle of the form changes
+with the type you pick.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/automation-command.png" alt="Automation Studio with Command based automation selected, a daily 02:30 schedule, a workstation lock condition, and a command step running npm audit with delivery and destination controls">
+      <br><strong>Command based:</strong> run a shell command, a PowerShell one-liner, or a script file on an interval, at a daily time, or on chosen weekdays. Each step picks its destination terminal and whether to run when ready or just stage the text.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/automation-copilot.png" alt="Automation Studio with Copilot automation selected, a weekly Monday-to-Friday 08:30 schedule, a Run when MultiTerm is closed control, and a Copilot prompt step">
+      <br><strong>Copilot:</strong> send a scheduled prompt to Copilot CLI. The step waits for the assistant to actually be ready before typing, and can keep running on schedule after you close the window.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/automation-condition.png" alt="Automation Studio with Conditional automation selected, showing When and Then prompts, a working directory of D colon backslash exports, and a Hidden, Visible, or Existing terminal session choice">
+      <br><strong>Conditional:</strong> Copilot answers a yes/no <em>When</em> question first, and the <em>Then</em> action runs only if the answer was yes. The assessment turn is read-only, the working directory bounds what it can reach, and the session can be hidden, visible, or an existing terminal.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/automation-appearance.png" alt="Automation Studio with Appearance automation selected, matching terminal titles that contain prod, with an appearance profile summary and Apply now and Save and enable actions">
+      <br><strong>Appearance:</strong> style terminals by title instead of on a schedule. The first enabled rule whose match wins supplies the colours, font, and header, and manual styling returns when a title stops matching.
+    </td>
+  </tr>
+</table>
+
+Command and Copilot rules can chain several ordered steps, and a step can wait on
+the previous step's output — matching text, or explicitly not matching it — before
+it runs. Conditional rules additionally carry a tool-permission envelope and an
+optional state note carried between checks.
+
 ### Source control
 
 Every terminal tracks the repository it is sitting in, so review, staging, and
