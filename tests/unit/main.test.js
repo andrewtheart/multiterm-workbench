@@ -1426,31 +1426,52 @@ describe("on-demand bridge restart for background automations", () => {
     expect(win.loadURL).not.toHaveBeenCalled();
   });
 
-  it("moves the hidden window to a new origin when a real listener holds the port", async () => {
+  // Binding the real configured port here would be environment-dependent: on a
+  // machine with MultiTerm installed, http.sys reserves 3177 and the bind fails
+  // with EACCES before the assertion is reached.
+  it("moves the hidden window to a new origin when the port stays held", async () => {
+    let startedPort = 0;
+    mockHealth((options, callback, request) => {
+      if (Number(options.port) === startedPort) sendHealthyResponse(callback, { port: Number(options.port) });
+      else process.nextTick(() => request.emit("error", new Error("refused")));
+    });
+    vi.spyOn(net, "createServer").mockImplementation(() => {
+      const listener = new EventEmitter();
+      listener.listen = vi.fn((port, _host, callback) => {
+        if (port === 3177) process.nextTick(() => listener.emit("error", new Error("occupied")));
+        else callback();
+      });
+      listener.close = vi.fn((callback) => callback());
+      return listener;
+    });
+    childProcess.spawn.mockImplementation((_exe, _args, options) => {
+      startedPort = Number(options.env.PORT);
+      return makeChild();
+    });
+    main.createWindow();
+    const win = main.getMainWindow();
+    win.loadURL.mockClear();
+
+    const result = await main.ensureBridgeAvailable();
+    expect(result).toMatchObject({ ok: true, restarted: true, navigated: true });
+    expect(result.port).toBeGreaterThan(3177);
+    expect(win.loadURL).toHaveBeenCalledWith(`http://127.0.0.1:${result.port}/`);
+    expect(main.bridgeOrigin()).toBe(`http://127.0.0.1:${result.port}`);
+  });
+
+  // The mocked probes above cannot show that the real bind actually reports a
+  // held port, so this one uses a genuine socket on a port the OS just handed us.
+  it("rejects a genuinely occupied port and picks the next free one", async () => {
     const squatter = net.createServer();
     await new Promise((resolve, reject) => {
       squatter.once("error", reject);
-      squatter.listen(3177, "127.0.0.1", resolve);
+      squatter.listen(0, "127.0.0.1", resolve);
     });
+    const held = squatter.address().port;
     try {
-      let startedPort = 0;
-      mockHealth((options, callback, request) => {
-        if (Number(options.port) === startedPort) sendHealthyResponse(callback, { port: Number(options.port) });
-        else process.nextTick(() => request.emit("error", new Error("refused")));
-      });
-      childProcess.spawn.mockImplementation((_exe, _args, options) => {
-        startedPort = Number(options.env.PORT);
-        return makeChild();
-      });
-      main.createWindow();
-      const win = main.getMainWindow();
-      win.loadURL.mockClear();
-
-      const result = await main.ensureBridgeAvailable();
-      expect(result).toMatchObject({ ok: true, restarted: true, navigated: true });
-      expect(result.port).toBeGreaterThan(3177);
-      expect(win.loadURL).toHaveBeenCalledWith(`http://127.0.0.1:${result.port}/`);
-      expect(main.bridgeOrigin()).toBe(`http://127.0.0.1:${result.port}`);
+      const reclaimed = await main.reclaimBridgePort(held, "127.0.0.1", 2, 0);
+      expect(reclaimed).not.toBe(held);
+      expect(reclaimed).toBeGreaterThan(held);
     } finally {
       await new Promise((resolve) => squatter.close(resolve));
     }
