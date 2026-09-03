@@ -233,6 +233,36 @@ file-selection prompts on an interactive Windows desktop.
   </tr>
 </table>
 
+### Source control
+
+Every terminal tracks the repository it is sitting in, so review, staging, and
+commit happen next to the work rather than in another window. Agent worktrees
+get their own isolated checkout, and merging one back has a conflict resolver
+built in.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/git-review-changes.png" alt="Review changes dialog showing two staged files and three unstaged files beside a side-by-side diff of a modified Express route, with a commit message box, Suggest button, and Commit staged action">
+      <br><strong>Review changes:</strong> per-terminal staged and unstaged panes, word-level diffs, stage or unstage by file or hunk, then commit and push without leaving the workspace.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/git-worktree-manager.png" alt="Worktrees dialog listing one ordinary checkout and three MultiTerm-created worktrees, each with Open, Bring changes back, Review, and Remove actions">
+      <br><strong>Worktree manager:</strong> every isolated checkout in one list, with Open, Review, Bring changes back, and Remove on the ones MultiTerm created.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/git-worktree-launch.png" alt="Run in a worktree dialog with a repository folder filled in, the parent branch resolved to main, a suggested worktree name, and the path the worktree will be created at">
+      <br><strong>Run an agent in a worktree:</strong> branch from a folder or a clone URL, then start Copilot or Claude in the new checkout so parallel agents never share a working tree.
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/git-conflict-resolver.png" alt="Resolve conflicts dialog with read-only Base, Current, and Incoming panes above an editable merged result containing conflict markers, and two unresolved hunks each offering Use current, Use incoming, and Use both">
+      <br><strong>Conflict resolver:</strong> base, current, and incoming side by side over an editable result — take a side per hunk or type your own, then stage the resolution.
+    </td>
+  </tr>
+</table>
+
 ## Performance
 
 MultiTerm is built to stay smooth with many live shells open at once. The work
