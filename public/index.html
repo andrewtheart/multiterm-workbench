@@ -575,6 +575,80 @@
             </label>
 
             <label class="control-row">
+              <span title="How many conditional automation checks may start in any rolling hour, counted across every rule and including manual runs. A check over the limit is recorded as skipped instead of running.">Condition checks per hour</span>
+              <input id="automationConditionChecksPerHour" type="number" min="1" max="240" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Separate rolling-hour budget for checks that run while MultiTerm is closed, so unattended rules cannot starve the checks you start yourself.">Background condition checks per hour</span>
+              <input id="automationConditionBackgroundChecksPerHour" type="number" min="1" max="240" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Raise a desktop notification when an automation running in the background finishes or fails, so you learn about it without opening the window.">Notify about background automation runs</span>
+              <input id="automationBackgroundNotifications" type="checkbox">
+            </label>
+
+            <label class="control-row">
+              <span title="How often Windows relaunches MultiTerm hidden so background automations survive a quit, a crash, or a reboot. A per-user scheduled task is created while any rule asks to keep running while closed, and removed when the last one stops.">Background relaunch interval (minutes)</span>
+              <input id="automationBackgroundTaskMinutes" type="number" min="5" max="1440" step="5" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How many conditional automation checks may assess at the same time. A check that arrives while the limit is reached is recorded as skipped rather than queued.">Concurrent condition checks</span>
+              <input id="automationConditionConcurrency" type="number" min="1" max="8" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Largest state note a conditional automation may remember between checks. An oversized note is refused and the previous note is kept, because a truncated note is worse than a stale one.">Condition state note (KB)</span>
+              <input id="automationConditionStateKb" type="number" min="1" max="64" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="How many tool permissions a conditional automation may hold in each of its allow and deny lists.">Condition tool permissions</span>
+              <input id="automationConditionToolEntries" type="number" min="1" max="100" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Largest Copilot CLI command line a conditional check may build. This guards the Windows command-line length limit.">Condition command length (KB)</span>
+              <input id="automationConditionCommandLengthKb" type="number" min="1" max="30" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="AI credits one conditional check may spend before the Copilot CLI stops it. The CLI refuses anything below 30. 0 removes the cap.">Condition AI credit budget</span>
+              <input id="automationConditionMaxAiCredits" type="number" min="0" max="100" step="1" inputmode="numeric">
+            </label>
+
+            <label class="control-row">
+              <span title="Model conditional checks run on. Auto lets Copilot pick a small model for a yes/no question and is far cheaper than the model you use interactively. Inherit uses whatever the Copilot CLI is configured with.">Condition model</span>
+              <select id="automationConditionModel">
+                <option value="auto">Auto (let Copilot choose)</option>
+                <option value="">Inherit the CLI setting</option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span title="Reasoning effort for conditional checks. Ignored while Condition model is Auto, because that model refuses an effort setting. Measured against a real check, effort barely moved the cost - the model is what matters.">Condition effort</span>
+              <select id="automationConditionEffort">
+                <option value="none">Inherit the CLI setting</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra high</option>
+                <option value="max">Max</option>
+              </select>
+            </label>
+
+            <label class="control-row">
+              <span title="Context window tier for conditional checks. The extended tier costs more per run and a directory check does not need it.">Condition context</span>
+              <select id="automationConditionContext">
+                <option value="default">Provider default</option>
+                <option value="long_context">Extended</option>
+              </select>
+            </label>
+
+            <label class="control-row">
               <span title="How long MultiTerm waits without any bridge response before replacing a stale connection and reconnecting. Increase this only for heavily loaded systems.">Bridge response timeout (seconds)</span>
               <input id="bridgeHeartbeatTimeoutSeconds" type="number" min="10" max="300" step="5" inputmode="numeric">
             </label>
@@ -1887,9 +1961,10 @@
         <p id="closeConfirmText" class="confirm-body"></p>
         <label id="closeConfirmRememberRow" class="confirm-remember toggle-row">
           <input id="closeConfirmRemember" type="checkbox">
-          <span>Always minimize window closes to the tray</span>
+          <span id="closeConfirmRememberText">Always minimize window closes to the tray</span>
         </label>
         <div class="confirm-actions">
+          <button id="closeConfirmBackground" type="button" class="confirm-proceed" hidden>Keep running in the background</button>
           <button id="closeConfirmTray" type="button" class="confirm-cancel">Keep in tray</button>
           <button id="closeConfirmKeep" type="button" class="confirm-cancel">Quit, keep terminals</button>
           <button id="closeConfirmQuit" type="button" class="confirm-danger">Quit &amp; close bridge</button>
@@ -2039,6 +2114,29 @@
         <div class="confirm-actions auto-title-notice-actions">
           <button id="autoTitleNoticeDisable" type="button" class="confirm-cancel">Turn off automatic titles</button>
           <button id="autoTitleNoticeContinue" type="button" class="confirm-proceed">Save and generate title</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="conditionAutomationNoticeOverlay" class="palette-overlay" hidden>
+      <div class="palette condition-automation-notice" role="dialog" aria-modal="true" aria-labelledby="conditionAutomationNoticeTitle" aria-describedby="conditionAutomationNoticeText">
+        <div class="confirm-head">
+          <i data-lucide="shield-alert"></i>
+          <h2 id="conditionAutomationNoticeTitle">A scheduled check is about to run Copilot unattended</h2>
+        </div>
+        <p id="conditionAutomationNoticeText" class="confirm-body">This automation starts a Copilot session on a schedule with nobody watching. It reads whatever is in its working directory to judge the condition, and when the condition is true it runs the action with the permissions listed below.</p>
+        <section class="condition-notice-envelope" aria-labelledby="conditionAutomationNoticeEnvelopeTitle">
+          <h3 id="conditionAutomationNoticeEnvelopeTitle">What this rule may do</h3>
+          <dl id="conditionAutomationNoticeEnvelope" class="condition-notice-envelope-list"></dl>
+        </section>
+        <ul class="condition-notice-points">
+          <li>File names, file contents, and command output are untrusted. Text placed there by someone else can try to steer the assistant.</li>
+          <li>A reported result is the assistant's own claim, not proof that the action ran.</li>
+          <li>You are asked again whenever a rule widens these permissions, its working directory, or its session.</li>
+        </ul>
+        <div class="confirm-actions condition-notice-actions">
+          <button id="conditionAutomationNoticeCancel" type="button" class="confirm-cancel">Do not run this check</button>
+          <button id="conditionAutomationNoticeContinue" type="button" class="confirm-proceed">Allow this check to run</button>
         </div>
       </div>
     </div>
@@ -2341,6 +2439,7 @@
               <div id="automationType" class="automation-type-options" role="radiogroup" aria-label="Automation type">
                 <button type="button" role="radio" data-automation-type="command" aria-checked="true"><i data-lucide="terminal-square"></i><span><strong>Command based automation</strong><small>Shell commands, PowerShell, or script files</small></span></button>
                 <button type="button" role="radio" data-automation-type="copilot" aria-checked="false"><i data-lucide="sparkles"></i><span><strong>Copilot automation</strong><small>Run a scheduled prompt in Copilot CLI</small></span></button>
+                <button type="button" role="radio" data-automation-type="condition" aria-checked="false"><i data-lucide="scan-eye"></i><span><strong>Conditional automation</strong><small>Copilot checks a condition, then acts on it</small></span></button>
                 <button type="button" role="radio" data-automation-type="appearance" aria-checked="false"><i data-lucide="palette"></i><span><strong>Appearance automation</strong><small>Style terminals when their titles match</small></span></button>
               </div>
             </fieldset>
@@ -2361,6 +2460,40 @@
               <p class="automation-appearance-priority">The first enabled appearance rule in this list whose title condition matches supplies the terminal appearance.</p>
             </fieldset>
 
+            <fieldset id="automationConditionBlock" class="automation-block automation-condition-block" hidden>
+              <legend>Condition check</legend>
+              <label class="automation-field"><span>When</span><textarea id="automationConditionPrompt" class="automation-condition-text" rows="3" maxlength="4000" spellcheck="false" placeholder="e.g. A new file has been written to D:\Incoming since the last check"></textarea></label>
+              <label class="automation-field"><span>Then</span><textarea id="automationConditionAction" class="automation-condition-text" rows="3" maxlength="4000" spellcheck="false" placeholder="e.g. Delete the file"></textarea></label>
+              <div class="automation-field automation-condition-cwd">
+                <span id="automationConditionCwdLabel">Working directory</span>
+                <div class="automation-condition-cwd-row">
+                  <input id="automationConditionCwd" type="text" maxlength="1024" spellcheck="false" autocomplete="off" aria-labelledby="automationConditionCwdLabel" placeholder="D:\Incoming">
+                  <button id="automationConditionCwdBrowse" class="secondary-action" type="button"><i data-lucide="folder-open"></i><span>Browse…</span></button>
+                </div>
+                <small id="automationConditionCwdHint">Copilot starts here, and unless you widen the scope below it can only reach this folder and its subfolders.</small>
+              </div>
+              <div class="automation-field">
+                <span id="automationConditionSessionLabel">Session</span>
+                <div id="automationConditionSession" class="automation-segments" role="group" aria-labelledby="automationConditionSessionLabel">
+                  <button type="button" data-condition-session="hidden" aria-pressed="true">Hidden</button>
+                  <button type="button" data-condition-session="visible" aria-pressed="false">Visible</button>
+                  <button type="button" data-condition-session="existing" aria-pressed="false">Existing terminal</button>
+                </div>
+              </div>
+              <div id="automationConditionTargetFields" class="automation-condition-target" hidden>
+                <label class="automation-field"><span>Match terminal by</span><select id="automationConditionTargetMode"><option value="title">Title</option><option value="pid">Process ID</option></select></label>
+                <label id="automationConditionTargetNameRow" class="automation-field"><span>Terminal title</span><input id="automationConditionTargetName" type="text" maxlength="160" spellcheck="false" autocomplete="off"></label>
+                <label id="automationConditionTargetPidRow" class="automation-field" hidden><span>Process ID</span><input id="automationConditionTargetPid" type="number" min="1" step="1" inputmode="numeric"></label>
+                <label class="automation-check automation-condition-inherit"><input id="automationConditionInherit" type="checkbox"><span>Inherit the permissions of an assistant already running there</span></label>
+              </div>
+              <label class="automation-check"><input id="automationConditionKeepState" type="checkbox" checked><span>Remember a state note between checks</span></label>
+              <label class="automation-check"><input id="automationConditionClose" type="checkbox" checked><span>Close the session when the check finishes</span></label>
+              <div class="automation-condition-state">
+                <div><strong>Remembered state</strong><small id="automationConditionStatePreview">Nothing remembered yet. The first run is the baseline.</small></div>
+                <button id="automationConditionStateClear" class="secondary-action" type="button"><i data-lucide="eraser"></i><span>Clear</span></button>
+              </div>
+            </fieldset>
+
             <fieldset id="automationScheduleBlock" class="automation-block">
               <legend>When</legend>
               <div class="automation-segments" role="group" aria-label="Schedule cadence">
@@ -2371,6 +2504,7 @@
               <div id="automationIntervalFields" class="automation-inline-fields">
                 <span>Every</span><input id="automationInterval" type="number" min="1" step="1" value="60" aria-label="Interval value">
                 <select id="automationIntervalUnit" aria-label="Interval unit"><option value="minutes">minutes</option><option value="hours">hours</option></select>
+                <div id="automationIntervalPresets" class="automation-interval-presets" role="group" aria-label="Interval presets"></div>
               </div>
               <div id="automationClockFields" class="automation-clock-fields" hidden>
                 <label><span>At</span><input id="automationTime" type="time" value="09:00"></label>
@@ -2379,6 +2513,7 @@
                 </div>
               </div>
               <label class="automation-machine-state"><span>Run when workstation is</span><select id="automationMachineState"><option value="both">Locked or unlocked</option><option value="locked">Locked</option><option value="unlocked">Unlocked</option></select></label>
+              <label id="automationRunWhenClosedField" class="automation-machine-state" hidden><span>Run when MultiTerm is closed</span><select id="automationRunWhenClosed"><option value="off">Only while the window is open</option><option value="background">Keep running in the background</option></select><small>Closing the window docks MultiTerm to the tray instead of quitting, so this rule keeps its schedule.</small></label>
               <label class="automation-check"><input id="automationCatchUp" type="checkbox"><span>Run once after sleep or reconnect</span></label>
             </fieldset>
 
@@ -2386,6 +2521,59 @@
               <legend>Then</legend>
               <div id="automationActionList" class="automation-action-list" aria-label="Visual automation workflow"></div>
               <button id="automationActionAdd" class="secondary-action automation-action-add" type="button"><i data-lucide="plus"></i><span>Add another action</span></button>
+            </fieldset>
+
+            <fieldset id="automationToolsBlock" class="automation-block automation-tools-block" hidden>
+              <legend>Tool permissions</legend>
+              <div id="automationToolsMode" class="automation-segments automation-tools-mode" role="radiogroup" aria-label="Tool permission mode">
+                <button type="button" role="radio" data-tools-mode="all" aria-checked="true">Allow all tools</button>
+                <button type="button" role="radio" data-tools-mode="selected" aria-checked="false">Only these tools</button>
+              </div>
+              <p id="automationToolsModeHint" class="automation-tools-hint">Every tool is offered to Copilot and approved without asking.</p>
+
+              <div id="automationToolsAllowGroup" class="automation-tools-group" hidden>
+                <span id="automationToolsCuratedLabel" class="automation-tools-label">Common permissions</span>
+                <div id="automationToolsCurated" class="automation-tools-chips" role="group" aria-labelledby="automationToolsCuratedLabel">
+                  <button type="button" data-tool-spec="shell" aria-pressed="false">shell</button>
+                  <button type="button" data-tool-spec="write" aria-pressed="false">write</button>
+                  <button type="button" data-tool-spec="shell(git:*)" aria-pressed="false">shell(git:*)</button>
+                  <button type="button" data-tool-spec="shell(gh:*)" aria-pressed="false">shell(gh:*)</button>
+                  <button type="button" data-tool-spec="shell(npm:*)" aria-pressed="false">shell(npm:*)</button>
+                  <button type="button" data-tool-spec="shell(node)" aria-pressed="false">shell(node)</button>
+                  <button type="button" data-tool-spec="shell(dotnet:*)" aria-pressed="false">shell(dotnet:*)</button>
+                  <button type="button" data-tool-spec="shell(python)" aria-pressed="false">shell(python)</button>
+                  <button type="button" data-tool-spec="shell(pwsh)" aria-pressed="false">shell(pwsh)</button>
+                </div>
+                <ul id="automationToolsAllowList" class="automation-tools-list" aria-label="Allowed tools"></ul>
+                <p id="automationToolsAllowEmpty" class="automation-tools-empty">Nothing selected yet, so this check can only read.</p>
+                <div class="automation-tools-add">
+                  <input id="automationToolsAllowInput" type="text" maxlength="200" spellcheck="false" autocomplete="off" placeholder="shell(git push), write(D:\Incoming), url(github.com)" aria-label="Add an allowed tool">
+                  <button id="automationToolsAllowAdd" class="secondary-action" type="button"><i data-lucide="plus"></i><span>Add tool</span></button>
+                </div>
+                <p id="automationToolsAllowError" class="automation-tools-error" role="alert" hidden></p>
+              </div>
+
+              <div class="automation-tools-group">
+                <span id="automationToolsDenyLabel" class="automation-tools-label">Never allow</span>
+                <ul id="automationToolsDenyList" class="automation-tools-list" aria-labelledby="automationToolsDenyLabel"></ul>
+                <p id="automationToolsDenyEmpty" class="automation-tools-empty">Nothing is denied outright.</p>
+                <div class="automation-tools-add">
+                  <input id="automationToolsDenyInput" type="text" maxlength="200" spellcheck="false" autocomplete="off" placeholder="shell(rm), write(.env)" aria-label="Add a denied tool">
+                  <button id="automationToolsDenyAdd" class="secondary-action" type="button"><i data-lucide="plus"></i><span>Deny tool</span></button>
+                </div>
+                <p id="automationToolsDenyError" class="automation-tools-error" role="alert" hidden></p>
+                <small>A denied tool is refused even when every tool is allowed.</small>
+              </div>
+
+              <div class="automation-tools-group">
+                <span class="automation-tools-label">Files and network</span>
+                <label class="automation-check"><input id="automationToolsAllPaths" type="checkbox"><span>Read and write outside the working directory</span></label>
+                <label class="automation-check"><input id="automationToolsTempDir" type="checkbox" checked><span>Use the system temporary directory</span></label>
+                <label class="automation-check"><input id="automationToolsAllUrls" type="checkbox"><span>Reach any address on the network</span></label>
+                <small>Allowing every tool does not widen file or network reach on its own. Name individual sites with a url(...) permission instead of allowing all of them.</small>
+              </div>
+
+              <p id="automationToolsSummary" class="automation-tools-summary">All tools, nothing denied.</p>
             </fieldset>
             <label id="automationRunAsField" class="automation-field automation-account-field"><span>Run as user</span><input id="automationRunAs" type="text" maxlength="320" autocomplete="username" spellcheck="false"><small id="automationRunAsHint">Defaults to the current user.</small></label>
 
@@ -2486,14 +2674,18 @@
           </section>
 
           <section class="artifact-section recovered-notes-section">
-            <div class="artifact-section-head">
-              <div>
-                <h3>Recovered notes</h3>
-                <p>Notes are kept here after their terminal process exits.</p>
-              </div>
+            <button id="recoveredNotesToggle" type="button" class="recovered-notes-toggle" aria-expanded="false" aria-controls="recoveredNotesBody">
+              <i data-lucide="chevron-right" class="recovered-notes-chevron" aria-hidden="true"></i>
+              <span class="recovered-notes-summary">
+                <span class="recovered-notes-heading">Recovered notes</span>
+                <span class="recovered-notes-hint">Notes are kept here after their terminal process exits.</span>
+              </span>
+              <span id="recoveredNotesCount" class="recovered-notes-count" aria-hidden="true" hidden>0</span>
+            </button>
+            <div id="recoveredNotesBody" class="recovered-notes-body" hidden>
+              <div id="recoveredNotesList" class="recovered-notes-list"></div>
+              <p id="recoveredNotesEmpty" class="artifact-empty">No recovered notes.</p>
             </div>
-            <div id="recoveredNotesList" class="recovered-notes-list"></div>
-            <p id="recoveredNotesEmpty" class="artifact-empty">No recovered notes.</p>
           </section>
         </div>
       </div>
@@ -2901,13 +3093,14 @@
       <form id="terminalNotesFlyoutComposer" class="terminal-notes-flyout-composer" hidden>
         <label for="terminalNotesFlyoutInput">Note</label>
         <textarea id="terminalNotesFlyoutInput" rows="4" spellcheck="true" placeholder="Add context, a decision, link, or reminder…"></textarea>
+        <!-- Ordered save-first for the keyboard; CSS `order` keeps the layout. -->
         <div class="terminal-notes-flyout-composer-actions">
+          <button id="terminalNotesFlyoutSave" type="submit" class="confirm-proceed">Save note</button>
+          <button id="terminalNotesFlyoutCancel" type="button" class="ghost">Cancel</button>
           <button id="terminalNotesFlyoutExpand" type="button" class="secondary-action">
             <i data-lucide="expand"></i>
             <span>Expand</span>
           </button>
-          <button id="terminalNotesFlyoutCancel" type="button" class="ghost">Cancel</button>
-          <button id="terminalNotesFlyoutSave" type="submit" class="confirm-proceed">Save note</button>
         </div>
       </form>
       <footer class="terminal-notes-flyout-footer">

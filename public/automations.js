@@ -497,6 +497,10 @@
     const lines = [
       "You are an unattended scheduled check for MultiTerm Workbench.",
       "Decide whether this condition is true right now.",
+      // Without this the model spends a tool call discovering the denial, which
+      // costs a turn and prints a permission error that looks like a failure.
+      "This turn cannot run shell commands or change files. Inspect the working",
+      "directory with the read-only file tools instead.",
       "<condition>",
       String(options.prompt || ""),
       "</condition>"
@@ -521,6 +525,12 @@
     const token = String(options.token || "");
     const lines = [
       "The condition you just evaluated is true. Carry out this instruction.",
+      // The action resumes the assessment session, whose transcript still shows
+      // that turn's refusals. Measured at 6 failures in 10 runs without this:
+      // the model reported no deletion tool existed and never attempted one.
+      "This session has been restarted with the permissions this rule grants, which are",
+      "not the ones the previous turn had. Do not assume a tool is unavailable because it",
+      "was refused earlier. Attempt the work and report what actually happens.",
       "<action>",
       String(options.action || ""),
       "</action>"
@@ -595,6 +605,7 @@
       machineState: ["locked", "unlocked"].includes(value.machineState) ? value.machineState : "both",
       name: text(value.name, 160) || `Automation ${index + 1}`,
       runAs: text(value.runAs, 320),
+      runWhenClosed: type !== "appearance" && value.runWhenClosed === "background" ? "background" : "off",
       snoozedUntil: text(value.snoozedUntil, 64) || null,
       trigger: normalizeTrigger(value.trigger),
       titleMatch,
@@ -610,6 +621,7 @@
       : "failed";
     return {
       automationId: identifier(value.automationId) || null,
+      background: value.background === true,
       detail: text(value.detail, 500),
       id: identifier(value.id) || `history-${index + 1}`,
       occurredAt: text(value.occurredAt, 64) || new Date().toISOString(),

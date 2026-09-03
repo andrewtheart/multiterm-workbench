@@ -53,6 +53,18 @@ const defaultSettings = {
   // from the pane's own suggest-title menu, never from the settings panel.
   autoTitleSuppressions: [],
   automationHistoryLimit: 200,
+  automationBackgroundNotifications: true,
+  automationBackgroundTaskMinutes: 15,
+  automationConditionBackgroundChecksPerHour: 30,
+  automationConditionChecksPerHour: 60,
+  automationConditionCommandLengthKb: 8,
+  automationConditionConcurrency: 2,
+  automationConditionContext: "default",
+  automationConditionEffort: "none",
+  automationConditionMaxAiCredits: 30,
+  automationConditionModel: "auto",
+  automationConditionStateKb: 8,
+  automationConditionToolEntries: 25,
   automationOutputCaptureKb: 128,
   automationStepTimeoutMinutes: 30,
   gitChangesFileLimit: 500,
@@ -219,6 +231,18 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   copilotCwdQueryTimeoutSeconds: "ai assistant resume working directory cwd query ask session timeout seconds hidden terminal",
   analyticsReset: "analytics statistics metrics usage productivity keyboard keystrokes keys typing focus focused time duration reset clear",
   automationOutputCaptureKb: "automation workflow step output capture condition match regex exact multiline kilobytes limit",
+  automationBackgroundNotifications: "automation background closed window hidden tray notification notify desktop toast alert mute silence complete failed",
+  automationBackgroundTaskMinutes: "automation background closed scheduled task windows scheduler wake relaunch repeat interval minutes logon reboot recover",
+  automationConditionBackgroundChecksPerHour: "conditional automation copilot condition background closed unattended check rate limit per hour separate budget allowance throttle",
+  automationConditionChecksPerHour: "conditional automation copilot condition check rate limit per hour rolling window budget throttle unattended",
+  automationConditionCommandLengthKb: "conditional automation copilot condition command line length limit kilobytes windows argument budget",
+  automationConditionConcurrency: "conditional automation copilot condition concurrent parallel simultaneous checks limit sessions",
+  automationConditionContext: "conditional automation copilot condition context window long extended tokens cost",
+  automationConditionEffort: "conditional automation copilot condition reasoning effort thinking cost credits cheap",
+  automationConditionMaxAiCredits: "conditional automation copilot condition ai credits spend budget cost cap premium requests",
+  automationConditionModel: "conditional automation copilot condition model auto inherit cost credits cheap",
+  automationConditionStateKb: "conditional automation copilot condition remembered state note memory size kilobytes budget between checks",
+  automationConditionToolEntries: "conditional automation copilot condition tool permissions allow deny list entries count limit",
   automationStepTimeoutMinutes: "automation workflow step timeout hang stuck copilot command minutes deadline",
   appTheme: "appearance color colours scheme mode dark light system ui interface look visual",
   fontFamily: "typeface typography text lettering monospace console font face cascadia consolas jetbrains fira courier",
@@ -632,6 +656,24 @@ const elements = {
   automationCatchUp: document.querySelector("#automationCatchUp"),
   automationClockFields: document.querySelector("#automationClockFields"),
   automationClose: document.querySelector("#automationsClose"),
+  automationConditionAction: document.querySelector("#automationConditionAction"),
+  automationConditionBlock: document.querySelector("#automationConditionBlock"),
+  automationConditionClose: document.querySelector("#automationConditionClose"),
+  automationConditionCwd: document.querySelector("#automationConditionCwd"),
+  automationConditionCwdBrowse: document.querySelector("#automationConditionCwdBrowse"),
+  automationConditionCwdHint: document.querySelector("#automationConditionCwdHint"),
+  automationConditionInherit: document.querySelector("#automationConditionInherit"),
+  automationConditionKeepState: document.querySelector("#automationConditionKeepState"),
+  automationConditionPrompt: document.querySelector("#automationConditionPrompt"),
+  automationConditionSession: document.querySelector("#automationConditionSession"),
+  automationConditionStateClear: document.querySelector("#automationConditionStateClear"),
+  automationConditionStatePreview: document.querySelector("#automationConditionStatePreview"),
+  automationConditionTargetFields: document.querySelector("#automationConditionTargetFields"),
+  automationConditionTargetMode: document.querySelector("#automationConditionTargetMode"),
+  automationConditionTargetName: document.querySelector("#automationConditionTargetName"),
+  automationConditionTargetNameRow: document.querySelector("#automationConditionTargetNameRow"),
+  automationConditionTargetPid: document.querySelector("#automationConditionTargetPid"),
+  automationConditionTargetPidRow: document.querySelector("#automationConditionTargetPidRow"),
   automationDays: document.querySelector("#automationDays"),
   automationDelete: document.querySelector("#automationDelete"),
   automationEditor: document.querySelector("#automationEditor"),
@@ -639,6 +681,7 @@ const elements = {
   automationHistoryLimit: document.querySelector("#automationHistoryLimit"),
   automationInterval: document.querySelector("#automationInterval"),
   automationIntervalFields: document.querySelector("#automationIntervalFields"),
+  automationIntervalPresets: document.querySelector("#automationIntervalPresets"),
   automationIntervalUnit: document.querySelector("#automationIntervalUnit"),
   automationMachineState: document.querySelector("#automationMachineState"),
   automationName: document.querySelector("#automationName"),
@@ -654,6 +697,8 @@ const elements = {
   automationRunAs: document.querySelector("#automationRunAs"),
   automationRunAsField: document.querySelector("#automationRunAsField"),
   automationRunAsHint: document.querySelector("#automationRunAsHint"),
+  automationRunWhenClosed: document.querySelector("#automationRunWhenClosed"),
+  automationRunWhenClosedField: document.querySelector("#automationRunWhenClosedField"),
   automationScheduleBlock: document.querySelector("#automationScheduleBlock"),
   automationSave: document.querySelector("#automationSave"),
   automationSearch: document.querySelector("#automationSearch"),
@@ -661,6 +706,25 @@ const elements = {
   automationTitleMatchCase: document.querySelector("#automationTitleMatchCase"),
   automationTitleMatchType: document.querySelector("#automationTitleMatchType"),
   automationTitleMatchValue: document.querySelector("#automationTitleMatchValue"),
+  automationToolsAllowAdd: document.querySelector("#automationToolsAllowAdd"),
+  automationToolsAllowEmpty: document.querySelector("#automationToolsAllowEmpty"),
+  automationToolsAllowError: document.querySelector("#automationToolsAllowError"),
+  automationToolsAllowGroup: document.querySelector("#automationToolsAllowGroup"),
+  automationToolsAllowInput: document.querySelector("#automationToolsAllowInput"),
+  automationToolsAllowList: document.querySelector("#automationToolsAllowList"),
+  automationToolsAllPaths: document.querySelector("#automationToolsAllPaths"),
+  automationToolsAllUrls: document.querySelector("#automationToolsAllUrls"),
+  automationToolsBlock: document.querySelector("#automationToolsBlock"),
+  automationToolsCurated: document.querySelector("#automationToolsCurated"),
+  automationToolsDenyAdd: document.querySelector("#automationToolsDenyAdd"),
+  automationToolsDenyEmpty: document.querySelector("#automationToolsDenyEmpty"),
+  automationToolsDenyError: document.querySelector("#automationToolsDenyError"),
+  automationToolsDenyInput: document.querySelector("#automationToolsDenyInput"),
+  automationToolsDenyList: document.querySelector("#automationToolsDenyList"),
+  automationToolsMode: document.querySelector("#automationToolsMode"),
+  automationToolsModeHint: document.querySelector("#automationToolsModeHint"),
+  automationToolsSummary: document.querySelector("#automationToolsSummary"),
+  automationToolsTempDir: document.querySelector("#automationToolsTempDir"),
   automationType: document.querySelector("#automationType"),
   automationToggle: document.querySelector("#automationsToggle"),
   automationWelcome: document.querySelector("#automationWelcome"),
@@ -1106,6 +1170,23 @@ const elements = {
   bridgeHeartbeatSeconds: document.querySelector("#bridgeHeartbeatSeconds"),
   automationOutputCaptureKb: document.querySelector("#automationOutputCaptureKb"),
   automationStepTimeoutMinutes: document.querySelector("#automationStepTimeoutMinutes"),
+  automationBackgroundNotifications: document.querySelector("#automationBackgroundNotifications"),
+  automationBackgroundTaskMinutes: document.querySelector("#automationBackgroundTaskMinutes"),
+  automationConditionBackgroundChecksPerHour: document.querySelector("#automationConditionBackgroundChecksPerHour"),
+  automationConditionChecksPerHour: document.querySelector("#automationConditionChecksPerHour"),
+  automationConditionCommandLengthKb: document.querySelector("#automationConditionCommandLengthKb"),
+  automationConditionConcurrency: document.querySelector("#automationConditionConcurrency"),
+  automationConditionContext: document.querySelector("#automationConditionContext"),
+  automationConditionEffort: document.querySelector("#automationConditionEffort"),
+  automationConditionMaxAiCredits: document.querySelector("#automationConditionMaxAiCredits"),
+  automationConditionModel: document.querySelector("#automationConditionModel"),
+  automationConditionStateKb: document.querySelector("#automationConditionStateKb"),
+  automationConditionToolEntries: document.querySelector("#automationConditionToolEntries"),
+  conditionNoticeCancel: document.querySelector("#conditionAutomationNoticeCancel"),
+  conditionNoticeContinue: document.querySelector("#conditionAutomationNoticeContinue"),
+  conditionNoticeEnvelope: document.querySelector("#conditionAutomationNoticeEnvelope"),
+  conditionNoticeOverlay: document.querySelector("#conditionAutomationNoticeOverlay"),
+  conditionNoticeText: document.querySelector("#conditionAutomationNoticeText"),
   bridgeHeartbeatTimeoutSeconds: document.querySelector("#bridgeHeartbeatTimeoutSeconds"),
   bridgeStartupAsk: document.querySelector("#bridgeStartupAsk"),
   bridgeStartupAskRow: document.querySelector("#bridgeStartupAskRow"),
@@ -1179,6 +1260,8 @@ const elements = {
   closeConfirmText: document.querySelector("#closeConfirmText"),
   closeConfirmRemember: document.querySelector("#closeConfirmRemember"),
   closeConfirmRememberRow: document.querySelector("#closeConfirmRememberRow"),
+  closeConfirmRememberText: document.querySelector("#closeConfirmRememberText"),
+  closeConfirmBackground: document.querySelector("#closeConfirmBackground"),
   closeConfirmTray: document.querySelector("#closeConfirmTray"),
   closeConfirmKeep: document.querySelector("#closeConfirmKeep"),
   closeConfirmQuit: document.querySelector("#closeConfirmQuit"),
@@ -1340,8 +1423,11 @@ const elements = {
   togglePager: document.querySelector("#togglePager"),
   toggleSidecar: document.querySelector("#toggleSidecar"),
   toggleSidecarTop: document.querySelector("#toggleSidecarTop"),
+  recoveredNotesBody: document.querySelector("#recoveredNotesBody"),
+  recoveredNotesCount: document.querySelector("#recoveredNotesCount"),
   recoveredNotesEmpty: document.querySelector("#recoveredNotesEmpty"),
   recoveredNotesList: document.querySelector("#recoveredNotesList"),
+  recoveredNotesToggle: document.querySelector("#recoveredNotesToggle"),
   unparentedQueueTarget: document.querySelector("#unparentedQueueTarget"),
   unparentedTargetRow: document.querySelector("#unparentedTargetRow"),
   workspaceDelete: document.querySelector("#workspaceDelete"),
@@ -1588,11 +1674,24 @@ const state = {
   aiSetup: { draft: null, guided: null, returnFocus: null },
   analytics: loadTerminalAnalytics(),
   analyticsRuntime: { focusStartedAt: 0, focusedTerminalId: null, saveTimer: 0, ticker: 0, ticksSinceSave: 0 },
-  automations: loadAutomationStore(initialSettings.automationHistoryLimit),
-  automationRuntime: { lastMessageRefresh: 0, lastTickAt: Date.now(), runs: new Map(), steps: new Map(), ticking: false, timer: 0 },
-  automationStudio: { appearanceDraft: null, editingId: null, returnFocus: null, view: "schedules" },
+  automations: loadAutomationStore(initialSettings.automationHistoryLimit, initialSettings),
+  automationRuntime: { backgroundBridgeAttemptAt: 0, backgroundBridgeNotice: null, blockedConsent: new Map(), conditionChecks: new Set(), lastMessageRefresh: 0, lastTickAt: Date.now(), runs: new Map(), steps: new Map(), ticking: false, timer: 0, unattendedRules: new Set() },
+  automationStudio: {
+    appearanceDraft: null,
+    conditionCwdChecking: false,
+    conditionCwdError: "",
+    conditionCwdValidated: "",
+    conditionStateCleared: false,
+    editingId: null,
+    returnFocus: null,
+    toolsDraft: null,
+    view: "schedules"
+  },
   hostUser: "",
+  backgroundLaunch: false,
+  backgroundWindow: false,
   bridgeClosingDown: false,
+  closeConfirmHideTimer: 0,
   closeDisposition: "",
   closeRequestSource: "window",
   copilotCwdHistory: loadCopilotCwdHistory(),
@@ -1628,6 +1727,7 @@ const state = {
   terminalArtifacts: loadTerminalArtifacts(),
   terminalArtifactsHub: { draftText: null, noteTerminalId: null, returnFocus: null, savedTimer: 0, selectedNoteId: null },
   autoTitleNotice: { promise: null, resolve: null },
+  conditionNotice: { fingerprint: "", promise: null, resolve: null },
   titleSuggestionHistory: loadTitleSuggestionHistory(),
   sessionManualTitleHistory: loadSessionManualTitleHistory(),
   titleSuggestionHistoryHub: { returnFocus: null, scope: null, visibleCount: TITLE_SUGGESTION_HISTORY_PAGE_SIZE },
@@ -1828,11 +1928,13 @@ window.addEventListener("DOMContentLoaded", () => {
   bindExternalTerminalFocusPrompt();
   bindUpdateConsent();
   bindAutoTitleNotice();
+  bindConditionAutomationNotice();
   bindUpdateDialog();
   bindStatisticsDialog();
   bindTerminalAnalytics();
   bindPrepareEditor();
   bindTerminalArtifactsHub();
+  bindModalDragging();
   bindTerminalMessages();
   bindAutomationStudio();
   bindMemStatus();
@@ -2020,6 +2122,7 @@ function bindControls() {
     state.settings.automationStepTimeoutMinutes,
     elements.automationStepTimeoutMinutes
   );
+  syncAutomationRuntimeSettings();
   state.settings.bridgeHeartbeatTimeoutSeconds = clampBridgeHeartbeatTimeoutSeconds(
     state.settings.bridgeHeartbeatTimeoutSeconds,
     elements.bridgeHeartbeatTimeoutSeconds
@@ -2307,6 +2410,18 @@ function bindControls() {
   bindSetting(elements.bridgeHeartbeatSeconds, "bridgeHeartbeatSeconds", "change", clampBridgeHeartbeatSeconds);
   bindSetting(elements.automationOutputCaptureKb, "automationOutputCaptureKb", "change", clampAutomationOutputCaptureKb);
   bindSetting(elements.automationStepTimeoutMinutes, "automationStepTimeoutMinutes", "change", clampAutomationStepTimeoutMinutes);
+  bindSetting(elements.automationBackgroundNotifications, "automationBackgroundNotifications", "change", (_, element) => element.checked);
+  bindSetting(elements.automationBackgroundTaskMinutes, "automationBackgroundTaskMinutes", "change", clampAutomationBackgroundTaskMinutes);
+  bindSetting(elements.automationConditionBackgroundChecksPerHour, "automationConditionBackgroundChecksPerHour", "change", clampAutomationConditionBackgroundChecksPerHour);
+  bindSetting(elements.automationConditionChecksPerHour, "automationConditionChecksPerHour", "change", clampAutomationConditionChecksPerHour);
+  bindSetting(elements.automationConditionCommandLengthKb, "automationConditionCommandLengthKb", "change", clampAutomationConditionCommandLengthKb);
+  bindSetting(elements.automationConditionConcurrency, "automationConditionConcurrency", "change", clampAutomationConditionConcurrency);
+  bindSetting(elements.automationConditionMaxAiCredits, "automationConditionMaxAiCredits", "change", clampAutomationConditionMaxAiCredits);
+  bindSetting(elements.automationConditionModel, "automationConditionModel", "change", (value) => String(value || ""));
+  bindSetting(elements.automationConditionEffort, "automationConditionEffort", "change", (value) => String(value || "none"));
+  bindSetting(elements.automationConditionContext, "automationConditionContext", "change", (value) => String(value || "default"));
+  bindSetting(elements.automationConditionStateKb, "automationConditionStateKb", "change", clampAutomationConditionStateKb);
+  bindSetting(elements.automationConditionToolEntries, "automationConditionToolEntries", "change", clampAutomationConditionToolEntries);
   bindSetting(elements.bridgeHeartbeatTimeoutSeconds, "bridgeHeartbeatTimeoutSeconds", "change", clampBridgeHeartbeatTimeoutSeconds);
   bindSetting(elements.copilotLogViewerEnabled, "copilotLogViewerEnabled", "change", (_, element) => element.checked);
   bindSetting(elements.copilotLogInitialTailKb, "copilotLogInitialTailKb", "change", (value, element) => (
@@ -2579,6 +2694,16 @@ const GIT_PUSH_TIMEOUT_SECONDS_BOUNDS = { min: 10, max: 1800, fallback: 120 };
 const GIT_MERGE_TIMEOUT_SECONDS_BOUNDS = { min: 30, max: 1800, fallback: 300 };
 const COMMIT_MESSAGE_TIMEOUT_SECONDS_BOUNDS = { min: 15, max: 600, fallback: 60 };
 const AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS = { min: 1, max: 1440, fallback: 30 };
+const AUTOMATION_CONDITION_CHECKS_PER_HOUR_BOUNDS = { min: 1, max: 240, fallback: 60 };
+const AUTOMATION_BACKGROUND_TASK_MINUTES_BOUNDS = { min: 5, max: 1440, fallback: 15 };
+const AUTOMATION_CONDITION_BACKGROUND_CHECKS_PER_HOUR_BOUNDS = { min: 1, max: 240, fallback: 30 };
+const AUTOMATION_CONDITION_COMMAND_LENGTH_KB_BOUNDS = { min: 1, max: 30, fallback: 8 };
+const AUTOMATION_CONDITION_CONCURRENCY_BOUNDS = { min: 1, max: 8, fallback: 2 };
+// Copilot CLI 1.0.82 refuses --max-ai-credits below 30: "Use at least 30 AI
+// credits." A lower value aborts the launch back to a shell prompt.
+const AUTOMATION_CONDITION_MAX_AI_CREDITS_BOUNDS = { min: 30, max: 100, fallback: 30 };
+const AUTOMATION_CONDITION_STATE_KB_BOUNDS = { min: 1, max: 64, fallback: 8 };
+const AUTOMATION_CONDITION_TOOL_ENTRIES_BOUNDS = { min: 1, max: 100, fallback: 25 };
 const BRIDGE_HEARTBEAT_TIMEOUT_SECONDS_BOUNDS = { min: 10, max: 300, fallback: 30 };
 const TERMINAL_MESSAGE_KB_BOUNDS = { min: 1, max: 1024, fallback: 64 };
 const TERMINAL_INBOX_CAPACITY_BOUNDS = { min: 0, max: 2147483647, fallback: 500 };
@@ -2603,11 +2728,15 @@ function normalizeDiagnosticSetting(value, element, fallback) {
   return next;
 }
 
-function clampSettingNumber(value, element, bounds) {
+function boundedSettingNumber(value, bounds) {
   const requested = Number(value);
-  const next = Number.isFinite(requested)
+  return Number.isFinite(requested)
     ? Math.min(bounds.max, Math.max(bounds.min, Math.round(requested)))
     : bounds.fallback;
+}
+
+function clampSettingNumber(value, element, bounds) {
+  const next = boundedSettingNumber(value, bounds);
   element.value = next;
   return next;
 }
@@ -2720,6 +2849,81 @@ function clampAutomationOutputCaptureKb(value, element) {
 
 function clampAutomationStepTimeoutMinutes(value, element) {
   return clampSettingNumber(value, element, AUTOMATION_STEP_TIMEOUT_MINUTES_BOUNDS);
+}
+
+function clampAutomationConditionChecksPerHour(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_CONDITION_CHECKS_PER_HOUR_BOUNDS);
+}
+
+function clampAutomationConditionBackgroundChecksPerHour(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_CONDITION_BACKGROUND_CHECKS_PER_HOUR_BOUNDS);
+}
+
+function clampAutomationBackgroundTaskMinutes(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_BACKGROUND_TASK_MINUTES_BOUNDS);
+}
+
+function clampAutomationConditionCommandLengthKb(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_CONDITION_COMMAND_LENGTH_KB_BOUNDS);
+}
+
+function clampAutomationConditionConcurrency(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_CONDITION_CONCURRENCY_BOUNDS);
+}
+
+// 0 is a real choice here: it removes the per-check credit cap entirely.
+function clampAutomationConditionMaxAiCredits(value, element) {
+  return clampSpecialZeroSetting(value, element, AUTOMATION_CONDITION_MAX_AI_CREDITS_BOUNDS);
+}
+
+function clampAutomationConditionStateKb(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_CONDITION_STATE_KB_BOUNDS);
+}
+
+function clampAutomationConditionToolEntries(value, element) {
+  return clampSettingNumber(value, element, AUTOMATION_CONDITION_TOOL_ENTRIES_BOUNDS);
+}
+
+function syncAutomationRuntimeSettings() {
+  state.settings.automationConditionChecksPerHour = clampAutomationConditionChecksPerHour(
+    state.settings.automationConditionChecksPerHour,
+    elements.automationConditionChecksPerHour
+  );
+  state.settings.automationConditionBackgroundChecksPerHour = clampAutomationConditionBackgroundChecksPerHour(
+    state.settings.automationConditionBackgroundChecksPerHour,
+    elements.automationConditionBackgroundChecksPerHour
+  );
+  state.settings.automationConditionCommandLengthKb = clampAutomationConditionCommandLengthKb(
+    state.settings.automationConditionCommandLengthKb,
+    elements.automationConditionCommandLengthKb
+  );
+  state.settings.automationConditionConcurrency = clampAutomationConditionConcurrency(
+    state.settings.automationConditionConcurrency,
+    elements.automationConditionConcurrency
+  );
+  state.settings.automationConditionMaxAiCredits = clampAutomationConditionMaxAiCredits(
+    state.settings.automationConditionMaxAiCredits,
+    elements.automationConditionMaxAiCredits
+  );
+  state.settings.automationConditionStateKb = clampAutomationConditionStateKb(
+    state.settings.automationConditionStateKb,
+    elements.automationConditionStateKb
+  );
+  state.settings.automationConditionToolEntries = clampAutomationConditionToolEntries(
+    state.settings.automationConditionToolEntries,
+    elements.automationConditionToolEntries
+  );
+  state.settings.automationConditionModel = String(state.settings.automationConditionModel || "");
+  state.settings.automationConditionEffort = conditionSettingChoice("automationConditionEffort", COPILOT_TITLE_EFFORTS, "none");
+  state.settings.automationConditionContext = conditionSettingChoice("automationConditionContext", COPILOT_TITLE_CONTEXTS, "default");
+  elements.automationConditionModel.value = state.settings.automationConditionModel;
+  elements.automationConditionEffort.value = state.settings.automationConditionEffort;
+  elements.automationConditionContext.value = state.settings.automationConditionContext;
+  elements.automationBackgroundNotifications.checked = state.settings.automationBackgroundNotifications !== false;
+  state.settings.automationBackgroundTaskMinutes = clampAutomationBackgroundTaskMinutes(
+    state.settings.automationBackgroundTaskMinutes,
+    elements.automationBackgroundTaskMinutes
+  );
 }
 
 function clampGitChangesFileLimit(value, element = elements.gitChangesFileLimit) {
@@ -3156,6 +3360,7 @@ function transitionBridgeDisconnected(socket, detail, message = "WebSocket close
   state.socket = null;
   state.socketReady = false;
   state.bridgeLastMessageAt = 0;
+  lastBackgroundPlanSignature = "";
   stopBridgeHeartbeat();
   log.warn("bridge", message, detail);
   settlePendingBridgeRequests("disconnected", detail);
@@ -4163,6 +4368,8 @@ function addTerminal(options = {}) {
   const terminal = {
     color: savedMeta?.color || options.color || session.color || null,
     copilotCwd: normalizeCopilotCwdEntry(savedMeta?.copilotCwd ?? options.copilotCwd),
+    // Until the user clicks elsewhere, Ctrl+A belongs to Copilot's prompt box.
+    composerPress: true,
     contextSelection: "",
     ctrlCCount: 0,
     ctrlCLastAt: 0,
@@ -4331,13 +4538,13 @@ function addTerminal(options = {}) {
   refreshIcons(pane);
   if (!transient) refreshGlobalShortcutHints();
   bindTerminalKeyHandling(terminal);
+  bindComposerSelection(terminal);
   bindTerminalFontZoom(terminal);
   bindTerminalSelectionHandling(terminal);
   registerCwdTracking(terminal);
   scheduleTerminalGitInspection(terminal);
   registerModifiedKeyReporting(terminal);
   bindTerminalScrollControls(terminal);
-  bindComposerSelection(terminal);
 
   term.onData((data) => {
     if (!data) return;
@@ -4507,6 +4714,7 @@ function bindTerminalKeyHandling(terminal) {
     if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyA") {
       event.preventDefault();
       event.stopPropagation();
+      clearComposerSelection(terminal);
       terminal.term.selectAll();
       return;
     }
@@ -7787,7 +7995,7 @@ function closeAllTerminals() {
 
 function disposeTerminal(terminal) {
   const { id } = terminal;
-  failAutomationWorkflowTasksForTerminal(terminal, "Terminal closed before the automation step completed");
+  failAutomationWorkflowTasksForTerminal(terminal, "Terminal closed before the automation step completed", { teardown: false });
   if (terminalNotificationFlyoutId === id) closeTerminalNotificationFlyout();
   if (terminalNotesFlyoutId === id) closeTerminalNotesFlyout();
   if (headerBackgroundFlyoutTarget?.kind === "terminal" && headerBackgroundFlyoutTarget.id === id) closeHeaderBackgroundFlyout();
@@ -14551,6 +14759,14 @@ function bindGlobalShortcuts() {
       return;
     }
 
+    if (elements.conditionNoticeOverlay && !elements.conditionNoticeOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        finishConditionConsent(false);
+      }
+      return;
+    }
+
     if (elements.pageCloseOverlay && !elements.pageCloseOverlay.hidden) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -15660,9 +15876,12 @@ function syncCopilotScrollInset(terminal) {
   if (!screen || !container || terminal.term.rows < 1) return;
   const screenRect = screen.getBoundingClientRect();
   if (screenRect.height < 1) return;
+  // Measured in visual pixels but consumed as a CSS length inside the scaled
+  // stage, so the workspace zoom has to come back out.
+  const zoom = workspaceZoomScale();
   const cellHeight = screenRect.height / terminal.term.rows;
   const floorGap = container.getBoundingClientRect().bottom - screenRect.bottom;
-  const inset = Math.round(floorGap + copilotComposerRows(terminal) * cellHeight);
+  const inset = Math.round((floorGap + copilotComposerRows(terminal) * cellHeight) / zoom);
   terminal.pane.style.setProperty("--pane-scroll-bottom-inset", `${Math.max(inset, 0)}px`);
 }
 
@@ -15786,10 +16005,13 @@ function renderComposerSelection(terminal) {
   }
   const screenRect = screen.getBoundingClientRect();
   const hostRect = terminal.screen.getBoundingClientRect();
-  const cellWidth = screenRect.width / terminal.term.cols;
-  const cellHeight = screenRect.height / terminal.term.rows;
-  const offsetLeft = screenRect.left - hostRect.left;
-  const offsetTop = screenRect.top - hostRect.top;
+  // Both rects are visual pixels, but the bands are positioned in the layer's own
+  // unscaled pixels, so the workspace zoom has to come back out.
+  const zoom = workspaceZoomScale();
+  const cellWidth = screenRect.width / terminal.term.cols / zoom;
+  const cellHeight = screenRect.height / terminal.term.rows / zoom;
+  const offsetLeft = (screenRect.left - hostRect.left) / zoom;
+  const offsetTop = (screenRect.top - hostRect.top) / zoom;
 
   const rects = [];
   let index = 0;
@@ -15907,7 +16129,9 @@ function handleComposerSelectionKey(terminal, event) {
   }
 
   if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyA") {
-    if (!copilotComposerRegion(terminal)) return false;
+    // A click outside the prompt box means the user is working with the output,
+    // so Ctrl+A falls through to xterm's whole-buffer selection.
+    if (!terminal.composerPress || !copilotComposerRegion(terminal)) return false;
     event.preventDefault();
     event.stopPropagation();
     selectAllComposerText(terminal);
@@ -15956,7 +16180,26 @@ function handleComposerSelectionKey(terminal, event) {
   return false;
 }
 
+// Returns true when a press landed in Copilot's prompt box, border rows
+// included, because that is the box the user sees.
+function pressLandsInComposer(terminal, event) {
+  const region = copilotComposerRegion(terminal);
+  if (!region) return false;
+  const screen = terminal.term.element?.querySelector(".xterm-screen");
+  const rect = screen?.getBoundingClientRect();
+  if (!rect?.height) return false;
+  const row = Math.floor(((event.clientY - rect.top) / rect.height) * terminal.term.rows);
+  const rows = region.rows.map((entry) => entry.row);
+  return row >= Math.min(...rows) - 1 && row <= Math.max(...rows) + 1;
+}
+
 function bindComposerSelection(terminal) {
+  // Registered before the TUI drag handler, which stops propagation on the pane
+  // once it owns a press.
+  terminal.pane.addEventListener("mousedown", (event) => {
+    if (event.button !== 0 || !event.target.closest(".xterm")) return;
+    terminal.composerPress = pressLandsInComposer(terminal, event);
+  }, true);
   terminal.term.onCursorMove(() => {
     const selection = terminal.composerSelection;
     if (!selection) return;
@@ -20512,11 +20755,86 @@ function bindRightClickWarning() {
 function requestAppClose(source = "window") {
   state.closeRequestSource = source === "tray" ? "tray" : "window";
   const action = state.settings.closeAction;
-  if (state.closeRequestSource === "window" && action === "tray") {
+  if (state.closeRequestSource === "window" && (action === "tray" || action === "background")) {
     finishAppClose(action);
     return;
   }
   openCloseConfirm();
+}
+
+// Enabled rules that asked to keep running once the window is gone. Only
+// Copilot and conditional rules can, so the list doubles as the "is background
+// mode worth offering" test.
+function backgroundAutomationRules() {
+  return state.automations.rules.filter((rule) => rule.enabled
+    && rule.runWhenClosed === "background"
+    && (rule.type === "copilot" || rule.type === "condition"));
+}
+
+// Flat scalars only: the installed bridge parses messages into a string map.
+// It uses this to decide whether losing its last renderer means it is finished.
+function publishBackgroundAutomationPlan() {
+  const rules = backgroundAutomationRules();
+  let nextDueAt = "";
+  for (const rule of rules) {
+    const due = automationDueAt(rule);
+    if (!due) continue;
+    const iso = due.toISOString();
+    if (!nextDueAt || iso < nextDueAt) nextDueAt = iso;
+  }
+  const plan = {
+    count: rules.length,
+    enabled: rules.length > 0 && !state.automations.paused,
+    nextDueAt
+  };
+  syncBackgroundAutomationTask(plan.enabled);
+  const signature = `${plan.enabled}|${plan.count}|${plan.nextDueAt}`;
+  if (signature === lastBackgroundPlanSignature) return false;
+  if (!sendBridge({ type: "backgroundAutomationPlan", ...plan })) return false;
+  lastBackgroundPlanSignature = signature;
+  return true;
+}
+
+// The task is what brings automations back after a quit, a crash, or a reboot.
+// It knows nothing about rule schedules, so it never needs re-registering when
+// a rule is edited - only when the last background rule appears or disappears.
+function syncBackgroundAutomationTask(enabled) {
+  const sync = window.multiterm?.syncBackgroundTask;
+  if (typeof sync !== "function") return false;
+  const intervalMinutes = boundedSettingNumber(
+    state.settings.automationBackgroundTaskMinutes,
+    AUTOMATION_BACKGROUND_TASK_MINUTES_BOUNDS
+  );
+  const signature = `${enabled}|${intervalMinutes}`;
+  if (signature === lastBackgroundTaskSignature) return false;
+  lastBackgroundTaskSignature = signature;
+  void Promise.resolve(sync({ enabled, intervalMinutes })).then((result) => {
+    if (result?.ok) return;
+    lastBackgroundTaskSignature = "";
+    log.warn("automations", "Could not update the background relaunch task", result?.error || "no response");
+  }).catch((error) => {
+    lastBackgroundTaskSignature = "";
+    log.warn("automations", "Could not update the background relaunch task", String(error?.message || error));
+  });
+  return true;
+}
+
+// An instance the scheduled task started retires itself once nothing is due
+// inside the next repeat window. A user-started instance never self-quits.
+async function maybeFinishBackgroundRun(nowMs) {
+  if (!state.backgroundLaunch || !windowIsUnattended()) return false;
+  if (state.automationRuntime.steps.size > 0 || state.automationRuntime.runs.size > 0) return false;
+  const horizon = nowMs + boundedSettingNumber(
+    state.settings.automationBackgroundTaskMinutes,
+    AUTOMATION_BACKGROUND_TASK_MINUTES_BOUNDS
+  ) * 60000;
+  for (const rule of backgroundAutomationRules()) {
+    const due = automationDueAt(rule);
+    if (due && due.getTime() <= horizon) return false;
+  }
+  state.backgroundLaunch = false;
+  await window.multiterm?.finishBackgroundRun?.();
+  return true;
 }
 
 function openCloseConfirm() {
@@ -20524,16 +20842,31 @@ function openCloseConfirm() {
   const count = userTerminals().length;
   const sessionLabel = `${count} terminal session${count === 1 ? "" : "s"}`;
   const fromTray = state.closeRequestSource === "tray";
+  const background = backgroundAutomationRules();
+  const backgroundOffered = background.length > 0 && Boolean(window.multiterm?.respondClose);
   elements.closeConfirmTitle.textContent = fromTray ? "Quit MultiTerm?" : "Close MultiTerm?";
   elements.closeConfirmText.textContent = `${sessionLabel} ${count === 1 ? "is" : "are"} connected to this bridge. `
-    + "Keeping the bridge leaves every terminal and in-progress command running. Closing the bridge first asks each terminal to exit cleanly; commands still running after the grace period are interrupted and then terminated.";
+    + "Keeping the bridge leaves every terminal and in-progress command running. Closing the bridge first asks each terminal to exit cleanly; commands still running after the grace period are interrupted and then terminated."
+    + (backgroundOffered
+      ? ` ${background.length} automation${background.length === 1 ? "" : "s"} `
+        + `${background.length === 1 ? "is" : "are"} set to keep running while MultiTerm is closed; either quit option stops ${background.length === 1 ? "it" : "them"}.`
+      : "");
+  elements.closeConfirmBackground.hidden = !backgroundOffered;
+  elements.closeConfirmRememberText.textContent = backgroundOffered
+    ? "Always use this choice when the window closes"
+    : "Always minimize window closes to the tray";
   elements.closeConfirmTray.hidden = fromTray;
   elements.closeConfirmRememberRow.hidden = fromTray;
   elements.closeConfirmRemember.checked = false;
+  window.clearTimeout(state.closeConfirmHideTimer);
   elements.closeConfirmOverlay.hidden = false;
   window.requestAnimationFrame(() => {
     elements.closeConfirmOverlay.classList.add("is-open");
-    (fromTray ? elements.closeConfirmKeep : elements.closeConfirmTray).focus();
+    if (backgroundOffered && !fromTray) {
+      elements.closeConfirmBackground.focus();
+    } else {
+      (fromTray ? elements.closeConfirmKeep : elements.closeConfirmTray).focus();
+    }
   });
   refreshIcons();
 }
@@ -20541,15 +20874,17 @@ function openCloseConfirm() {
 function closeCloseConfirm() {
   if (!elements.closeConfirmOverlay) return;
   elements.closeConfirmOverlay.classList.remove("is-open");
-  window.setTimeout(() => {
+  // Reopening inside the fade must not inherit the previous hide.
+  window.clearTimeout(state.closeConfirmHideTimer);
+  state.closeConfirmHideTimer = window.setTimeout(() => {
     elements.closeConfirmOverlay.hidden = true;
   }, 150);
 }
 
-// Picks tray/quit from the modal, optionally remembering it for next time.
+// Picks tray/background/quit from the modal, optionally remembering it for next time.
 function chooseCloseAction(action) {
   if (elements.closeConfirmRemember && elements.closeConfirmRemember.checked
-      && state.closeRequestSource === "window" && action === "tray") {
+      && state.closeRequestSource === "window" && (action === "tray" || action === "background")) {
     state.settings.closeAction = action;
     saveSettings();
   }
@@ -20576,6 +20911,7 @@ function finishAppClose(action) {
 
 function bindCloseConfirm() {
   if (!elements.closeConfirmOverlay) return;
+  elements.closeConfirmBackground.addEventListener("click", () => chooseCloseAction("background"));
   elements.closeConfirmTray.addEventListener("click", () => chooseCloseAction("tray"));
   elements.closeConfirmKeep.addEventListener("click", () => chooseCloseAction("quitKeep"));
   elements.closeConfirmQuit.addEventListener("click", () => chooseCloseAction("quitClose"));
@@ -21780,6 +22116,57 @@ let pageDropAccepted = false;
 let emptyPageDropGroupId = null;
 let originalPageOrder = null;
 let suppressPageClick = false;
+let pagerRangeSelection = new Set();
+let pagerRangeAnchor = null;
+
+function visiblePageChips() {
+  return [...(elements.pagerList?.querySelectorAll(".pager-chip") || [])];
+}
+
+// Ranges are read from the rendered bar rather than state.pages, so they follow
+// whatever the user can actually see: horizontal or vertical placement, group
+// bands, and collapsed groups whose members are not in the DOM at all.
+function applyPagerRangeSelection() {
+  const live = new Set(state.pages.map((page) => page.id));
+  for (const id of [...pagerRangeSelection]) {
+    if (!live.has(id)) pagerRangeSelection.delete(id);
+  }
+  if (pagerRangeAnchor && !live.has(pagerRangeAnchor)) pagerRangeAnchor = null;
+  const multiple = pagerRangeSelection.size > 1;
+  for (const chip of visiblePageChips()) {
+    chip.classList.toggle("is-range-selected", multiple && pagerRangeSelection.has(chip.dataset.pageId));
+  }
+}
+
+function clearPagerRangeSelection() {
+  if (!pagerRangeSelection.size) return false;
+  pagerRangeSelection.clear();
+  applyPagerRangeSelection();
+  return true;
+}
+
+function selectPagerRange(toPageId) {
+  const chips = visiblePageChips();
+  const from = chips.findIndex((chip) => chip.dataset.pageId === pagerRangeAnchor);
+  const to = chips.findIndex((chip) => chip.dataset.pageId === toPageId);
+  if (from < 0 || to < 0) return false;
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  pagerRangeSelection = new Set(chips.slice(start, end + 1).map((chip) => chip.dataset.pageId));
+  applyPagerRangeSelection();
+  return true;
+}
+
+// A drag that starts on a selected tab carries the whole selection; anything
+// else carries just the tab under the pointer.
+function draggedPageChips() {
+  if (!draggedPageId || !elements.pagerList) return [];
+  if (pagerRangeSelection.size > 1 && pagerRangeSelection.has(draggedPageId)) {
+    return visiblePageChips().filter((chip) => pagerRangeSelection.has(chip.dataset.pageId));
+  }
+  const chip = elements.pagerList.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
+  return chip ? [chip] : [];
+}
 
 function setEmptyPageDropTarget(groupId) {
   emptyPageDropGroupId = groupId || null;
@@ -21807,18 +22194,32 @@ function syncPageOrderFromPager() {
 }
 
 function moveDraggedPage(targetChip, before) {
-  const draggedChip = elements.pagerList.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
-  if (!draggedChip || draggedChip === targetChip) return;
+  const chips = draggedPageChips();
+  if (!chips.length || chips.includes(targetChip)) return;
 
   const alreadyPlaced = before
-    ? targetChip.previousElementSibling === draggedChip
-    : targetChip.nextElementSibling === draggedChip;
+    ? targetChip.previousElementSibling === chips[chips.length - 1]
+    : targetChip.nextElementSibling === chips[0];
   if (alreadyPlaced) return;
 
   // The target may sit inside a group band rather than directly on the bar.
-  targetChip.parentElement.insertBefore(draggedChip, before ? targetChip : targetChip.nextElementSibling);
+  // Every chip goes before the same anchor node, which preserves their order.
+  const anchor = before ? targetChip : targetChip.nextElementSibling;
+  for (const chip of chips) targetChip.parentElement.insertBefore(chip, anchor);
   syncPageOrderFromPager();
   pageDragChanged = true;
+}
+
+function appendDraggedPagesTo(zone) {
+  const chips = draggedPageChips();
+  if (!chips.length) return false;
+  const settled = chips[chips.length - 1] === zone.lastElementChild
+    && chips.every((chip) => chip.parentElement === zone);
+  if (settled) return false;
+  for (const chip of chips) zone.append(chip);
+  syncPageOrderFromPager();
+  pageDragChanged = true;
+  return true;
 }
 
 function movePageByOffset(pageId, offset) {
@@ -21990,6 +22391,7 @@ function renderPager() {
   }
   refreshIcons();
   updatePageGroupButton();
+  applyPagerRangeSelection();
   window.requestAnimationFrame(() => {
     const active = list.querySelector(".pager-chip.is-active");
     if (active?.isConnected) active.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -22182,7 +22584,20 @@ function bindPager() {
       return;
     }
     const chip = event.target.closest(".pager-chip");
-    if (chip && !chip.querySelector(".pager-rename")) setActivePage(chip.dataset.pageId);
+    if (chip && !chip.querySelector(".pager-rename")) {
+      if (event.shiftKey && pagerRangeAnchor && pagerRangeAnchor !== chip.dataset.pageId) {
+        // Extending a range deliberately does not switch pages: the gesture
+        // exists to gather tabs for a move, not to navigate.
+        event.preventDefault();
+        selectPagerRange(chip.dataset.pageId);
+        return;
+      }
+      clearPagerRangeSelection();
+      pagerRangeAnchor = chip.dataset.pageId;
+      setActivePage(chip.dataset.pageId);
+      return;
+    }
+    clearPagerRangeSelection();
   });
 
   list.addEventListener("dblclick", (event) => {
@@ -22194,6 +22609,11 @@ function bindPager() {
   });
 
   list.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && clearPagerRangeSelection()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (!event.ctrlKey || !event.shiftKey || event.target.closest(".pager-rename")) return;
     const chip = event.target.closest(".pager-chip");
     if (!chip) return;
@@ -22218,7 +22638,7 @@ function bindPager() {
     setEmptyPageDropTarget(null);
     originalPageOrder = state.pages.map((page) => ({ id: page.id, groupId: page.groupId }));
     suppressPageClick = true;
-    chip.classList.add("is-page-dragging");
+    for (const dragging of draggedPageChips()) dragging.classList.add("is-page-dragging");
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", draggedPageId);
@@ -22248,12 +22668,7 @@ function bindPager() {
       const band = event.target.closest?.(".pager-group-chips");
       setEmptyPageDropTarget(null);
       const zone = band || list;
-      const draggedChip = list.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
-      if (zone && draggedChip && draggedChip !== zone.lastElementChild) {
-        zone.append(draggedChip);
-        syncPageOrderFromPager();
-        pageDragChanged = true;
-      }
+      if (zone) appendDraggedPagesTo(zone);
     }
   });
 
@@ -22264,18 +22679,15 @@ function bindPager() {
       const zone = list.querySelector(
         `[data-group-id="${CSS.escape(emptyPageDropGroupId)}"] .pager-group-chips`
       );
-      const draggedChip = list.querySelector(`[data-page-id="${CSS.escape(draggedPageId)}"]`);
-      if (zone && draggedChip) {
-        zone.append(draggedChip);
-        syncPageOrderFromPager();
-        pageDragChanged = true;
-      }
+      if (zone) appendDraggedPagesTo(zone);
     }
     pageDropAccepted = true;
   });
 
-  list.addEventListener("dragend", (event) => {
-    event.target.closest?.(".pager-chip")?.classList.remove("is-page-dragging");
+  list.addEventListener("dragend", () => {
+    for (const dragging of list.querySelectorAll(".pager-chip.is-page-dragging")) {
+      dragging.classList.remove("is-page-dragging");
+    }
     if (pageDragChanged && pageDropAccepted) {
       commitPageGroups();
     } else if (pageDragChanged && originalPageOrder) {
@@ -22604,6 +23016,7 @@ function syncControlsFromSettings() {
     state.settings.automationStepTimeoutMinutes,
     elements.automationStepTimeoutMinutes
   );
+  syncAutomationRuntimeSettings();
   state.settings.bridgeHeartbeatTimeoutSeconds = clampBridgeHeartbeatTimeoutSeconds(
     state.settings.bridgeHeartbeatTimeoutSeconds,
     elements.bridgeHeartbeatTimeoutSeconds
@@ -24895,7 +25308,14 @@ function renderRecoveredNotes() {
   const entries = state.terminalArtifacts.recoveredNotes;
   elements.recoveredNotesList.textContent = "";
   elements.recoveredNotesEmpty.hidden = entries.length > 0;
+  elements.recoveredNotesCount.textContent = String(entries.length);
+  elements.recoveredNotesCount.hidden = entries.length === 0;
+  elements.recoveredNotesToggle.setAttribute(
+    "aria-label",
+    `Recovered notes: ${entries.length} ${entries.length === 1 ? "note" : "notes"}`
+  );
 
+  const target = recoveredNoteMoveTarget();
   for (const entry of entries) {
     const card = document.createElement("article");
     card.className = "recovered-note";
@@ -24914,6 +25334,23 @@ function renderRecoveredNotes() {
     ].filter(Boolean).join(" \u00b7 ");
     identity.append(title, meta);
 
+    const actions = document.createElement("div");
+    actions.className = "recovered-note-actions";
+
+    const move = document.createElement("button");
+    move.type = "button";
+    move.className = "recovered-note-move";
+    move.dataset.recoveredMove = entry.id;
+    move.disabled = !target;
+    const moveLabel = target
+      ? `Move this note to ${committedTerminalTitle(target)}`
+      : "Choose a live terminal to move this note into";
+    move.title = moveLabel;
+    move.setAttribute("aria-label", moveLabel);
+    const moveIcon = document.createElement("i");
+    moveIcon.dataset.lucide = "corner-up-right";
+    move.append(moveIcon);
+
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "recovered-note-delete";
@@ -24923,7 +25360,8 @@ function renderRecoveredNotes() {
     const icon = document.createElement("i");
     icon.dataset.lucide = "trash-2";
     remove.append(icon);
-    head.append(identity, remove);
+    actions.append(remove, move);
+    head.append(identity, actions);
 
     const notes = document.createElement("textarea");
     notes.className = "recovered-note-input";
@@ -24935,6 +25373,43 @@ function renderRecoveredNotes() {
     card.append(head, notes);
     elements.recoveredNotesList.append(card);
   }
+}
+
+// The dialog's own target selector is the "working with" terminal, so a
+// recovered note follows whatever the rest of the dialog is acting on.
+function recoveredNoteMoveTarget() {
+  const selected = elements.terminalArtifactsTarget.value;
+  if (selected === UNPARENTED_QUEUE_VALUE) return null;
+  const terminal = state.terminals.get(selected);
+  return artifactTerminalIsAvailable(terminal) ? terminal : null;
+}
+
+function setRecoveredNotesExpanded(expanded) {
+  elements.recoveredNotesToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  elements.recoveredNotesBody.hidden = !expanded;
+}
+
+function moveRecoveredNoteToTarget(id) {
+  const index = state.terminalArtifacts.recoveredNotes.findIndex((item) => item.id === id);
+  if (index < 0) {
+    toast("That recovered note is no longer available.", "info", 1800);
+    return;
+  }
+  const target = recoveredNoteMoveTarget();
+  if (!target) {
+    toast("Choose a live terminal to move this note into.", "info", 2200);
+    return;
+  }
+  const entry = state.terminalArtifacts.recoveredNotes[index];
+  const note = upsertArtifactNote(ensureTerminalArtifact(target), null, entry.notes);
+  if (!note) {
+    toast("That recovered note is empty.", "info", 1800);
+    return;
+  }
+  state.terminalArtifacts.recoveredNotes.splice(index, 1);
+  saveTerminalArtifacts();
+  renderTerminalArtifacts();
+  toast(`Moved the note to ${committedTerminalTitle(target)}.`, "success", 2200);
 }
 
 function renderTerminalNoteList(record) {
@@ -25253,6 +25728,7 @@ function openTerminalArtifacts(terminalId = null, { draftText = null, noteId = n
   state.terminalArtifactsHub.selectedNoteId = noteId;
   state.terminalArtifactsHub.draftText = typeof draftText === "string" ? draftText : null;
   refreshTerminalArtifactTargets(preferred);
+  setRecoveredNotesExpanded(false);
   renderTerminalArtifacts();
   elements.terminalArtifactsOverlay.hidden = false;
   window.requestAnimationFrame(() => elements.terminalArtifactsOverlay.classList.add("is-open"));
@@ -25270,6 +25746,97 @@ function closeTerminalArtifacts({ restoreFocus = true } = {}) {
     elements.terminalArtifactsOverlay.hidden = true;
     if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
   }, 150);
+}
+
+// Modals are flex-centred by their overlay and animate with a transform, so a
+// drag offsets the card with position:relative instead of fighting either.
+const MODAL_DRAG_IGNORE = "button, input, select, textarea, a[href], [contenteditable], .combobox";
+let modalDrag = null;
+
+function modalDragTarget(target) {
+  const card = target.closest?.(".palette-overlay .palette");
+  if (!card || target.closest(MODAL_DRAG_IGNORE)) return null;
+  // Walk to the card's own direct child so a nested header, such as a diff
+  // pane's, cannot be mistaken for the dialog's title bar.
+  let node = target;
+  while (node && node.parentElement !== card) node = node.parentElement;
+  if (!node) return null;
+  const header = node.tagName === "HEADER"
+    || [...node.classList].some((name) => name.endsWith("-head"));
+  return header ? card : null;
+}
+
+function moveModalCard(card, offsetX, offsetY) {
+  const rect = card.getBoundingClientRect();
+  const baseLeft = rect.left - (Number(card.dataset.dragX) || 0);
+  const baseTop = rect.top - (Number(card.dataset.dragY) || 0);
+  // Clamp so the dialog can never be dragged off screen and stranded.
+  const x = Math.max(-baseLeft, Math.min(offsetX, window.innerWidth - baseLeft - rect.width));
+  const y = Math.max(-baseTop, Math.min(offsetY, window.innerHeight - baseTop - rect.height));
+  card.dataset.dragX = String(x);
+  card.dataset.dragY = String(y);
+  card.style.left = `${x}px`;
+  card.style.top = `${y}px`;
+}
+
+function resetModalCardPosition(card) {
+  delete card.dataset.dragX;
+  delete card.dataset.dragY;
+  card.style.left = "";
+  card.style.top = "";
+  card.classList.remove("is-dragging");
+}
+
+function bindModalDragging() {
+  document.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const card = modalDragTarget(event.target);
+    if (!card) return;
+    // preventDefault stops the header text being selected mid-drag, but it also
+    // suppresses the focus that a mousedown on non-focusable chrome would give
+    // the card, and the overlay's Escape handler depends on that focus.
+    event.preventDefault();
+    card.focus({ preventScroll: true });
+    modalDrag = {
+      card,
+      originX: Number(card.dataset.dragX) || 0,
+      originY: Number(card.dataset.dragY) || 0,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY
+    };
+    card.classList.add("is-dragging");
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    if (!modalDrag || event.pointerId !== modalDrag.pointerId) return;
+    moveModalCard(
+      modalDrag.card,
+      modalDrag.originX + (event.clientX - modalDrag.startX),
+      modalDrag.originY + (event.clientY - modalDrag.startY)
+    );
+  });
+
+  const finish = () => {
+    if (!modalDrag) return;
+    modalDrag.card.classList.remove("is-dragging");
+    modalDrag = null;
+  };
+  document.addEventListener("pointerup", finish);
+  document.addEventListener("pointercancel", finish);
+
+  // Reopening a dialog should present it centred again, and every close path
+  // ends with the overlay hidden, so watch that rather than each close function.
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      const overlay = record.target;
+      if (!overlay.hidden) continue;
+      for (const card of overlay.querySelectorAll(".palette")) resetModalCardPosition(card);
+    }
+  });
+  for (const overlay of document.querySelectorAll(".palette-overlay")) {
+    observer.observe(overlay, { attributeFilter: ["hidden"] });
+  }
 }
 
 function bindTerminalArtifactsHub() {
@@ -25354,7 +25921,16 @@ function bindTerminalArtifactsHub() {
     entry.notesUpdatedAt = new Date().toISOString();
     saveTerminalArtifacts();
   });
+  elements.recoveredNotesToggle.addEventListener("click", () => {
+    const expanded = elements.recoveredNotesToggle.getAttribute("aria-expanded") === "true";
+    setRecoveredNotesExpanded(!expanded);
+  });
   elements.recoveredNotesList.addEventListener("click", (event) => {
+    const moveButton = event.target.closest("[data-recovered-move]");
+    if (moveButton) {
+      moveRecoveredNoteToTarget(moveButton.dataset.recoveredMove);
+      return;
+    }
     const button = event.target.closest("[data-recovered-delete]");
     if (!button) return;
     const index = state.terminalArtifacts.recoveredNotes.findIndex((item) => item.id === button.dataset.recoveredDelete);
@@ -25371,29 +25947,325 @@ function bindTerminalArtifactsHub() {
 
 /* ---------------- Automations --------------- */
 
+// Denial overrides every other permission layer, so a new rule starts with the
+// destructive shell commands and secret files already refused.
+const CONDITION_TOOL_DENY_SEED = Object.freeze([
+  "shell(rm)",
+  "shell(del)",
+  "shell(rmdir)",
+  "shell(Remove-Item)",
+  "shell(format)",
+  "write(.env)",
+  "write(.git)"
+]);
+const AUTOMATION_CONDITION_CWD_HINT = "Copilot starts here, and unless you widen the scope below it can only reach this folder and its subfolders.";
+const CONDITION_CHECK_LEDGER_STORAGE_KEY = "multiterm.conditionCheckLedger";
+const CONDITION_BACKGROUND_LEDGER_STORAGE_KEY = "multiterm.conditionBackgroundCheckLedger";
+const CONDITION_CHECK_WINDOW_MS = 3600000;
+const CONDITION_CONSENT_STORAGE_KEY = "multiterm.conditionAutomationConsent";
+const CONDITION_BLOCKED_NOTICE_MS = 86400000;
+let lastBackgroundPlanSignature = "";
+let lastBackgroundTaskSignature = "";
+let automationConditionCwdGeneration = 0;
+let automationConditionCwdTimer = 0;
+
 function automationHistoryLimit() {
   const value = Number(state?.settings?.automationHistoryLimit ?? defaultSettings.automationHistoryLimit);
   return Number.isFinite(value) && value >= 0 ? Math.round(value) : defaultSettings.automationHistoryLimit;
 }
 
-function loadAutomationStore(historyLimit = defaultSettings.automationHistoryLimit) {
+// Takes settings explicitly: the bootstrap store load runs while `state` is
+// still in its temporal dead zone.
+function automationNormalizationOptions(settings) {
+  const source = settings || {};
+  const stateKb = Number(source.automationConditionStateKb);
+  return {
+    stateBytes: Number.isFinite(stateKb) ? stateKb * 1024 : undefined,
+    toolEntryLimit: Number(source.automationConditionToolEntries)
+  };
+}
+
+function loadAutomationStore(historyLimit = defaultSettings.automationHistoryLimit, settings = null) {
+  const options = automationNormalizationOptions(settings);
   try {
     const raw = JSON.parse(localStorage.getItem(AUTOMATIONS_STORAGE_KEY) || "null");
-    return automationApi.normalizeStore(raw, historyLimit);
+    return automationApi.normalizeStore(raw, historyLimit, options);
   } catch {
-    return automationApi.normalizeStore(null, historyLimit);
+    return automationApi.normalizeStore(null, historyLimit, options);
   }
 }
 
 function saveAutomationStore() {
-  state.automations = automationApi.normalizeStore(state.automations, automationHistoryLimit());
+  state.automations = automationApi.normalizeStore(state.automations, automationHistoryLimit(), automationNormalizationOptions(state.settings));
   localStorage.setItem(AUTOMATIONS_STORAGE_KEY, JSON.stringify(state.automations));
   updateAutomationBadge();
+  publishBackgroundAutomationPlan();
 }
 
-function addAutomationHistory(status, title, detail = "", automationId = null) {
+function conditionCheckRateLimit() {
+  return boundedSettingNumber(state.settings.automationConditionChecksPerHour, AUTOMATION_CONDITION_CHECKS_PER_HOUR_BOUNDS);
+}
+
+// Unattended runs keep their own allowance: the shared ledger is never withdrawn,
+// so a busy overnight schedule would otherwise starve interactive checks.
+function conditionBackgroundRateLimit() {
+  return boundedSettingNumber(
+    state.settings.automationConditionBackgroundChecksPerHour,
+    AUTOMATION_CONDITION_BACKGROUND_CHECKS_PER_HOUR_BOUNDS
+  );
+}
+
+function conditionCheckConcurrencyLimit() {
+  return boundedSettingNumber(state.settings.automationConditionConcurrency, AUTOMATION_CONDITION_CONCURRENCY_BOUNDS);
+}
+
+function conditionCommandByteBudget() {
+  return boundedSettingNumber(state.settings.automationConditionCommandLengthKb, AUTOMATION_CONDITION_COMMAND_LENGTH_KB_BOUNDS) * 1024;
+}
+
+function conditionStateByteBudget() {
+  return boundedSettingNumber(state.settings.automationConditionStateKb, AUTOMATION_CONDITION_STATE_KB_BOUNDS) * 1024;
+}
+
+function conditionMaxAiCredits() {
+  const requested = Number(state.settings.automationConditionMaxAiCredits);
+  if (requested === 0) return 0;
+  return boundedSettingNumber(requested, AUTOMATION_CONDITION_MAX_AI_CREDITS_BOUNDS);
+}
+
+// Stored settings are user editable, so an unrecognised value falls back rather
+// than being handed to the CLI, which would reject the whole launch.
+function conditionSettingChoice(key, allowed, fallback) {
+  const value = String(state.settings[key] || "");
+  return allowed.has(value) ? value : fallback;
+}
+
+// The ledger is persisted apart from Run History because history is capped and
+// can be configured down to zero, which would erase the rate window with it.
+function loadConditionCheckLedger(unattended = false) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(conditionLedgerKey(unattended)) || "[]");
+    return Array.isArray(raw) ? raw.map(Number).filter((stamp) => Number.isFinite(stamp)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function conditionLedgerKey(unattended) {
+  return unattended ? CONDITION_BACKGROUND_LEDGER_STORAGE_KEY : CONDITION_CHECK_LEDGER_STORAGE_KEY;
+}
+
+function conditionCheckLedger(now = Date.now(), unattended = false) {
+  const since = now - CONDITION_CHECK_WINDOW_MS;
+  return loadConditionCheckLedger(unattended).filter((stamp) => stamp > since).sort((left, right) => left - right);
+}
+
+function liveConditionCheckCount() {
+  return state.automationRuntime.conditionChecks.size;
+}
+
+function conditionCheckBlocker(now = Date.now(), unattended = false) {
+  const concurrency = conditionCheckConcurrencyLimit();
+  if (liveConditionCheckCount() >= concurrency) {
+    return `Already assessing ${concurrency} condition${concurrency === 1 ? "" : "s"}`;
+  }
+  const limit = unattended ? conditionBackgroundRateLimit() : conditionCheckRateLimit();
+  const used = conditionCheckLedger(now, unattended).length;
+  if (used >= limit) {
+    return `Reached the limit of ${limit} ${unattended ? "background " : ""}condition check${limit === 1 ? "" : "s"} per hour`;
+  }
+  return "";
+}
+
+// The ledger entry is written at launch and never withdrawn, so a failed or
+// timed-out assessment still consumes its check.
+function reserveConditionCheck(now = Date.now(), unattended = false) {
+  const reason = conditionCheckBlocker(now, unattended);
+  if (reason) return { reason, token: "" };
+  const token = createId();
+  state.automationRuntime.conditionChecks.add(token);
+  const ledger = conditionCheckLedger(now, unattended);
+  ledger.push(now);
+  localStorage.setItem(conditionLedgerKey(unattended), JSON.stringify(ledger));
+  return { reason: "", token };
+}
+
+function releaseConditionCheck(token) {
+  return Boolean(token) && state.automationRuntime.conditionChecks.delete(token);
+}
+
+function conditionFingerprint(rule) {
+  return automationApi.conditionConsentFingerprint(rule, automationNormalizationOptions(state.settings));
+}
+
+function loadConditionConsent() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CONDITION_CONSENT_STORAGE_KEY) || "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const entries = {};
+    for (const [fingerprint, grantedAt] of Object.entries(raw)) {
+      if (fingerprint && typeof grantedAt === "string") entries[fingerprint] = grantedAt;
+    }
+    return entries;
+  } catch {
+    return {};
+  }
+}
+
+function saveConditionConsent(entries, keepFingerprint = "") {
+  const live = new Set(state.automations.rules
+    .filter((rule) => rule.type === "condition")
+    .map((rule) => conditionFingerprint(rule)));
+  if (keepFingerprint) live.add(keepFingerprint);
+  const kept = {};
+  for (const [fingerprint, grantedAt] of Object.entries(entries)) {
+    if (live.has(fingerprint)) kept[fingerprint] = grantedAt;
+  }
+  localStorage.setItem(CONDITION_CONSENT_STORAGE_KEY, JSON.stringify(kept));
+  return kept;
+}
+
+function conditionConsentGranted(rule) {
+  const fingerprint = conditionFingerprint(rule);
+  return Boolean(fingerprint) && Boolean(loadConditionConsent()[fingerprint]);
+}
+
+// A rule that came due with the window hidden cannot be asked anything.
+// Electron keeps the page "visible" for a hidden window while backgroundThrottling
+// is off, so the main process is the authority; document.hidden still covers the
+// installed browser build, where a minimized window really is hidden.
+function windowIsUnattended() {
+  return state.backgroundWindow === true || document.hidden;
+}
+
+function automationRunIsUnattended(rule, options = {}) {
+  return options.manual !== true && rule.runWhenClosed === "background" && windowIsUnattended();
+}
+
+// One blocked entry per envelope per day: an hourly rule waiting a week for
+// approval must not write 168 identical rows.
+function noteBlockedConditionConsent(rule) {
+  const fingerprint = conditionFingerprint(rule);
+  const previous = state.automationRuntime.blockedConsent.get(rule.id);
+  const now = Date.now();
+  if (previous && previous.fingerprint === fingerprint && now - previous.at < CONDITION_BLOCKED_NOTICE_MS) return false;
+  state.automationRuntime.blockedConsent.set(rule.id, { at: now, fingerprint });
+  addAutomationHistory(
+    "blocked",
+    rule.name,
+    "This check needs approval for its permissions before it can run unattended. Open MultiTerm and run it once.",
+    rule.id,
+    { background: true }
+  );
+  return true;
+}
+
+function conditionEnvelopeRows(rule) {
+  const condition = rule.condition;
+  const tools = condition.tools;
+  const files = tools.allowAllPaths
+    ? "Any path on this machine"
+    : `${condition.cwd} and its subfolders${tools.temporaryDirectory ? ", plus the system temporary directory" : ""}`;
+  const rows = [
+    ["Working directory", condition.cwd],
+    ["Tools", tools.mode === "selected"
+      ? tools.allow.length ? tools.allow.join(", ") : "None, so this check can only read"
+      : "Every tool, approved without asking"],
+    ["Never allow", tools.deny.length ? tools.deny.join(", ") : "Nothing"],
+    ["Files", files],
+    ["Network", tools.allowAllUrls ? "Any address" : "Only addresses named by a url(...) permission"],
+    ["Session", `${conditionSessionLabel(condition.sessionMode)}${condition.closeWhenDone ? ", closed when the check finishes" : ""}`]
+  ];
+  if (condition.sessionMode === "existing" && condition.inheritSessionPermissions) {
+    rows.push(["Inherited permissions", "An assistant already running there keeps its own permissions, which MultiTerm cannot verify"]);
+  }
+  return rows;
+}
+
+function renderConditionNoticeEnvelope(rule) {
+  elements.conditionNoticeEnvelope.textContent = "";
+  for (const [label, detail] of conditionEnvelopeRows(rule)) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = detail;
+    elements.conditionNoticeEnvelope.append(term, description);
+  }
+}
+
+// Consent is recorded against the permission envelope, so widening any layer
+// asks again while renaming or rescheduling a rule does not.
+function requestConditionConsent(rule) {
+  const fingerprint = conditionFingerprint(rule);
+  if (!fingerprint) return Promise.resolve({ granted: false, reason: "The rule has no usable permission envelope" });
+  if (conditionConsentGranted(rule)) return Promise.resolve({ granted: true, reason: "" });
+  const pending = state.conditionNotice;
+  if (pending.promise) {
+    return pending.fingerprint === fingerprint
+      ? pending.promise
+      : Promise.resolve({ granted: false, reason: "Another conditional automation was waiting for approval" });
+  }
+  elements.conditionNoticeText.textContent = `${rule.name} starts a Copilot session on a schedule with nobody watching. It reads what is in its working directory to judge the condition, and when the condition is true it carries out the action with the permissions below.`;
+  renderConditionNoticeEnvelope(rule);
+  elements.conditionNoticeOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.conditionNoticeOverlay.classList.add("is-open");
+    elements.conditionNoticeCancel.focus({ preventScroll: true });
+  });
+  pending.fingerprint = fingerprint;
+  pending.promise = new Promise((resolve) => { pending.resolve = resolve; });
+  return pending.promise;
+}
+
+function finishConditionConsent(granted) {
+  const pending = state.conditionNotice;
+  if (!pending.promise) return false;
+  if (granted) {
+    const entries = loadConditionConsent();
+    entries[pending.fingerprint] = new Date().toISOString();
+    saveConditionConsent(entries, pending.fingerprint);
+  }
+  elements.conditionNoticeOverlay.classList.remove("is-open");
+  window.setTimeout(() => { elements.conditionNoticeOverlay.hidden = true; }, 150);
+  const resolve = pending.resolve;
+  pending.fingerprint = "";
+  pending.promise = null;
+  pending.resolve = null;
+  resolve({ granted, reason: granted ? "" : "Approval was declined" });
+  return true;
+}
+
+function bindConditionAutomationNotice() {
+  if (!elements.conditionNoticeOverlay) return;
+  elements.conditionNoticeContinue.addEventListener("click", () => finishConditionConsent(true));
+  elements.conditionNoticeCancel.addEventListener("click", () => finishConditionConsent(false));
+  elements.conditionNoticeOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.conditionNoticeOverlay) finishConditionConsent(false);
+  });
+  elements.conditionNoticeOverlay.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const focusable = [...elements.conditionNoticeOverlay.querySelectorAll(
+      'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )].filter((element) => element.getClientRects().length > 0);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+}
+
+function addAutomationHistory(status, title, detail = "", automationId = null, options = {}) {
+  const background = options.background === true
+    || (automationId !== null && state.automationRuntime.unattendedRules.has(automationId));
   state.automations.history.push({
     automationId,
+    background,
     detail,
     id: createId(),
     occurredAt: new Date().toISOString(),
@@ -25403,6 +26275,15 @@ function addAutomationHistory(status, title, detail = "", automationId = null) {
   saveAutomationStore();
   renderAutomationActivity();
   renderAutomationRuleList();
+  if (background) announceBackgroundAutomationOutcome(status, title, detail);
+}
+
+// A background run has no window to report into, so a finished or refused one
+// raises a desktop notification unless the user muted them.
+function announceBackgroundAutomationOutcome(status, title, detail) {
+  if (state.settings.automationBackgroundNotifications === false) return;
+  if (!["blocked", "completed", "failed"].includes(status)) return;
+  notifyDesktop(`${title}: ${detail || status}`);
 }
 
 function automationScheduleSummary(rule) {
@@ -25546,7 +26427,7 @@ function runAppearanceAutomationRule(rule, { manual = false } = {}) {
 
 function selectedAutomationType() {
   const selected = elements.automationType.querySelector("[data-automation-type][aria-checked='true']")?.dataset.automationType;
-  return ["copilot", "appearance"].includes(selected) ? selected : "command";
+  return ["copilot", "appearance", "condition"].includes(selected) ? selected : "command";
 }
 
 function updateAutomationAppearanceValidation() {
@@ -25579,15 +26460,27 @@ function renderAutomationAppearanceSummary() {
 }
 
 function updateAutomationTypeFields() {
-  const appearance = selectedAutomationType() === "appearance";
+  const type = selectedAutomationType();
+  const appearance = type === "appearance";
+  const condition = type === "condition";
   elements.automationAppearanceBlock.hidden = !appearance;
+  elements.automationConditionBlock.hidden = !condition;
+  elements.automationConditionBlock.disabled = !condition;
+  elements.automationToolsBlock.hidden = !condition;
+  elements.automationToolsBlock.disabled = !condition;
   elements.automationScheduleBlock.hidden = appearance;
   elements.automationScheduleBlock.disabled = appearance;
-  elements.automationActionsBlock.hidden = appearance;
-  elements.automationActionsBlock.disabled = appearance;
-  elements.automationRunAsField.hidden = appearance;
-  elements.automationRunAs.disabled = appearance;
-  elements.automationRunNow.querySelector("span").textContent = appearance ? "Apply now" : "Run now";
+  elements.automationActionsBlock.hidden = appearance || condition;
+  elements.automationActionsBlock.disabled = appearance || condition;
+  elements.automationRunAsField.hidden = appearance || condition;
+  elements.automationRunAs.disabled = appearance || condition;
+  const supportsBackground = type === "copilot" || condition;
+  elements.automationRunWhenClosedField.hidden = !supportsBackground;
+  elements.automationRunWhenClosed.disabled = !supportsBackground;
+  if (!supportsBackground) elements.automationRunWhenClosed.value = "off";
+  elements.automationRunNow.querySelector("span").textContent = appearance
+    ? "Apply now"
+    : condition ? "Check now" : "Run now";
   if (appearance && !automationApi.normalizeAppearance(state.automationStudio.appearanceDraft)) {
     state.automationStudio.appearanceDraft = automationAppearanceProfileSeed(
       state.terminals.get(state.activeId) || automationLiveTerminals()[0] || null
@@ -25595,6 +26488,290 @@ function updateAutomationTypeFields() {
   }
   updateAutomationAppearanceValidation();
   renderAutomationAppearanceSummary();
+  updateAutomationConditionFields();
+  renderAutomationToolsEditor();
+}
+
+function selectedConditionSessionMode() {
+  const selected = elements.automationConditionSession
+    .querySelector("[data-condition-session][aria-pressed='true']")?.dataset.conditionSession;
+  return ["visible", "existing"].includes(selected) ? selected : "hidden";
+}
+
+function applyConditionSessionMode(mode) {
+  const normalized = ["visible", "existing"].includes(mode) ? mode : "hidden";
+  for (const button of elements.automationConditionSession.querySelectorAll("[data-condition-session]")) {
+    button.setAttribute("aria-pressed", String(button.dataset.conditionSession === normalized));
+  }
+}
+
+function setConditionSessionMode(mode) {
+  applyConditionSessionMode(mode);
+  updateAutomationConditionFields();
+  updateAutomationPreview();
+}
+
+function conditionSessionLabel(mode) {
+  if (mode === "visible") return "Visible session";
+  if (mode === "existing") return "Existing terminal";
+  return "Hidden session";
+}
+
+function updateAutomationConditionFields() {
+  if (!elements.automationConditionBlock) return;
+  const condition = selectedAutomationType() === "condition";
+  const existing = selectedConditionSessionMode() === "existing";
+  const byPid = elements.automationConditionTargetMode.value === "pid";
+  elements.automationConditionTargetFields.hidden = !existing;
+  elements.automationConditionTargetNameRow.hidden = byPid;
+  elements.automationConditionTargetPidRow.hidden = !byPid;
+  elements.automationConditionPrompt.required = condition;
+  elements.automationConditionAction.required = condition;
+  elements.automationConditionCwd.required = condition;
+  elements.automationConditionTargetName.required = condition && existing && !byPid;
+  elements.automationConditionTargetPid.required = condition && existing && byPid;
+  renderAutomationConditionState();
+}
+
+function renderAutomationConditionState() {
+  const rule = state.automations.rules.find((item) => item.id === state.automationStudio.editingId);
+  const cleared = state.automationStudio.conditionStateCleared;
+  const note = cleared ? "" : rule?.condition ? rule.conditionState : "";
+  const checkedAt = cleared ? "" : rule?.condition ? rule.conditionCheckedAt : "";
+  const checked = checkedAt ? new Date(checkedAt) : null;
+  const stamp = checked && Number.isFinite(checked.getTime())
+    ? `Checked ${checked.toLocaleString([], { hour: "numeric", minute: "2-digit", weekday: "short" })} · `
+    : "";
+  elements.automationConditionStateClear.disabled = !note;
+  elements.automationConditionStatePreview.textContent = note
+    ? `${stamp}${note}`
+    : "Nothing remembered yet. The first run is the baseline.";
+}
+
+function clearAutomationConditionState() {
+  state.automationStudio.conditionStateCleared = true;
+  renderAutomationConditionState();
+  updateAutomationPreview();
+}
+
+function automationToolsDraft() {
+  if (!state.automationStudio.toolsDraft) {
+    state.automationStudio.toolsDraft = automationApi.normalizeToolPermissions(
+      { deny: [...CONDITION_TOOL_DENY_SEED] },
+      automationNormalizationOptions(state.settings)
+    );
+  }
+  return state.automationStudio.toolsDraft;
+}
+
+function automationToolsSummary(tools) {
+  const parts = [tools.mode === "selected"
+    ? tools.allow.length ? tools.allow.join(", ") : "Read-only"
+    : "All tools"];
+  if (tools.deny.length) parts.push(`${tools.deny.length} denied`);
+  const scope = [];
+  if (tools.allowAllPaths) scope.push("any path");
+  if (tools.allowAllUrls) scope.push("any address");
+  if (!tools.temporaryDirectory) scope.push("no temp directory");
+  if (scope.length) parts.push(scope.join(", "));
+  return parts.join(" · ");
+}
+
+function renderAutomationToolsList(list, specs, kind) {
+  list.textContent = "";
+  for (const spec of specs) {
+    const row = document.createElement("li");
+    const label = document.createElement("code");
+    label.textContent = spec;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-button";
+    remove.dataset.toolRemove = kind;
+    remove.dataset.toolSpec = spec;
+    remove.title = `Remove ${spec}`;
+    remove.setAttribute("aria-label", `Remove ${spec}`);
+    remove.innerHTML = '<i data-lucide="x"></i>';
+    row.append(label, remove);
+    list.append(row);
+  }
+  refreshIcons(list);
+}
+
+function renderAutomationToolsEditor() {
+  if (!elements.automationToolsBlock) return;
+  const tools = automationToolsDraft();
+  const selected = tools.mode === "selected";
+  for (const button of elements.automationToolsMode.querySelectorAll("[data-tools-mode]")) {
+    button.setAttribute("aria-checked", String(button.dataset.toolsMode === tools.mode));
+  }
+  elements.automationToolsModeHint.textContent = selected
+    ? "Only these permissions are approved. Copilot cannot run shell commands or write files unless a permission above allows it."
+    : "Every tool is offered to Copilot and approved without asking.";
+  elements.automationToolsAllowGroup.hidden = !selected;
+  for (const chip of elements.automationToolsCurated.querySelectorAll("[data-tool-spec]")) {
+    chip.setAttribute("aria-pressed", String(tools.allow.includes(chip.dataset.toolSpec)));
+  }
+  renderAutomationToolsList(elements.automationToolsAllowList, tools.allow, "allow");
+  renderAutomationToolsList(elements.automationToolsDenyList, tools.deny, "deny");
+  elements.automationToolsAllowEmpty.hidden = tools.allow.length > 0;
+  elements.automationToolsDenyEmpty.hidden = tools.deny.length > 0;
+  elements.automationToolsAllPaths.checked = tools.allowAllPaths;
+  elements.automationToolsAllUrls.checked = tools.allowAllUrls;
+  elements.automationToolsTempDir.checked = tools.temporaryDirectory;
+  elements.automationToolsSummary.textContent = automationToolsSummary(tools);
+}
+
+function setAutomationToolsFeedback(input, errorNode, message) {
+  input.setCustomValidity(message);
+  errorNode.textContent = message;
+  errorNode.hidden = !message;
+}
+
+// The module owns the entry ceiling, so an entry that does not survive
+// normalization is reported instead of silently dropped at save time.
+function addAutomationToolSpec(kind, spec) {
+  const tools = automationToolsDraft();
+  const list = kind === "deny" ? tools.deny : tools.allow;
+  const error = automationApi.toolSpecValidationError(spec);
+  if (error) return error;
+  if (list.includes(spec)) return "That permission is already listed.";
+  list.push(spec);
+  const normalized = automationApi.normalizeToolPermissions(tools, automationNormalizationOptions(state.settings));
+  if (!(kind === "deny" ? normalized.deny : normalized.allow).includes(spec)) {
+    list.pop();
+    return "This list is full. Remove a permission before adding another.";
+  }
+  renderAutomationToolsEditor();
+  updateAutomationPreview();
+  return "";
+}
+
+function submitAutomationToolSpec(kind, input, errorNode) {
+  const message = addAutomationToolSpec(kind, input.value.trim());
+  setAutomationToolsFeedback(input, errorNode, message);
+  if (!message) input.value = "";
+  return !message;
+}
+
+function removeAutomationToolSpec(kind, spec) {
+  const tools = automationToolsDraft();
+  const list = kind === "deny" ? tools.deny : tools.allow;
+  const index = list.indexOf(spec);
+  if (index < 0) return;
+  list.splice(index, 1);
+  renderAutomationToolsEditor();
+  updateAutomationPreview();
+}
+
+function toggleAutomationToolSpec(spec) {
+  if (automationToolsDraft().allow.includes(spec)) {
+    removeAutomationToolSpec("allow", spec);
+    return;
+  }
+  const message = addAutomationToolSpec("allow", spec);
+  setAutomationToolsFeedback(elements.automationToolsAllowInput, elements.automationToolsAllowError, message);
+}
+
+function automationIntervalPresetLabel(minutes) {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = minutes / 60;
+  return `${hours} h`;
+}
+
+function selectedAutomationIntervalMinutes() {
+  const value = Math.max(1, Math.round(Number(elements.automationInterval.value) || 1));
+  return value * (elements.automationIntervalUnit.value === "hours" ? 60 : 1);
+}
+
+function renderAutomationIntervalPresets() {
+  if (!elements.automationIntervalPresets) return;
+  elements.automationIntervalPresets.textContent = "";
+  for (const minutes of automationApi.INTERVAL_PRESETS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.intervalPreset = String(minutes);
+    button.textContent = automationIntervalPresetLabel(minutes);
+    elements.automationIntervalPresets.append(button);
+  }
+  syncAutomationIntervalPresets();
+}
+
+function syncAutomationIntervalPresets() {
+  if (!elements.automationIntervalPresets) return;
+  const current = selectedAutomationIntervalMinutes();
+  for (const button of elements.automationIntervalPresets.querySelectorAll("[data-interval-preset]")) {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.intervalPreset) === current));
+  }
+}
+
+function applyAutomationIntervalPreset(minutes) {
+  const preset = automationApi.intervalPresetFor(minutes);
+  if (preset === null) return;
+  const usesHours = preset % 60 === 0;
+  elements.automationInterval.value = String(usesHours ? preset / 60 : preset);
+  elements.automationIntervalUnit.value = usesHours ? "hours" : "minutes";
+  syncAutomationIntervalPresets();
+  updateAutomationPreview();
+}
+
+function setAutomationConditionCwdHint(message, tone = "") {
+  if (!elements.automationConditionCwdHint) return;
+  elements.automationConditionCwdHint.textContent = message;
+  elements.automationConditionCwdHint.dataset.tone = tone;
+}
+
+function resetAutomationConditionCwdCheck() {
+  state.automationStudio.conditionCwdChecking = false;
+  state.automationStudio.conditionCwdError = "";
+  state.automationStudio.conditionCwdValidated = "";
+  window.clearTimeout(automationConditionCwdTimer);
+  automationConditionCwdGeneration += 1;
+  elements.automationConditionCwd.setCustomValidity("");
+  setAutomationConditionCwdHint(AUTOMATION_CONDITION_CWD_HINT);
+}
+
+function scheduleAutomationConditionCwdCheck() {
+  window.clearTimeout(automationConditionCwdTimer);
+  automationConditionCwdTimer = window.setTimeout(() => { void validateAutomationConditionCwd(); }, 500);
+}
+
+async function validateAutomationConditionCwd() {
+  const path = elements.automationConditionCwd.value.trim();
+  const generation = ++automationConditionCwdGeneration;
+  if (!path) {
+    state.automationStudio.conditionCwdChecking = false;
+    state.automationStudio.conditionCwdError = "";
+    state.automationStudio.conditionCwdValidated = "";
+    elements.automationConditionCwd.setCustomValidity("");
+    setAutomationConditionCwdHint(AUTOMATION_CONDITION_CWD_HINT);
+    return false;
+  }
+  state.automationStudio.conditionCwdChecking = true;
+  setAutomationConditionCwdHint("Checking this directory...", "waiting");
+  const response = await requestBridge({ distro: "", path, shell: "powershell", type: "validateDirectory" }, { timeout: 20000 });
+  if (generation !== automationConditionCwdGeneration) return false;
+  state.automationStudio.conditionCwdChecking = false;
+  if (!response) {
+    state.automationStudio.conditionCwdError = bridgeSilenceReason("check the working directory");
+    state.automationStudio.conditionCwdValidated = "";
+    elements.automationConditionCwd.setCustomValidity(state.automationStudio.conditionCwdError);
+    setAutomationConditionCwdHint(state.automationStudio.conditionCwdError, "error");
+    return false;
+  }
+  if (!response.valid || !response.path) {
+    state.automationStudio.conditionCwdError = response.error || "That directory is not available on this machine.";
+    state.automationStudio.conditionCwdValidated = "";
+    elements.automationConditionCwd.setCustomValidity(state.automationStudio.conditionCwdError);
+    setAutomationConditionCwdHint(state.automationStudio.conditionCwdError, "error");
+    return false;
+  }
+  state.automationStudio.conditionCwdError = "";
+  state.automationStudio.conditionCwdValidated = response.path;
+  if (elements.automationConditionCwd.value.trim() === path) elements.automationConditionCwd.value = response.path;
+  elements.automationConditionCwd.setCustomValidity("");
+  setAutomationConditionCwdHint(`${response.path} · ${AUTOMATION_CONDITION_CWD_HINT}`, "ok");
+  updateAutomationPreview();
+  return true;
 }
 
 function readAutomationActionRows() {
@@ -25924,12 +27101,29 @@ function setAutomationScheduleMode(mode) {
 }
 
 function setAutomationType(type, { rerender = true } = {}) {
-  const normalized = ["copilot", "appearance"].includes(type) ? type : "command";
+  const normalized = ["copilot", "appearance", "condition"].includes(type) ? type : "command";
   for (const button of elements.automationType.querySelectorAll("[data-automation-type]")) {
     button.setAttribute("aria-checked", String(button.dataset.automationType === normalized));
   }
   updateAutomationTypeFields();
-  if (rerender && normalized !== "appearance") renderAutomationActionRows();
+  if (rerender && normalized !== "appearance" && normalized !== "condition") renderAutomationActionRows();
+}
+
+function readAutomationConditionDraft() {
+  const pid = Number(elements.automationConditionTargetPid.value);
+  return {
+    action: elements.automationConditionAction.value,
+    closeWhenDone: elements.automationConditionClose.checked,
+    cwd: elements.automationConditionCwd.value,
+    inheritSessionPermissions: elements.automationConditionInherit.checked,
+    keepState: elements.automationConditionKeepState.checked,
+    prompt: elements.automationConditionPrompt.value,
+    sessionMode: selectedConditionSessionMode(),
+    targetMode: elements.automationConditionTargetMode.value,
+    targetName: elements.automationConditionTargetName.value,
+    targetPid: Number.isFinite(pid) && pid > 0 ? Math.round(pid) : null,
+    tools: automationToolsDraft()
+  };
 }
 
 function readAutomationEditorRule(existing = null) {
@@ -25939,9 +27133,14 @@ function readAutomationEditorRule(existing = null) {
   const days = [...elements.automationDays.querySelectorAll("[data-day][aria-pressed='true']")]
     .map((button) => Number(button.dataset.day));
   const actions = readAutomationActionRows();
+  const type = selectedAutomationType();
+  const keepsState = type === "condition" && !state.automationStudio.conditionStateCleared;
   return automationApi.normalizeRule({
-    actions: selectedAutomationType() === "appearance" ? [] : actions,
+    actions: type === "appearance" || type === "condition" ? [] : actions,
     appearance: state.automationStudio.appearanceDraft,
+    condition: readAutomationConditionDraft(),
+    conditionCheckedAt: keepsState ? existing?.conditionCheckedAt || null : null,
+    conditionState: keepsState ? existing?.conditionState || "" : "",
     createdAt: existing?.createdAt || new Date().toISOString(),
     enabled: existing?.enabled === true,
     id: existing?.id || createId(),
@@ -25949,6 +27148,7 @@ function readAutomationEditorRule(existing = null) {
     machineState: elements.automationMachineState.value,
     name: elements.automationName.value,
     runAs: elements.automationRunAs.value,
+    runWhenClosed: elements.automationRunWhenClosed.value,
     snoozedUntil: existing?.snoozedUntil || null,
     trigger: {
       catchUp: elements.automationCatchUp.checked ? "once" : "skip",
@@ -25963,23 +27163,35 @@ function readAutomationEditorRule(existing = null) {
       type: elements.automationTitleMatchType.value,
       value: elements.automationTitleMatchValue.value
     },
-    type: selectedAutomationType(),
+    type,
     updatedAt: new Date().toISOString()
-  });
+  }, 0, automationNormalizationOptions(state.settings));
+}
+
+function automationBackgroundSummary(rule) {
+  return rule?.runWhenClosed === "background" ? " · Runs while closed" : "";
 }
 
 function updateAutomationPreview() {
   if (!elements.automationPreview) return;
+  const type = selectedAutomationType();
   const rule = readAutomationEditorRule(state.automations.rules.find((item) => item.id === state.automationStudio.editingId));
-  if (selectedAutomationType() === "appearance") {
+  syncAutomationIntervalPresets();
+  if (type === "appearance") {
     elements.automationPreview.textContent = rule
       ? `${automationScheduleSummary(rule)} · first matching enabled rule wins`
       : "Add a valid title condition and appearance profile";
     return;
   }
+  if (type === "condition") {
+    elements.automationPreview.textContent = rule
+      ? `${automationScheduleSummary(rule)} · ${conditionSessionLabel(rule.condition.sessionMode)} · ${automationToolsSummary(rule.condition.tools)}${automationBackgroundSummary(rule)}`
+      : "Add a condition, an action, and a working directory";
+    return;
+  }
   const actionCount = elements.automationActionList.querySelectorAll(".automation-action-row").length;
   elements.automationPreview.textContent = rule
-    ? `${automationScheduleSummary(rule)} · ${rule.type === "copilot" ? "Copilot" : "Command based"} · ${actionCount} visual step${actionCount === 1 ? "" : "s"}`
+    ? `${automationScheduleSummary(rule)} · ${rule.type === "copilot" ? "Copilot" : "Command based"} · ${actionCount} visual step${actionCount === 1 ? "" : "s"}${automationBackgroundSummary(rule)}`
     : "Add at least one destination and command";
 }
 
@@ -25997,6 +27209,7 @@ function openAutomationEditor(id = null) {
     : "Defaults to the current user. Another Windows account will prompt for credentials when the workflow runs.";
   elements.automationCatchUp.checked = rule?.trigger.catchUp === "once";
   elements.automationMachineState.value = rule?.machineState || "both";
+  elements.automationRunWhenClosed.value = rule?.runWhenClosed === "background" ? "background" : "off";
   elements.automationTime.value = rule?.trigger.time || "09:00";
   const intervalMinutes = rule?.trigger.intervalMinutes || 60;
   const usesHours = intervalMinutes >= 60 && intervalMinutes % 60 === 0;
@@ -26012,37 +27225,83 @@ function openAutomationEditor(id = null) {
   elements.automationTitleMatchType.value = rule?.titleMatch?.type || "contains";
   elements.automationTitleMatchCase.value = rule?.titleMatch?.caseSensitive ? "sensitive" : "insensitive";
   elements.automationTitleMatchValue.value = rule?.titleMatch?.value || "";
+  const condition = rule?.condition || null;
+  state.automationStudio.conditionStateCleared = false;
+  state.automationStudio.toolsDraft = automationApi.normalizeToolPermissions(
+    condition ? condition.tools : { deny: [...CONDITION_TOOL_DENY_SEED] },
+    automationNormalizationOptions(state.settings)
+  );
+  elements.automationConditionPrompt.value = condition?.prompt || "";
+  elements.automationConditionAction.value = condition?.action || "";
+  elements.automationConditionCwd.value = condition?.cwd || "";
+  elements.automationConditionKeepState.checked = condition ? condition.keepState : true;
+  elements.automationConditionClose.checked = condition ? condition.closeWhenDone : true;
+  elements.automationConditionInherit.checked = condition?.inheritSessionPermissions === true;
+  elements.automationConditionTargetMode.value = condition?.targetMode === "pid" ? "pid" : "title";
+  elements.automationConditionTargetName.value = condition?.targetName || "";
+  elements.automationConditionTargetPid.value = condition?.targetPid ? String(condition.targetPid) : "";
+  applyConditionSessionMode(condition?.sessionMode || "hidden");
+  setAutomationToolsFeedback(elements.automationToolsAllowInput, elements.automationToolsAllowError, "");
+  setAutomationToolsFeedback(elements.automationToolsDenyInput, elements.automationToolsDenyError, "");
+  elements.automationToolsAllowInput.value = "";
+  elements.automationToolsDenyInput.value = "";
+  resetAutomationConditionCwdCheck();
   setAutomationType(rule?.type || "command", { rerender: false });
-  if (rule?.type !== "appearance") renderAutomationActionRows(rule?.actions || [{}]);
+  if (rule?.type !== "appearance" && rule?.type !== "condition") renderAutomationActionRows(rule?.actions || [{}]);
   setAutomationScheduleMode(rule?.trigger.mode || "interval");
+  renderAutomationIntervalPresets();
   updateAutomationTypeFields();
   updateAutomationPreview();
   renderAutomationRuleList();
+  if (condition?.cwd) void validateAutomationConditionCwd();
   elements.automationName.focus();
 }
 
 function closeAutomationEditor() {
   state.automationStudio.editingId = null;
   state.automationStudio.appearanceDraft = null;
+  state.automationStudio.toolsDraft = null;
+  state.automationStudio.conditionStateCleared = false;
+  resetAutomationConditionCwdCheck();
   elements.automationEditor.hidden = true;
   elements.automationWelcome.hidden = false;
   renderAutomationRuleList();
+}
+
+function automationConditionSaveBlocker() {
+  const path = elements.automationConditionCwd.value.trim();
+  if (!path) return "Add a name, a condition, an action, and a working directory";
+  if (state.automationStudio.conditionCwdChecking) return "Still checking the working directory";
+  if (state.automationStudio.conditionCwdError) return state.automationStudio.conditionCwdError;
+  if (state.automationStudio.conditionCwdValidated !== path) return "Check the working directory before saving";
+  return "";
 }
 
 function saveAutomationEditor(event) {
   event?.preventDefault();
   const currentIndex = state.automations.rules.findIndex((item) => item.id === state.automationStudio.editingId);
   const current = currentIndex >= 0 ? state.automations.rules[currentIndex] : null;
+  const type = selectedAutomationType();
   const rule = readAutomationEditorRule(current);
   if (!rule) {
     toast(
-      selectedAutomationType() === "appearance"
+      type === "appearance"
         ? "Add a name, valid title condition, and appearance profile"
-        : "Add a name, destination, and command",
+        : type === "condition"
+          ? "Add a name, a condition, an action, and a working directory"
+          : "Add a name, destination, and command",
       "info",
       2200
     );
     return false;
+  }
+  if (type === "condition") {
+    const blocker = automationConditionSaveBlocker();
+    if (blocker) {
+      toast(blocker, "info", 2600);
+      elements.automationConditionCwd.focus();
+      return false;
+    }
   }
   rule.enabled = true;
   if (currentIndex >= 0) state.automations.rules.splice(currentIndex, 1, rule);
@@ -26124,6 +27383,20 @@ function showAutomationRuleContextMenu(rule, event) {
   if (rule.type !== "appearance") {
     items.push({ icon: "alarm-clock", label: "Snooze automation...", run: () => snoozeAutomationRule(rule.id) });
   }
+  if (rule.type === "condition") {
+    const task = liveConditionTaskForRule(rule.id);
+    const revealable = Boolean(task) && task.sessionMode === "hidden" && !task.revealed
+      && state.terminals.has(task.terminalId);
+    items.push({
+      disabled: !revealable,
+      icon: "eye",
+      label: "Reveal running check",
+      title: revealable
+        ? "Move the hidden Copilot session into the workspace"
+        : "This rule has no hidden check running right now",
+      run: () => { void revealConditionCheck(rule.id); }
+    });
+  }
   items.push(
     { separator: true },
     { danger: true, icon: "trash-2", label: "Delete automation", run: () => deleteAutomationRule(rule.id) }
@@ -26155,7 +27428,9 @@ function renderAutomationRuleList() {
       ? "Copilot automation"
       : rule.type === "appearance"
         ? "Appearance automation"
-        : "Command based automation";
+        : rule.type === "condition"
+          ? "Conditional automation"
+          : "Command based automation";
     const summary = document.createElement("span");
     summary.textContent = `${automationScheduleSummary(rule)} · ${automationNextRunLabel(rule)}`;
     const lastOutcome = automationLastOutcome(rule);
@@ -26243,6 +27518,12 @@ function renderAutomationActivity() {
     copy.className = "automation-activity-copy";
     const title = document.createElement("strong");
     title.textContent = entry.title;
+    if (entry.background) {
+      const marker = document.createElement("span");
+      marker.className = "automation-activity-background";
+      marker.textContent = "Background";
+      title.append(" ", marker);
+    }
     const detail = document.createElement("span");
     detail.textContent = entry.detail || entry.status;
     copy.append(title, detail);
@@ -26328,11 +27609,81 @@ function bindAutomationStudio() {
     button.addEventListener("click", () => setAutomationType(button.dataset.automationType));
   }
   elements.automationAppearanceEdit.addEventListener("click", openAutomationAppearanceProfileEditor);
+  for (const button of elements.automationConditionSession.querySelectorAll("[data-condition-session]")) {
+    button.addEventListener("click", () => setConditionSessionMode(button.dataset.conditionSession));
+  }
+  elements.automationConditionTargetMode.addEventListener("change", () => {
+    updateAutomationConditionFields();
+    updateAutomationPreview();
+  });
+  elements.automationConditionCwd.addEventListener("input", () => {
+    state.automationStudio.conditionCwdError = "";
+    state.automationStudio.conditionCwdValidated = "";
+    elements.automationConditionCwd.setCustomValidity("");
+    scheduleAutomationConditionCwdCheck();
+  });
+  elements.automationConditionCwdBrowse.addEventListener("click", async () => {
+    const chosen = await chooseInlineFolder(elements.automationConditionCwd.value.trim(), "Select working directory");
+    if (!chosen) return;
+    elements.automationConditionCwd.value = chosen;
+    void validateAutomationConditionCwd();
+  });
+  elements.automationConditionStateClear.addEventListener("click", clearAutomationConditionState);
+  elements.automationIntervalPresets.addEventListener("click", (event) => {
+    const preset = event.target.closest("[data-interval-preset]");
+    if (preset) applyAutomationIntervalPreset(Number(preset.dataset.intervalPreset));
+  });
+  for (const button of elements.automationToolsMode.querySelectorAll("[data-tools-mode]")) {
+    button.addEventListener("click", () => {
+      automationToolsDraft().mode = button.dataset.toolsMode === "selected" ? "selected" : "all";
+      renderAutomationToolsEditor();
+      updateAutomationPreview();
+    });
+  }
+  elements.automationToolsCurated.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-tool-spec]");
+    if (chip) toggleAutomationToolSpec(chip.dataset.toolSpec);
+  });
+  for (const [list, kind] of [[elements.automationToolsAllowList, "allow"], [elements.automationToolsDenyList, "deny"]]) {
+    list.addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-tool-remove]");
+      if (remove) removeAutomationToolSpec(kind, remove.dataset.toolSpec);
+    });
+  }
+  for (const [input, add, errorNode, kind] of [
+    [elements.automationToolsAllowInput, elements.automationToolsAllowAdd, elements.automationToolsAllowError, "allow"],
+    [elements.automationToolsDenyInput, elements.automationToolsDenyAdd, elements.automationToolsDenyError, "deny"]
+  ]) {
+    add.addEventListener("click", () => submitAutomationToolSpec(kind, input, errorNode));
+    input.addEventListener("input", () => setAutomationToolsFeedback(input, errorNode, ""));
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      submitAutomationToolSpec(kind, input, errorNode);
+    });
+  }
+  for (const [checkbox, key] of [
+    [elements.automationToolsAllPaths, "allowAllPaths"],
+    [elements.automationToolsAllUrls, "allowAllUrls"],
+    [elements.automationToolsTempDir, "temporaryDirectory"]
+  ]) {
+    checkbox.addEventListener("change", () => {
+      automationToolsDraft()[key] = checkbox.checked;
+      renderAutomationToolsEditor();
+      updateAutomationPreview();
+    });
+  }
   elements.automationTitleMatchType.addEventListener("change", () => {
     updateAutomationAppearanceValidation();
     updateAutomationPreview();
   });
   elements.automationTitleMatchCase.addEventListener("change", updateAutomationPreview);
+  elements.automationRunWhenClosed.addEventListener("change", () => {
+    // Without catch-up an occurrence missed while the machine slept is dropped,
+    // which is exactly the case background execution exists for.
+    if (elements.automationRunWhenClosed.value === "background") elements.automationCatchUp.checked = true;
+    updateAutomationPreview();
+  });
   elements.automationTitleMatchValue.addEventListener("input", () => {
     updateAutomationAppearanceValidation();
     updateAutomationPreview();
@@ -26429,7 +27780,7 @@ function bindAutomationStudio() {
   });
   window.addEventListener("storage", (event) => {
     if (event.key !== AUTOMATIONS_STORAGE_KEY) return;
-    state.automations = loadAutomationStore(automationHistoryLimit());
+    state.automations = loadAutomationStore(automationHistoryLimit(), state.settings);
     refreshAppearanceAutomations();
     renderAutomationStudio();
   });
@@ -26586,6 +27937,7 @@ function scheduleAutomationTaskTimeout(task) {
 function expireAutomationTask(task) {
   if (!task || !state.automationRuntime.steps.has(task.token)) return false;
   const detail = `Timed out after ${state.settings.automationStepTimeoutMinutes} minute${Number(state.settings.automationStepTimeoutMinutes) === 1 ? "" : "s"}`;
+  if (task.kind === "condition") return finishConditionTask(task, "failed", conditionTimeoutDetail(task, detail));
   return task.kind === "copilot"
     ? finishCopilotAutomationTask(task.token, false, detail, task.output)
     : finishAutomationWorkflowTask(task.token, 1, detail);
@@ -26970,10 +28322,489 @@ function advanceAutomationRun(run) {
   return started;
 }
 
+const CONDITION_POLL_MS = 700;
+// Measured against a real resumed Copilot CLI 1.0.82: the composer paints its
+// ready signature about 9 seconds before it finishes loading agents and skills,
+// and a prompt delivered in that window is discarded with no error.
+const CONDITION_COMPOSER_SETTLE_MS = 2500;
+// A tool the rule neither allowed nor denied raises this dialog and waits
+// forever; --no-ask-user does not suppress it, and the composer still reports
+// itself ready underneath. Both phrases are CLI chrome, not model prose.
+const CONDITION_APPROVAL_PROMPT = /do you want to (?:run|allow)\b|yes, and don.t ask again/i;
+// Measured on CLI 1.0.82: a working directory outside the CLI's own
+// trustedFolders raises this before the composer exists, and no launch flag
+// suppresses it -- --yolo, --allow-all-paths and --add-dir were all still
+// asked. Answering the highlighted "1. Yes" trusts the folder for this session
+// only and writes nothing to the user's Copilot config.
+const CONDITION_TRUST_PROMPT = /do you trust the files in this folder\?/i;
+const CONDITION_TRUST_ANSWER_LIMIT = 3;
+
+function conditionApprovalPending(terminal) {
+  return activeBufferLines(terminal).some((line) => CONDITION_APPROVAL_PROMPT.test(line));
+}
+
+function conditionTrustPending(terminal) {
+  return activeBufferLines(terminal).some((line) => CONDITION_TRUST_PROMPT.test(line));
+}
+
+function conditionDelay(ms) {
+  return new Promise((resolve) => { window.setTimeout(resolve, ms); });
+}
+
+function conditionTaskIsLive(task) {
+  return Boolean(task) && state.automationRuntime.steps.get(task.token) === task;
+}
+
+function liveConditionTaskForRule(ruleId) {
+  for (const task of state.automationRuntime.steps.values()) {
+    if (task.kind === "condition" && task.ruleId === ruleId) return task;
+  }
+  return null;
+}
+
+function storedConditionRule(ruleId) {
+  const rule = state.automations.rules.find((item) => item.id === ruleId);
+  return rule?.type === "condition" ? rule : null;
+}
+
+function conditionResultToken() {
+  return `MTCOND${createAiSessionId().replace(/-/g, "").toUpperCase()}`;
+}
+
+// A single Copilot process cannot change its grants between turns, so the
+// assessment launches read-only and the action resumes the same session id with
+// the rule's own envelope.
+function buildConditionLaunchCommand(task, rule, { readOnly = false, resume = false } = {}) {
+  const model = String(state.settings.automationConditionModel || "");
+  const command = buildAiAssistantCommand({
+    context: conditionSettingChoice("automationConditionContext", COPILOT_TITLE_CONTEXTS, "default"),
+    // Measured on CLI 1.0.82: the auto model rejects the launch outright with
+    // "Model "auto" does not support reasoning effort configuration".
+    effort: model === "auto"
+      ? "none"
+      : conditionSettingChoice("automationConditionEffort", COPILOT_TITLE_EFFORTS, "none"),
+    logKey: task.sessionId,
+    maxAiCredits: conditionMaxAiCredits(),
+    // A check does not inherit the model picked for interactive work. Measured
+    // on one real yes/no directory check: the inherited model spent 21.73 AI
+    // credits over 15 premium requests, the auto model 0.50 over 1. Effort was
+    // not the lever -- dropping it from xhigh to low changed nothing.
+    model,
+    provider: "copilot",
+    readOnly,
+    remote: false,
+    resumeId: resume ? task.sessionId : "",
+    sessionId: resume ? "" : task.sessionId,
+    shell: "pwsh",
+    toolPermissions: rule.condition.tools,
+    unattended: true,
+    workingDirectory: task.cwd,
+    yolo: false
+  });
+  const bytes = new TextEncoder().encode(command).length;
+  const budget = conditionCommandByteBudget();
+  if (bytes > budget) {
+    return { command: "", error: `The Copilot launch command needs ${bytes} bytes, over the ${budget} byte budget. Remove tool permissions or raise the command length limit in Settings.` };
+  }
+  return { command, error: "" };
+}
+
+function createConditionSessionTerminal(task, rule) {
+  task.sessionId = createAiSessionId();
+  const launch = buildConditionLaunchCommand(task, rule, { readOnly: true });
+  if (launch.error) return { error: launch.error };
+  const terminal = addTerminal({
+    aiSessionId: task.sessionId,
+    assistantSessionKey: `cli:${task.sessionId}`,
+    cwd: task.cwd,
+    pendingCommand: launch.command,
+    runStartup: false,
+    shell: "pwsh",
+    title: `Check · ${rule.name}`,
+    transient: true
+  });
+  if (!terminal) return { error: "The check terminal could not be started" };
+  task.terminalId = terminal.id;
+  // The bridge session stays ephemeral for the whole run even once the pane is
+  // visible, so a renderer disconnect cannot strand a tool-enabled session.
+  if (task.sessionMode === "visible") promoteTransientTerminal(terminal, { focus: false });
+  return { error: "", terminal };
+}
+
+function resolveConditionSession(task, rule) {
+  const condition = rule.condition;
+  if (condition.sessionMode !== "existing") return createConditionSessionTerminal(task, rule);
+  const resolution = resolveAutomationTerminal({
+    targetMode: condition.targetMode,
+    targetName: condition.targetName,
+    targetPid: condition.targetPid
+  });
+  if (!resolution.terminal) return { error: resolution.error };
+  const terminal = resolution.terminal;
+  const name = terminal.titleInput.value;
+  const readiness = terminalExecutionReadiness(terminal);
+  if (readiness.mode === "copilot" || readiness.mode === "claude" || terminal.aiAssistantTuiProvider) {
+    if (readiness.mode !== "copilot") return { error: `${name} is not running GitHub Copilot, so this check cannot use it` };
+    if (!condition.inheritSessionPermissions) {
+      return { error: `${name} is already running Copilot with the permissions it launched with, so this check refused to use it` };
+    }
+    if (!readiness.ready) return { error: `${name} is busy, so the check could not start` };
+    task.inherited = true;
+    task.terminalId = terminal.id;
+    task.sessionId = claimAiSessionId(terminal, terminal.aiSessionId);
+    return { error: "", terminal };
+  }
+  if (readiness.mode !== "shell" || !readiness.ready) return { error: `${name} is busy, so the check could not start` };
+  task.terminalId = terminal.id;
+  task.sessionId = claimAiSessionId(terminal);
+  const launch = buildConditionLaunchCommand(task, rule, { readOnly: true });
+  if (launch.error) return { error: launch.error };
+  if (!sendBridge({ type: "input", id: terminal.id, data: `${launch.command}\r` })) {
+    return { error: "The bridge was unavailable while starting the check session" };
+  }
+  return { error: "", terminal };
+}
+
+// A plain CR is deliberate: the dialog is CLI chrome painted before the composer
+// exists, so the kitty encoding terminalEnterSequence would pick for a live
+// Copilot TUI does not apply. Verified against the real CLI.
+function conditionAnswerTrustPrompt(task, terminal) {
+  task.trustAnswers = (task.trustAnswers || 0) + 1;
+  if (task.trustAnswers > CONDITION_TRUST_ANSWER_LIMIT) {
+    return { error: "Copilot kept asking whether to trust the working directory" };
+  }
+  if (!sendBridge({ type: "input", id: terminal.id, data: "\r" })) {
+    return { error: "The bridge was unavailable while answering the Copilot trust prompt" };
+  }
+  return { error: "" };
+}
+
+async function waitForConditionReadiness(task, mode, { settleMs = 0, failOnIdleShell = false, answerTrustPrompt = false } = {}) {
+  let steadySince = 0;
+  let steadyRevision = -1;
+  while (conditionTaskIsLive(task)) {
+    const terminal = state.terminals.get(task.terminalId);
+    if (!terminal) return { error: "The check terminal is no longer running" };
+    if (terminal.status === "exited" || terminal.status === "error") {
+      return { error: "The check session exited before the prompt could be sent" };
+    }
+    const readiness = terminalExecutionReadiness(terminal);
+    const matched = readiness.mode === mode && readiness.ready;
+    if (matched && !settleMs) return { error: "" };
+    if (answerTrustPrompt && conditionTrustPending(terminal)) {
+      const answer = conditionAnswerTrustPrompt(task, terminal);
+      if (answer.error) return answer;
+      // The dialog repaints as it closes, so restart the settle window.
+      steadyRevision = -1;
+      await conditionDelay(CONDITION_POLL_MS);
+      continue;
+    }
+    if (terminal.outputRevision !== steadyRevision) {
+      steadyRevision = terminal.outputRevision;
+      steadySince = Date.now();
+    } else if (Date.now() - steadySince >= settleMs) {
+      if (matched) return { error: "" };
+      // A rejected launch argument drops straight back to the prompt, so an idle
+      // shell here is a failed start rather than a slow one.
+      if (failOnIdleShell && readiness.mode === "shell" && readiness.ready) {
+        return { error: `The Copilot CLI did not start: ${conditionLaunchFailure(terminal)}` };
+      }
+    }
+    await conditionDelay(CONDITION_POLL_MS);
+  }
+  return { error: "" };
+}
+
+function conditionLaunchFailure(terminal) {
+  const lines = activeBufferLines(terminal).map((line) => line.trim()).filter(Boolean);
+  const failure = [...lines].reverse().find((line) => /\b(error|invalid|not recognized|cannot|unknown option)\b/i.test(line));
+  return failure || lines[lines.length - 1] || "the session returned to a shell prompt";
+}
+
+async function readConditionTurn(task) {
+  while (conditionTaskIsLive(task)) {
+    await conditionDelay(CONDITION_POLL_MS);
+    if (!conditionTaskIsLive(task)) return { error: "", output: "" };
+    const terminal = state.terminals.get(task.terminalId);
+    if (!terminal || terminal.status !== "live") return { error: "The check session exited before Copilot answered", output: "" };
+    if (conditionApprovalPending(terminal)) {
+      return { error: "Copilot asked for permission to use a tool this rule does not allow", output: "" };
+    }
+    // A tool call inside one prompt writes its own turn_end, so the events file is
+    // only authoritative once the composer is idle again.
+    const readiness = terminalExecutionReadiness(terminal);
+    if (readiness.mode !== "copilot" || !readiness.ready) continue;
+    const response = await requestBridge({
+      cursor: task.cursor,
+      maxKb: state.settings.automationOutputCaptureKb,
+      sessionId: task.sessionId,
+      turnStarted: task.turnStarted,
+      type: "copilotAutomationOutput"
+    }, { timeout: 30000 });
+    if (!conditionTaskIsLive(task)) return { error: "", output: "" };
+    if (!response) return { error: "The bridge did not answer while reading Copilot output", output: "" };
+    if (response.error) return { error: response.error, output: "" };
+    task.cursor = Math.max(task.cursor, Number(response.cursor) || 0);
+    task.output = boundedAutomationOutput(`${task.output}${String(response.output || "")}`);
+    task.truncated = task.truncated || response.truncated === true;
+    task.turnStarted = task.turnStarted || response.turnStarted === true;
+    if (response.complete) return { error: "", output: task.output };
+  }
+  return { error: "", output: "" };
+}
+
+// One delivery path for every session mode. queueAutomaticTerminalCommand is
+// deliberately bypassed because it refuses transient terminals.
+async function runConditionTurn(task, prompt) {
+  const ready = await waitForConditionReadiness(task, "copilot", {
+    answerTrustPrompt: true,
+    failOnIdleShell: true,
+    settleMs: CONDITION_COMPOSER_SETTLE_MS
+  });
+  if (ready.error || !conditionTaskIsLive(task)) return { error: ready.error, output: "" };
+  const snapshot = await requestBridge({
+    maxKb: state.settings.automationOutputCaptureKb,
+    sessionId: task.sessionId,
+    snapshot: true,
+    type: "copilotAutomationOutput"
+  }, { timeout: 30000 });
+  if (!conditionTaskIsLive(task)) return { error: "", output: "" };
+  if (!snapshot) return { error: "The bridge did not answer while preparing Copilot output capture", output: "" };
+  if (snapshot.error) return { error: snapshot.error, output: "" };
+  task.cursor = Math.max(0, Number(snapshot.cursor) || 0);
+  task.output = "";
+  task.truncated = false;
+  task.turnStarted = false;
+  const terminal = state.terminals.get(task.terminalId);
+  if (!terminal) return { error: "The check terminal is no longer running", output: "" };
+  if (!pasteIntoSpecificTerminal(terminal, prompt)) return { error: "The prompt could not be sent to the check session", output: "" };
+  scheduleTerminalEnter(terminal, { sequence: COPILOT_TUI_ENTER });
+  return readConditionTurn(task);
+}
+
+async function grantConditionActionPermissions(task, rule) {
+  // An inherited session keeps the grants it launched with, which is exactly why
+  // that mode is opt-in and disclosed rather than silently trusted.
+  if (task.inherited) return { error: "" };
+  const terminal = state.terminals.get(task.terminalId);
+  if (!terminal || terminal.status !== "live") return { error: "The check terminal is no longer running" };
+  const launch = buildConditionLaunchCommand(task, rule, { resume: true });
+  if (launch.error) return { error: launch.error };
+  if (!sendTerminalSlashDirective(terminal, "exit")) return { error: "The read-only assessment session could not be closed" };
+  const idle = await waitForConditionReadiness(task, "shell");
+  if (idle.error || !conditionTaskIsLive(task)) return { error: idle.error };
+  if (!sendBridge({ type: "input", id: terminal.id, data: `${launch.command}\r` })) {
+    return { error: "The bridge was unavailable while starting the action session" };
+  }
+  return { error: "" };
+}
+
+function commitConditionState(task, { checkedAt = "", note = null } = {}) {
+  const rule = storedConditionRule(task.ruleId);
+  if (!rule) return false;
+  if (checkedAt) rule.conditionCheckedAt = checkedAt;
+  // An oversized note is refused outright, because a truncated structured note is
+  // worse than a stale one.
+  if (note !== null && rule.condition.keepState
+    && automationApi.conditionStateWithinBudget(note, conditionStateByteBudget())) {
+    rule.conditionState = note;
+  }
+  rule.updatedAt = new Date().toISOString();
+  saveAutomationStore();
+  renderAutomationRuleList();
+  return true;
+}
+
+async function promoteConditionSession(task, terminal) {
+  if (task.bridgePromoted) return true;
+  const promoted = await requestBridge({ type: "promoteSession", id: terminal.id }, { timeout: 20000 });
+  if (!promoted?.ok || promoted.id !== terminal.id) return false;
+  task.bridgePromoted = true;
+  return true;
+}
+
+function finishConditionSession(task) {
+  const terminal = state.terminals.get(task.terminalId);
+  if (!terminal || task.sessionMode === "existing") return false;
+  if (task.sessionMode === "hidden" && !task.revealed) return discardTransientTerminal(terminal);
+  if (task.closeWhenDone) return removeTerminal(terminal.id);
+  // A pane the user keeps must outlive the renderer that owns it, which an
+  // ephemeral bridge session would not.
+  void promoteConditionSession(task, terminal);
+  return true;
+}
+
+function finishConditionTask(task, status, detail, { teardown = true } = {}) {
+  if (!conditionTaskIsLive(task)) return false;
+  window.clearTimeout(task.timeoutTimer);
+  state.automationRuntime.steps.delete(task.token);
+  releaseConditionCheck(task.checkToken);
+  if (teardown) finishConditionSession(task);
+  addAutomationHistory(status, task.ruleName, detail, task.ruleId);
+  return true;
+}
+
+function conditionTimeoutDetail(task, detail) {
+  const terminal = state.terminals.get(task.terminalId);
+  if (!terminal) return detail;
+  if (conditionApprovalPending(terminal)) {
+    return `${detail}. Copilot asked for permission to use a tool this rule does not allow`;
+  }
+  if (!terminal.awaitingInput) return detail;
+  return `${detail}. Copilot was waiting for an answer, which usually means it asked for permission to use a tool this rule does not allow`;
+}
+
+async function orchestrateConditionCheck(task, rule) {
+  const consent = await requestConditionConsent(rule);
+  if (!conditionTaskIsLive(task)) return false;
+  if (!consent.granted) return finishConditionTask(task, "skipped", consent.reason || "Approval was declined");
+
+  // Revalidated on every run, not only at save: the folder can disappear between
+  // occurrences.
+  const validated = await requestBridge({
+    distro: "",
+    path: rule.condition.cwd,
+    shell: "powershell",
+    type: "validateDirectory"
+  }, { timeout: 20000 });
+  if (!conditionTaskIsLive(task)) return false;
+  if (!validated) return finishConditionTask(task, "failed", bridgeSilenceReason("check the working directory"));
+  if (!validated.valid || !validated.path) {
+    return finishConditionTask(task, "failed", validated.error || "The working directory is not available on this machine");
+  }
+  task.cwd = validated.path;
+
+  const session = resolveConditionSession(task, rule);
+  if (!conditionTaskIsLive(task)) return false;
+  if (session.error) return finishConditionTask(task, "failed", session.error);
+
+  const startedAt = new Date().toISOString();
+  const assessment = await runConditionTurn(task, automationApi.conditionAssessmentPrompt({
+    checkedAt: rule.conditionCheckedAt,
+    keepState: rule.condition.keepState,
+    prompt: rule.condition.prompt,
+    state: rule.conditionState,
+    stateBytes: conditionStateByteBudget(),
+    token: task.resultToken
+  }));
+  if (!conditionTaskIsLive(task)) return false;
+  if (assessment.error) return finishConditionTask(task, "failed", assessment.error);
+  const verdict = automationApi.parseConditionVerdict(assessment.output, task.resultToken);
+  if (verdict.error) return finishConditionTask(task, "failed", verdict.error);
+  if (verdict.verdict === "no") {
+    commitConditionState(task, { checkedAt: startedAt, note: verdict.state });
+    return finishConditionTask(task, "skipped", "The condition was not met");
+  }
+
+  // The verdict timestamp commits now; the note only stages until the action
+  // reports success, so a failed action is retried against the same state.
+  commitConditionState(task, { checkedAt: startedAt });
+  task.candidateState = verdict.state;
+  task.phase = "action";
+  const granted = await grantConditionActionPermissions(task, rule);
+  if (!conditionTaskIsLive(task)) return false;
+  if (granted.error) return finishConditionTask(task, "failed", granted.error);
+
+  const action = await runConditionTurn(task, automationApi.conditionActionPrompt({
+    action: rule.condition.action,
+    keepState: rule.condition.keepState,
+    state: task.candidateState,
+    stateBytes: conditionStateByteBudget(),
+    token: task.resultToken
+  }));
+  if (!conditionTaskIsLive(task)) return false;
+  if (action.error) return finishConditionTask(task, "failed", action.error);
+  const result = automationApi.parseActionResult(action.output, task.resultToken);
+  if (result.error) return finishConditionTask(task, "failed", result.error);
+  if (result.result !== "ok") {
+    return finishConditionTask(task, "failed", "Copilot reported that the action did not complete, so the remembered state was kept");
+  }
+  commitConditionState(task, { note: result.state || task.candidateState });
+  return finishConditionTask(task, "completed", "The condition was met and the action completed");
+}
+
+// runAutomationRule is synchronous and returns a started count, so the task is
+// created here and the orchestration runs behind it.
+function runConditionAutomationRule(rule, options = {}) {
+  if (copilotCliRecoveryNeeded()) {
+    const reason = `GitHub Copilot CLI is not ready. ${copilotSetupPrompt().action}.`;
+    addAutomationHistory("failed", rule.name, reason, rule.id);
+    if (options.manual) toast(reason, "warn", 3200);
+    return 0;
+  }
+  // Nobody can answer the consent modal with no window, so an ungranted envelope
+  // is refused before the reservation rather than opening a dialog into the void.
+  if (options.unattended && !conditionConsentGranted(rule)) {
+    noteBlockedConditionConsent(rule);
+    return 0;
+  }
+  // Reserved before any dialog or session await, and never withdrawn, so a failed
+  // or timed-out check still consumes its slot in the hourly window.
+  const reservation = reserveConditionCheck(Date.now(), options.unattended === true);
+  if (reservation.reason) {
+    addAutomationHistory("skipped", rule.name, reservation.reason, rule.id);
+    if (options.manual) toast(reservation.reason, "info", 2600);
+    return 0;
+  }
+  const task = {
+    bridgePromoted: false,
+    candidateState: "",
+    checkToken: reservation.token,
+    closeWhenDone: rule.condition.closeWhenDone,
+    cursor: 0,
+    cwd: rule.condition.cwd,
+    inherited: false,
+    kind: "condition",
+    output: "",
+    phase: "assessment",
+    resultToken: conditionResultToken(),
+    revealed: false,
+    ruleId: rule.id,
+    ruleName: rule.name,
+    sessionId: "",
+    sessionMode: rule.condition.sessionMode,
+    terminalId: "",
+    timeoutTimer: 0,
+    token: createId().replace(/[^a-zA-Z0-9_-]/g, ""),
+    truncated: false,
+    turnStarted: false
+  };
+  state.automationRuntime.steps.set(task.token, task);
+  scheduleAutomationTaskTimeout(task);
+  addAutomationHistory("queued", rule.name, `Checking the condition in a ${conditionSessionLabel(task.sessionMode).toLowerCase()}`, rule.id);
+  void orchestrateConditionCheck(task, rule);
+  return 1;
+}
+
+async function revealConditionCheck(ruleId) {
+  const task = liveConditionTaskForRule(ruleId);
+  const terminal = task ? state.terminals.get(task.terminalId) : null;
+  if (!task || !terminal || task.revealed || task.sessionMode !== "hidden") {
+    toast("That rule has no hidden check running right now", "info", 2200);
+    return false;
+  }
+  // The bridge session is promoted first; moving only the pane would leave a
+  // revealed session that cannot survive a renderer reconnect.
+  if (!await promoteConditionSession(task, terminal)) {
+    toast("The bridge did not promote the hidden check session", "warn", 3200);
+    return false;
+  }
+  if (!promoteTransientTerminal(terminal, { focus: true })) {
+    toast("The hidden check session could not be revealed", "warn", 3200);
+    return false;
+  }
+  task.revealed = true;
+  return true;
+}
+
 function runAutomationRule(rule, options = {}) {
-  const normalized = automationApi.normalizeRule(rule);
+  const normalized = automationApi.normalizeRule(rule, 0, automationNormalizationOptions(state.settings));
   if (!normalized) return 0;
+  const unattended = automationRunIsUnattended(normalized, options);
+  if (unattended) state.automationRuntime.unattendedRules.add(normalized.id);
+  else state.automationRuntime.unattendedRules.delete(normalized.id);
   if (normalized.type === "appearance") return runAppearanceAutomationRule(normalized, options);
+  if (normalized.type === "condition") return runConditionAutomationRule(normalized, { ...options, unattended });
   if (normalized.type === "copilot" && copilotCliRecoveryNeeded()) {
     const reason = `GitHub Copilot CLI is not ready. ${copilotSetupPrompt().action}.`;
     addAutomationHistory("failed", normalized.name, reason, normalized.id);
@@ -27105,14 +28936,15 @@ function finishAutomationWorkflowTask(token, exitCode, overrideDetail = "") {
   );
 }
 
-function failAutomationWorkflowTasksForTerminal(terminal, reason) {
+function failAutomationWorkflowTasksForTerminal(terminal, reason, { teardown = true } = {}) {
   const tokens = new Set(terminal?.automationWorkflowTasks?.map((task) => task.token) || []);
   for (const task of state.automationRuntime.steps.values()) {
     if (task.terminalId === terminal?.id) tokens.add(task.token);
   }
   for (const token of tokens) {
     const task = state.automationRuntime.steps.get(token);
-    if (task?.kind === "copilot") finishCopilotAutomationTask(token, false, reason, task.output);
+    if (task?.kind === "condition") finishConditionTask(task, "failed", reason, { teardown });
+    else if (task?.kind === "copilot") finishCopilotAutomationTask(token, false, reason, task.output);
     else finishAutomationWorkflowTask(token, 1, reason);
   }
 }
@@ -27148,11 +28980,74 @@ function queueAutomationStage(terminal, command, rule, options = {}) {
   return true;
 }
 
+const BACKGROUND_BRIDGE_WAIT_MS = 20000;
+const BACKGROUND_BRIDGE_ATTEMPT_MS = 15000;
+const BACKGROUND_BRIDGE_NOTICE_MS = 600000;
+
+// The scheduler leases every run through the bridge, so a background rule that
+// comes due with the socket down cannot even be evaluated until the bridge is
+// back. Ask the main process to restart it, then wait for our own reconnect.
+async function restoreBridgeForDueBackgroundRules(nowMs) {
+  const due = state.automations.rules.filter((rule) => rule.enabled
+    && rule.runWhenClosed === "background"
+    && (rule.type === "copilot" || rule.type === "condition")
+    && automationDueAt(rule) !== null
+    && automationDueAt(rule).getTime() <= nowMs);
+  if (!due.length) return false;
+  if (nowMs - state.automationRuntime.backgroundBridgeAttemptAt < BACKGROUND_BRIDGE_ATTEMPT_MS) return false;
+  state.automationRuntime.backgroundBridgeAttemptAt = nowMs;
+  const ensure = window.multiterm?.ensureBridge;
+  if (typeof ensure !== "function") {
+    noteBackgroundBridgeFailure(due, "The bridge is offline and this build cannot restart it.", nowMs);
+    return false;
+  }
+  let outcome = null;
+  try {
+    outcome = await ensure();
+  } catch (error) {
+    noteBackgroundBridgeFailure(due, `The bridge could not be restarted: ${String(error?.message || error)}`, nowMs);
+    return false;
+  }
+  if (!outcome?.ok) {
+    noteBackgroundBridgeFailure(due, `The bridge could not be restarted: ${outcome?.error || "no response"}`, nowMs);
+    return false;
+  }
+  if (await waitForSocketReady(BACKGROUND_BRIDGE_WAIT_MS)) {
+    state.automationRuntime.backgroundBridgeNotice = null;
+    return true;
+  }
+  noteBackgroundBridgeFailure(due, "The bridge restarted but the workbench could not reconnect in time.", nowMs);
+  return false;
+}
+
+// One entry per distinct reason per window, so a rule that stays blocked for a
+// week cannot fill Run History with identical rows.
+function noteBackgroundBridgeFailure(rules, detail, nowMs) {
+  const previous = state.automationRuntime.backgroundBridgeNotice;
+  if (previous && previous.detail === detail && nowMs - previous.at < BACKGROUND_BRIDGE_NOTICE_MS) return;
+  state.automationRuntime.backgroundBridgeNotice = { at: nowMs, detail };
+  for (const rule of rules) addAutomationHistory("failed", rule.name, detail, rule.id, { background: true });
+}
+
+function waitForSocketReady(timeoutMs) {
+  if (state.socketReady) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const poll = () => {
+      if (state.socketReady) resolve(true);
+      else if (Date.now() >= deadline) resolve(false);
+      else window.setTimeout(poll, 250);
+    };
+    window.setTimeout(poll, 250);
+  });
+}
+
 async function tickAutomationSchedules(now = new Date()) {
   const nowMs = now.getTime();
   if (state.automationRuntime.ticking) return false;
   state.automationRuntime.ticking = true;
   try {
+    if (!state.socketReady && !state.automations.paused) await restoreBridgeForDueBackgroundRules(nowMs);
     if (!await acquireAutomationRunner()) {
       state.automationRuntime.lastTickAt = nowMs;
       return false;
@@ -27161,6 +29056,7 @@ async function tickAutomationSchedules(now = new Date()) {
       state.automationRuntime.lastMessageRefresh = nowMs;
       requestTerminalMessages();
     }
+    publishBackgroundAutomationPlan();
     if (state.automations.paused) {
       state.automationRuntime.lastTickAt = nowMs;
       return false;
@@ -27212,6 +29108,7 @@ async function tickAutomationSchedules(now = new Date()) {
       renderAutomationRuleList();
     }
     state.automationRuntime.lastTickAt = nowMs;
+    await maybeFinishBackgroundRun(nowMs);
     return changed;
   } finally {
     state.automationRuntime.ticking = false;
@@ -27229,9 +29126,22 @@ function scheduleAutomationTick() {
 
 function startAutomationRunner() {
   state.automationRuntime.lastTickAt = Date.now();
+  void Promise.resolve(window.multiterm?.isBackgroundLaunch?.())
+    .then((launched) => { state.backgroundLaunch = launched === true; })
+    .catch(() => { state.backgroundLaunch = false; });
+  void Promise.resolve(window.multiterm?.isBackgroundWindow?.())
+    .then((background) => { state.backgroundWindow = background === true; })
+    .catch(() => { state.backgroundWindow = false; });
+  window.multiterm?.onBackgroundWindowChange?.((background) => {
+    state.backgroundWindow = background;
+    // Any window the user opened is theirs now, so it must never self-quit.
+    if (!background) state.backgroundLaunch = false;
+  });
   scheduleAutomationTick();
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) void tickAutomationSchedules(new Date());
+    if (document.hidden) return;
+    state.backgroundLaunch = false;
+    void tickAutomationSchedules(new Date());
   });
 }
 
@@ -30637,6 +32547,39 @@ function registerCopilotLogTerminal(key, terminal) {
 // The CLI silently ignores an empty --available-tools value, so a tool-free session
 // must exclude by pattern; these are the same patterns src/server.js gives the SDK.
 const COPILOT_TOOL_FREE_EXCLUSIONS = "builtin:*,mcp:*,custom:*";
+// The two tool kinds that can change the machine. Denying a kind outright is the
+// only measured way to keep it away from an unattended run, and a deny beats every
+// allow including --allow-all-tools.
+const COPILOT_MUTATING_TOOL_KINDS = Object.freeze(["shell", "write"]);
+
+function copilotToolSpecKind(spec) {
+  const shape = /^([A-Za-z0-9_.-]{1,64})(?:\(.*\))?$/.exec(String(spec || "").trim());
+  return shape ? shape[1] : "";
+}
+
+// Availability, approval, and path/URL scope are three independent CLI layers.
+// Read tools need no approval, so a read-only turn is expressed purely as denials.
+function copilotPermissionArguments(tools, readOnly = false) {
+  if (!tools) return [];
+  const parts = [];
+  const deny = new Set(tools.deny);
+  if (readOnly) {
+    for (const kind of COPILOT_MUTATING_TOOL_KINDS) deny.add(kind);
+  } else if (tools.mode === "selected") {
+    const allowedKinds = new Set(tools.allow.map(copilotToolSpecKind));
+    for (const kind of COPILOT_MUTATING_TOOL_KINDS) {
+      if (!allowedKinds.has(kind)) deny.add(kind);
+    }
+    for (const spec of tools.allow) parts.push("--allow-tool", powerShellLiteral(spec));
+  } else {
+    parts.push("--allow-all-tools");
+  }
+  for (const spec of deny) parts.push("--deny-tool", powerShellLiteral(spec));
+  if (tools.allowAllPaths) parts.push("--allow-all-paths");
+  if (tools.allowAllUrls) parts.push("--allow-all-urls");
+  if (!tools.temporaryDirectory) parts.push("--disallow-temp-dir");
+  return parts;
+}
 
 function buildAiAssistantCommand({
   provider = state.settings.aiSessionProvider,
@@ -30648,6 +32591,11 @@ function buildAiAssistantCommand({
   shell = "pwsh",
   initialPrompt = "",
   tools = true,
+  toolPermissions = null,
+  readOnly = false,
+  unattended = false,
+  workingDirectory = "",
+  maxAiCredits = 0,
   yolo = state.settings.aiSessionYolo,
   remote = provider === "copilot" && state.settings.copilotRemoteSessions,
   model = state.settings.aiSessionModel,
@@ -30691,6 +32639,14 @@ function buildAiAssistantCommand({
   }
   if (provider === "copilot" && initialPrompt) parts.push("-i", powerShellLiteral(initialPrompt));
   if (provider === "copilot" && !tools) parts.push(`--excluded-tools="${COPILOT_TOOL_FREE_EXCLUSIONS}"`);
+  // An unattended agent must not inherit instructions or MCP servers from the
+  // directory it was pointed at, and must never block on a question.
+  if (provider === "copilot" && unattended) {
+    if (workingDirectory) parts.push("-C", powerShellLiteral(workingDirectory));
+    parts.push("--no-ask-user", "--no-custom-instructions", "--disable-builtin-mcps", "--no-remote");
+    if (maxAiCredits > 0) parts.push("--max-ai-credits", String(maxAiCredits));
+  }
+  if (provider === "copilot") parts.push(...copilotPermissionArguments(toolPermissions, readOnly));
   return parts.filter(Boolean).join(" ");
 }
 
@@ -33336,6 +35292,9 @@ function enhanceComboboxes() {
     elements.aiSessionModel,
     elements.aiSessionEffort,
     elements.aiSessionContext,
+    elements.automationConditionModel,
+    elements.automationConditionEffort,
+    elements.automationConditionContext,
     elements.aiTitleProvider,
     elements.shellSelect,
     elements.layoutMode,

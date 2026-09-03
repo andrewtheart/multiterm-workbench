@@ -1614,6 +1614,68 @@ test.describe("Close and bridge confirmation modal", () => {
     await page.keyboard.press("Escape");
   });
 
+  test("offers background mode only while a rule asks to keep running while closed", async () => {
+    await reset("ask");
+    await page.evaluate(() => requestAppClose());
+    await expect(page.locator("#closeConfirmBackground")).toBeHidden();
+    await page.keyboard.press("Escape");
+
+    await page.evaluate(() => {
+      state.automations = automationApi.normalizeStore({
+        rules: [{
+          actions: [{ command: "Review the build", id: "action-bgclose01", targetName: "Tests" }],
+          enabled: true,
+          id: "automation-bgclose1",
+          name: "Overnight review",
+          runWhenClosed: "background",
+          trigger: { intervalMinutes: 60, mode: "interval", type: "schedule" },
+          type: "copilot"
+        }]
+      }, state.settings.automationHistoryLimit);
+    });
+
+    await reset("ask");
+    await page.evaluate(() => requestAppClose());
+    await expect(page.locator("#closeConfirmBackground")).toBeVisible();
+    await expect(page.locator("#closeConfirmText")).toContainText("1 automation is set to keep running while MultiTerm is closed");
+    await expect(page.locator("#closeConfirmBackground")).toBeFocused();
+    await page.locator("#closeConfirmRemember").check();
+    await page.locator("#closeConfirmBackground").click();
+    await expect(page.locator("#closeConfirmOverlay")).toBeHidden();
+    expect(await lastDecision()).toBe("background");
+    expect(await closeAction()).toBe("background");
+
+    // A remembered background choice skips the modal on the next window close.
+    await page.evaluate(() => { window.__closeDecision = undefined; });
+    await page.evaluate(() => requestAppClose());
+    expect(await overlayHidden()).toBe(true);
+    expect(await lastDecision()).toBe("background");
+
+    await page.evaluate(() => {
+      state.settings.closeAction = "ask";
+      saveSettings();
+      state.automations = automationApi.normalizeStore(null, state.settings.automationHistoryLimit);
+      localStorage.removeItem("multiterm.automations");
+    });
+  });
+
+  test("reopening inside the closing fade keeps the dialog on screen", async () => {
+    await reset("ask");
+    await page.evaluate(() => requestAppClose());
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    // Cancel and reopen inside the 150ms fade: the pending hide must not land.
+    await page.evaluate(() => {
+      cancelAppClose();
+      requestAppClose();
+    });
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    await expect(page.locator("#closeConfirmRemember")).toBeVisible();
+    await page.waitForTimeout(300);
+    await expect(page.locator("#closeConfirmOverlay")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#closeConfirmOverlay")).toBeHidden();
+  });
+
   test("completeness: no uncaught page errors across the close-modal suite", async () => {
     // Reset the setting so this suite leaves nothing sticky for later runs.
     await page.evaluate(() => { state.settings.closeAction = "ask"; saveSettings(); });

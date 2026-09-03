@@ -289,6 +289,25 @@ button svg,
   width: 38px;
 }
 
+/* A dialog's own header already frames its close control, so it reads as a bare
+   glyph. The border stays transparent rather than removed so the 38px hit target
+   does not shrink, and the shared button ripple is suppressed because that tint
+   is the box this is meant to get rid of. */
+.palette-overlay .icon-button[id$="Close"] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.palette-overlay .icon-button[id$="Close"]:hover {
+  border-color: transparent;
+  color: var(--text);
+}
+
+.palette-overlay .icon-button[id$="Close"]::before {
+  content: none;
+}
+
 /* ---------------- Inputs --------------- */
 
 input,
@@ -1929,9 +1948,34 @@ body.header-hidden .status-hint kbd,
   border-radius: var(--radius-lg);
   box-shadow: var(--elev-4);
   overflow: hidden;
+  position: relative;
   transform: translateY(-8px) scale(0.98);
   transition: transform var(--dur) var(--ease-emphasized);
   width: min(640px, 92vw);
+}
+
+/* A dialog is moved by its own title bar. Interactive controls inside the
+   header keep the normal pointer, so only the bar itself advertises the drag. */
+.palette-overlay .palette > header,
+.palette-overlay .palette > [class$="-head"] {
+  cursor: move;
+}
+
+.palette-overlay .palette > header button,
+.palette-overlay .palette > header input,
+.palette-overlay .palette > [class$="-head"] button,
+.palette-overlay .palette > [class$="-head"] input {
+  cursor: auto;
+}
+
+.palette-overlay .palette > header button,
+.palette-overlay .palette > [class$="-head"] button {
+  cursor: pointer;
+}
+
+.palette.is-dragging {
+  transition: none;
+  user-select: none;
 }
 
 .palette-overlay.is-open .palette {
@@ -5788,6 +5832,19 @@ body[data-pager-placement="right"] .pager-list {
   opacity: 0.55;
 }
 
+/* Range selection has to stay legible against .is-active, which a selected tab
+   can also be, so it uses a filled tint rather than another border colour. */
+.pager-chip.is-range-selected {
+  background: color-mix(in srgb, var(--accent) 30%, var(--surface-high));
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.pager-chip.is-range-selected .pager-count {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text);
+}
+
 .pager-chip.is-pane-page-drop-target {
   background: var(--accent);
   border-color: var(--accent);
@@ -8894,7 +8951,8 @@ button.shortcut-binding.is-capturing {
 .automation-field > span,
 .automation-machine-state > span,
 .automation-clock-fields label > span { color: var(--muted); font-size: 11px; }
-.automation-field > small { color: var(--muted); font-size: 9.5px; line-height: 1.35; }
+.automation-field > small,
+.automation-machine-state > small { color: var(--muted); font-size: 9.5px; line-height: 1.35; }
 .automation-account-field {
   grid-column: 2;
   justify-self: start;
@@ -8917,7 +8975,7 @@ button.shortcut-binding.is-capturing {
 .automation-type-options {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
 .automation-type-options > button {
@@ -8944,7 +9002,8 @@ button.shortcut-binding.is-capturing {
 .automation-type-options svg { color: var(--accent); height: 18px; width: 18px; }
 .automation-type-options strong,
 .automation-type-options small { display: block; }
-.automation-type-options strong { font-size: 11px; }
+/* The tile name stays legible whether or not its type is the selected one. */
+.automation-type-options strong { color: var(--text); font-size: 11px; }
 .automation-type-options small { color: var(--muted); font-size: 9.5px; margin-top: 3px; }
 
 .automation-block {
@@ -8983,6 +9042,7 @@ button.shortcut-binding.is-capturing {
 .automation-retention { align-items: center; display: flex; gap: 8px; }
 .automation-inline-fields input { width: 76px; }
 .automation-machine-state select { width: 100%; }
+.automation-machine-state[hidden] { display: none; }
 .automation-clock-fields { align-items: flex-start; flex-direction: column; }
 .automation-clock-fields label { grid-template-columns: auto 120px; }
 .automation-days { display: grid; gap: 4px; grid-template-columns: repeat(7, 30px); }
@@ -9134,11 +9194,120 @@ button.shortcut-binding.is-capturing {
 }
 .automation-action-add { align-self: flex-start; }
 
+.automation-condition-block { grid-column: 1 / -1; }
+.automation-condition-text { font-family: var(--mono); font-size: 11px; min-height: 62px; resize: vertical; width: 100%; }
+.automation-condition-cwd-row { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; }
+.automation-condition-cwd-row[hidden] { display: none; }
+.automation-condition-cwd small[data-tone="error"] { color: var(--danger); }
+.automation-condition-cwd small[data-tone="ok"] { color: var(--accent); }
+.automation-condition-target {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(140px, 0.6fr) minmax(180px, 1fr);
+  padding: 10px;
+}
+.automation-condition-target[hidden] { display: none; }
+.automation-condition-inherit { grid-column: 1 / -1; }
+.automation-condition-state {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px;
+}
+.automation-condition-state[hidden] { display: none; }
+.automation-condition-state strong { display: block; font-size: 11px; }
+.automation-condition-state small { color: var(--muted); display: block; font-size: 9.5px; margin-top: 3px; overflow-wrap: anywhere; }
+
+.automation-inline-fields { flex-wrap: wrap; }
+.automation-inline-fields[hidden] { display: none; }
+.automation-interval-presets { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: 6px; }
+.automation-interval-presets[hidden] { display: none; }
+.automation-interval-presets button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 9.5px;
+  min-height: 24px;
+  padding: 0 9px;
+}
+.automation-interval-presets button[aria-pressed="true"] { background: var(--primary-container); border-color: var(--accent); color: var(--text); }
+
+.automation-tools-mode { grid-template-columns: repeat(2, 1fr); }
+.automation-tools-mode button[aria-checked="true"] { background: var(--surface-high); box-shadow: var(--elev-1); color: var(--text); }
+.automation-tools-hint { color: var(--muted); font-size: 9.5px; line-height: 1.4; margin: 0; }
+.automation-tools-group { display: grid; gap: 8px; }
+.automation-tools-group[hidden] { display: none; }
+.automation-tools-group > small { color: var(--muted); font-size: 9.5px; line-height: 1.4; }
+.automation-tools-label { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.25px; text-transform: uppercase; }
+.automation-tools-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.automation-tools-chips[hidden] { display: none; }
+.automation-tools-chips button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  min-height: 24px;
+  padding: 0 9px;
+}
+.automation-tools-chips button[aria-pressed="true"] { background: var(--primary-container); border-color: var(--accent); color: var(--text); }
+.automation-tools-list { display: grid; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.automation-tools-list[hidden] { display: none; }
+.automation-tools-list li {
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 28px;
+  padding: 3px 3px 3px 9px;
+}
+.automation-tools-list code { font-family: var(--mono); font-size: 10px; overflow-wrap: anywhere; }
+.automation-tools-list .icon-button { height: 22px; min-height: 22px; width: 22px; }
+.automation-tools-list .icon-button svg { height: 12px; width: 12px; }
+.automation-tools-empty { color: var(--muted); font-size: 9.5px; margin: 0; }
+.automation-tools-empty[hidden] { display: none; }
+.automation-tools-add { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr) auto; }
+.automation-tools-add[hidden] { display: none; }
+.automation-tools-add button { justify-self: start; }
+.automation-tools-add input { font-family: var(--mono); font-size: 10px; }
+.automation-tools-error { color: var(--danger); font-size: 9.5px; margin: 0; }
+.automation-tools-error[hidden] { display: none; }
+.automation-tools-summary {
+  align-items: center;
+  background: rgb(79 209 176 / 0.07);
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+  display: flex;
+  font-size: 10px;
+  gap: 8px;
+  margin: 0;
+  min-height: 30px;
+  overflow-wrap: anywhere;
+  padding: 6px 9px;
+}
+.automation-tools-summary[hidden] { display: none; }
+
 @container (max-width: 460px) {
   .automation-step-body { grid-template-columns: 1fr; }
   .automation-output-match-fields { grid-template-columns: 1fr; }
   .automation-output-match-fields .automation-output-pattern { grid-column: 1; }
   .automation-step-body label { grid-column: 1; }
+  .automation-condition-cwd-row,
+  .automation-condition-state,
+  .automation-condition-target,
+  .automation-tools-add { grid-template-columns: 1fr; }
 }
 
 .automation-preview { align-items: center; background: rgb(79 209 176 / 0.07); border-left: 2px solid var(--accent); color: var(--muted); display: flex; font-size: 11px; gap: 8px; min-height: 36px; padding: 7px 10px; }
@@ -9186,6 +9355,20 @@ button.shortcut-binding.is-capturing {
 .automation-activity-copy span { display: block; }
 .automation-route-copy span,
 .automation-activity-copy span { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.automation-activity-copy .automation-activity-background {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  margin-top: 0;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
 .automation-rule-copy .automation-rule-outcome[data-status="blocked"],
 .automation-rule-copy .automation-rule-outcome[data-status="failed"],
 .automation-rule-copy .automation-rule-outcome[data-status="skipped"] { color: #f0b35a; }
@@ -9409,6 +9592,15 @@ button.shortcut-binding.is-capturing {
 
 .terminal-notes-flyout-composer-actions #terminalNotesFlyoutExpand {
   margin-right: auto;
+  order: -1;
+}
+
+.terminal-notes-flyout-composer-actions #terminalNotesFlyoutCancel {
+  order: 0;
+}
+
+.terminal-notes-flyout-composer-actions #terminalNotesFlyoutSave {
+  order: 1;
 }
 
 .terminal-notes-flyout-composer-actions button {
@@ -9605,6 +9797,79 @@ button.shortcut-binding.is-capturing {
   }
 
   .auto-title-notice-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+}
+
+.condition-automation-notice {
+  padding: 22px 22px 18px;
+  width: min(640px, calc(100vw - 24px));
+}
+
+.condition-automation-notice .confirm-head svg {
+  color: #f0b35a;
+}
+
+.condition-notice-envelope {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-top: 14px;
+  padding: 12px 14px;
+}
+
+.condition-notice-envelope h3 {
+  font-size: 13px;
+  margin: 0;
+}
+
+.condition-notice-envelope-list {
+  display: grid;
+  gap: 6px 14px;
+  grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+  margin: 10px 0 0;
+}
+
+.condition-notice-envelope-list[hidden] {
+  display: none;
+}
+
+.condition-notice-envelope-list dt {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.condition-notice-envelope-list dd {
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.condition-notice-points {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  margin: 12px 0 0;
+  padding-left: 20px;
+}
+
+.condition-notice-actions {
+  margin-top: 16px;
+}
+
+@media (max-width: 560px) {
+  .condition-automation-notice {
+    padding: 18px 16px 14px;
+  }
+
+  .condition-notice-envelope-list {
+    grid-template-columns: 1fr;
+  }
+
+  .condition-notice-actions {
     align-items: stretch;
     flex-direction: column-reverse;
   }
@@ -10482,6 +10747,105 @@ button.shortcut-binding.is-capturing {
   margin-top: 8px;
   min-height: 76px;
   padding: 8px 10px;
+}
+
+.recovered-notes-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.recovered-notes-chevron {
+  color: var(--muted);
+  flex: none;
+  height: 14px;
+  transition: transform 120ms ease;
+  width: 14px;
+}
+
+.recovered-notes-toggle[aria-expanded="true"] .recovered-notes-chevron {
+  transform: rotate(90deg);
+}
+
+.recovered-notes-summary {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recovered-notes-heading {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.recovered-notes-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.recovered-notes-count {
+  align-items: center;
+  background: var(--primary);
+  border-radius: 999px;
+  color: var(--on-primary);
+  display: inline-flex;
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  height: 18px;
+  justify-content: center;
+  margin-left: auto;
+  min-width: 18px;
+  padding: 0 5px;
+}
+
+.recovered-notes-count[hidden] {
+  display: none;
+}
+
+.recovered-notes-body {
+  display: block;
+}
+
+.recovered-notes-body[hidden] {
+  display: none;
+}
+
+.recovered-note-actions {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.recovered-note-move {
+  align-items: center;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  flex: none;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  width: 30px;
+}
+
+.recovered-note-move:hover:not(:disabled) {
+  color: var(--primary);
+}
+
+.recovered-note-move i,
+.recovered-note-move svg {
+  height: 14px;
+  width: 14px;
 }
 
 @media (max-width: 640px) {
@@ -14530,7 +14894,6 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
     max-height: 42vh;
   }
 
-  .terminal-host[data-layout="focus"],
   .terminal-host[data-layout="columns"],
   .terminal-host[data-layout="rows"],
   .terminal-host[data-layout="grid"],
@@ -14544,7 +14907,6 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
     grid-template-rows: none;
   }
 
-  .terminal-host:not([data-snap-edge])[data-layout="focus"] .terminal-pane.is-primary,
   .terminal-host:not([data-snap-edge])[data-layout="master-top"] .terminal-pane.is-primary,
   .terminal-host:not([data-snap-edge])[data-layout="master-right"] .terminal-pane.is-primary,
   .terminal-host:not([data-snap-edge])[data-layout="master-bottom"] .terminal-pane.is-primary,
@@ -14575,8 +14937,24 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
     grid-row: auto;
   }
 
-  .terminal-host[data-layout="focus"] .terminal-pane.is-primary {
-    min-height: var(--pane-height);
+  /* A stage this narrow cannot hold a rail beside the primary, so the rail
+     moves under it: the focus pane keeps its configured share as a dominant
+     top row, and the others become short strips you can scan and click into.
+     The primary's floor is a grid track rather than a min-height, because a
+     min-height taller than the row it sits in overflows onto the next pane. */
+  .terminal-host:not([data-snap-edge])[data-layout="focus"] {
+    --focus-rail-height: max(120px, calc(var(--pane-height) * 0.45));
+    grid-auto-rows: minmax(var(--focus-rail-height), 1fr);
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(max(220px, var(--focus-width)), 1fr);
+  }
+
+  .terminal-host:not([data-snap-edge])[data-layout="focus"] .terminal-pane.is-primary {
+    grid-row: 1;
+  }
+
+  .terminal-host:not([data-snap-edge])[data-layout="focus"] .terminal-pane:not(.is-primary) {
+    min-height: var(--focus-rail-height);
   }
 
   .terminal-host[data-snap-edge="left"],

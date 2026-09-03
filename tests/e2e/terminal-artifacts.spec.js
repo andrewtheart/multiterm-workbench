@@ -281,6 +281,32 @@ test.describe("Terminal notes and command queue", () => {
     })).toBe("Replacement from full editor");
   });
 
+  test("tabs from the note text to Save, Cancel, then Expand", async ({ page }) => {
+    await reset(page);
+    await page.locator('.terminal-pane [data-action="artifacts"]').click();
+    await page.locator("#terminalNotesFlyoutAdd").click();
+    await expect(page.locator("#terminalNotesFlyoutInput")).toBeFocused();
+
+    for (const id of ["terminalNotesFlyoutSave", "terminalNotesFlyoutCancel", "terminalNotesFlyoutExpand"]) {
+      await page.keyboard.press("Tab");
+      await expect(page.locator(`#${id}`)).toBeFocused();
+    }
+    // Beyond Expand the flyout hands back to the default document order. Add
+    // note is disabled while the composer is open, so the footer starts here.
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#terminalNotesFlyoutDetails")).toBeFocused();
+
+    // Reading order follows focus order, but the buttons still lay out with
+    // Expand pinned left and Save last.
+    const lefts = await page.evaluate(() => ({
+      expand: elements.terminalNotesFlyoutExpand.getBoundingClientRect().left,
+      cancel: elements.terminalNotesFlyoutCancel.getBoundingClientRect().left,
+      save: elements.terminalNotesFlyoutSave.getBoundingClientRect().left
+    }));
+    expect(lefts.expand).toBeLessThan(lefts.cancel);
+    expect(lefts.cancel).toBeLessThan(lefts.save);
+  });
+
   test("uses the same notes flyout when the pane action is in overflow", async ({ page }) => {
     await reset(page);
     await page.evaluate(() => {
@@ -821,6 +847,62 @@ test.describe("Terminal notes and command queue", () => {
     await expect(page.locator("#terminalArtifactsTarget")).toHaveValue("__unparented__");
     await expect(page.locator("#unparentedTargetRow")).toBeVisible();
     await expect(page.locator("#terminalNotesSection")).toBeHidden();
+  });
+
+  test("keeps recovered notes in a collapsed drawer that counts them", async ({ page }) => {
+    await reset(page, 2);
+    const ids = await page.evaluate(() => [...state.terminals.keys()]);
+    await page.locator("#terminalArtifactsToggle").click();
+    await expect(page.locator("#recoveredNotesCount")).toBeHidden();
+
+    await page.locator("#terminalArtifactsTarget").selectOption(ids[0]);
+    await page.locator("#terminalNotesAdd").click();
+    await page.locator("#terminalNotesInput").fill("Keep this after the process ends.");
+    await page.evaluate((id) => handleBridgeMessage({ type: "exited", id, code: 0 }), ids[0]);
+
+    await expect(page.locator("#recoveredNotesCount")).toHaveText("1");
+    await expect(page.locator("#recoveredNotesBody")).toBeHidden();
+    await expect(page.locator("#recoveredNotesToggle")).toHaveAttribute("aria-expanded", "false");
+
+    await page.locator("#recoveredNotesToggle").click();
+    await expect(page.locator("#recoveredNotesBody")).toBeVisible();
+    await expect(page.locator("#recoveredNotesToggle")).toHaveAttribute("aria-expanded", "true");
+
+    // The drawer is a per-visit affordance, so reopening starts collapsed again.
+    await page.locator("#terminalArtifactsClose").click();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeHidden();
+    await page.locator("#terminalArtifactsToggle").click();
+    await expect(page.locator("#recoveredNotesBody")).toBeHidden();
+    await expect(page.locator("#recoveredNotesCount")).toHaveText("1");
+  });
+
+  test("moves a recovered note into the terminal being worked with", async ({ page }) => {
+    await reset(page, 2);
+    const ids = await page.evaluate(() => [...state.terminals.keys()]);
+    await page.locator("#terminalArtifactsToggle").click();
+    await page.locator("#terminalArtifactsTarget").selectOption(ids[0]);
+    await page.locator("#terminalNotesAdd").click();
+    await page.locator("#terminalNotesInput").fill("Carry this into the live pane.");
+    await page.evaluate((id) => handleBridgeMessage({ type: "exited", id, code: 0 }), ids[0]);
+
+    await page.locator("#recoveredNotesToggle").click();
+    const order = await page.evaluate(() =>
+      [...document.querySelectorAll(".recovered-note-actions > button")].map((button) => button.className));
+    expect(order).toEqual(["recovered-note-delete", "recovered-note-move"]);
+    // The unparented queue is not a terminal, so there is nowhere to move it yet.
+    await expect(page.locator(".recovered-note-move")).toBeDisabled();
+
+    await page.locator("#terminalArtifactsTarget").selectOption(ids[1]);
+    await expect(page.locator(".recovered-note-move")).toBeEnabled();
+    await page.locator(".recovered-note-move").click();
+
+    await expect(page.locator("#recoveredNotesCount")).toBeHidden();
+    await expect(page.locator(".recovered-note")).toHaveCount(0);
+    const moved = await page.evaluate(
+      (id) => state.terminalArtifacts.terminals[id].notes.map((note) => note.text),
+      ids[1]
+    );
+    expect(moved).toContain("Carry this into the live pane.");
   });
 
   // Guards the whole surface against the same CSS mistake: any class that sets

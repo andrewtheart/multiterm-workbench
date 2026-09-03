@@ -131,6 +131,39 @@ describe("automations model", () => {
     expect(automations.normalizeRule(rule({ machineState: "unknown" })).machineState).toBe("both");
   });
 
+  it("keeps background execution opt-in and refuses it for appearance rules", () => {
+    expect(automations.normalizeRule(rule()).runWhenClosed).toBe("off");
+    expect(automations.normalizeRule(rule({ runWhenClosed: "background", type: "copilot" })).runWhenClosed)
+      .toBe("background");
+    expect(automations.normalizeRule(rule({ runWhenClosed: "always" })).runWhenClosed).toBe("off");
+    expect(automations.normalizeRule(rule({
+      actions: [],
+      appearance: {
+        background: "#102030",
+        foreground: "#f0e0d0",
+        fontFamily: "Cascadia Mono",
+        headerBackground: {
+          angle: 140,
+          mode: "gradient",
+          stops: [
+            { color: "#112233", opacity: 100, position: 0 },
+            { color: "#445566", opacity: 70, position: 100 }
+          ],
+          type: "linear"
+        }
+      },
+      runWhenClosed: "background",
+      titleMatch: { type: "contains", value: "build" },
+      type: "appearance"
+    })).runWhenClosed).toBe("off");
+
+    const store = automations.normalizeStore({
+      rules: [rule({ id: "automation-bg000001", runWhenClosed: "background", type: "copilot" })]
+    });
+    expect(store.rules[0].runWhenClosed).toBe("background");
+    expect(automations.normalizeStore(store).rules[0].runWhenClosed).toBe("background");
+  });
+
   it("normalizes title-triggered appearance rules without requiring command actions", () => {
     const normalized = automations.normalizeRule(rule({
       actions: [],
@@ -385,11 +418,23 @@ describe("automations model", () => {
     expect(store.history).toHaveLength(1);
     expect(store.history[0]).toMatchObject({
       automationId: null,
+      background: false,
       id: "history-2",
       status: "failed",
       title: "Automation"
     });
     expect(new Date(store.history[0].occurredAt).getTime()).not.toBeNaN();
+  });
+
+  it("keeps the background marker on history entries across a round trip", () => {
+    const store = automations.normalizeStore({
+      history: [
+        { background: true, id: "history-bg1", status: "completed", title: "Overnight review" },
+        { background: "yes", id: "history-bg2", status: "failed", title: "Coerced" }
+      ]
+    });
+    expect(store.history.map((entry) => entry.background)).toEqual([true, false]);
+    expect(automations.normalizeStore(store).history.map((entry) => entry.background)).toEqual([true, false]);
   });
 
   it("computes interval recurrences from their wall-clock anchor without drift", () => {
@@ -697,6 +742,25 @@ describe("conditional Copilot automations", () => {
         .toContain("no previous state; treat this run as the baseline");
     });
 
+    // The assessment turn always launches with shell and write denied. Without
+    // being told, the model spends a tool call finding out and the CLI prints a
+    // permission error that reads like the check failed.
+    it("tells the assessment turn that shell and file writes are unavailable", () => {
+      const prompt = automations.conditionAssessmentPrompt({ prompt: "A new file arrived", token: TOKEN });
+      expect(prompt).toContain("cannot run shell commands or change files");
+      expect(prompt).toContain("read-only file tools");
+    });
+
+    // The action turn resumes the assessment session, so the transcript still
+    // shows that turn's tool refusals. Measured on the real rule, 10 runs each:
+    // 4/10 completed without this guidance, 10/10 with it, the failures all
+    // reporting no deletion tool existed without ever attempting one.
+    it("tells the action turn that the previous turn's refusals no longer apply", () => {
+      const prompt = automations.conditionActionPrompt({ action: "Delete the file", token: TOKEN });
+      expect(prompt).toContain("restarted with the permissions this rule grants");
+      expect(prompt).toContain("Do not assume a tool is unavailable");
+    });
+
     it("demands an explicit success or failure record from the action turn", () => {
       const prompt = automations.conditionActionPrompt({
         action: "Delete the file",
@@ -816,6 +880,38 @@ describe("conditional Copilot automations", () => {
 
       expect(automations.conditionConsentFingerprint(conditionRule({}, { cwd: "" }))).toBe("");
       expect(automations.conditionConsentFingerprint(null)).toBe("");
+    });
+
+    it("re-prompts when a rule switches to inherited session permissions", () => {
+      const owned = conditionRule({}, { sessionMode: "existing", targetName: "Build" });
+      const inherited = conditionRule({}, {
+        inheritSessionPermissions: true,
+        sessionMode: "existing",
+        targetName: "Build"
+      });
+      expect(automations.conditionConsentFingerprint(inherited))
+        .not.toBe(automations.conditionConsentFingerprint(owned));
+    });
+
+    it("keeps the verdict timestamp out of the schedule anchor", () => {
+      const normalized = automations.normalizeRule(conditionRule({
+        conditionCheckedAt: "2026-09-01T11:45:00.000Z",
+        lastRunAt: "2026-09-01T11:00:00.000Z"
+      }));
+      expect(normalized.lastRunAt).toBe("2026-09-01T11:00:00.000Z");
+      expect(normalized.conditionCheckedAt).toBe("2026-09-01T11:45:00.000Z");
+
+      // The next occurrence follows lastRunAt, so advancing a verdict timestamp
+      // must never move the schedule forward or skip an occurrence.
+      const due = automations.nextScheduledAt(normalized, new Date("2026-09-01T11:50:00.000Z"));
+      expect(due.toISOString()).toBe("2026-09-01T12:00:00.000Z");
+
+      const laterVerdict = automations.normalizeRule(conditionRule({
+        conditionCheckedAt: "2026-09-01T11:59:00.000Z",
+        lastRunAt: "2026-09-01T11:00:00.000Z"
+      }));
+      expect(automations.nextScheduledAt(laterVerdict, new Date("2026-09-01T11:50:00.000Z")).toISOString())
+        .toBe("2026-09-01T12:00:00.000Z");
     });
   });
 

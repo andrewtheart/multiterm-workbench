@@ -201,6 +201,7 @@ Pages organize terminals into separate visual groups without ending their shell 
 - Closing a populated page asks whether to move its terminals to a neighbouring page or close them. Select **Take this action next time** to remember the choice, or change **When closing a page with terminals** under **Session** settings. Close other pages asks the same question and moves surviving terminals onto the page you kept.
 - Choose **Pages location** under **Layout** to place the page tabs at the top, bottom, left, or right. Right-click blank space in the tabs bar or vertical panel for **Open new page** (quick key <kbd>1</kbd>), **Create new group**, and the same four placement choices. A new empty group shows **Drop pages here** until you drag a page into it. Changes from either placement control persist across launches and keep the other control synchronized. A vertical pages panel has its own hide button and a floating restore button.
 - Drag page tabs left/right in a horizontal bar or up/down in a vertical panel. With a page focused, <kbd>Ctrl+Shift</kbd> plus the matching arrow key reorders it from the keyboard.
+- Select a page tab, then <kbd>Shift</kbd>-click another one to select every tab between them. The range is highlighted, and dragging any tab in it moves the whole selection together, so a set of pages can be dropped into a group in one go. Extending a range deliberately does not switch pages. A plain click on any tab, a click on empty space in the bar, or <kbd>Escape</kbd> clears the selection.
 - Drag a terminal by its title bar onto a page tab to move it there, or use the terminal's context menu.
 - Gather related pages into a named **page group** that draws as one labelled band in the tabs bar. Right-click a page and choose **Add to group** to put it in an existing group or start a new one, which opens its name for editing immediately; **Remove from group** takes it back out. A group always draws as a single band, so joining one also moves the page next to the rest of its group.
 - Select a group's label to collapse or expand it, and right-click the label for **Rename group**, **Collapse**/**Expand**, **New page in group**, and **Ungroup**. An empty group instead offers **Delete group**. A collapsed group shows how many pages it is holding, and the page you are currently on always stays visible even when its group is collapsed. Dragging a tab into or out of a band changes its membership, as does <kbd>Ctrl+Shift</kbd> plus an arrow key when it steps across a band's edge. A group created from a page stops existing when it loses its last page; a group created from blank space keeps its empty drop zone. Groups are saved with the workspace.
@@ -241,7 +242,7 @@ Use **Fit all terminals** after resizing the window or changing layouts. **Reset
 
 Open **Notes...** from a terminal's context menu, or **Notes & command queue...** from the header notebook button or the command palette. Notes are stored against the terminal PID so each live shell has its own working context.
 
-When a shell exits, its notes are retained in **Recovered notes** instead of being deleted. You can copy or remove recovered notes after reviewing them.
+When a shell exits, its notes are retained in **Recovered notes** instead of being deleted. That section is a collapsed drawer with a count of how many notes it is holding, so an ended terminal's context stays out of the way until you want it; select the drawer to open it. Each recovered note has a button that moves it onto the terminal named in **Working with** at the top of the dialog, which is how you carry context from an ended process into a live one. The button is disabled while the unparented queue is selected, because that is not a terminal. You can also edit or remove recovered notes after reviewing them.
 
 ### Command queues
 
@@ -270,7 +271,7 @@ Open **Automations** from the workflow button in the header or the command palet
 
 ### Scheduled terminal work
 
-Choose **Command based automation** for ad-hoc shell commands, ad-hoc PowerShell, or `.ps1`, `.cmd`, and `.bat` script paths. Choose **Copilot automation** for scheduled Copilot CLI prompts. Choose **Appearance automation** to style terminals by title instead of running work. Create an interval, daily, or selected-weekday schedule, then build the workflow from connected visual step cards.
+Choose **Command based automation** for ad-hoc shell commands, ad-hoc PowerShell, or `.ps1`, `.cmd`, and `.bat` script paths. Choose **Copilot automation** for scheduled Copilot CLI prompts. Choose **Conditional automation** to have Copilot judge a condition on a schedule and act only when it is true. Choose **Appearance automation** to style terminals by title instead of running work. Create an interval, daily, or selected-weekday schedule, then build the workflow from connected visual step cards. Interval schedules also offer preset chips from 15 minutes to 24 hours.
 
 A step can target a terminal by exact title, exact PID, or **New terminal**. Title and PID targets offer **Send to new terminal if selected terminal cannot be located**, enabled by default. Whenever a step opens a terminal, choose the page that is active when the automation runs, a new page, or an existing page by title. The page-title field accepts freeform text and suggests current page names. Each step can specify a working directory; new terminals start there, and existing command steps run there without permanently moving the terminal. Script steps include a file picker. Copilot steps launch Copilot when needed, optionally change its working directory, and wait for its empty composer.
 
@@ -298,6 +299,40 @@ Under **If terminal title**, choose **Contains**, **Equals**, or **Regular expre
 **Edit appearance...** opens the same terminal appearance editor used by a pane's own styling, with both the **Terminal** and **Header** tabs, and saves the result as the rule's profile rather than applying it to one terminal. The profile always carries a complete body background, font color, font family, and header background.
 
 Rules are evaluated in list order and the first enabled rule whose condition matches supplies the appearance, so drag the more specific rule above the more general one. A styled terminal reverts to its own manual appearance as soon as its title stops matching, when the rule is paused or deleted, or when the global **Pause** control is on; the terminal's own saved appearance is never overwritten. Matching uses the committed title, so a title suggestion that is still awaiting approval does not restyle the terminal. **Apply now** restyles every live matching terminal immediately and records the result in **Run History**.
+
+### Conditional checks
+
+A **Conditional automation** runs a Copilot session on a schedule to judge a question you write in plain language, and carries out an action only when the answer is yes. Under **When**, describe the condition, for example `A new file has been written to D:\Incoming since the last check`. Under **Then**, describe what to do about it, for example `Delete the file`. A **Working directory** is required; Copilot starts there and, unless you widen the scope, can only reach that folder and its subfolders. The directory is checked again on every run, not only when you save, so a folder that disappears fails the check visibly instead of silently doing nothing somewhere else.
+
+**Remember what this check saw** lets Copilot write a short note at the end of each run and read it back on the next one. That note is what makes a phrase such as "a **new** file" meaningful across checks. The note is model-authored, so the editor shows it read-only with a **Clear** button rather than letting you edit it.
+
+Each check runs as two turns in two processes. The first turn only judges the condition and is launched with the shell and file-writing tools denied outright, so an assessment cannot change anything before it has decided. Only when the answer is yes does MultiTerm close that process and resume the same Copilot session with the permissions the rule actually grants, which keeps the conversation while making the permission change a real process boundary rather than a promise in a prompt.
+
+Copilot answers each turn with a single record framed by a per-run token, and MultiTerm reads only records that appear after that turn started. A finished Copilot response is not treated as success: the remembered note is committed only after an explicit `ACTION_OK`. A reported failure, an unreadable answer, or a timeout preserves the previous note so the next run retries the same work instead of recording it as handled. **Run History** records every outcome as queued, skipped, completed, or failed with the reason.
+
+Choose how the session appears with **Session**:
+
+- **Hidden** runs the check in a pane you never see and discards it when the check finishes. Right-click the rule and choose **Reveal running check** to bring a hidden session into the workspace while it is still running.
+- **Visible and auto-close** opens a normal pane so you can watch, and closes it at the end unless you turn **Close the session when the check finishes** off.
+- **Existing terminal** uses a terminal you name by title or PID. An idle shell has the configured Copilot CLI launched in it. A terminal that is *already* running an assistant is refused, because that session's permissions were fixed when it launched and this rule cannot apply its own. Turning on the explicit inherit option runs the check with those unverifiable permissions instead, and the approval dialog says so.
+
+**Tool permissions** are set per rule. **Allow all tools** offers Copilot everything and approves it without asking. **Only these tools** approves just the permissions you list, and any tool kind you have not allowed stays denied. Denials always win, including over **Allow all tools**, so the **Never allow** list stays active in both modes and is seeded with high-risk entries. Permissions use the Copilot CLI's own grammar and each row shows the exact spec: `shell(git:*)` for every Git command, `shell(git push)` for one subcommand, `write(D:\Incoming)` for a path, `url(github.com)` for an address. Entries are validated as you type and shell operators are refused. Separate controls cover file and network scope, because allowing every tool does not by itself allow every path or address.
+
+A rule that allows `shell(git:*)` has allowed Git and nothing else, so if Copilot then decides it needs an unrelated shell command the CLI raises its own approval dialog and waits for an answer nobody is there to give. MultiTerm watches for that dialog, ends the check, and records **Copilot asked for permission to use a tool this rule does not allow**, rather than leaving the session running until the step timeout. Grant the extra permission or reword the action if you see that outcome.
+
+The Copilot CLI also asks whether you trust the files in a folder the first time it works there, which is a separate gate from tool permissions and is not suppressed by any launch flag. MultiTerm answers it for the rule's working directory so an unattended check can start. It answers with the session-only choice, so nothing is added to the CLI's own list of remembered trusted folders and the rule's tool permissions are unaffected.
+
+A check does **not** inherit the model you picked for your own interactive sessions. That model is chosen for hard work, and answering a yes/no question with it every hour is expensive. Measured on one real check of a single folder: the inherited model spent **21.73 AI credits across 15 premium requests**, while Copilot's automatically chosen model answered the same question for **0.50 credits and 1 request**. **Condition model** under **Performance** therefore defaults to Auto; set it to **Inherit the CLI setting** if a condition genuinely needs your usual model.
+
+Reasoning effort is *not* the lever it looks like: the same check at `low` effort cost 21.71 credits against 21.73 at `xhigh`, so **Condition effort** defaults to inheriting and is ignored entirely while the model is Auto, which refuses an effort setting. **Condition context** stays on the provider default because the extended tier costs more and a directory check does not need it. **Condition AI credit budget** remains a hard stop per run rather than a spend target; the CLI refuses anything below 30.
+
+The session is launched for unattended use: it starts in the rule's working directory, cannot ask you a question, does not load custom instructions, and has built-in MCP servers and remote control disabled. Skills and agents configured globally for the Copilot CLI are still loaded, because the CLI offers no launch option to suppress them.
+
+Before a rule with a given set of permissions ever runs, MultiTerm shows a one-time dialog listing exactly what it is about to allow: the working directory, the tools, the denials, the file and network scope, and the session mode. Approval is recorded against that set of permissions, so renaming or rescheduling a rule does not ask again, but widening anything does. A dialog closed without an answer counts as declined.
+
+Everything the check reads is untrusted input, including file names, file contents, and the remembered note itself, and the prompt says so. The per-run token correlates the answer with the run; it is not a defence against a file that tries to instruct the assistant, so treat a conditional check as an assistant acting on your behalf rather than a sandbox.
+
+Six visible settings under **Performance** bound this work: **Condition checks per hour** (1-240, default 60) over a rolling hour, **Concurrent condition checks** (1-8, default 2), **Condition state note (KB)** (1-64, default 8), **Condition tool permissions** (1-100, default 25), **Condition command length (KB)** (1-30, default 8), and **Condition AI credit budget** (30-100, default 30, where `0` removes the cap and any other value is passed to the Copilot CLI's own budget; the CLI refuses a budget below 30). A check that is over the hourly or concurrent bound is recorded as skipped with the reason rather than dropped, and a check that has started consumes its slot even if it later fails.
 
 ### Visual handoff routes
 
@@ -548,6 +583,8 @@ Settings cover:
 **Title size** scales terminal-title text from 80% to 150% and defaults to 110%. Choose 100% to restore the original title size.
 
 Changes are stored locally in the app's browser profile. Use **Reset settings** to return to defaults.
+
+Every dialog can be moved: drag it by its title bar to slide it out of the way of whatever you are reading behind it. Buttons and fields in that bar keep working normally, a dialog cannot be dragged off screen, and closing one returns it to its usual position so it always reopens where you expect.
 
 ## Keyboard shortcuts
 

@@ -116,13 +116,14 @@ test.describe("Focus rail overlap", () => {
   });
 });
 
-// Below 920px the host collapses to a single column. The primary must stop
-// spanning the rail rows there, or it would claim every row of that one column
-// and push the rest of the terminals far below the fold.
+// A sidebar-width stage (the VS Code panel is the reported case) cannot show a
+// rail beside the primary, so the rail stacks under it. The primary must stay
+// dominant and must not paint over the first rail pane: it used to carry
+// `min-height: var(--pane-height)` inside a 180px auto row, overflowing 140px.
 test.describe("Focus rail on a narrow window", () => {
-  test.use({ viewport: { width: 800, height: 1000 } });
+  test.use({ viewport: { width: 430, height: 900 } });
 
-  test("primary drops its row span in single-column mode", async ({ page }) => {
+  test("stacks a dominant primary over condensed rail strips", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
 
@@ -130,6 +131,8 @@ test.describe("Focus rail on a narrow window", () => {
       const el = document.querySelector("#layoutMode");
       el.value = "focus";
       el.dispatchEvent(new Event("change", { bubbles: true }));
+      // The stage is otherwise too short at this width to measure a share.
+      document.querySelector("#toggleSidecar")?.click();
     });
     await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "focus");
 
@@ -142,16 +145,75 @@ test.describe("Focus rail on a narrow window", () => {
 
     const info = await page.evaluate(() => {
       const host = document.querySelector("#terminalHost");
-      const primary = host.querySelector(".terminal-pane.is-primary");
+      const panes = [...host.querySelectorAll(".terminal-pane")];
+      const boxes = panes.map((pane) => ({
+        primary: pane.classList.contains("is-primary"),
+        rect: pane.getBoundingClientRect(),
+      }));
+      const hits = [];
+      for (let i = 0; i < boxes.length; i += 1) {
+        for (let j = i + 1; j < boxes.length; j += 1) {
+          const a = boxes[i].rect;
+          const b = boxes[j].rect;
+          const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+          const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+          if (overlapY > 1 && overlapX > 1) hits.push({ i, j, overlapY: Math.round(overlapY) });
+        }
+      }
+      const primary = boxes.find((box) => box.primary);
       return {
-        gridRow: getComputedStyle(primary).gridRow,
-        primaryHeight: Math.round(primary.getBoundingClientRect().height),
+        hits,
+        gridRow: getComputedStyle(panes.find((pane) => pane.classList.contains("is-primary"))).gridRow,
+        primaryHeight: Math.round(primary.rect.height),
+        railHeights: boxes.filter((box) => !box.primary).map((box) => Math.round(box.rect.height)),
+        hostHeight: host.clientHeight,
       };
     });
 
-    expect(info.gridRow).toBe("auto");
-    // One row, kept a little taller than the rest by the narrow-screen
-    // min-height. Spanning four rail rows would be 750px or more.
-    expect(info.primaryHeight).toBeLessThan(600);
+    expect(info.hits, `panes overlapped: ${JSON.stringify(info.hits)}`).toEqual([]);
+    // Pinned to the first row so the rail always reads as being below the focus.
+    expect(info.gridRow).toBe("1");
+    // Dominant, but capped so a long rail cannot squeeze it out.
+    expect(info.primaryHeight).toBeGreaterThan(info.hostHeight * 0.5);
+    expect(info.primaryHeight).toBeLessThan(info.hostHeight * 0.8);
+    // Condensed strips: shorter than a full pane, tall enough to read.
+    for (const height of info.railHeights) {
+      expect(height).toBeGreaterThanOrEqual(120);
+      expect(height).toBeLessThan(info.primaryHeight);
+    }
+
+    await page.evaluate(() => document.querySelector("#restoreSidecar")?.click());
+    for (let i = 0; i < 4; i += 1) {
+      await page.locator('.terminal-pane [data-action="close"]').last().click();
+      await page.waitForTimeout(80);
+    }
+    await expect(page.locator(".terminal-pane")).toHaveCount(start);
+  });
+
+  test("gives the whole stage to a lone primary", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    await page.evaluate(() => {
+      const el = document.querySelector("#layoutMode");
+      el.value = "focus";
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      document.querySelector("#toggleSidecar")?.click();
+      closeAllTerminals();
+    });
+    await expect(page.locator(".terminal-pane")).toHaveCount(0);
+    await page.locator("#addTerminal").click();
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    await page.waitForTimeout(300);
+
+    const share = await page.evaluate(() => {
+      const host = document.querySelector("#terminalHost");
+      const pane = host.querySelector(".terminal-pane");
+      return pane.getBoundingClientRect().height / host.clientHeight;
+    });
+    // No rail means no reserved rail space.
+    expect(share).toBeGreaterThan(0.85);
+
+    await page.evaluate(() => document.querySelector("#restoreSidecar")?.click());
   });
 });

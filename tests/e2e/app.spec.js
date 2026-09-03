@@ -3189,6 +3189,104 @@ test.describe("MultiTerm Workbench UI", () => {
     });
   });
 
+  test("shows a modal's close control as a bare glyph with no box or border", async () => {
+    await page.locator("#terminalArtifactsToggle").click();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeVisible();
+
+    const shown = await page.evaluate(() => {
+      const button = document.querySelector("#terminalArtifactsClose");
+      const style = getComputedStyle(button);
+      return {
+        background: style.backgroundColor,
+        border: style.borderTopColor,
+        // The shared button ripple is a tinted overlay, so it counts as a box.
+        ripple: getComputedStyle(button, "::before").content,
+        borderWidth: style.borderTopWidth
+      };
+    });
+    expect(shown.background).toBe("rgba(0, 0, 0, 0)");
+    expect(shown.border).toBe("rgba(0, 0, 0, 0)");
+    expect(shown.ripple).toBe("none");
+    // Transparent rather than removed, so the hit target keeps its size.
+    expect(shown.borderWidth).toBe("1px");
+
+    // Every other modal has to match, not just the one opened above.
+    const closers = await page.evaluate(() =>
+      [...document.querySelectorAll('.palette-overlay .icon-button[id$="Close"]')].map((button) => {
+        const style = getComputedStyle(button);
+        return {
+          id: button.id,
+          boxed: style.backgroundColor !== "rgba(0, 0, 0, 0)" || style.borderTopColor !== "rgba(0, 0, 0, 0)"
+        };
+      }));
+
+    expect(closers.filter((closer) => closer.boxed)).toEqual([]);
+    const ids = closers.map((closer) => closer.id);
+    expect(ids).toEqual(expect.arrayContaining([
+      "terminalArtifactsClose",
+      "automationsClose",
+      "statisticsClose",
+      "helpDocClose",
+      "worktreeConflictClose"
+    ]));
+    // The selector keys off an id suffix, so prove it cannot reach a control
+    // that merely happens to be named "...Close", such as this checkbox.
+    expect(ids).not.toContain("automationConditionClose");
+
+    await page.locator("#terminalArtifactsClose").click();
+    await expect(page.locator("#terminalArtifactsOverlay")).toBeHidden();
+  });
+
+  test("moves a modal by dragging its header and re-centres it on reopen", async () => {
+    // A compact dialog, so there is room to move it in both directions.
+    await page.evaluate(() => openAbout());
+    await expect(page.locator("#aboutOverlay")).toBeVisible();
+    const card = page.locator("#aboutOverlay .palette");
+    const header = page.locator('#aboutOverlay .palette > [class$="-head"], #aboutOverlay .palette > header').first();
+    // The card scales in, so measuring before that settles reads a shifted box.
+    const settled = () => expect.poll(() => page.evaluate(
+      () => getComputedStyle(document.querySelector("#aboutOverlay .palette")).transform
+    )).toBe("matrix(1, 0, 0, 1, 0, 0)");
+    await settled();
+
+    const before = await card.boundingBox();
+    const grip = await header.boundingBox();
+    await page.mouse.move(grip.x + 40, grip.y + grip.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(grip.x + 140, grip.y + grip.height / 2 + 70, { steps: 8 });
+    await page.mouse.up();
+
+    const after = await card.boundingBox();
+    expect(Math.round(after.x - before.x)).toBe(100);
+    expect(Math.round(after.y - before.y)).toBe(70);
+
+    // A drag must not be able to strand the dialog off screen.
+    await page.mouse.move(grip.x + 140, grip.y + grip.height / 2 + 70);
+    await page.mouse.down();
+    await page.mouse.move(-4000, -4000, { steps: 6 });
+    await page.mouse.up();
+    const clamped = await card.boundingBox();
+    const viewport = page.viewportSize();
+    expect(clamped.x).toBeGreaterThanOrEqual(-1);
+    expect(clamped.y).toBeGreaterThanOrEqual(-1);
+    expect(clamped.x + clamped.width).toBeLessThanOrEqual(viewport.width + 1);
+
+    // A control in the header still works rather than starting a drag.
+    await page.locator("#aboutClose").click();
+    await expect(page.locator("#aboutOverlay")).toBeHidden();
+    await page.evaluate(() => openAbout());
+    await settled();
+    const reopened = await card.boundingBox();
+    expect(Math.round(reopened.x)).toBe(Math.round(before.x));
+    expect(Math.round(reopened.y)).toBe(Math.round(before.y));
+    await page.locator("#aboutClose").click();
+    await expect(page.locator("#aboutOverlay")).toBeHidden();
+    // Dragging must not cost a card its focus, or Escape stops reaching the
+    // overlay. Only cards carrying tabindex can hold it, so that is guarded by
+    // "still closes on Escape after clicking non-interactive dialog chrome" in
+    // worktree-dialog.spec.js rather than here.
+  });
+
   test("closes all terminals", async () => {
     await page.locator("#closeAllTerminals").click();
     await expect(page.locator("#statusSessions")).toHaveText("0 sessions");

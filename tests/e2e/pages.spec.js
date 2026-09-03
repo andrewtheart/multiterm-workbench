@@ -802,6 +802,42 @@ test.describe("Pages and the quick switcher", () => {
     await expect(page.locator("body")).toHaveAttribute("data-pager-placement", "left");
   });
 
+  test("selects a range of page tabs with Shift and moves them into a group at once", async () => {
+    await reset(1);
+    const archive = await page.evaluate(() => {
+      addPage({ name: "Builds", activate: false });
+      addPage({ name: "Logs", activate: false });
+      const id = addPage({ name: "Archive", activate: false });
+      setPagerPlacement("bottom");
+      createPageGroup("Bundle", [id]);
+      return id;
+    });
+
+    await page.locator(".pager-chip", { hasText: "Page 1" }).click();
+    await page.locator(".pager-chip", { hasText: "Logs" }).click({ modifiers: ["Shift"] });
+
+    const selected = () => page.evaluate(() => [...document.querySelectorAll(".pager-chip.is-range-selected .pager-name")]
+      .map((name) => name.textContent));
+    await expect.poll(selected).toEqual(["Page 1", "Builds", "Logs"]);
+    // Extending a range is a gathering gesture, so it must not navigate away.
+    expect(await page.evaluate(() => pageById(state.activePageId).name)).toBe("Page 1");
+
+    // Dragging any member carries the whole selection into the target's band.
+    await page.locator(".pager-chip", { hasText: "Builds" }).dragTo(
+      page.locator(".pager-chip", { hasText: "Archive" })
+    );
+    const grouped = await page.evaluate((id) => {
+      const groupId = pageById(id).groupId;
+      return state.pages.filter((item) => item.groupId === groupId).map((item) => item.name);
+    }, archive);
+    expect(grouped).toHaveLength(4);
+    expect(grouped).toEqual(expect.arrayContaining(["Page 1", "Builds", "Logs", "Archive"]));
+
+    // A plain click is the way out of a range.
+    await page.locator(".pager-chip", { hasText: "Archive" }).click();
+    await expect(page.locator(".pager-chip.is-range-selected")).toHaveCount(0);
+  });
+
   test("switching pages hides panes without killing their sessions", async () => {
     await reset(2);
     const marker = "PAGE-ALIVE-MARKER";

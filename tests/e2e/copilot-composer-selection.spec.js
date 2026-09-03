@@ -154,6 +154,42 @@ test.describe("Copilot composer text selection", () => {
     expect((await composer()).bandCount).toBe(0);
   });
 
+  // A press in Copilot's output means the user is working with the transcript,
+  // so Ctrl+A has to mean the terminal rather than the prompt box.
+  test("Ctrl+A selects the whole terminal after a click outside the prompt box", async () => {
+    await clearComposer();
+    await page.keyboard.type("ECHO ONE", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("ECHO ONE");
+
+    const point = await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      const region = copilotComposerRegion(terminal);
+      const rect = terminal.term.element.querySelector(".xterm-screen").getBoundingClientRect();
+      const cellHeight = rect.height / terminal.term.rows;
+      const topComposerRow = Math.min(...region.rows.map((row) => row.row));
+      return {
+        outside: { x: rect.left + rect.width / 2, y: rect.top + (topComposerRow - 3) * cellHeight + cellHeight / 2 },
+        inside: { x: rect.left + 20, y: rect.top + region.rows[0].row * cellHeight + cellHeight / 2 }
+      };
+    }, id);
+
+    await page.mouse.click(point.outside.x, point.outside.y);
+    await page.keyboard.press("Control+a");
+    const wide = await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      return { selected: terminal.term.getSelection().length, composer: terminal.composerSelection };
+    }, id);
+    expect(wide.composer).toBeFalsy();
+    expect(wide.selected).toBeGreaterThan("ECHO ONE".length);
+    expect((await composer()).bandCount).toBe(0);
+
+    // Clicking back into the prompt box hands Ctrl+A back to the composer.
+    await page.mouse.click(point.inside.x, point.inside.y);
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("");
+  });
+
   test("replaces the whole composer when you type over a Ctrl+A selection", async () => {
     await clearComposer();
     await page.keyboard.type("CHARLIE DELTA", { delay: 40 });
@@ -467,3 +503,108 @@ test.describe("Copilot composer text selection", () => {
     });
   });
 });
+
+// The highlight is painted into the pane in local CSS pixels while the workspace
+// zoom scales the whole stage, so its geometry is measured here rather than
+// against a live CLI: the placement maths is what breaks, not the TUI.
+test.describe("Copilot composer highlight placement under workspace zoom", () => {
+  test.describe.configure({ mode: "serial" });
+
+  let page;
+  let id;
+
+  // Where the highlight actually lands versus the cells it claims to cover.
+  const measure = (terminalId, zoom) => page.evaluate(({ terminalId: target, zoom: percent }) => {
+    const terminal = state.terminals.get(target);
+    setWorkspaceZoom(percent);
+    const row = 2;
+    const start = 3;
+    const end = 11;
+    copilotComposerRegion = () => ({ rows: [{ row, start, end }] });
+    terminal.composerSelection = { mode: "all", anchor: 0, head: end - start };
+    renderComposerSelection(terminal);
+
+    const band = terminal.screen.querySelector(".pane-composer-selection-band");
+    if (!band) return null;
+    const screen = terminal.pane.querySelector(".xterm-screen");
+    const screenRect = screen.getBoundingClientRect();
+    const bandRect = band.getBoundingClientRect();
+    const cellWidth = screenRect.width / terminal.term.cols;
+    const cellHeight = screenRect.height / terminal.term.rows;
+    return {
+      topDrift: bandRect.top - (screenRect.top + row * cellHeight),
+      leftDrift: bandRect.left - (screenRect.left + start * cellWidth),
+      widthDrift: bandRect.width - (end - start) * cellWidth,
+      heightDrift: bandRect.height - cellHeight
+    };
+  }, { terminalId, zoom });
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await startRendererCoverage(page);
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect.poll(async () => {
+      await page.evaluate(() => closeAllTerminals());
+      return page.locator(".terminal-pane").count();
+    }, { timeout: 30000 }).toBe(0);
+    id = await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }).id);
+    await expect.poll(() => page.evaluate((terminalId) => state.terminals.get(terminalId)?.status, id),
+      { timeout: 30000 }).toBe("live");
+  });
+
+  test.afterAll(async () => {
+    await page.evaluate(() => {
+      setWorkspaceZoom(defaultSettings.workspaceZoom);
+      saveSettings();
+      closeAllTerminals();
+    });
+    await stopRendererCoverage(page, "copilot-composer-selection-zoom");
+    await page.close();
+  });
+
+  // A zoom above 100% used to push the band below the composer, and one below
+  // 100% pushed it above, because the maths mixed visual and local pixels.
+  for (const zoom of [100, 150, 80, 200]) {
+    test(`paints the highlight over the composed text at ${zoom}% zoom`, async () => {
+      const drift = await measure(id, zoom);
+      expect(drift).not.toBeNull();
+      expect(Math.abs(drift.topDrift)).toBeLessThan(1.5);
+      expect(Math.abs(drift.leftDrift)).toBeLessThan(1.5);
+      expect(Math.abs(drift.widthDrift)).toBeLessThan(1.5);
+      expect(Math.abs(drift.heightDrift)).toBeLessThan(1.5);
+    });
+  }
+
+  // The scroll chevron is parked with the same measurement, so it drifts too.
+  for (const zoom of [100, 150, 80]) {
+    test(`parks the scroll chevron on the composer edge at ${zoom}% zoom`, async () => {
+      await page.evaluate((percent) => setWorkspaceZoom(percent), zoom);
+      // The inset is only meaningful once the pane has refit to the new scale.
+      await expect.poll(() => page.evaluate((terminalId) => {
+        const terminal = state.terminals.get(terminalId);
+        const screen = terminal.pane.querySelector(".xterm-screen");
+        const container = terminal.pane.querySelector(".terminal-screen");
+        return Math.round(container.getBoundingClientRect().bottom - screen.getBoundingClientRect().bottom);
+      }, id), { timeout: 15000 }).toBeGreaterThanOrEqual(0);
+
+      const drift = await page.evaluate(({ terminalId, percent }) => {
+        const terminal = state.terminals.get(terminalId);
+        copilotComposerRows = () => 3;
+        terminal.copilotScrollInsetAt = 0;
+        syncCopilotScrollInset(terminal);
+
+        const screen = terminal.pane.querySelector(".xterm-screen");
+        const container = terminal.pane.querySelector(".terminal-screen");
+        const screenRect = screen.getBoundingClientRect();
+        const scale = percent / 100;
+        const expected = ((container.getBoundingClientRect().bottom - screenRect.bottom)
+          + 3 * (screenRect.height / terminal.term.rows)) / scale;
+        const applied = Number.parseFloat(terminal.pane.style.getPropertyValue("--pane-scroll-bottom-inset"));
+        return applied - expected;
+      }, { terminalId: id, percent: zoom });
+      expect(Math.abs(drift)).toBeLessThan(1.5);
+    });
+  }
+});
+
