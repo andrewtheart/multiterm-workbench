@@ -16,6 +16,7 @@ async function reset(page) {
   await page.evaluate(() => {
     window.__terminalAppearanceOriginal = {
       fontFamily: state.settings.fontFamily,
+      fontSize: state.settings.fontSize,
       terminalBackground: state.settings.terminalBackground,
       terminalForeground: state.settings.terminalForeground,
       terminalHeaderBackground: cloneHeaderBackground(state.settings.terminalHeaderBackground)
@@ -58,6 +59,7 @@ test.describe("Terminal appearance editor", () => {
       const original = window.__terminalAppearanceOriginal;
       if (original) {
         state.settings.fontFamily = original.fontFamily;
+        state.settings.fontSize = original.fontSize;
         state.settings.terminalBackground = original.terminalBackground;
         state.settings.terminalForeground = original.terminalForeground;
         state.settings.terminalHeaderBackground = original.terminalHeaderBackground;
@@ -66,6 +68,7 @@ test.describe("Terminal appearance editor", () => {
         terminal.terminalBackground = "";
         terminal.terminalForeground = "";
         terminal.terminalFontFamily = "";
+        terminal.fontSizeOverride = null;
         terminal.headerBackground = null;
       }
       applySettings();
@@ -216,6 +219,30 @@ test.describe("Terminal appearance editor", () => {
       if (terminal) terminal.fontSizeOverride = null;
       applyTerminalAppearance(terminal);
     }, target);
+  });
+
+  // Reset clears the body appearance, and the size is part of it: leaving the
+  // override behind kept the terminal on the size the user just asked to drop.
+  test("clears the font size override when the body is reset to defaults", async ({ page }) => {
+    await reset(page);
+    const target = await page.evaluate(() => [...state.terminals.keys()][0]);
+    const globalSize = await page.evaluate(() => state.settings.fontSize);
+
+    await openAppearance(page);
+    await page.locator("#terminalAppearanceFontSize").fill(String(globalSize + 5));
+    await page.locator("#headerBackgroundApply").click();
+    await page.locator("#terminalAppearanceApplyTerminal").click();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeHidden();
+    expect(await page.evaluate((id) => state.terminals.get(id).fontSizeOverride, target)).toBe(globalSize + 5);
+
+    await openAppearance(page);
+    await page.locator("#headerBackgroundReset").click();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeHidden();
+
+    expect(await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      return { override: terminal.fontSizeOverride, rendered: terminal.term.options.fontSize };
+    }, target), "the terminal goes back to the app-wide size").toEqual({ override: null, rendered: globalSize });
   });
 
   test("steps the font size from buttons that stay easy to hit", async ({ page }) => {

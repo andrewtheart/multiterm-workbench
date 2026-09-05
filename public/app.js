@@ -105,7 +105,7 @@ const defaultSettings = {
   copilotRemoteSessions: false,
   copilotCwdQueryTimeoutSeconds: 180,
   copilotSessionListTimeoutSeconds: 20,
-  copilotSessionNotePageSize: 5,
+  copilotSessionNotePageSize: 2,
   copilotSessionSearchContextKb: 1024,
   copilotTitleContext: "default",
   copilotTitleContextKb: 16,
@@ -164,7 +164,7 @@ const defaultSettings = {
   shellIntegration: true,
   showBridgeIdInWindowTitle: true,
   showVersionInWindowTitle: false,
-  sidecarHidden: false,
+  sidecarHidden: true,
   sidecarWidth: SIDECAR_WIDTH_BOUNDS.fallback,
   silenceSeconds: 10,
   snippets: [
@@ -1639,6 +1639,7 @@ const elements = {
   statusZoomIn: document.querySelector("#statusZoomIn"),
   statusZoomOut: document.querySelector("#statusZoomOut"),
   statusWorkspaceZoom: document.querySelector("#statusWorkspaceZoom"),
+  statusWorkspaceZoomReset: document.querySelector("#statusWorkspaceZoomReset"),
   statusWorkspaceZoomValue: document.querySelector("#statusWorkspaceZoomValue"),
   statisticsBody: document.querySelector("#statisticsBody"),
   statisticsClose: document.querySelector("#statisticsClose"),
@@ -1727,6 +1728,7 @@ const elements = {
   toggleHeaderTop: document.querySelector("#toggleHeaderTop"),
   togglePager: document.querySelector("#togglePager"),
   toggleSidecar: document.querySelector("#toggleSidecar"),
+  expandSettingsRail: document.querySelector("#expandSettingsRail"),
   toggleSidecarTop: document.querySelector("#toggleSidecarTop"),
   recoveredNotesBody: document.querySelector("#recoveredNotesBody"),
   recoveredNotesCount: document.querySelector("#recoveredNotesCount"),
@@ -2561,6 +2563,12 @@ function bindControls() {
     clearTerminalFocus();
     setWorkspaceZoom(elements.statusWorkspaceZoom.value, { announce: true });
   });
+  elements.statusWorkspaceZoomReset.addEventListener("click", (event) => {
+    // Nested in the slider's own label, which would otherwise take the click.
+    event.preventDefault();
+    clearTerminalFocus();
+    resetWorkspaceZoom();
+  });
   elements.fitAll.addEventListener("click", fitAllTerminals);
   elements.resetLayout.addEventListener("click", resetLayout);
   elements.commandPalette.addEventListener("click", openPalette);
@@ -2635,6 +2643,10 @@ function bindControls() {
   });
   elements.toggleHeader.addEventListener("click", () => toggleChrome("headerHidden"));
   elements.toggleSidecar.addEventListener("click", () => toggleChrome("sidecarHidden"));
+  elements.expandSettingsRail.addEventListener("click", () => {
+    toggleChrome("sidecarHidden");
+    elements.settingsSearch.focus();
+  });
   elements.toggleHeaderTop.addEventListener("click", () => toggleChrome("headerHidden"));
   elements.toggleSidecarTop.addEventListener("click", () => toggleChrome("sidecarHidden"));
   bindSidecarResize();
@@ -3061,7 +3073,7 @@ const COPILOT_IMPORT_CONTEXT_KB_BOUNDS = { min: 8, max: 1024, fallback: 64 };
 const COPILOT_SESSION_SEARCH_CONTEXT_KB_BOUNDS = { min: 64, max: 16384, fallback: 1024 };
 const COPILOT_CWD_QUERY_TIMEOUT_SECONDS_BOUNDS = { min: 30, max: 900, fallback: 180 };
 const COPILOT_SESSION_LIST_TIMEOUT_SECONDS_BOUNDS = { min: 5, max: 300, fallback: 20 };
-const COPILOT_SESSION_NOTE_PAGE_SIZE_BOUNDS = { min: 1, max: 50, fallback: 5 };
+const COPILOT_SESSION_NOTE_PAGE_SIZE_BOUNDS = { min: 1, max: 50, fallback: 2 };
 const COPILOT_TITLE_CONTEXT_KB_BOUNDS = { min: 4, max: 24, fallback: 16 };
 const COPILOT_TITLE_WORD_BOUNDS = { min: 1, max: 20 };
 const TITLE_SUGGESTION_HISTORY_BOUNDS = { min: 25, max: TITLE_SUGGESTION_HISTORY_MAX_LIMIT, fallback: 500 };
@@ -4734,6 +4746,7 @@ function addTerminal(options = {}) {
     copilotCwd: normalizeCopilotCwdEntry(savedMeta?.copilotCwd ?? options.copilotCwd),
     // Until the user clicks elsewhere, Ctrl+A belongs to Copilot's prompt box.
     composerPress: true,
+    composerProvenEnds: new Map(),
     contextSelection: "",
     ctrlCCount: 0,
     ctrlCLastAt: 0,
@@ -5289,6 +5302,14 @@ function setWorkspaceZoom(value, { announce = false } = {}) {
   applySettings();
   saveSettings();
   if (announce) showWorkspaceZoomIndicator();
+}
+
+function resetWorkspaceZoom() {
+  // A page's own zoom outranks the global one, so clearing it too is what makes
+  // the workspace actually land back on 100%.
+  pageZoomOverrides.delete(state.activePageId);
+  setWorkspaceZoom(WORKSPACE_ZOOM_BOUNDS.fallback, { announce: true });
+  window.requestAnimationFrame(() => fitAllTerminals());
 }
 
 function contextMenuScaleFactor() {
@@ -12924,6 +12945,9 @@ function resetFontZoom() {
 }
 
 function terminalFontSize(terminal) {
+  // A profile's 0 means "inherit the app size", so only a real size overrides.
+  const automated = terminal?.automationAppearance;
+  if (automated?.fontSize) return automated.fontSize;
   return terminal.fontSizeOverride ?? state.settings.fontSize;
 }
 
@@ -16401,6 +16425,10 @@ function copilotComposerRegion(terminal) {
   if (topOffset - bottomOffset < 2) return null;
 
   const rows = [];
+  // The cursor is the only witness to content the painting cannot show. A row
+  // that shrank back once it moved on would renumber a selection still being
+  // extended, so what it proves is held for that selection's lifetime.
+  const proven = terminal.composerSelection ? terminal.composerProvenEnds : null;
   for (let offset = topOffset - 1; offset > bottomOffset; offset -= 1) {
     const screenRow = term.rows - 1 - offset;
     const line = buffer.getLine(buffer.viewportY + screenRow);
@@ -16420,12 +16448,25 @@ function copilotComposerRegion(terminal) {
     }
     // Trailing spaces are real composer text, so the cursor marks the true end.
     if (buffer.cursorY === screenRow) end = Math.max(end, buffer.cursorX);
+    if (proven) {
+      end = Math.max(end, proven.get(screenRow) ?? 0);
+      proven.set(screenRow, end);
+    }
     rows.push({ row: screenRow, start, end: Math.max(end, start), newline: false });
   }
-  // A row that stops short of the box edge ended because the user pressed Enter;
-  // a row filled to the edge is one logical line continuing onto the next.
+  // A break costs one cursor step whether Copilot wrapped the line or the user
+  // typed a newline, so the index space treats them alike. The text does not: a
+  // wrap swallowed the space it broke on. A greedy wrapper keeps the next word
+  // on this row whenever it fits, so a break with room to spare was typed; the
+  // rest is indistinguishable from the cells and is read as a wrap.
   for (let index = 0; index < rows.length - 1; index += 1) {
-    rows[index].newline = rows[index].end < borders.contentEnd;
+    const row = rows[index];
+    row.newline = row.end < borders.contentEnd;
+    if (!row.newline) continue;
+    const next = rows[index + 1];
+    const painted = buffer.getLine(buffer.viewportY + next.row)?.translateToString(true, next.start) ?? "";
+    const word = painted.trimStart().split(/\s/)[0] || "";
+    row.wrapped = (row.end - row.start) + 1 + word.length > borders.contentEnd + 1 - row.start;
   }
   return rows.length > 0 ? { rows } : null;
 }
@@ -16467,10 +16508,19 @@ function composerSelectionFromViewport(terminal, region) {
   return { mode: "range", anchor, head };
 }
 
-function composerSelectionRange(selection) {
+function composerSelectionRange(selection, region = null) {
+  // Select-all always means everything, and the anchor is kept as a buffer
+  // position because a row's measured width grows once the cursor proves what it
+  // hides -- an index captured under the old width no longer names the same
+  // character.
+  if (region && selection.mode === "all") return { from: 0, to: composerLength(region) };
+  const anchored = region && selection.anchorAt
+    ? composerIndexAt(region, selection.anchorAt.row, selection.anchorAt.col)
+    : -1;
+  const anchor = anchored >= 0 ? anchored : selection.anchor;
   return {
-    from: Math.min(selection.anchor, selection.head),
-    to: Math.max(selection.anchor, selection.head)
+    from: Math.min(anchor, selection.head),
+    to: Math.max(anchor, selection.head)
   };
 }
 
@@ -16493,7 +16543,7 @@ function renderComposerSelection(terminal) {
     layer.replaceChildren();
     return;
   }
-  const { from, to } = composerSelectionRange(selection);
+  const { from, to } = composerSelectionRange(selection, region);
   const screen = terminal.pane.querySelector(".xterm-screen");
   if (!screen || to <= from) {
     layer.replaceChildren();
@@ -16533,21 +16583,36 @@ function renderComposerSelection(terminal) {
 function clearComposerSelection(terminal) {
   if (!terminal.composerSelection) return false;
   terminal.composerSelection = null;
+  terminal.composerProvenEnds.clear();
   renderComposerSelection(terminal);
   return true;
 }
 
+// A painted row cannot say whether a trailing space is text the user typed or
+// the box's own padding, and a soft wrap silently swallows the spaces it broke
+// on, so the cell count is a floor rather than the truth. Padding bounds it: a
+// row hides at most its own width. Backspace past the start is a no-op, so a
+// select-all clears exactly when it overshoots to that bound.
+function composerClearBound(terminal, region) {
+  const borders = copilotComposerBorders(terminal);
+  const width = borders ? borders.contentEnd + 1 : 0;
+  return region.rows.reduce(
+    (total, row) => total + Math.max(width - row.start, row.end - row.start) + 1,
+    0
+  );
+}
+
 function deleteComposerSelection(terminal, region, selection) {
-  const { from, to } = composerSelectionRange(selection);
+  const { from, to } = composerSelectionRange(selection, region);
   const length = to - from;
-  const total = composerLength(region);
   const cursor = composerCursorIndex(terminal, region);
   clearComposerSelection(terminal);
   if (length < 1) return false;
   // Select-all leaves Copilot's cursor wherever it was, so overshoot to the end
-  // first; the composer clamps there and backspaces then remove a known range.
+  // first; the composer clamps there and the backspaces then empty it.
+  const bound = composerClearBound(terminal, region);
   const data = selection.mode === "all"
-    ? "\u001b[C".repeat(total) + "\u007f".repeat(length)
+    ? "\u001b[C".repeat(bound) + "\u007f".repeat(bound)
     : selection.mode === "range"
       // A mouse range sits anywhere, so walk the cursor to its end and delete back.
       ? (cursor < 0
@@ -16569,13 +16634,13 @@ function composerText(terminal, region) {
     .map((row) => {
       const line = buffer.getLine(buffer.viewportY + row.row);
       // Trailing spaces are kept so offsets into this text match composer indices.
-      return line ? line.translateToString(false, row.start, row.end) + (row.newline ? "\n" : "") : "";
+      return line ? line.translateToString(false, row.start, row.end) + (row.newline ? (row.wrapped ? " " : "\n") : "") : "";
     })
     .join("");
 }
 
 function composerSelectionText(terminal, region, selection) {
-  const { from, to } = composerSelectionRange(selection);
+  const { from, to } = composerSelectionRange(selection, region);
   return composerText(terminal, region).slice(from, to);
 }
 
@@ -16612,6 +16677,12 @@ function selectAllComposerText(terminal) {
 function handleComposerSelectionKey(terminal, event) {
   const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
   const arrow = event.key === "ArrowLeft" || event.key === "ArrowRight";
+  const editsComposer = (plain && (event.key.length === 1 || arrow
+    || ["Home", "End", "Backspace", "Delete", "Enter", "Tab"].includes(event.key)))
+    || (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.code === "KeyV");
+  if (!terminal.composerPress && editsComposer && copilotComposerRegion(terminal)) {
+    terminal.composerPress = true;
+  }
 
   if (plain && event.shiftKey && arrow) {
     const region = copilotComposerRegion(terminal);
@@ -16621,7 +16692,13 @@ function handleComposerSelectionKey(terminal, event) {
     event.preventDefault();
     event.stopPropagation();
     if (!terminal.composerSelection || terminal.composerSelection.mode !== "cursor") {
-      terminal.composerSelection = { mode: "cursor", anchor: cursor, head: cursor };
+      const buffer = terminal.term.buffer.active;
+      terminal.composerSelection = {
+        mode: "cursor",
+        anchor: cursor,
+        anchorAt: { row: buffer.cursorY, col: buffer.cursorX },
+        head: cursor
+      };
     }
     // The head follows Copilot's own cursor, updated from onCursorMove.
     sendBridge({ type: "input", id: terminal.id, data: event.key === "ArrowLeft" ? "\u001b[D" : "\u001b[C" });
@@ -16634,6 +16711,7 @@ function handleComposerSelectionKey(terminal, event) {
     if (!terminal.composerPress || !copilotComposerRegion(terminal)) return false;
     event.preventDefault();
     event.stopPropagation();
+    forgetTerminalSelection(terminal);
     selectAllComposerText(terminal);
     return true;
   }
@@ -16722,6 +16800,44 @@ function bindComposerSelection(terminal) {
   terminal.term.textarea?.addEventListener("blur", () => clearComposerSelection(terminal));
 }
 
+function copilotTuiScrollAvailability(terminal) {
+  const { term } = terminal;
+  const borders = copilotComposerBorders(terminal);
+  if (!borders || term.cols < 1) return null;
+  const buffer = term.buffer.active;
+  const cellAt = (row) => buffer.getLine(buffer.viewportY + row)?.getCell(term.cols - 1);
+  let bottom = term.rows - borders.top - 2;
+  while (bottom >= 0 && !(cellAt(bottom)?.getChars() || "").trim()) bottom -= 1;
+  const background = relativeLuminance(term.options.theme?.background || "#000000");
+  if (!Number.isFinite(background)) return null;
+  const colors = new Map();
+  let top = bottom;
+  for (; top >= 0; top -= 1) {
+    const cell = cellAt(top);
+    if (cell?.getChars() !== "\u2503") break;
+    if (!cell.isFgRGB()) return null;
+    const color = cell.getFgColor();
+    const span = colors.get(color);
+    if (span) {
+      span.first = top;
+      span.count += 1;
+    } else {
+      const hex = `#${color.toString(16).padStart(6, "0")}`;
+      colors.set(color, {
+        first: top,
+        last: top,
+        count: 1,
+        contrast: contrastRatio(relativeLuminance(hex), background)
+      });
+    }
+  }
+  top += 1;
+  if (bottom - top < 1 || colors.size > 2) return null;
+  const thumb = [...colors.values()].sort((first, second) => second.contrast - first.contrast)[0];
+  if (!thumb || thumb.last - thumb.first + 1 !== thumb.count) return null;
+  return { up: thumb.first > top, down: thumb.last < bottom };
+}
+
 function syncTerminalScrollControls(terminal) {
   const topButton = terminal.pane.querySelector(".pane-scroll-top");
   const bottomButton = terminal.pane.querySelector(".pane-scroll-bottom");
@@ -16736,9 +16852,10 @@ function syncTerminalScrollControls(terminal) {
   bottomButton.title = `Scroll ${subject} to the bottom`;
   bottomButton.setAttribute("aria-label", `Scroll ${subject} to the bottom`);
   if (!copilotTui) terminal.tuiScrollEdge = "";
+  const tuiScroll = copilotTui ? copilotTuiScrollAvailability(terminal) : null;
   const tuiEdge = terminal.tuiScrollEdge || "bottom";
-  const awayFromTop = copilotTui ? tuiEdge !== "top" : buffer.viewportY > 0;
-  const awayFromBottom = copilotTui ? tuiEdge !== "bottom" : buffer.viewportY < buffer.baseY;
+  const awayFromTop = copilotTui ? tuiScroll?.up ?? tuiEdge !== "top" : buffer.viewportY > 0;
+  const awayFromBottom = copilotTui ? tuiScroll?.down ?? tuiEdge !== "bottom" : buffer.viewportY < buffer.baseY;
   const unsupportedBuffer = buffer.type === "alternate" && !copilotTui;
   topButton.hidden = unsupportedBuffer || !awayFromTop;
   bottomButton.hidden = unsupportedBuffer || !awayFromBottom;
@@ -21705,6 +21822,19 @@ function requestPageClose(id) {
   return removePage(id, { terminalAction: action });
 }
 
+function requestSelectedPagesClose(ids) {
+  const selected = new Set(ids);
+  const pageIds = state.pages.filter((page) => selected.has(page.id)).map((page) => page.id);
+  if (pageIds.length === 0) return false;
+  if (pageIds.length === 1) return requestPageClose(pageIds[0]);
+  const action = normalizePageCloseAction(state.settings.pageCloseAction);
+  if (action === "ask" && [...state.terminals.values()].some((terminal) => selected.has(terminal.pageId))) {
+    openPageCloseConfirm({ kind: "selected", pageIds });
+    return false;
+  }
+  return closeSelectedPages(pageIds, { terminalAction: action });
+}
+
 function requestCloseAllPages() {
   const action = normalizePageCloseAction(state.settings.pageCloseAction);
   if (state.terminals.size > 0 && action === "ask") {
@@ -21733,38 +21863,56 @@ function openPageCloseConfirm(request) {
   state.pendingPageClose = request;
   const closingAll = request.kind === "all";
   const closingOthers = request.kind === "others";
+  const closingSelected = request.kind === "selected";
+  const selected = new Set(request.pageIds || []);
   const page = closingAll ? null : pageById(request.pageId);
   const count = closingAll
     ? state.terminals.size
+    : closingSelected
+      ? [...state.terminals.values()].filter((terminal) => selected.has(terminal.pageId)).length
     : closingOthers
       ? terminalsNotOnPage(request.pageId).length
       : terminalsOnPage(request.pageId).length;
   const otherPages = closingOthers ? state.pages.length - 1 : 0;
   elements.pageCloseTitle.textContent = closingAll
     ? "Close all pages?"
+    : closingSelected
+      ? "Close selected pages?"
     : closingOthers
       ? "Close other pages?"
       : "Close page?";
   elements.pageCloseText.textContent = closingAll
     ? `The ${count} terminal${count === 1 ? "" : "s"} across all pages can be moved to one new Page 1 or closed with the pages.`
+    : closingSelected
+      ? `Closing ${selected.size} pages affects ${count} terminal${count === 1 ? "" : "s"}. Move ${count === 1 ? "it" : "them"} to ${selected.size === state.pages.length ? "one new Page 1" : "a remaining page"} or close ${count === 1 ? "it" : "them"} with the pages.`
     : closingOthers
       ? `Closing the other ${otherPages} page${otherPages === 1 ? "" : "s"} affects ${count} terminal${count === 1 ? "" : "s"}. Move ${count === 1 ? "it" : "them"} to “${page?.name || "this page"}” or close ${count === 1 ? "it" : "them"} with the pages.`
       : `“${page?.name || "This page"}” contains ${count} terminal${count === 1 ? "" : "s"}. Move ${count === 1 ? "it" : "them"} to a neighbouring page or close ${count === 1 ? "it" : "them"} with the page.`;
   elements.pageCloseRemember.checked = false;
   elements.pageCloseOverlay.hidden = false;
-  window.requestAnimationFrame(() => {
+  pageCloseReturnFocus = document.activeElement;
+  pageCloseFocusFrame = window.requestAnimationFrame(() => {
     elements.pageCloseOverlay.classList.add("is-open");
     elements.pageCloseMove.focus();
   });
   refreshIcons();
 }
 
-function closePageCloseConfirm() {
+let pageCloseReturnFocus = null;
+// Dismissing before this frame runs would otherwise focus a button that is about
+// to be hidden, stranding focus on BODY.
+let pageCloseFocusFrame = 0;
+
+function closePageCloseConfirm({ restoreFocus = true } = {}) {
+  const returnFocus = pageCloseReturnFocus;
   state.pendingPageClose = null;
+  pageCloseReturnFocus = null;
+  window.cancelAnimationFrame(pageCloseFocusFrame);
   elements.pageCloseOverlay.classList.remove("is-open");
   window.setTimeout(() => {
     elements.pageCloseOverlay.hidden = true;
   }, 150);
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 }
 
 function choosePageCloseAction(action) {
@@ -21776,8 +21924,9 @@ function choosePageCloseAction(action) {
     elements.pageCloseAction._combo?.sync();
     saveSettings();
   }
-  closePageCloseConfirm();
+  closePageCloseConfirm({ restoreFocus: false });
   if (request.kind === "all") resetAllPages(action);
+  else if (request.kind === "selected") closeSelectedPages(request.pageIds, { terminalAction: action });
   else if (request.kind === "others") closeOtherPages(request.pageId, { terminalAction: action });
   else removePage(request.pageId, { terminalAction: action });
 }
@@ -21785,7 +21934,7 @@ function choosePageCloseAction(action) {
 function bindPageCloseConfirm() {
   elements.pageCloseMove.addEventListener("click", () => choosePageCloseAction("move"));
   elements.pageCloseTerminals.addEventListener("click", () => choosePageCloseAction("close"));
-  elements.pageCloseCancel.addEventListener("click", closePageCloseConfirm);
+  elements.pageCloseCancel.addEventListener("click", () => closePageCloseConfirm());
   elements.pageCloseOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.pageCloseOverlay) closePageCloseConfirm();
   });
@@ -21806,6 +21955,7 @@ function requestTerminalClose(id) {
 
 function openTerminalCloseConfirm(terminal) {
   state.pendingTerminalClose = terminal.id;
+  terminalCloseReturnFocus = document.activeElement;
   window.clearTimeout(terminalCloseHideTimer);
   const title = committedTerminalTitle(terminal) || "This terminal";
   elements.terminalCloseText.textContent = terminal.pid
@@ -21813,7 +21963,7 @@ function openTerminalCloseConfirm(terminal) {
     : `“${title}” is still running. Closing it ends that session.`;
   elements.terminalCloseRemember.checked = false;
   elements.terminalCloseOverlay.hidden = false;
-  window.requestAnimationFrame(() => {
+  terminalCloseFocusFrame = window.requestAnimationFrame(() => {
     elements.terminalCloseOverlay.classList.add("is-open");
     elements.terminalCloseCancel.focus();
   });
@@ -21823,14 +21973,27 @@ function openTerminalCloseConfirm(terminal) {
 // Held so reopening the dialog inside the fade cannot be blanked by the hide
 // this scheduled.
 let terminalCloseHideTimer = 0;
+let terminalCloseReturnFocus = null;
+// Dismissing before this frame runs would otherwise focus a button that is about
+// to be hidden, stranding focus on BODY.
+let terminalCloseFocusFrame = 0;
 
-function closeTerminalCloseConfirm() {
+function closeTerminalCloseConfirm({ restoreFocus = true } = {}) {
+  const returnFocus = terminalCloseReturnFocus;
+  const asked = state.terminals.get(state.pendingTerminalClose);
   state.pendingTerminalClose = null;
+  terminalCloseReturnFocus = null;
+  window.cancelAnimationFrame(terminalCloseFocusFrame);
   elements.terminalCloseOverlay.classList.remove("is-open");
   window.clearTimeout(terminalCloseHideTimer);
   terminalCloseHideTimer = window.setTimeout(() => {
     elements.terminalCloseOverlay.hidden = true;
   }, 150);
+  if (!restoreFocus) return;
+  // The dialog took focus off the pane, so keeping the terminal alive has to hand
+  // it back; otherwise focus is stranded on BODY and typing reaches nothing.
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  else asked?.term?.focus();
 }
 
 function acceptTerminalClose() {
@@ -21841,13 +22004,13 @@ function acceptTerminalClose() {
     elements.confirmTerminalClose.checked = false;
     saveSettings();
   }
-  closeTerminalCloseConfirm();
+  closeTerminalCloseConfirm({ restoreFocus: false });
   removeTerminal(id);
 }
 
 function bindTerminalCloseConfirm() {
   elements.terminalCloseAccept.addEventListener("click", acceptTerminalClose);
-  elements.terminalCloseCancel.addEventListener("click", closeTerminalCloseConfirm);
+  elements.terminalCloseCancel.addEventListener("click", () => closeTerminalCloseConfirm());
   elements.terminalCloseOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.terminalCloseOverlay) closeTerminalCloseConfirm();
   });
@@ -21874,6 +22037,45 @@ function resetAllPages(terminalAction) {
   updateTerminalActions();
   window.requestAnimationFrame(() => fitAllTerminals());
   toast(terminalAction === "close" ? "Closed all pages and terminals" : "Closed all pages — moved terminals to Page 1", "info");
+  return true;
+}
+
+function closeSelectedPages(ids, options = {}) {
+  const selected = new Set(ids);
+  const removed = state.pages.filter((page) => selected.has(page.id));
+  if (!removed.length) return false;
+  const remaining = state.pages.filter((page) => !selected.has(page.id));
+  const terminalAction = normalizePageCloseAction(options.terminalAction);
+  if (!remaining.length) {
+    const closed = resetAllPages(terminalAction);
+    if (closed) elements.pagerList.querySelector(".pager-chip.is-active")?.focus();
+    return closed;
+  }
+  const fallback = remaining.find((page) => page.id === state.activePageId) || remaining[0];
+  const affected = [...state.terminals.values()].filter((terminal) => selected.has(terminal.pageId));
+  if (terminalAction === "close") {
+    for (const terminal of affected) removeTerminal(terminal.id);
+    if ([...state.terminals.values()].some((terminal) => selected.has(terminal.pageId))) {
+      toast("Could not close every terminal on the selected pages", "error", 3200);
+      return false;
+    }
+  } else {
+    for (const terminal of affected) terminal.pageId = fallback.id;
+  }
+  state.pages = remaining;
+  for (const page of removed) clearPageOverrides(page.id);
+  pruneEmptyPageGroups();
+  state.activePageId = fallback.id;
+  applyPageVisibility();
+  renderPager();
+  savePages();
+  saveTerminalPages();
+  saveSessionSnapshot();
+  applyZoom();
+  updateTerminalActions();
+  elements.pagerList.querySelector(".pager-chip.is-active")?.focus();
+  window.requestAnimationFrame(() => fitAllTerminals());
+  toast(`Closed ${removed.length} page${removed.length === 1 ? "" : "s"}`, "info");
   return true;
 }
 
@@ -22523,6 +22725,13 @@ function isVerticalPager() {
   return placement === "left" || placement === "right";
 }
 
+// Re-inserting a node detaches it, which silently resets the scroll offset of
+// every scroller inside it, so the bar only moves when it is not already there.
+function dockPager(parent, before) {
+  if (elements.pager.parentElement === parent && elements.pager.nextElementSibling === before) return;
+  parent.insertBefore(elements.pager, before);
+}
+
 function applyPagerPlacement() {
   const placement = normalizedPagerPlacement();
   const vertical = placement === "left" || placement === "right";
@@ -22536,12 +22745,12 @@ function applyPagerPlacement() {
   elements.pagerList.setAttribute("aria-orientation", vertical ? "vertical" : "horizontal");
 
   if (vertical) {
-    if (placement === "left") elements.workbench.insertBefore(elements.pager, elements.stage);
-    else elements.workbench.append(elements.pager);
+    if (placement === "left") dockPager(elements.workbench, elements.stage);
+    else dockPager(elements.workbench, null);
   } else if (placement === "top") {
-    elements.appShell.insertBefore(elements.pager, elements.workbench);
+    dockPager(elements.appShell, elements.workbench);
   } else {
-    elements.appShell.insertBefore(elements.pager, document.querySelector(".status-bar"));
+    dockPager(elements.appShell, document.querySelector(".status-bar"));
   }
 
   placeHeaderRestoreToggle(placement);
@@ -23054,12 +23263,28 @@ function tabAppearanceTargetValue() {
   return normalizeTabAppearance(globalTabAppearance());
 }
 
+// Applying the editor writes every field, so it has to seed from the same chain
+// the chip paints from: a page inherits its group before the bar. Seeding from
+// the bar alone made editing one field overwrite the group's other two.
+function inheritedTabAppearance(scope, id) {
+  const layers = [normalizeTabAppearance(globalTabAppearance())];
+  if (scope === "page") layers.push(normalizeTabAppearance(pageGroupOf(pageById(id))?.tabAppearance));
+  const inherited = {};
+  for (const layer of layers) {
+    if (!layer) continue;
+    for (const [name, value] of Object.entries(layer)) {
+      if (value) inherited[name] = value;
+    }
+  }
+  return inherited;
+}
+
 function openTabAppearanceEditor(scope, id, subtitle) {
   if (!elements.tabAppearanceOverlay) return;
   hideContextMenu();
   tabAppearanceTarget = { scope, id };
   tabAppearanceReturnFocus = document.activeElement;
-  const inherited = normalizeTabAppearance(globalTabAppearance()) || {};
+  const inherited = inheritedTabAppearance(scope, id);
   const current = tabAppearanceTargetValue() || {};
   const theme = themes[state.settings.theme] || themes.ember;
   elements.tabAppearanceSubtitle.textContent = subtitle;
@@ -23507,6 +23732,21 @@ function bindPager() {
         return;
       }
       clearPagerRangeSelection();
+      const label = chip.querySelector(".pager-name");
+      if (isVerticalPager() && event.detail > 0 && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
+          && label?.firstChild && (event.target === chip || label.contains(event.target))) {
+        const prefix = document.createRange();
+        prefix.setStart(label.firstChild, 0);
+        prefix.setEnd(label.firstChild, Array.from(label.textContent).slice(0, 3).join("").length);
+        const bounds = chip.getBoundingClientRect();
+        const end = Math.min(prefix.getBoundingClientRect().right, label.getBoundingClientRect().right);
+        if (event.clientX >= bounds.left && event.clientX <= end) {
+          event.preventDefault();
+          event.stopPropagation();
+          startPageRename(chip);
+          return;
+        }
+      }
       pagerRangeAnchor = chip.dataset.pageId;
       setActivePage(chip.dataset.pageId);
       return;
@@ -23523,6 +23763,16 @@ function bindPager() {
   });
 
   list.addEventListener("keydown", (event) => {
+    if (event.target.closest(".pager-rename")) return;
+    if (event.key === "Delete" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) {
+      const chip = event.target.closest(".pager-chip");
+      if (!chip) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) requestSelectedPagesClose(pagerRangeSelection.size > 1
+        ? [...pagerRangeSelection] : [chip.dataset.pageId]);
+      return;
+    }
     if (event.key === "Escape" && clearPagerRangeSelection()) {
       event.preventDefault();
       event.stopPropagation();
@@ -23669,6 +23919,11 @@ function bindPager() {
     items.push({ separator: true, spacious: true });
     if (state.pages.length > 1) {
       items.push({ label: "Close page", icon: "x", shortcutId: "page.close", danger: true, run: () => requestPageClose(page.id) });
+      if (pagerRangeSelection.size > 1) {
+        const selectedPageIds = [...pagerRangeSelection];
+        items.push({ label: "Close pages", icon: "x", hint: "Delete", shortcutId: "page.close-selected", danger: true,
+          run: () => requestSelectedPagesClose(selectedPageIds) });
+      }
       items.push({ label: "Close other pages", icon: "x-square", shortcutId: "page.close-others", danger: true, run: () => requestCloseOtherPages(page.id) });
     }
     items.push({ label: "Close all", icon: "trash-2", shortcutId: "page.close-all", danger: true, run: requestCloseAllPages });
@@ -24188,7 +24443,7 @@ function applyTerminalHeaderBackground(terminal) {
 function applyTerminalAppearance(terminal) {
   if (!terminal?.term) return;
   terminal.term.options.fontFamily = fontStacks[terminalFontFamilyName(terminal)];
-  terminal.term.options.fontSize = terminal.fontSizeOverride ?? state.settings.fontSize;
+  terminal.term.options.fontSize = terminalFontSize(terminal);
   terminal.term.options.theme = terminalThemeFor(terminal);
   scheduleFit(terminal);
 }
@@ -25043,11 +25298,14 @@ function resetHeaderBackgroundEditor() {
       state.settings.terminalBackground = "";
       state.settings.terminalForeground = "";
       state.settings.fontFamily = defaultSettings.fontFamily;
+      state.settings.fontSize = defaultSettings.fontSize;
       elements.fontFamily.value = state.settings.fontFamily;
+      elements.fontSize.value = String(state.settings.fontSize);
       for (const candidate of state.terminals.values()) {
         candidate.terminalBackground = "";
         candidate.terminalForeground = "";
         candidate.terminalFontFamily = "";
+        candidate.fontSizeOverride = null;
       }
       saveSettings();
       saveSessionSnapshot();
@@ -25055,6 +25313,7 @@ function resetHeaderBackgroundEditor() {
       terminal.terminalBackground = "";
       terminal.terminalForeground = "";
       terminal.terminalFontFamily = "";
+      terminal.fontSizeOverride = null;
       saveSessionSnapshot();
     }
     for (const candidate of state.terminals.values()) applyTerminalAppearance(candidate);
@@ -35194,9 +35453,11 @@ function sizeContextMenuScrollRuns() {
   const scale = contextMenuScaleFactor();
   for (const run of elements.contextMenu.querySelectorAll(".ctx-scroll-run")) {
     run.style.maxHeight = "";
-    const first = run.firstElementChild;
-    if (!first || run.children.length <= rows) continue;
-    const rowHeight = first.getBoundingClientRect().height / scale;
+    // A filtered-out row is display:none and measures zero, so both the count
+    // and the row height have to come from rows that are actually on screen.
+    const shown = [...run.children].filter((row) => !row.hidden);
+    if (shown.length <= rows) continue;
+    const rowHeight = shown[0].getBoundingClientRect().height / scale;
     if (rowHeight > 0) run.style.maxHeight = `${rowHeight * rows}px`;
   }
 }
@@ -35925,6 +36186,7 @@ function filterContextMenu(value) {
   ctxFocusables = ctxAllFocusables.filter((row) => !row.hidden && !row.closest(".ctx-group")?.hidden);
   const empty = elements.contextMenu.querySelector(".ctx-search-empty");
   if (empty) empty.hidden = !query || visibleRows > 0;
+  sizeContextMenuScrollRuns();
 }
 
 // Renders the rows of the hover submenu into its own panel. Kept separate from
@@ -36065,8 +36327,12 @@ function openContextSubmenuFor(parentEl, items) {
   if (left + rect.width > window.innerWidth - 8) left = parent.left - rect.width + 4;
   left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8));
   let top = Math.max(8, Math.min(parent.top - 6, window.innerHeight - rect.height - 8));
-  menu.style.left = `${left}px`;
-  menu.style.top = `${top}px`;
+  // Both rects are visual pixels, but the panel's own left/top are multiplied by
+  // its zoom, so the placement has to be divided back out the way the parent menu
+  // and showContextSubmenuAt already do.
+  const scale = contextMenuScaleFactor();
+  menu.style.left = `${left / scale}px`;
+  menu.style.top = `${top / scale}px`;
   menu.classList.remove("is-positioning");
   parentEl.setAttribute("aria-expanded", "true");
 }

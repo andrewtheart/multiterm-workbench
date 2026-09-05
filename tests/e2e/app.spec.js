@@ -47,6 +47,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
     await page.waitForFunction(() => Boolean(state.bridgeId));
     await page.evaluate(() => {
       closeAllTerminals();
@@ -3167,7 +3168,17 @@ test.describe("MultiTerm Workbench UI", () => {
       setActiveTerminal(id);
       applySettings();
     }, originalPrimaryId);
-    await page.waitForTimeout(200);
+    // Focus mode animates the rail into place, so a fixed wait can measure a point
+    // the pane has already moved away from by the time the cursor reaches it.
+    await expect.poll(async () => page.evaluate((id) => {
+      const pane = [...document.querySelectorAll(".terminal-pane")]
+        .find((candidate) => candidate.dataset.id === id);
+      const rect = pane?.getBoundingClientRect();
+      const key = rect ? `${Math.round(rect.x)}:${Math.round(rect.y)}:${Math.round(rect.width)}:${Math.round(rect.height)}` : "";
+      const settled = key !== "" && key === window.__railRectKey;
+      window.__railRectKey = key;
+      return settled;
+    }, targetId)).toBe(true);
 
     const point = await page.evaluate((id) => {
       const pane = [...document.querySelectorAll(".terminal-pane")]
@@ -3201,6 +3212,11 @@ test.describe("MultiTerm Workbench UI", () => {
 
     await page.mouse.move(point.x - 80, point.y - 40);
     await page.mouse.move(point.x, point.y, { steps: 24 });
+    // Name the pane actually under the cursor, so a layout shift reports itself
+    // instead of surfacing as an unexplained active-terminal mismatch.
+    expect(await page.evaluate(({ x, y }) =>
+      document.elementFromPoint(x, y)?.closest(".terminal-pane")?.dataset.id ?? null,
+    { x: point.x, y: point.y })).toBe(targetId);
     await page.mouse.down();
     await page.waitForTimeout(100);
 

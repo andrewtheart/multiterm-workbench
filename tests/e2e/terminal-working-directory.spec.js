@@ -247,6 +247,7 @@ test.describe("terminal working-directory tracking", () => {
   });
 
   test("exposes the tracking toggle in settings", async () => {
+    if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
     await page.evaluate(() => {
       const group = document.querySelector("#settingsShowAll");
       if (group) group.click();

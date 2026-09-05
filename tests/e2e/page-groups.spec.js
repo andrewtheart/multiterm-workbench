@@ -645,6 +645,57 @@ test.describe("Page groups", () => {
     });
   });
 
+  // Applying writes all three fields, so the editor has to seed from the same
+  // chain the chip paints from. Seeding from the bar alone meant saving a size
+  // on a grouped tab stamped theme defaults over the group's colours.
+  test("seeds a grouped tab's appearance editor from its group, not just the bar", async () => {
+    await page.evaluate(() => {
+      state.settings.pagerTabBackground = "#402020";
+      state.settings.pagerTabForeground = "#FFEEDD";
+      const id = createPageGroup("Band", ["page-2"]);
+      pageGroupById(id).tabAppearance = { background: "#204020", foreground: "#DDFFEE", fontSize: 9 };
+      renderPager();
+    });
+
+    await page.evaluate(() => openTabAppearanceEditor("page", "page-2", "Beta"));
+    await expect(page.locator("#tabAppearanceOverlay")).toBeVisible();
+    await expect(page.locator("#tabAppearanceBackground"), "the group's colour, not the bar's").toHaveValue("#204020");
+    await expect(page.locator("#tabAppearanceForeground")).toHaveValue("#ddffee");
+    await expect(page.locator("#tabAppearanceFontSize"), "an inherited size stays an empty override").toHaveValue("");
+
+    await page.locator("#tabAppearanceFontSize").fill("25");
+    await page.locator("#tabAppearanceApply").click();
+    await expect(page.locator("#tabAppearanceOverlay")).toBeHidden();
+
+    expect(await page.evaluate(() => pageById("page-2").tabAppearance),
+      "changing only the size leaves the group's colours intact")
+      .toEqual({ background: "#204020", foreground: "#DDFFEE", fontSize: 25 });
+    expect(await page.evaluate(() => getComputedStyle(
+      document.querySelector('.pager-chip[data-page-id="page-2"]')
+    ).getPropertyValue("--tab-bg").trim())).toBe("#204020");
+
+    // A group has no band above it, so its own editor still seeds from the bar.
+    await page.evaluate(() => openTabAppearanceEditor("group", state.pageGroups[0].id, "Band"));
+    await expect(page.locator("#tabAppearanceBackground")).toHaveValue("#204020");
+    await page.evaluate(() => {
+      pageGroupById(state.pageGroups[0].id).tabAppearance = null;
+      closeTabAppearanceEditor();
+      openTabAppearanceEditor("group", state.pageGroups[0].id, "Band");
+    });
+    await expect(page.locator("#tabAppearanceBackground"), "falling back to the bar").toHaveValue("#402020");
+
+    await page.evaluate(() => {
+      closeTabAppearanceEditor();
+      delete pageById("page-2").tabAppearance;
+      state.settings.pagerTabBackground = "";
+      state.settings.pagerTabForeground = "";
+      state.settings.pagerTabFontSize = 0;
+      saveSettings();
+      savePages();
+      renderPager();
+    });
+  });
+
   test("carries membership and order through a reload", async () => {
     const id = await page.evaluate(() => {
       const groupId = createPageGroup("Release", ["page-1", "page-2"]);

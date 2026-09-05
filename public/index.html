@@ -151,6 +151,11 @@
       </div>
 
       <div class="workbench">
+        <aside id="settingsRail" class="settings-rail" aria-label="Settings">
+          <button id="expandSettingsRail" class="icon-button" type="button" title="Expand settings" aria-label="Expand settings">
+            <i data-lucide="panel-left-open" aria-hidden="true"></i>
+          </button>
+        </aside>
         <aside class="control-panel" aria-label="Terminal layout controls">
           <div class="settings-panel-sticky">
             <div class="settings-panel-heading">Settings</div>
@@ -1129,7 +1134,9 @@
         <div id="minimizedDock" class="minimized-dock" aria-label="Minimized terminals" hidden></div>
         <span class="status-spacer"></span>
         <label class="status-workspace-zoom" title="Workspace zoom: drag to resize every pane">
-          <i data-lucide="scan" aria-hidden="true"></i>
+          <button id="statusWorkspaceZoomReset" class="status-workspace-zoom-reset" type="button" title="Reset workspace zoom to 100%" aria-label="Reset workspace zoom to 100%">
+            <i data-lucide="scan" aria-hidden="true"></i>
+          </button>
           <input id="statusWorkspaceZoom" type="range" min="25" max="200" step="5" aria-label="Workspace zoom" title="Workspace zoom&#10;Ctrl+mouse wheel or trackpad pinch&#10;Keyboard: focus the slider, then use Arrow keys; Home jumps to 25%, End to 200%">
           <output id="statusWorkspaceZoomValue">100%</output>
         </label>

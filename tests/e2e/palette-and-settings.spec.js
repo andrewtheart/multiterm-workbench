@@ -204,6 +204,7 @@ test.describe("Command palette — every option works", () => {
     });
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
     await resetTo(1);
   });
 
@@ -799,6 +800,7 @@ test.describe("Command palette — every option works", () => {
 
   test("dynamic: restore-workspace command restores layout + terminals", async () => {
     await resetTo(2);
+    if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
     await page.evaluate(() => {
       state.settings.layout = "rows";
       elements.layoutMode.value = "rows";
@@ -913,10 +915,12 @@ test.describe("Settings panel — every control has its expected effect", () => 
 
     const setting = (key) => page.evaluate((k) => state.settings[k], key);
     const openSettingsGroup = async (name) => {
+      if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
       const button = page.locator(`#settings-group-${name}`);
       if (await button.getAttribute("aria-expanded") !== "true") await button.click();
     };
     const closeSettingsGroup = async (name) => {
+      if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
       const button = page.locator(`#settings-group-${name}`);
       if (await button.getAttribute("aria-expanded") === "true") await button.click();
     };
@@ -946,6 +950,7 @@ test.describe("Settings panel — every control has its expected effect", () => 
       page.on("pageerror", (err) => pageErrors.push(String(err.message || err)));
       await page.goto("/");
       await expect(page.locator("#statusConn")).toHaveText("Connected");
+      if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
         // The bridge keeps ptys alive globally (they survive a client disconnect),
         // so a freshly-loaded page reattaches whatever sessions earlier suites left
         // behind. Wait for that one-time `welcome` to settle (>=1 pane), then

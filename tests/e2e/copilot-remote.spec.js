@@ -184,9 +184,12 @@ test.describe("Copilot remote control", () => {
   });
 
   test("persists the settings controls through a reload", async () => {
+    // Both the panel and its sections start collapsed, and toggling by click
+    // would close a section another test had already opened.
     await page.evaluate(() => {
-      const group = document.querySelector("#copilotRemoteSessions").closest(".control-section");
-      group?.querySelector(".settings-group-toggle")?.click();
+      state.settings.sidecarHidden = false;
+      applySettings();
+      for (const group of settingsPanelGroups) setSettingsGroupExpanded(group, true);
     });
     await page.locator("#copilotRemoteSessions").check();
     await page.selectOption("#copilotRemoteKeepAlive", "busy");

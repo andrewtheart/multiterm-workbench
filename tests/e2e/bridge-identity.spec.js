@@ -6,6 +6,7 @@ test.describe("Bridge identity card", () => {
   const open = async (page) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
     await page.locator(".status-conn-wrap").hover();
     await expect(page.locator("#bridgeIdentityCard")).toBeVisible();
   };
@@ -262,6 +263,7 @@ test.describe("Bridge identity card", () => {
   test("lets the settings toggle withdraw the consent again", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.locator("#expandSettingsRail").click();
     await page.locator("#settingsSearch").fill("bridge terminal");
     const toggle = page.locator("#allowBridgeTerminalFocus");
     await expect(toggle).toBeVisible();

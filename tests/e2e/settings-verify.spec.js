@@ -58,6 +58,7 @@ test.describe("Settings panel verification", () => {
 
   const setting = (key) => page.evaluate((key) => state.settings[key], key);
   const openSettingsGroup = async (name) => {
+    if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
     const button = page.locator(`#settings-group-${name}`);
     if (await button.getAttribute("aria-expanded") !== "true") await button.click();
   };
@@ -66,6 +67,53 @@ test.describe("Settings panel verification", () => {
     return t ? t.term.options[opt] : null;
   }, opt);
   const hostVar = (name) => page.evaluate((name) => document.querySelector("#terminalHost").style.getPropertyValue(name).trim(), name);
+
+  test("starts with a 30px settings rail and remembers the expanded width", async () => {
+    expect(await page.evaluate(() => defaultSettings.sidecarHidden)).toBe(true);
+    const rail = page.locator("#settingsRail");
+    const expand = page.locator("#expandSettingsRail");
+    await expect(rail).toBeVisible();
+    await expect(page.locator(".control-panel")).toBeHidden();
+    for (const width of [1400, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const placement of ["top", "bottom", "left", "right"]) {
+        await page.evaluate((value) => setPagerPlacement(value), placement);
+        await expect.poll(() => rail.evaluate((element) => element.getBoundingClientRect().width)).toBe(30);
+        const geometry = await page.evaluate(() => {
+          const railBox = document.querySelector("#settingsRail").getBoundingClientRect();
+          const button = document.querySelector("#expandSettingsRail").getBoundingClientRect();
+          const stage = document.querySelector(".stage").getBoundingClientRect();
+          return {
+            contained: button.left >= railBox.left && button.right <= railBox.right,
+            adjacent: stage.left >= railBox.right,
+            overflow: document.documentElement.scrollWidth > innerWidth
+          };
+        });
+        expect(geometry).toEqual({ contained: true, adjacent: true, overflow: false });
+      }
+    }
+
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.evaluate(() => setPagerPlacement("bottom"));
+    await expand.click();
+    await expect(rail).toBeHidden();
+    await expect(page.locator(".control-panel")).toBeVisible();
+    await set("#sidecarWidth", "420", "input");
+    await page.locator("#toggleSidecarTop").click();
+    await expect(rail).toBeVisible();
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(rail).toBeVisible();
+    await expand.focus();
+    await page.keyboard.press("Enter");
+    await expect(rail).toBeHidden();
+    await expect.poll(() => page.locator(".control-panel").evaluate((element) => element.getBoundingClientRect().width)).toBe(420);
+    await page.reload();
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await expect(rail).toBeHidden();
+    await expect(page.locator(".control-panel")).toBeVisible();
+    await set("#sidecarWidth", "300", "input");
+  });
 
   test("appearance settings", async () => {
     const catalogs = await page.evaluate(() => [elements.fontFamily, elements.terminalAppearanceFontFamily].map((select) => (

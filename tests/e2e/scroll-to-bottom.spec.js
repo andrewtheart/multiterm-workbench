@@ -21,6 +21,64 @@ test.describe("Terminal edge scroll controls", () => {
   const topButton = (page) => page.locator(".terminal-pane .pane-scroll-top");
   const bottomButton = (page) => page.locator(".terminal-pane .pane-scroll-bottom");
 
+  test("hides Copilot edge controls when its painted thumb fills the scroll track", async ({ page }) => {
+    const id = await freshTerminal(page);
+    await page.evaluate(async (terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      const { term } = terminal;
+      terminal.aiAssistantTuiProvider = "copilot";
+      terminal.tuiScrollEdge = "middle";
+      let frame = "\u001b[?1049h\u001b[2J\u001b[H";
+      for (let row = 2; row < term.rows - 6; row += 1) {
+        frame += `\u001b[${row + 1};${term.cols}H\u001b[38;2;145;152;161m\u2503`;
+      }
+      frame += `\u001b[0m\u001b[${term.rows - 4};1H${"\u2584".repeat(term.cols)}`;
+      frame += `\u001b[${term.rows - 2};1H${"\u2580".repeat(term.cols)}`;
+      await new Promise((resolve) => term.write(frame, resolve));
+      syncTerminalScrollControls(terminal);
+    }, id);
+    await expect(topButton(page)).toBeHidden();
+    await expect(bottomButton(page)).toBeHidden();
+    await page.locator(".terminal-pane").dispatchEvent("wheel", { deltaY: -100 });
+    await expect(bottomButton(page)).toBeHidden();
+  });
+
+  test("follows Copilot's painted scroll position across redraws in light and dark themes", async ({ page }) => {
+    const id = await freshTerminal(page);
+    const themes = [
+      { background: "#0d1117", track: "145;152;161", thumb: "240;246;252" },
+      { background: "#ffffff", track: "145;152;161", thumb: "31;35;40" }
+    ];
+    for (const theme of themes) {
+      for (const position of ["bottom", "middle", "top", "full", "bottom"]) {
+        await page.evaluate(async ({ terminalId, theme, position }) => {
+          const terminal = state.terminals.get(terminalId);
+          const { term } = terminal;
+          terminal.aiAssistantTuiProvider = "copilot";
+          terminal.tuiScrollEdge = "middle";
+          term.options.theme = { ...term.options.theme, background: theme.background };
+          const trackTop = 2;
+          const trackBottom = term.rows - 7;
+          const thumbTop = position === "top" || position === "full" ? trackTop
+            : position === "bottom" ? trackBottom - 2 : trackTop + 3;
+          const thumbBottom = position === "full" ? trackBottom : thumbTop + 2;
+          let frame = "\u001b[?1049h\u001b[2J\u001b[H";
+          for (let row = trackTop; row <= trackBottom; row += 1) {
+            const color = row >= thumbTop && row <= thumbBottom ? theme.thumb : theme.track;
+            frame += `\u001b[${row + 1};${term.cols}H\u001b[38;2;${color}m\u2503`;
+          }
+          frame += `\u001b[0m\u001b[${term.rows - 4};1H${"\u2584".repeat(term.cols)}`;
+          frame += `\u001b[${term.rows - 2};1H${"\u2580".repeat(term.cols)}`;
+          await new Promise((resolve) => term.write(frame, resolve));
+        }, { terminalId: id, theme, position });
+        if (position === "top" || position === "full") await expect(topButton(page)).toBeHidden();
+        else await expect(topButton(page)).toBeVisible();
+        if (position === "bottom" || position === "full") await expect(bottomButton(page)).toBeHidden();
+        else await expect(bottomButton(page)).toBeVisible();
+      }
+    }
+  });
+
   test("shows the downward control only while downward scrolling is possible", async ({ page }) => {
     const id = await freshTerminal(page);
     const control = bottomButton(page);

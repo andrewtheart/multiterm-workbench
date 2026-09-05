@@ -131,8 +131,11 @@ test.describe("Focus rail on a narrow window", () => {
       const el = document.querySelector("#layoutMode");
       el.value = "focus";
       el.dispatchEvent(new Event("change", { bubbles: true }));
-      // The stage is otherwise too short at this width to measure a share.
-      document.querySelector("#toggleSidecar")?.click();
+      // The stage is otherwise too short at this width to measure a share. Set
+      // the state rather than clicking the toggle, which would reopen a panel
+      // that now starts hidden.
+      state.settings.sidecarHidden = true;
+      applySettings();
     });
     await expect(page.locator("#terminalHost")).toHaveAttribute("data-layout", "focus");
 

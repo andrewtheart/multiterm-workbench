@@ -140,6 +140,30 @@ test.describe("Per-page layout and zoom", () => {
     expect(result.globalSetting).toBe(100);
   });
 
+  // The icon sits inside the slider's own label, so it has to claim the click
+  // rather than let the label hand it to the range input.
+  test("resets the workspace to 100% from the status bar zoom icon", async ({ page }) => {
+    await ready(page);
+    await page.evaluate(() => {
+      setWorkspaceZoom(160);
+      setPageZoomOverride(75);
+    });
+    expect(await page.evaluate(() => effectivePageZoom())).toBe(75);
+
+    await page.locator("#statusWorkspaceZoomReset").click();
+
+    await expect.poll(() => page.evaluate(() => effectivePageZoom())).toBe(100);
+    expect(await page.evaluate(() => ({
+      global: state.settings.workspaceZoom,
+      // A page's own zoom outranks the global one, so it has to go too.
+      override: pageZoomOverrides.has(state.activePageId),
+      transform: elements.host.style.transform,
+      slider: elements.statusWorkspaceZoom.value,
+      saved: JSON.parse(localStorage.getItem("multiterm.settings") || "{}").workspaceZoom
+    }))).toEqual({ global: 100, override: false, transform: "", slider: "100", saved: 100 });
+    await expect(page.locator("#statusWorkspaceZoomValue")).toHaveText("100%");
+  });
+
   test("offers both overrides from the workspace menu", async ({ page }) => {
     await ready(page);
     await page.evaluate(() => {

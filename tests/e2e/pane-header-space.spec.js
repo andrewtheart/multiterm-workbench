@@ -153,6 +153,9 @@ test.describe("Pane header space", () => {
   test("keeps notes activity and palette visible in compact columns until the title needs their room", async ({ page }) => {
     await ready(page, 2);
     await page.evaluate(() => {
+      // Stage width decides how compact a column is, so pin the settings panel
+      // rather than inheriting whichever way it was last left.
+      state.settings.sidecarHidden = false;
       state.settings.compactChrome = true;
       state.settings.layout = "columns";
       state.settings.columns = 2;

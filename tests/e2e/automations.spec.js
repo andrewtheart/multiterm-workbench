@@ -352,6 +352,46 @@ test.describe("Automation Studio", () => {
     await expect.poll(() => page.evaluate(() => [...state.terminals.values()][0].term.options.theme.background)).toBe("#223344");
   });
 
+  // The profile carries a body font size alongside the colours and family, so a
+  // matching rule has to paint all four; the size used to be dropped silently.
+  test("paints the profile's terminal font size and hands it back when the title stops matching", async ({ page }) => {
+    const globalSize = await page.evaluate(() => state.settings.fontSize);
+    const wanted = globalSize + 6;
+
+    const applied = await page.evaluate((size) => {
+      const terminal = [...state.terminals.values()][0];
+      const profile = automationAppearanceProfileSeed(terminal);
+      state.automations.rules = [automationApi.normalizeRule({
+        actions: [],
+        appearance: { ...profile, fontSize: size },
+        enabled: true,
+        id: "appearance-font-size",
+        name: "Big type",
+        titleMatch: { caseSensitive: false, type: "equals", value: "Tests" },
+        type: "appearance"
+      })];
+      saveAutomationStore();
+      refreshAppearanceAutomations();
+      return {
+        rendered: terminal.term.options.fontSize,
+        stored: state.automations.rules[0].appearance.fontSize
+      };
+    }, wanted);
+    expect(applied.stored, "the profile keeps the size").toBe(wanted);
+    expect(applied.rendered, "and it reaches xterm").toBe(wanted);
+
+    // A settings pass repaints every pane from scratch, so it must not undo the rule.
+    expect(await page.evaluate(() => {
+      applySettings();
+      return [...state.terminals.values()][0].term.options.fontSize;
+    }), "a settings repaint leaves the rule in charge").toBe(wanted);
+
+    expect(await page.evaluate(() => {
+      commitTerminalTitle([...state.terminals.values()][0], "Production", false, "manual");
+      return [...state.terminals.values()][0].term.options.fontSize;
+    }), "and the app-wide size returns once the title stops matching").toBe(globalSize);
+  });
+
   test("uses first-match appearance priority across pause, deletion, enablement, and terminal creation", async ({ page }) => {
     const initial = await page.evaluate(() => {
       const terminal = [...state.terminals.values()][0];
@@ -1564,7 +1604,12 @@ test.describe("Automation Studio", () => {
         terminal.shell = "cmd";
         terminal.status = "starting";
         const started = runAutomationRule(rule, { manual: true });
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        // The launch settles over several ticks, so sampling after a single one
+        // reads the staged record before it exists.
+        const deadline = Date.now() + 5000;
+        while (!terminal.pendingExternalAssistant && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
         const pending = terminal.pendingExternalAssistant ? { ...terminal.pendingExternalAssistant } : null;
         for (const [token, task] of state.automationRuntime.steps) {
           if (task.runId && state.automationRuntime.runs.get(task.runId)?.rule.id === rule.id) state.automationRuntime.steps.delete(token);

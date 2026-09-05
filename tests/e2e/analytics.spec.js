@@ -22,6 +22,7 @@ test.describe("Terminal interaction analytics", () => {
     await startRendererCoverage(page);
     await page.goto("/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
+    if (await page.locator("#expandSettingsRail").isVisible()) await page.locator("#expandSettingsRail").click();
     await page.evaluate(() => {
       closeAllTerminals();
       state.analytics = emptyTerminalAnalytics();

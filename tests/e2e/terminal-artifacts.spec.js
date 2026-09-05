@@ -374,7 +374,11 @@ test.describe("Terminal notes and command queue", () => {
     await page.locator(".command-queue-send").click();
 
     const result = await page.evaluate(() => {
-      const frames = window.__artifactFrames.filter((frame) => frame.type === "input");
+      // Handing focus back to the terminal makes xterm emit a DECSET 1004 focus
+      // report, so drop those: they are protocol traffic, not dequeued input.
+      const frames = window.__artifactFrames.filter(
+        (frame) => frame.type === "input" && !/^\u001b\[[IO]$/.test(frame.data)
+      );
       state.socket.send = window.__artifactOriginalSend;
       return {
         frames,
@@ -823,7 +827,9 @@ test.describe("Terminal notes and command queue", () => {
     });
     await page.locator(".command-queue-send").click();
     const sent = await page.evaluate(() => {
-      const frames = window.__artifactFrames.filter((frame) => frame.type === "input");
+      const frames = window.__artifactFrames.filter(
+        (frame) => frame.type === "input" && !/^\u001b\[[IO]$/.test(frame.data)
+      );
       state.socket.send = window.__artifactOriginalSend;
       return frames;
     });

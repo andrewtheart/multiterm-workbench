@@ -729,8 +729,10 @@ test.describe("Automatic terminal title suggestions", () => {
 
   test("lists paused rules in settings and resumes them from there", async ({ page }) => {
     await ready(page);
-    // The section starts collapsed, so open every settings group first.
+    // The panel starts collapsed and so does every section inside it.
     await page.evaluate(() => {
+      state.settings.sidecarHidden = false;
+      applySettings();
       state.settings.autoTitleSuppressions = [];
       applyAutoTitleSuppressions();
       for (const group of settingsPanelGroups) setSettingsGroupExpanded(group, true);

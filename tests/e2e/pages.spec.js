@@ -168,6 +168,73 @@ test.describe("Pages and the quick switcher", () => {
     })).toBe(true);
   });
 
+  test("edits vertical page titles from the leading edge through the first three characters", async () => {
+    await reset(0);
+    await page.evaluate(() => addPage({ name: "Wii release builds", activate: false }));
+    const chip = page.locator('.pager-chip[data-page-id="page-2"]');
+    const rename = chip.locator(".pager-rename");
+    const clickPoint = () => chip.evaluate((tab) => {
+      const label = tab.querySelector(".pager-name");
+      const range = document.createRange();
+      range.setStart(label.firstChild, 0);
+      range.setEnd(label.firstChild, 3);
+      const prefix = range.getBoundingClientRect();
+      const bounds = tab.getBoundingClientRect();
+      return {
+        leading: bounds.left + 2,
+        third: prefix.right - 1,
+        after: prefix.right + 3,
+        middle: bounds.left + bounds.width / 2,
+        y: bounds.top + bounds.height / 2
+      };
+    });
+
+    for (const placement of ["left", "right"]) {
+      await page.evaluate((value) => setPagerPlacement(value), placement);
+      for (const target of ["leading", "third"]) {
+        const point = await clickPoint();
+        await page.mouse.click(point[target], point.y);
+        await expect(rename).toBeFocused();
+        await expect(rename).toHaveValue("Wii release builds");
+        expect(await page.evaluate(() => state.activePageId)).toBe("page-1");
+        await rename.fill("Discard this edit");
+        await rename.press("Escape");
+        await expect(chip.locator(".pager-name")).toHaveText("Wii release builds");
+      }
+      const point = await clickPoint();
+      await page.mouse.click(point.after, point.y);
+      await expect(rename).toHaveCount(0);
+      await expect(chip).toHaveClass(/is-active/);
+      await page.locator('.pager-chip[data-page-id="page-1"] .pager-count').click();
+      await page.keyboard.down("Shift");
+      await page.mouse.click(point.leading, point.y);
+      await page.keyboard.up("Shift");
+      await expect(rename).toHaveCount(0);
+      await expect(chip).toHaveClass(/is-range-selected/);
+      await page.evaluate(() => clearPagerRangeSelection());
+    }
+
+    for (const placement of ["top", "bottom"]) {
+      await page.evaluate((value) => {
+        setPagerPlacement(value);
+        setActivePage("page-1");
+      }, placement);
+      const point = await clickPoint();
+      await page.mouse.click(point.third, point.y);
+      await expect(rename).toHaveCount(0);
+      await expect(chip).toHaveClass(/is-active/);
+    }
+
+    await page.evaluate(() => setPagerPlacement("left"));
+    const point = await clickPoint();
+    await page.mouse.click(point.leading, point.y);
+    await rename.fill("Saved release builds");
+    await rename.press("Enter");
+    await expect(chip.locator(".pager-name")).toHaveText("Saved release builds");
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.pages")).pages.find((entry) => entry.id === "page-2").name))
+      .toBe("Saved release builds");
+  });
+
   test("contains long horizontal page lists and scrolls them without visible chrome", async () => {
     await reset(0);
     try {
@@ -227,6 +294,66 @@ test.describe("Pages and the quick switcher", () => {
     } finally {
       await page.setViewportSize({ width: 1400, height: 900 });
     }
+  });
+
+  // Emptying the list to re-render it resets its scroll offset, and the active
+  // chip was then scrolled to from zero, which parked whichever tab you clicked
+  // against the far edge of the panel.
+  test("leaves a visible page tab where it is and only scrolls one that is off screen", async () => {
+    await reset(0);
+    await page.evaluate(() => {
+      setPagerPlacement("left");
+      for (let index = 2; index <= 30; index += 1) addPage({ name: `Page ${index}`, activate: false });
+      setActivePage("page-1", { focus: false });
+    });
+    await expect(page.locator(".pager-chip")).toHaveCount(30);
+
+    const settle = () => page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }));
+
+    const clicked = await page.evaluate(async () => {
+      const list = elements.pagerList;
+      const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      list.scrollTop = Math.round((list.scrollHeight - list.clientHeight) / 2);
+      await frame();
+      const offsets = () => {
+        const view = list.getBoundingClientRect();
+        return [...list.querySelectorAll(".pager-chip")]
+          .filter((chip) => {
+            const box = chip.getBoundingClientRect();
+            return box.top >= view.top - 0.5 && box.bottom <= view.bottom + 0.5;
+          })
+          .map((chip) => ({ name: chip.querySelector(".pager-name").textContent, top: chip.getBoundingClientRect().top - view.top }));
+      };
+      const visible = offsets();
+      const target = visible[Math.floor(visible.length / 2)];
+      list.querySelector(`.pager-chip[data-page-id="${
+        [...list.querySelectorAll(".pager-chip")].find((chip) => chip.querySelector(".pager-name").textContent === target.name).dataset.pageId
+      }"]`).click();
+      await frame();
+      const settled = offsets().find((chip) => chip.name === target.name);
+      return { name: target.name, before: target.top, after: settled ? settled.top : null, last: offsets().at(-1).name };
+    });
+
+    expect(clicked.after, `${clicked.name} moved inside the panel when it was clicked`).toBeCloseTo(clicked.before, 0);
+    // It was picked from the middle of the run, so it must not have become the
+    // final visible tab.
+    expect(clicked.last).not.toBe(clicked.name);
+    expect(await page.evaluate(() => pageById(state.activePageId).name)).toBe(clicked.name);
+
+    // A tab that genuinely is off screen still gets scrolled to.
+    await page.evaluate(() => {
+      elements.pagerList.scrollTop = 0;
+      const last = state.pages.at(-1);
+      setActivePage(last.id, { focus: false });
+    });
+    await settle();
+    expect(await page.evaluate(() => {
+      const view = elements.pagerList.getBoundingClientRect();
+      const box = elements.pagerList.querySelector(".pager-chip.is-active").getBoundingClientRect();
+      return box.top >= view.top - 0.5 && box.bottom <= view.bottom + 0.5;
+    })).toBe(true);
   });
 
   test("opens a new page with quick key 1 and shows close controls on proper tabs", async () => {
@@ -331,6 +458,109 @@ test.describe("Pages and the quick switcher", () => {
     await page.locator("#contextMenu .ctx-item", { hasText: "Close page" }).click();
     await expect(page.locator("#pageCloseOverlay")).toBeHidden();
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
+  });
+
+  // Keeping the page has to hand focus back to the tab the close came from;
+  // dismissing the dialog used to strand it on BODY.
+  test("returns focus to the tab when a page close is cancelled", async () => {
+    await reset(1);
+    const doomed = await page.evaluate(() => {
+      const id = addPage({ name: "Doomed", activate: false });
+      moveTerminalToPage([...state.terminals.keys()][0], id);
+      renderPager();
+      return id;
+    });
+
+    await page.locator(`.pager-chip[data-page-id="${doomed}"] [data-page-close]`).click();
+    await expect(page.locator("#pageCloseOverlay")).toBeVisible();
+    await page.locator("#pageCloseCancel").click();
+    await expect(page.locator("#pageCloseOverlay")).toBeHidden();
+
+    expect(await page.evaluate(() => document.activeElement?.closest(".pager-chip")?.dataset.pageId)).toBe(doomed);
+    await expect(page.locator(`.pager-chip[data-page-id="${doomed}"]`)).toHaveCount(1);
+  });
+
+  test("Delete closes selected pages through one remembered page-close warning", async () => {
+    await reset(2);
+    await page.evaluate(() => {
+      const second = addPage({ name: "Second", activate: false });
+      addPage({ name: "Keep", activate: false });
+      moveTerminalToPage([...state.terminals.keys()][1], second);
+    });
+    await page.locator('.pager-chip[data-page-id="page-1"]').click();
+    await page.locator('.pager-chip[data-page-id="page-2"]').click({ modifiers: ["Shift"] });
+    await page.keyboard.press("Delete");
+    await expect(page.locator("#pageCloseOverlay")).toBeVisible();
+    await expect(page.locator("#pageCloseTitle")).toHaveText("Close selected pages?");
+    await expect(page.locator("#pageCloseText")).toContainText("2 pages");
+    await expect(page.locator("#pageCloseText")).toContainText("2 terminals");
+    await page.locator("#pageCloseCancel").click();
+    await expect(page.locator("#pageCloseOverlay")).toBeHidden();
+    await expect(page.locator(".pager-chip")).toHaveCount(3);
+    await expect(page.locator(".pager-chip.is-range-selected")).toHaveCount(2);
+    await page.locator('.pager-chip[data-page-id="page-2"]').focus();
+    await page.keyboard.press("Delete");
+    await expect(page.locator("#pageCloseOverlay")).toBeVisible();
+    await page.locator("#pageCloseRemember").check();
+    await page.locator("#pageCloseMove").click();
+    await expect(page.locator(".pager-name")).toHaveText("Keep");
+    expect(await perPage()).toEqual(["Keep=2"]);
+    await expect(page.locator(".pager-chip.is-range-selected")).toHaveCount(0);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).pageCloseAction)).toBe("move");
+
+    await page.evaluate(() => {
+      const target = addPage({ name: "Second batch", activate: false });
+      addPage({ name: "Empty batch", activate: false });
+      moveTerminalToPage([...state.terminals.keys()][0], target);
+    });
+    await page.locator(".pager-chip", { hasText: "Second batch" }).click();
+    await page.locator(".pager-chip", { hasText: "Empty batch" }).click({ modifiers: ["Shift"] });
+    await page.keyboard.press("Delete");
+    await expect(page.locator("#pageCloseOverlay")).toBeHidden();
+    await expect(page.locator(".pager-name")).toHaveText("Keep");
+    expect(await perPage()).toEqual(["Keep=2"]);
+  });
+
+  test("Close pages closes the selected batch and only its terminals", async () => {
+    await reset(3);
+    const preserved = await page.evaluate(() => {
+      const second = addPage({ name: "Second", activate: false });
+      const keep = addPage({ name: "Keep", activate: false });
+      const ids = [...state.terminals.keys()];
+      moveTerminalToPage(ids[1], second);
+      moveTerminalToPage(ids[2], keep);
+      return ids[2];
+    });
+    await page.locator('.pager-chip[data-page-id="page-1"]').click();
+    await page.locator('.pager-chip[data-page-id="page-2"]').click({ modifiers: ["Shift"] });
+    await page.locator('.pager-chip[data-page-id="page-1"]').click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "Close page", exact: true })).toBeVisible();
+    await page.getByRole("menuitem", { name: "Close pages Delete", exact: true }).click();
+    await expect(page.locator("#pageCloseTitle")).toHaveText("Close selected pages?");
+    await page.evaluate(() => addPage({ name: "Added during warning", activate: false }));
+    await page.locator("#pageCloseTerminals").click();
+    await expect(page.locator(".pager-name")).toHaveText(["Keep", "Added during warning"]);
+    await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    expect(await page.evaluate((id) => state.terminals.has(id), preserved)).toBe(true);
+  });
+
+  test("Delete respects rename fields and keeps a page when the entire range closes", async () => {
+    await reset(0);
+    await page.evaluate(() => addPage({ name: "Second", activate: false }));
+    const first = page.locator('.pager-chip[data-page-id="page-1"]');
+    await first.locator(".pager-edit").click();
+    await page.keyboard.press("Delete");
+    await expect(page.locator(".pager-chip")).toHaveCount(2);
+    await expect(first.locator(".pager-rename")).toHaveValue("");
+    await page.keyboard.press("Escape");
+    await first.click();
+    await page.locator('.pager-chip[data-page-id="page-2"]').click({ modifiers: ["Shift"] });
+    await page.keyboard.press("Delete");
+    await expect(page.locator(".pager-name")).toHaveText("Page 1");
+    await expect(page.locator("#pageCloseOverlay")).toBeHidden();
+    await page.locator(".pager-chip").focus();
+    await page.keyboard.press("Delete");
+    await expect(page.locator(".pager-chip")).toHaveCount(1);
   });
 
   test("Close all is always available and resets to one empty Page 1", async () => {

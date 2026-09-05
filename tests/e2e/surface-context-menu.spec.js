@@ -165,6 +165,69 @@ test.describe("Surface context menu", () => {
     }, saved);
   });
 
+  // Sizing measures a row, and a filtered-out row measures zero, so resizing
+  // while a search hid the first row used to drop the cap for good.
+  test("keeps the page-row cap after filtering and resizing the menu", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const saved = await page.evaluate(() => {
+      const before = {
+        pages: state.pages,
+        activePageId: state.activePageId,
+        rows: state.settings.contextMenuPageRows,
+        scale: state.settings.contextMenuScale
+      };
+      state.settings.contextMenuPageRows = 5;
+      state.pages = [{ id: "page-1", name: "Page 1", groupId: null }];
+      state.activePageId = "page-1";
+      addPage({ name: "Alpha", activate: false });
+      for (let n = 0; n < 11; n += 1) addPage({ name: `Bulk ${n + 1}`, activate: false });
+      return before;
+    });
+
+    // Rects are visual pixels inside the zoomed menu while clientHeight is
+    // menu-local, so the row height has to be divided back out to compare them.
+    const capped = () => page.evaluate(() => {
+      const run = document.querySelector("#contextMenu .ctx-scroll-run");
+      if (!run) return null;
+      const shown = [...run.children].filter((row) => !row.hidden);
+      const rowHeight = shown[0].getBoundingClientRect().height / contextMenuScaleFactor();
+      return {
+        shown: shown.length,
+        visible: Math.round(run.clientHeight / rowHeight),
+        scrollable: run.scrollHeight > run.clientHeight + 1
+      };
+    });
+
+    await openTerminalMenu(page);
+    expect(await capped()).toEqual({ shown: 12, visible: 5, scrollable: true });
+
+    // Alpha is the run's first row, so this filter hides the row the sizing used
+    // to measure while still leaving more rows than the cap allows.
+    const search = page.locator("#contextMenu .ctx-menu-search-input");
+    await search.fill("Bulk");
+    await page.evaluate(() => setContextMenuScale(120));
+    expect(await capped(), "a hidden first row must not defeat the cap").toEqual({ shown: 11, visible: 5, scrollable: true });
+
+    // Filtering below the cap legitimately drops it; clearing the search has to
+    // put it back rather than leaving every row on screen.
+    await search.fill("Bulk 11");
+    expect((await capped()).scrollable, "one row needs no scroller").toBe(false);
+    await page.evaluate(() => setContextMenuScale(100));
+    await search.fill("");
+    expect(await capped(), "clearing the search restores the cap").toEqual({ shown: 12, visible: 5, scrollable: true });
+    await page.keyboard.press("Escape");
+
+    await page.evaluate((before) => {
+      state.pages = before.pages;
+      state.activePageId = before.activePageId;
+      state.settings.contextMenuPageRows = before.rows;
+      setContextMenuScale(before.scale);
+      savePages();
+      renderPager();
+    }, saved);
+  });
+
   test("scales the terminal menu from its own slider and remembers the size", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -243,6 +306,72 @@ test.describe("Surface context menu", () => {
         state.settings.contextMenuScale = value;
         applySettings();
         saveSettings();
+      }, original);
+    }
+  });
+
+  // The menu is scaled with CSS zoom, which multiplies its own left/top, so a
+  // placement measured in visual pixels has to be divided back out. The parent
+  // menu did that; the submenu did not, and drifted further from its row the
+  // further the scale sat from 100% — at 160% it landed off the bottom edge.
+  test("anchors a submenu to its row at every menu scale and workspace zoom", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    if ((await page.locator(".terminal-pane").count()) === 0) {
+      await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }));
+      await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    }
+    const original = await page.evaluate(() => ({
+      menu: state.settings.contextMenuScale,
+      workspace: state.settings.workspaceZoom
+    }));
+    const viewport = page.viewportSize();
+    try {
+      for (const workspace of [50, 100, 200]) {
+        for (const scale of [80, 100, 160]) {
+          await page.evaluate(([zoom, size]) => {
+            setWorkspaceZoom(zoom);
+            setContextMenuScale(size);
+          }, [workspace, scale]);
+
+          const menu = await openTerminalMenu(page);
+          await menu.locator('.ctx-item[aria-haspopup="menu"]').first().hover();
+          await expect(page.locator("#contextSubmenu")).toBeVisible();
+
+          const placement = await page.evaluate(() => {
+            const row = document.querySelector('#contextMenu .ctx-item[aria-expanded="true"]');
+            const parent = row.getBoundingClientRect();
+            const panel = document.querySelector("#contextSubmenu").getBoundingClientRect();
+            return {
+              topOffset: panel.top - parent.top,
+              // The panel sits to the row's right, or flips to its left when the
+              // right has no room; both are pinned to the row's own edges.
+              edgeError: panel.left < parent.left
+                ? panel.right - (parent.left + 4)
+                : panel.left - (parent.right - 4),
+              bottom: panel.bottom,
+              left: panel.left,
+              right: panel.right,
+              top: panel.top
+            };
+          });
+
+          const at = `workspace ${workspace}% menu ${scale}%`;
+          expect(placement.topOffset, `${at}: submenu top follows its row`).toBeCloseTo(-6, 0);
+          expect(Math.abs(placement.edgeError), `${at}: submenu hugs its row's edge`).toBeLessThan(1);
+          expect(placement.left, `${at}: submenu stays on screen`).toBeGreaterThanOrEqual(7.5);
+          expect(placement.top, at).toBeGreaterThanOrEqual(7.5);
+          expect(placement.right, at).toBeLessThanOrEqual(viewport.width + 0.5);
+          expect(placement.bottom, at).toBeLessThanOrEqual(viewport.height + 0.5);
+
+          await page.keyboard.press("Escape");
+          await expect(menu).toBeHidden();
+        }
+      }
+    } finally {
+      await page.evaluate((before) => {
+        setWorkspaceZoom(before.workspace);
+        setContextMenuScale(before.menu);
       }, original);
     }
   });

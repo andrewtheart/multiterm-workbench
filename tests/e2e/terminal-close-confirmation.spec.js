@@ -109,6 +109,34 @@ test.describe("Terminal close confirmation", () => {
     await expect(panes()).toHaveCount(1);
   });
 
+  // Dismissing the dialog left focus on BODY, so the terminal it had just spared
+  // silently swallowed everything typed next.
+  test("gives keyboard focus back to the terminal when cancelled", async () => {
+    const id = await resetToOnePane();
+    const pane = page.locator(`.terminal-pane[data-id="${id}"]`);
+    await pane.locator(".xterm-helper-textarea").focus();
+    await page.evaluate(() => {
+      window.__typed = [];
+      const send = state.socket.send.bind(state.socket);
+      state.socket.send = (raw) => {
+        const frame = JSON.parse(raw);
+        if (frame.type === "input" && !/^\u001b\[[IO]$/.test(frame.data)) window.__typed.push(frame.data);
+        return send(raw);
+      };
+    });
+
+    await page.keyboard.press("Control+Shift+KeyW");
+    await expect(overlay()).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(overlay()).toBeHidden();
+
+    expect(await page.evaluate(() => document.activeElement?.className), "focus is back in the pane")
+      .toContain("xterm-helper-textarea");
+    await page.keyboard.type("q");
+    await expect.poll(() => page.evaluate(() => window.__typed)).toContain("q");
+    await expect(panes()).toHaveCount(1);
+  });
+
   test("asks from the terminal right-click menu too", async () => {
     const id = await resetToOnePane();
     await page.locator(`.terminal-pane[data-id="${id}"] .terminal-screen`).click({ button: "right" });

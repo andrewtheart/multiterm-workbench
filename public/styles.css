@@ -39,6 +39,7 @@
 
   /* Layout */
   --sidecar-width: 300px;
+  --settings-rail-width: 30px;
   --pager-side-width: 230px;
 
   /* Typography */
@@ -766,8 +767,36 @@ body.header-hidden .topbar {
 }
 
 body.sidecar-hidden .workbench {
-  grid-template-areas: "stage";
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "settings stage";
+  grid-template-columns: var(--settings-rail-width) minmax(0, 1fr);
+}
+
+.settings-rail {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: none;
+  grid-area: settings;
+  min-width: 0;
+  padding-top: 6px;
+}
+
+body.sidecar-hidden .settings-rail {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-rail .icon-button {
+  flex: 0 0 auto;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  width: 28px;
+}
+
+.settings-rail svg {
+  height: 16px;
+  width: 16px;
 }
 
 body.sidecar-hidden .control-panel {
@@ -1689,9 +1718,28 @@ body.pager-panel-collapsed[data-pager-placement="right"] #togglePager {
   grid-template-columns: 14px 76px 34px;
 }
 
-.status-workspace-zoom > svg {
+.status-workspace-zoom svg {
   height: 14px;
   width: 14px;
+}
+
+/* min-height/padding reset: the base button rule would otherwise force 38px and
+   push the status bar taller than the row it shares. */
+.status-workspace-zoom-reset {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xs);
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+}
+
+.status-workspace-zoom-reset:hover {
+  color: var(--text);
 }
 
 .status-workspace-zoom input {
@@ -2690,7 +2738,7 @@ body.header-hidden .status-hint kbd,
   flex-direction: column;
   /* The overlay pins dialogs 12vh from the top, so 88vh left no bottom margin. */
   max-height: min(760px, 82vh);
-  width: min(860px, 94vw);
+  width: min(1032px, 94vw);
 }
 
 /* Only the scrolling panels give up height. Sizing them in vh independently of
@@ -3003,6 +3051,10 @@ body.header-hidden .status-hint kbd,
 
 .copilot-session-main {
   display: grid;
+  /* Absorbs the slack so the notes rule and the aside are measured from the
+     card's right edge; sized by its own content the rule landed at a different
+     x on every card. */
+  flex: 1 1 auto;
   gap: 6px;
   min-width: 0;
 }
@@ -3066,7 +3118,7 @@ body.header-hidden .status-hint kbd,
 
 .copilot-session-aside {
   align-self: stretch;
-  flex: none;
+  flex: 0 0 118px;
   flex-direction: column;
   justify-content: space-between;
   min-width: 118px;
@@ -3077,7 +3129,7 @@ body.header-hidden .status-hint kbd,
   align-self: stretch;
   border-left: 1px solid var(--border);
   display: flex;
-  flex: 1 1 0;
+  flex: 0 0 32%;
   flex-direction: column;
   gap: 6px;
   min-width: 0;
@@ -3131,6 +3183,9 @@ body.header-hidden .status-hint kbd,
 .copilot-session-aside time {
   color: var(--muted);
   font-size: 10px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -5544,6 +5599,14 @@ body.header-hidden .status-hint kbd,
     gap: 10px;
   }
 
+  /* Stacked, so the pinned widths would become heights. */
+  .copilot-session-notes {
+    border-left: 0;
+    flex: 0 0 auto;
+    padding-left: 0;
+    width: 100%;
+  }
+
   .copilot-session-entry {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5555,6 +5618,7 @@ body.header-hidden .status-hint kbd,
   .copilot-session-aside {
     align-items: center;
     align-self: auto;
+    flex: 0 0 auto;
     flex-direction: row;
     min-width: 0;
     width: 100%;
@@ -5737,8 +5801,8 @@ body[data-pager-placement="left"] .workbench {
 }
 
 body.sidecar-hidden[data-pager-placement="left"] .workbench {
-  grid-template-areas: "pager stage";
-  grid-template-columns: var(--pager-side-width) minmax(0, 1fr);
+  grid-template-areas: "settings pager stage";
+  grid-template-columns: var(--settings-rail-width) var(--pager-side-width) minmax(0, 1fr);
 }
 
 body[data-pager-placement="right"] .workbench {
@@ -5747,8 +5811,8 @@ body[data-pager-placement="right"] .workbench {
 }
 
 body.sidecar-hidden[data-pager-placement="right"] .workbench {
-  grid-template-areas: "stage pager";
-  grid-template-columns: minmax(0, 1fr) var(--pager-side-width);
+  grid-template-areas: "settings stage pager";
+  grid-template-columns: var(--settings-rail-width) minmax(0, 1fr) var(--pager-side-width);
 }
 
 body[data-pager-placement="left"] .pager,
@@ -5779,8 +5843,8 @@ body.pager-panel-collapsed[data-pager-placement="right"] .workbench {
 
 body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="left"] .workbench,
 body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="right"] .workbench {
-  grid-template-areas: "stage";
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "settings stage";
+  grid-template-columns: var(--settings-rail-width) minmax(0, 1fr);
 }
 
 body.pager-panel-collapsed[data-pager-placement="left"] .pager,
@@ -15194,7 +15258,8 @@ body.compact-chrome .toggle-row {
   }
 
   body.sidecar-hidden .workbench {
-    grid-template-areas: "stage";
+    grid-template-areas: "settings stage";
+    grid-template-columns: var(--settings-rail-width) minmax(0, 1fr);
     grid-template-rows: 1fr;
   }
 
@@ -15211,14 +15276,14 @@ body.compact-chrome .toggle-row {
   }
 
   body.sidecar-hidden[data-pager-placement="left"] .workbench {
-    grid-template-areas: "pager stage";
-    grid-template-columns: min(230px, 38vw) minmax(0, 1fr);
+    grid-template-areas: "settings pager stage";
+    grid-template-columns: var(--settings-rail-width) min(230px, 38vw) minmax(0, 1fr);
     grid-template-rows: minmax(80px, 1fr);
   }
 
   body.sidecar-hidden[data-pager-placement="right"] .workbench {
-    grid-template-areas: "stage pager";
-    grid-template-columns: minmax(0, 1fr) min(230px, 38vw);
+    grid-template-areas: "settings stage pager";
+    grid-template-columns: var(--settings-rail-width) minmax(0, 1fr) min(230px, 38vw);
     grid-template-rows: minmax(80px, 1fr);
   }
 
@@ -15231,8 +15296,8 @@ body.compact-chrome .toggle-row {
 
   body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="left"] .workbench,
   body.pager-panel-collapsed.sidecar-hidden[data-pager-placement="right"] .workbench {
-    grid-template-areas: "stage";
-    grid-template-columns: 1fr;
+    grid-template-areas: "settings stage";
+    grid-template-columns: var(--settings-rail-width) minmax(0, 1fr);
     grid-template-rows: 1fr;
   }
 
@@ -15347,6 +15412,7 @@ body.compact-chrome .toggle-row {
 }
 
 body.fullscreen-focus .topbar,
+body.fullscreen-focus .settings-rail,
 body.fullscreen-focus .control-panel,
 body.fullscreen-focus .settings-resize-handle,
 body.fullscreen-focus .pager,

@@ -215,6 +215,22 @@ test.describe("Copilot composer text selection", () => {
     expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("");
   });
 
+  test("returns Ctrl+A to the prompt after typing following an output click", async () => {
+    await clearComposer();
+    await page.keyboard.type("PROMPT", { delay: 40 });
+    await expect.poll(async () => (await composer()).text).toBe("PROMPT");
+    await clickComposerRow(-3);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).composerPress, id)).toBe(false);
+
+    await page.keyboard.type(" EDIT", { delay: 40 });
+    await expect.poll(async () => (await composer()).text).toBe("PROMPT EDIT");
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode).toBe("all");
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("");
+    await page.keyboard.press("Backspace");
+    await expect.poll(async () => (await composer()).text.trim()).toBe("");
+  });
+
   test("replaces the whole composer when you type over a Ctrl+A selection", async () => {
     await clearComposer();
     await page.keyboard.type("CHARLIE DELTA", { delay: 40 });
@@ -380,6 +396,99 @@ test.describe("Copilot composer text selection", () => {
     expect((await composer()).bandCount).toBe(0);
   });
 
+  // Text pasted out of the terminal carries trailing spaces, and a painted row
+  // cannot tell those from the box's own padding, so the cell count is a floor.
+  // A select-all that trusted it stopped short and ate a chunk out of the
+  // middle, leaving the head of the first line and the tail of the last.
+  test("clears a prompt box whose pasted lines carry trailing whitespace", async () => {
+    await clearComposer();
+    const text = [
+      "                    ! Failed to load 2 skills. Run /skills for more details.    ",
+      "   ",
+      "  \u2022 Tip: /diff        ",
+      "      Review the changes made in the current directory   "
+    ].join("\n");
+    await page.evaluate(({ terminalId, payload }) => {
+      state.terminals.get(terminalId).term.paste(payload);
+    }, { terminalId: id, payload: text });
+    await expect.poll(async () => (await composer())?.rowCount, { timeout: 20000 }).toBeGreaterThan(3);
+
+    const seeded = await composer();
+    expect(seeded.length,
+      "the painted cells cannot account for the trailing spaces").toBeLessThan(text.length);
+
+    // The reported sequence: click into the box, select all, cut.
+    await clickComposerRow(0);
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+    await page.keyboard.press("Control+x");
+
+    await expect.poll(async () => (await composer()).text, { timeout: 20000 }).toBe("");
+    expect((await composer()).bandCount).toBe(0);
+  });
+
+  // Only Copilot's cursor knows about trailing spaces, because the box paints
+  // them exactly like its own padding. Measuring a row narrower again the moment
+  // the cursor moved off it renumbered a selection that was still being extended.
+  test("selects across trailing whitespace the prompt box cannot paint", async () => {
+    await clearComposer();
+    await page.evaluate(({ terminalId, payload }) => {
+      state.terminals.get(terminalId).term.paste(payload);
+    }, { terminalId: id, payload: "alpha   \nbravo" });
+    await expect.poll(async () => (await composer())?.rowCount, { timeout: 20000 }).toBe(2);
+
+    const cursorAt = () => page.evaluate((terminalId) => {
+      const buffer = state.terminals.get(terminalId).term.buffer.active;
+      return `${buffer.cursorY}:${buffer.cursorX}`;
+    }, id);
+    // Waits for each press to land: a burst faster than the TUI repaints steps
+    // over the row end, the one place those spaces can be observed at all.
+    for (let press = 0; press < 7; press += 1) {
+      const before = await cursorAt();
+      await page.keyboard.press("Shift+ArrowLeft");
+      await expect.poll(cursorAt, { timeout: 10000 }).not.toBe(before);
+    }
+
+    await page.keyboard.press("Backspace");
+    await expect.poll(async () => (await composer()).text, { timeout: 20000 }).toBe("alpha  ");
+  });
+
+  // A wrapped line and a typed newline paint the same break, but only the wrap
+  // swallowed a space. Copying them alike put a line break into the clipboard
+  // that was never in the text - two shell commands where the user had one.
+  test("copies a wrapped line back as one line and keeps typed breaks", async () => {
+    await clearComposer();
+    // Built from the box's own width, so the line is guaranteed to wrap rather
+    // than depending on whatever pane size this spec happens to run in.
+    const width = await page.evaluate((terminalId) => {
+      const borders = copilotComposerBorders(state.terminals.get(terminalId));
+      return borders.contentEnd + 1;
+    }, id);
+    const filler = "lorem ";
+    const sources = [
+      { text: filler.repeat(Math.ceil((width + 12) / filler.length)).trim(), rows: 2 },
+      { text: "short line\ntail", rows: 2 }
+    ];
+    for (const { text: source, rows } of sources) {
+      await clearComposer();
+      await page.evaluate(() => navigator.clipboard.writeText("PLACEHOLDER"));
+      await page.evaluate(({ terminalId, payload }) => {
+        state.terminals.get(terminalId).term.paste(payload);
+      }, { terminalId: id, payload: source });
+      await expect.poll(async () => (await composer())?.text.length, { timeout: 20000 }).toBe(source.length);
+      // Without a real break there is nothing for the reading to get wrong.
+      expect((await composer()).rowCount, "the prompt box has to break this text").toBe(rows);
+
+      await page.keyboard.press("Control+a");
+      await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+      await page.keyboard.press("Control+x");
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText().then((text) => text.replace(/\r\n/g, "\n"))),
+          { timeout: 20000 })
+        .toBe(source);
+    }
+  });
+
   test("replaces a whole multi-line prompt box with the character typed", async () => {
     await seedLines(2);
     await page.keyboard.press("Control+a");
@@ -520,6 +629,7 @@ test.describe("Copilot composer text selection", () => {
       const cursorCallbacks = [];
       const renderCallbacks = [];
       const terminal = {
+        composerProvenEnds: new Map(),
         id: "composer-boundary",
         pane,
         screen,

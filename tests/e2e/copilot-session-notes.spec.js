@@ -143,6 +143,8 @@ test.describe("Copilot session notes", () => {
     // A terminal reused across many short sessions produced a card that listed
     // every note it had ever collected.
     await page.evaluate(({ sessions, linked }) => {
+      // Pinned rather than left on the default, so this covers paging itself.
+      state.settings.copilotSessionNotePageSize = 5;
       state.terminalArtifacts.terminals = {};
       state.terminalArtifacts.recoveredNotes = Array.from({ length: 13 }, (unused, index) => ({
         id: `page-${index}`,
@@ -178,6 +180,52 @@ test.describe("Copilot session notes", () => {
 
     await more.click();
     await expect(notes.locator(".copilot-session-note")).toHaveCount(5);
+  });
+
+  test("opens on two notes and lines every card's note rule up with the rest", async () => {
+    await page.evaluate(({ sessions, linked }) => {
+      state.settings.copilotSessionNotePageSize = defaultSettings.copilotSessionNotePageSize;
+      state.terminalArtifacts.terminals = {};
+      state.terminalArtifacts.recoveredNotes = Array.from({ length: 6 }, (unused, index) => ({
+        id: `two-${index}`,
+        title: "Ended terminal",
+        cwd: "D:\\multiTerm",
+        aiSessionId: linked,
+        notes: `note ${index}`,
+        recoveredAt: "2026-08-09T19:31:00.000Z"
+      }));
+      saveTerminalArtifacts();
+      copilotResume.provider = "copilot";
+      copilotResume.scope = "local";
+      copilotResume.filters = { origin: "all", source: "cli", project: "all", updated: "any" };
+      // Same session id so every card carries notes; the titles and folders are
+      // deliberately different lengths, because the note rule used to sit
+      // wherever each card's own text happened to end.
+      copilotResume.sessions = [
+        { ...sessions[0], key: `cli:${linked}-short`, name: "Short", cwd: "D:\\multiTerm" },
+        { ...sessions[0], key: `cli:${linked}-wide`, name: "A considerably longer session title that keeps going", cwd: "D:\\multiTerm\\deeply\\nested\\working\\folder" },
+        { ...sessions[0], key: `cli:${linked}-mid`, name: "Mid length title", cwd: "D:\\multiTerm" }
+      ];
+      copilotResume.visibleNotes.clear();
+      elements.copilotResumeOverlay.hidden = false;
+      renderCopilotSessions();
+    }, { sessions: SESSIONS, linked: LINKED });
+
+    const cards = page.locator(".copilot-session-card");
+    await expect(cards).toHaveCount(3);
+    // Two notes on sight, and the rest behind the control.
+    await expect(cards.first().locator(".copilot-session-note")).toHaveCount(2);
+    await expect(cards.first().locator(".copilot-session-notes-more")).toHaveText("Show 2 more notes\u2026");
+
+    const rules = await cards.evaluateAll((all) => all.map((element) => {
+      const box = element.getBoundingClientRect();
+      const notes = element.querySelector(".copilot-session-notes").getBoundingClientRect();
+      return Math.round(box.right - notes.left);
+    }));
+    expect(new Set(rules).size, `note rules sat at ${rules.join(", ")}px from the card's right edge`).toBe(1);
+
+    // The card earns that room from a dialog a fifth wider than it used to be.
+    expect(await page.evaluate(() => document.querySelector(".palette.copilot-resume").offsetWidth)).toBe(1032);
   });
 
   test("shows nothing when no note belongs to the session", async () => {
