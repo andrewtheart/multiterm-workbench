@@ -62,11 +62,13 @@ test.describe("Surface context menu", () => {
   // enough panes behind to tile the whole host and leave no blank surface at all.
   const trimPanes = async (page, keep) => {
     const panes = page.locator(".terminal-pane");
-    while ((await panes.count()) > keep) {
-      const before = await panes.count();
-      await page.locator('.terminal-pane [data-action="close"]').last().click();
-      await expect(panes).toHaveCount(before - 1);
-    }
+    const extra = (await panes.count()) - keep;
+    if (extra <= 0) return;
+    // Setup, not the behaviour under test, so bypass the close confirmation.
+    await page.evaluate((count) => {
+      [...state.terminals.keys()].slice(-count).forEach((id) => removeTerminal(id));
+    }, extra);
+    await expect(panes).toHaveCount(keep);
   };
 
   const openSurfaceMenu = async (page) => {
@@ -112,6 +114,57 @@ test.describe("Surface context menu", () => {
     await expect(menu.locator(".ctx-item", { hasText: "Split (duplicate)" })).toHaveCount(0);
   });
 
+  // With a page per project the Session section grew a Move to page row for each
+  // one and ran off the bottom of the screen.
+  test("scrolls the Session section's page rows at the configured height", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    const saved = await page.evaluate(() => {
+      const before = { pages: state.pages, activePageId: state.activePageId, rows: state.settings.contextMenuPageRows };
+      state.pages = [{ id: "page-1", name: "Page 1", groupId: null }];
+      state.activePageId = "page-1";
+      for (let n = 0; n < 11; n += 1) addPage({ name: `Bulk ${n + 1}`, activate: false });
+      return before;
+    });
+
+    const runMetrics = () => page.evaluate(() => {
+      const run = document.querySelector("#contextMenu .ctx-scroll-run");
+      if (!run) return null;
+      const rowHeight = run.firstElementChild.getBoundingClientRect().height;
+      return {
+        rows: run.children.length,
+        visible: Math.round(run.clientHeight / rowHeight),
+        scrollable: run.scrollHeight > run.clientHeight + 1
+      };
+    });
+
+    await openTerminalMenu(page);
+    expect(await runMetrics()).toEqual({ rows: 11, visible: 5, scrollable: true });
+    await page.keyboard.press("Escape");
+
+    await page.evaluate(() => { state.settings.contextMenuPageRows = 3; });
+    await openTerminalMenu(page);
+    expect(await runMetrics()).toEqual({ rows: 11, visible: 3, scrollable: true });
+    await page.keyboard.press("Escape");
+
+    // Fewer pages than the ceiling must not leave a scroller behind.
+    await page.evaluate(() => {
+      state.settings.contextMenuPageRows = 20;
+      renderPager();
+    });
+    await openTerminalMenu(page);
+    expect(await runMetrics()).toEqual({ rows: 11, visible: 11, scrollable: false });
+    await page.keyboard.press("Escape");
+
+    await page.evaluate((before) => {
+      state.pages = before.pages;
+      state.activePageId = before.activePageId;
+      state.settings.contextMenuPageRows = before.rows;
+      savePages();
+      renderPager();
+    }, saved);
+  });
+
   test("scales the terminal menu from its own slider and remembers the size", async ({ page }) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
@@ -132,7 +185,7 @@ test.describe("Surface context menu", () => {
 
       const rowBefore = await menu.locator(".ctx-item").first().boundingBox();
       const headerBefore = await menu.locator(".ctx-group-title").first().boundingBox();
-      await setNative(page, ".ctx-menu-scale-slider", "140", "input");
+      await setNative(page, ".ctx-menu-scale-slider", "140", "change");
       await expect(menu.locator(".ctx-menu-scale-value")).toHaveText("140%");
       expect(await page.evaluate(() => state.settings.contextMenuScale)).toBe(140);
 
@@ -187,6 +240,242 @@ test.describe("Surface context menu", () => {
     } finally {
       // Settings persist per origin, so a leftover scale would follow every later spec.
       await page.evaluate((value) => {
+        state.settings.contextMenuScale = value;
+        applySettings();
+        saveSettings();
+      }, original);
+    }
+  });
+
+  // Rescaling used to clamp the menu where it currently sat, and a clamp only
+  // enforces a maximum: every step of a slider drag shoved the menu further from
+  // its anchor and shrinking never gave the ground back.
+  test("returns the menu to its anchor when the size slider is dragged back", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    // Tall enough that a 100% menu is not already clamped against the top edge,
+    // so growing it genuinely has to move it.
+    await page.setViewportSize({ width: 1600, height: 1200 });
+    if ((await page.locator(".terminal-pane").count()) === 0) {
+      await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }));
+      await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    }
+    const original = await page.evaluate(() => state.settings.contextMenuScale);
+    const menu = page.locator("#contextMenu");
+    try {
+      // Anchored low and left, so growing the menu has to move it on both axes.
+      await page.evaluate(() => {
+        setContextMenuScale(100);
+        hideContextMenu();
+        showContextMenu(120, window.innerHeight - 120, [...state.terminals.values()][0], "");
+      });
+      await expect(menu).toBeVisible();
+      const box = () => menu.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: Math.round(rect.left), top: Math.round(rect.top) };
+      });
+
+      const start = await box();
+      const seen = [];
+      for (const value of [120, 140, 160, 140, 120, 100]) {
+        await setNative(page, ".ctx-menu-scale-slider", String(value), "change");
+        await expect(menu.locator(".ctx-menu-scale-value")).toHaveText(`${value}%`);
+        const current = await box();
+        seen.push({ value, ...current });
+        const onScreen = await menu.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.left >= 0 && rect.top >= 0
+            && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight;
+        });
+        expect(onScreen, `menu stays on screen at ${value}%`).toBe(true);
+      }
+
+      const grown = seen.find((entry) => entry.value === 160);
+      // Whether rescaling has to move the menu depends on how tall the menu
+      // happens to be, which earlier specs influence through their page and
+      // snippet rows, so the round trip below is the assertion that matters.
+      expect(grown, "the 160% step was measured").toBeTruthy();
+
+      const back = seen.at(-1);
+      expect(back.left, `left returned to ${start.left}, saw ${JSON.stringify(seen)}`).toBe(start.left);
+      expect(back.top, `top returned to ${start.top}, saw ${JSON.stringify(seen)}`).toBe(start.top);
+    } finally {
+      await page.keyboard.press("Escape");
+      await page.evaluate((value) => {
+        state.settings.contextMenuScale = value;
+        applySettings();
+        saveSettings();
+      }, original);
+    }
+  });
+
+  // Resizing the live menu on every input event made it sweep sideways and clip
+  // its own sections away mid-drag: at 160% it is 1216px wide, which a 1280px
+  // screen cannot grow into without shoving it. The drag now only previews the
+  // number and the menu is resized once, on release.
+  test("leaves the menu untouched while the size slider is dragged and resizes on release", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    if ((await page.locator(".terminal-pane").count()) === 0) {
+      await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }));
+      await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    }
+    const original = await page.evaluate(() => state.settings.contextMenuScale);
+    const menu = page.locator("#contextMenu");
+    try {
+      await page.evaluate(() => {
+        setContextMenuScale(100);
+        hideContextMenu();
+        showContextMenu(400, 300, [...state.terminals.values()][0], "");
+      });
+      await expect(menu).toBeVisible();
+      const slider = page.locator("#contextMenu .ctx-menu-scale-slider");
+      const grab = await slider.boundingBox();
+      const grabY = grab.y + grab.height / 2;
+      const frame = () => page.evaluate(() => {
+        const element = document.querySelector("#contextMenu");
+        const rect = element.getBoundingClientRect();
+        const row = element.querySelector(".ctx-item").getBoundingClientRect();
+        return {
+          scale: state.settings.contextMenuScale,
+          readout: element.querySelector(".ctx-menu-scale-value").textContent,
+          menu: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)],
+          row: [Math.round(row.left), Math.round(row.top)]
+        };
+      });
+
+      const before = await frame();
+      await page.mouse.move(grab.x + 4, grabY);
+      await page.mouse.down();
+      const during = [];
+      for (let step = 1; step <= 6; step += 1) {
+        await page.mouse.move(grab.x + 4 + step * 9, grabY);
+        during.push(await frame());
+      }
+      await page.mouse.up();
+
+      for (const sample of during) {
+        expect(sample.menu, `menu never moves mid-drag, saw ${JSON.stringify(during)}`).toEqual(before.menu);
+        expect(sample.row, "menu content never moves mid-drag").toEqual(before.row);
+        expect(sample.scale, "the applied scale is untouched mid-drag").toBe(before.scale);
+      }
+      // The readout still previews where the drag has reached.
+      expect(during.at(-1).readout).not.toBe(before.readout);
+
+      await expect.poll(() => page.evaluate(() => state.settings.contextMenuScale)).toBeGreaterThan(100);
+      const after = await frame();
+      expect(after.menu[2], "releasing applies the new size").toBeGreaterThan(before.menu[2]);
+    } finally {
+      await page.keyboard.press("Escape");
+      await page.evaluate((value) => {
+        state.settings.contextMenuScale = value;
+        applySettings();
+        saveSettings();
+      }, original);
+    }
+  });
+
+  // A menu resized after its slider drag has to keep honouring the position the
+  // drag left it in, and a submenu already on screen has to stay on screen.
+  test("re-places the menu and its submenu on a later resize", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    await page.setViewportSize({ width: 1600, height: 1200 });
+    if ((await page.locator(".terminal-pane").count()) === 0) {
+      await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }));
+      await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    }
+    const original = await page.evaluate(() => state.settings.contextMenuScale);
+    const menu = page.locator("#contextMenu");
+    const submenu = page.locator("#contextSubmenu");
+    try {
+      await page.evaluate(() => {
+        setContextMenuScale(100);
+        hideContextMenu();
+        showContextMenu(200, 200, [...state.terminals.values()][0], "");
+      });
+      await expect(menu).toBeVisible();
+
+      // A real drag stores the placement that kept the slider under the pointer.
+      const slider = page.locator("#contextMenu .ctx-menu-scale-slider");
+      const grab = await slider.boundingBox();
+      await page.mouse.move(grab.x + 4, grab.y + grab.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(grab.x + 30, grab.y + grab.height / 2);
+      await page.mouse.up();
+      await expect.poll(() => page.evaluate(() => ctxScaleDragAnchor)).toBeNull();
+      const held = await menu.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { left: Math.round(rect.left), top: Math.round(rect.top) };
+      });
+
+      // Resizing from the settings panel replays that stored placement rather
+      // than clamping wherever the menu currently sits.
+      await page.evaluate(() => {
+        openContextSubmenuFor(
+          document.querySelector("#contextMenu .ctx-item"),
+          [{ id: "probe.one", label: "Probe", icon: "circle", run: () => {} }]
+        );
+      });
+      await expect(submenu).toBeVisible();
+
+      await setNative(page, "#contextMenuScale", "150", "input");
+      const after = await page.evaluate(() => {
+        const menuRect = document.querySelector("#contextMenu").getBoundingClientRect();
+        const subRect = document.querySelector("#contextSubmenu").getBoundingClientRect();
+        return {
+          left: Math.round(menuRect.left),
+          onScreen: menuRect.left >= 0 && menuRect.top >= 0 && menuRect.right <= window.innerWidth,
+          submenuOnScreen: subRect.left >= 0 && subRect.top >= 0
+            && subRect.right <= window.innerWidth && subRect.bottom <= window.innerHeight
+        };
+      });
+      // A grown menu can still be pushed down by the top edge, but its horizontal
+      // placement proves the held position was replayed rather than re-clamped.
+      expect(after.left, `menu replayed its held placement, held ${JSON.stringify(held)}`).toBe(held.left);
+      expect(after.onScreen, "and it stays on screen").toBe(true);
+      expect(after.submenuOnScreen, "the open submenu stays on screen").toBe(true);
+    } finally {
+      await page.keyboard.press("Escape");
+      await page.evaluate((value) => {
+        state.settings.contextMenuScale = value;
+        applySettings();
+        saveSettings();
+      }, original);
+    }
+  });
+
+  // Compact menus have no size slider, so a stale drag anchor must not send the
+  // resize looking for one.
+  test("resizes a compact menu that has no size slider of its own", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+    if ((await page.locator(".terminal-pane").count()) === 0) {
+      await page.evaluate(() => addTerminal({ reveal: true, runStartup: false }));
+      await expect(page.locator(".terminal-pane")).toHaveCount(1);
+    }
+    const original = await page.evaluate(() => state.settings.contextMenuScale);
+    try {
+      const result = await page.evaluate(() => {
+        const terminal = [...state.terminals.values()][0];
+        minimizeTerminal(terminal.id);
+        showMinChipMenu(40, 40, terminal, terminal.minChip);
+        ctxScaleDragAnchor = { left: 0, top: 0 };
+        setContextMenuScale(130);
+        const menu = document.querySelector("#contextMenu");
+        return {
+          sliders: menu.querySelectorAll(".ctx-menu-scale-slider").length,
+          visible: !menu.hidden,
+          scale: state.settings.contextMenuScale
+        };
+      });
+      expect(result).toEqual({ sliders: 0, visible: true, scale: 130 });
+    } finally {
+      await page.keyboard.press("Escape");
+      await page.evaluate((value) => {
+        ctxScaleDragAnchor = null;
+        for (const terminal of state.terminals.values()) restoreTerminal(terminal.id);
         state.settings.contextMenuScale = value;
         applySettings();
         saveSettings();
@@ -463,6 +752,7 @@ test.describe("Surface context menu", () => {
     await expect(page.locator(".pane-title").last()).toHaveValue(/^Command Prompt \d+$/);
 
     await page.locator('.terminal-pane [data-action="close"]').last().click();
+    await page.locator("#terminalCloseAccept").click();
     await expect(page.locator(".terminal-pane")).toHaveCount(start);
   });
 

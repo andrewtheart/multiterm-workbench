@@ -838,6 +838,165 @@ test.describe("Pages and the quick switcher", () => {
     await expect(page.locator(".pager-chip.is-range-selected")).toHaveCount(0);
   });
 
+  // The hover rule carries the same weight as the range tint and is declared
+  // later, so the chip that ends the Shift-click kept the plain hover colour and
+  // only turned green once the pointer left it.
+  test("tints the chip the pointer is still resting on after a Shift-click", async () => {
+    await reset(1);
+    await page.evaluate(() => {
+      addPage({ name: "Builds", activate: false });
+      addPage({ name: "Logs", activate: false });
+      setPagerPlacement("bottom");
+    });
+
+    await page.locator(".pager-chip", { hasText: "Page 1" }).click();
+    await page.locator(".pager-chip", { hasText: "Logs" }).click({ modifiers: ["Shift"] });
+    await expect(page.locator(".pager-chip.is-range-selected")).toHaveCount(3);
+
+    // The chip carries a background transition, so let it settle before reading.
+    const tints = async () => {
+      await page.waitForTimeout(400);
+      return page.evaluate(() => [...document.querySelectorAll(".pager-chip.is-range-selected")]
+        .map((chip) => ({
+          name: chip.querySelector(".pager-name").textContent,
+          hovered: chip.matches(":hover"),
+          background: getComputedStyle(chip).backgroundColor
+        })));
+    };
+
+    const hovering = await tints();
+    const under = hovering.find((chip) => chip.hovered);
+    expect(under, "the pointer must still be resting on the chip it just selected").toBeTruthy();
+    const others = hovering.filter((chip) => !chip.hovered && !chip.name.includes("Page 1"));
+    expect(others.length).toBeGreaterThan(0);
+    for (const chip of others) {
+      expect(under.background, `${under.name} matches the tint on ${chip.name}`).toBe(chip.background);
+    }
+
+    // And it does not change when the pointer finally leaves.
+    await page.mouse.move(5, 5);
+    const away = await tints();
+    const moved = away.find((chip) => chip.name === under.name);
+    expect(moved.hovered).toBe(false);
+    expect(moved.background).toBe(under.background);
+  });
+
+  // Page 1, Builds and Logs on the bar; Archive alone in a group called Bundle.
+  const buildGroupedPager = ({ collapsed = false } = {}) => page.evaluate((collapse) => {
+    state.pageGroups = [];
+    addPage({ name: "Builds", activate: false });
+    addPage({ name: "Logs", activate: false });
+    const archive = addPage({ name: "Archive", activate: false });
+    setPagerPlacement("bottom");
+    const groupId = createPageGroup("Bundle", [archive]);
+    if (collapse) setPageGroupCollapsed(groupId, true);
+    return groupId;
+  }, collapsed);
+
+  const namesInGroup = (groupId) => page.evaluate(
+    (id) => state.pages.filter((item) => item.groupId === id).map((item) => item.name),
+    groupId
+  );
+
+  const selectPagerRange = async (from, to, expected) => {
+    await page.locator(".pager-chip", { hasText: from }).click();
+    await page.locator(".pager-chip", { hasText: to }).click({ modifiers: ["Shift"] });
+    await expect
+      .poll(() => page.evaluate(() => [...document.querySelectorAll(".pager-chip.is-range-selected .pager-name")]
+        .map((name) => name.textContent)))
+      .toEqual(expected);
+  };
+
+  // Aiming at the group itself rather than at one of its tabs used to drop the
+  // pages onto the bar, which took them out of every group instead.
+  test("moves a selected range into a group dropped on the band itself", async () => {
+    await reset(1);
+    const bundle = await buildGroupedPager();
+
+    await selectPagerRange("Page 1", "Logs", ["Page 1", "Builds", "Logs"]);
+    await page.locator(".pager-chip", { hasText: "Builds" }).dragTo(
+      page.locator(".pager-group-header", { hasText: "Bundle" })
+    );
+    await expect.poll(() => namesInGroup(bundle)).toEqual(["Page 1", "Builds", "Logs", "Archive"]);
+
+    // The bar has to be usable straight after a drop: a drag that never settles
+    // swallows the next click on a tab.
+    await page.locator(".pager-chip", { hasText: "Archive" }).click();
+    await expect.poll(() => page.evaluate(() => pageById(state.activePageId).name)).toBe("Archive");
+
+    // The band reserves a lane for its colour control, so the padding around the
+    // tabs is a drop target of its own.
+    await page.evaluate((groupId) => {
+      assignPagesToGroup(state.pages.filter((item) => item.groupId === groupId && item.name !== "Archive")
+        .map((item) => item.id), null);
+    }, bundle);
+    await expect.poll(() => namesInGroup(bundle)).toEqual(["Archive"]);
+
+    await selectPagerRange("Page 1", "Logs", ["Page 1", "Builds", "Logs"]);
+    const band = page.locator(".pager-group");
+    const box = await band.boundingBox();
+    await page.locator(".pager-chip", { hasText: "Builds" }).dragTo(band, {
+      targetPosition: { x: box.width - 4, y: box.height - 3 }
+    });
+    await expect.poll(() => namesInGroup(bundle)).toEqual(["Page 1", "Builds", "Logs", "Archive"]);
+
+    // Dropping the same tabs back on the band they already belong to changes
+    // nothing, so the drop must not report the bar as reordered.
+    await page.locator(".pager-chip", { hasText: "Builds" }).dragTo(
+      page.locator(".pager-group-header", { hasText: "Bundle" })
+    );
+    await expect.poll(() => namesInGroup(bundle)).toEqual(["Page 1", "Builds", "Logs", "Archive"]);
+    await page.locator(".pager-chip", { hasText: "Archive" }).click();
+    await expect.poll(() => page.evaluate(() => pageById(state.activePageId).name)).toBe("Archive");
+  });
+
+  // A collapsed band has no tabs on screen to aim at, so its header is the only
+  // target there is.
+  test("moves a selected range into a collapsed group and reopens it", async () => {
+    await reset(1);
+    const bundle = await buildGroupedPager({ collapsed: true });
+    await expect(page.locator(".pager-group .pager-chip")).toHaveCount(0);
+
+    await selectPagerRange("Page 1", "Logs", ["Page 1", "Builds", "Logs"]);
+    await page.locator(".pager-chip", { hasText: "Builds" }).dragTo(
+      page.locator(".pager-group-header", { hasText: "Bundle" })
+    );
+
+    await expect.poll(() => namesInGroup(bundle)).toEqual(["Page 1", "Builds", "Logs", "Archive"]);
+    // Landing in a collapsed group would otherwise hide the tabs just moved there.
+    expect(await page.evaluate((id) => pageGroupById(id).collapsed, bundle)).toBe(false);
+  });
+
+  test("keeps a page drag working while an unrelated group is collapsed", async () => {
+    await reset(1);
+    const bundle = await buildGroupedPager();
+    await page.evaluate(() => {
+      const stash = addPage({ name: "Stash", activate: false });
+      setPageGroupCollapsed(createPageGroup("Other", [stash]), true);
+    });
+
+    // A group's hidden member used to make the bar unreadable, so every drag
+    // anywhere on it was discarded on the way back to state.
+    const order = () => page.evaluate(() => state.pages.map((item) => item.name));
+    await page.locator(".pager-chip", { hasText: "Logs" }).dragTo(
+      page.locator(".pager-chip", { hasText: "Page 1" }),
+      { targetPosition: { x: 6, y: 6 } }
+    );
+    await expect.poll(order).toEqual(["Logs", "Page 1", "Builds", "Archive", "Stash"]);
+
+    await selectPagerRange("Logs", "Builds", ["Logs", "Page 1", "Builds"]);
+    await page.locator(".pager-chip", { hasText: "Builds" }).dragTo(
+      page.locator(".pager-chip", { hasText: "Archive" })
+    );
+
+    await expect.poll(() => namesInGroup(bundle)).toEqual(["Logs", "Page 1", "Builds", "Archive"]);
+    // The hidden member has to survive a drag that never saw it on the bar.
+    expect(await page.evaluate(() => {
+      const other = state.pageGroups.find((group) => group.name === "Other");
+      return state.pages.filter((item) => item.groupId === other.id).map((item) => item.name);
+    })).toEqual(["Stash"]);
+  });
+
   test("switching pages hides panes without killing their sessions", async () => {
     await reset(2);
     const marker = "PAGE-ALIVE-MARKER";

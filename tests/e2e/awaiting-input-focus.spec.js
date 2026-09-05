@@ -127,10 +127,10 @@ test.describe("Awaiting-input highlight and focus", () => {
     // Release the blocked Read-Host, then hand the bridge back as we found it.
     await page.keyboard.press("Enter");
     await page.waitForTimeout(300);
-    for (let i = 0; i < 2; i += 1) {
-      await page.locator('.terminal-pane [data-action="close"]').last().click();
-      await page.waitForTimeout(120);
-    }
+    // Cleanup, not the behaviour under test, so bypass the close confirmation.
+    await page.evaluate(() => {
+      [...state.terminals.keys()].slice(-2).forEach((id) => removeTerminal(id));
+    });
     await expect(page.locator(".terminal-pane")).toHaveCount(start);
   });
 });

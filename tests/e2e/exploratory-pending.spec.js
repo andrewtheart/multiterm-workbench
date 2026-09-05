@@ -259,7 +259,8 @@ test.describe("Exploratory: header gradients", () => {
     });
 
     expect(await paneBarGradient(page, 0)).toContain("linear-gradient(217deg");
-    expect(await paneBarGradient(page, 1)).toBe("");
+    // The untouched neighbour is not bare: it keeps the theme's own header.
+    expect(await paneBarGradient(page, 1)).toBe(await page.evaluate(() => headerBackgroundCss(themeHeaderBackground())));
 
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");

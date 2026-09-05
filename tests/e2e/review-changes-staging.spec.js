@@ -183,6 +183,76 @@ test.describe("Review Changes staging", () => {
     git(["reset", "--hard", "HEAD~1"]);
   });
 
+  test("keeps reviewing the pane being emptied instead of following the file across", async ({ page }) => {
+    resetRepository();
+    fs.writeFileSync(path.join(repo, "wide.txt"), wideFile(""));
+    git(["add", "wide.txt"]);
+    git(["commit", "-m", "wide"]);
+    fs.writeFileSync(path.join(repo, "wide.txt"), wideFile("EDITED"));
+    fs.writeFileSync(path.join(repo, "alpha.txt"), "one\nNEXT\nthree\n");
+    await openReview(page);
+
+    const selection = () => page.evaluate(() => worktreeReview.selection);
+    await expect(page.locator(UNSTAGED)).toHaveCount(2, { timeout: 60000 });
+    await page.locator(UNSTAGED).filter({ hasText: "wide.txt" }).click();
+    await expect(page.locator(".git-review-hunk-action")).toHaveCount(2, { timeout: 60000 });
+
+    // One hunk of two: the rest of this file is still worth reading, so the
+    // viewer stays on the unstaged copy rather than jumping to the staged one.
+    await page.locator(".git-review-hunk-action").first().click();
+    await expect.poll(selection).toEqual({ pane: "unstaged", path: "wide.txt" });
+    await expect(page.locator(".git-review-hunk-action")).toHaveCount(1);
+    await expect(page.locator(`${UNSTAGED}[data-path="wide.txt"]`)).toHaveAttribute("aria-selected", "true");
+
+    // The file has nothing left to stage, so the sweep moves on to the next one.
+    await page.locator(".git-review-hunk-action").first().click();
+    await expect.poll(selection).toEqual({ pane: "unstaged", path: "alpha.txt" });
+
+    // Staging the whole file empties the pane, and there is no unstaged file left.
+    await page.locator(UNSTAGED).first().hover();
+    await page.locator(`${UNSTAGED} .git-review-file-action`).first().click();
+    await expect(page.locator("#gitReviewUnstagedCount")).toHaveText("0");
+    expect(await selection()).toBeNull();
+
+    // Unstaging obeys the same rule in reverse: stay in the staged pane.
+    await page.locator(STAGED).filter({ hasText: "alpha.txt" }).click();
+    await expect.poll(selection).toEqual({ pane: "staged", path: "alpha.txt" });
+    await page.locator(STAGED).filter({ hasText: "alpha.txt" }).hover();
+    await page.locator(`${STAGED}[data-path="alpha.txt"] .git-review-file-action`).click();
+    await expect.poll(selection).toEqual({ pane: "staged", path: "wide.txt" });
+
+    await page.locator("#worktreeReviewDone").click();
+    resetRepository();
+    git(["reset", "--hard", "HEAD~1"]);
+  });
+
+  test("keeps every row control hidden while a staging round trip is in flight", async ({ page }) => {
+    resetRepository();
+    fs.writeFileSync(path.join(repo, "alpha.txt"), "one\nBUSY\nthree\n");
+    fs.writeFileSync(path.join(repo, "gamma.txt"), "gamma\n");
+    await openReview(page);
+
+    await expect(page.locator(UNSTAGED)).toHaveCount(2, { timeout: 60000 });
+    // Staging disables every button in the panes; the resting controls must not
+    // surface at the disabled opacity while that is true.
+    const restingOpacity = await page.evaluate(() => {
+      setGitReviewBusy(true);
+      const values = [...document.querySelectorAll(".git-review-file:not([aria-selected='true'])")]
+        .flatMap((row) => [...row.querySelectorAll(".git-review-file-action, .git-review-file-open")])
+        .map((control) => getComputedStyle(control).opacity);
+      setGitReviewBusy(false);
+      return values;
+    });
+    expect(restingOpacity.length).toBeGreaterThan(0);
+    expect([...new Set(restingOpacity)]).toEqual(["0"]);
+
+    // A hovered row still shows its control, busy or not.
+    await page.locator(UNSTAGED).first().hover();
+    await expect(page.locator(`${UNSTAGED} .git-review-file-action`).first()).toHaveCSS("opacity", "1");
+
+    await page.locator("#worktreeReviewDone").click();
+  });
+
   test("offers no hunk controls for an untracked file", async ({ page }) => {
     resetRepository();
     fs.writeFileSync(path.join(repo, "newborn.txt"), "created\n");

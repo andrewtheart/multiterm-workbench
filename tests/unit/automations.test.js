@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+const fs = require("node:fs");
+const path = require("node:path");
 const automations = require("../../public/automations");
 
 function rule(overrides = {}) {
@@ -193,7 +195,7 @@ describe("automations model", () => {
         background: "#102030",
         foreground: "#F0E0D0",
         fontFamily: "Cascadia Mono",
-        headerBackground: { angle: 140, fontFamily: "Consolas", fontSize: 20 }
+        headerBackground: { angle: 140, fontFamily: "Consolas", fontSize: 99 }
       },
       titleMatch: { caseSensitive: true, type: "equals", value: "Production" },
       type: "appearance"
@@ -247,6 +249,7 @@ describe("automations model", () => {
       "a{word}",
       "(?:ab)+",
       "(?<word>ab)+",
+      "[abc]",
       "[^\\]]+",
       "a+ba+"
     ]) {
@@ -315,6 +318,43 @@ describe("automations model", () => {
     expect(automations.terminalName("  Build   Output  ")).toBe("build output");
   });
 
+  it("names an unnamed rule after its position in the store", () => {
+    expect(automations.normalizeRule(rule({ name: "   " }), 4)).toMatchObject({ name: "Automation 5" });
+  });
+
+  it("clamps the terminal font size and treats zero as inherit", () => {
+    const base = {
+      background: "#102030",
+      foreground: "#f0e0d0",
+      fontFamily: "Consolas",
+      headerBackground: { mode: "solid", color: "#112233", stops: [{ color: "#112233" }] }
+    };
+    expect(automations.normalizeAppearance(base).fontSize).toBe(0);
+    expect(automations.normalizeAppearance({ ...base, fontSize: "invalid" }).fontSize).toBe(0);
+    expect(automations.normalizeAppearance({ ...base, fontSize: 0 }).fontSize).toBe(0);
+    expect(automations.normalizeAppearance({ ...base, fontSize: 3 }).fontSize).toBe(5);
+    expect(automations.normalizeAppearance({ ...base, fontSize: 999 }).fontSize).toBe(100);
+    expect(automations.normalizeAppearance({ ...base, fontSize: 100 }).fontSize).toBe(100);
+    expect(automations.normalizeAppearance({ ...base, fontSize: 14.4 }).fontSize).toBe(14);
+  });
+
+  it("accepts every font the renderer offers", () => {
+    const catalogue = fs.readFileSync(path.join(__dirname, "..", "..", "public", "app.js"), "utf8");
+    const block = catalogue.match(/const FONT_CATALOG = Object\.freeze\(\[([\s\S]*?)\]\);/);
+    expect(block, "FONT_CATALOG must be findable in app.js").not.toBeNull();
+    const names = [...block[1].matchAll(/\[\s*"([^"]+)"/g)].map((match) => match[1]);
+    expect(names.length).toBeGreaterThan(20);
+    const base = {
+      background: "#102030",
+      foreground: "#f0e0d0",
+      headerBackground: { mode: "solid", color: "#112233", stops: [{ color: "#112233" }] }
+    };
+    // A name the renderer offers but this module rejects would silently refuse a
+    // valid appearance profile, so the two lists have to stay in step.
+    const rejected = names.filter((name) => !automations.normalizeAppearance({ ...base, fontFamily: name }));
+    expect(rejected, "fonts offered by app.js but rejected here").toEqual([]);
+  });
+
   it("rejects malformed appearances and normalizes fallback header values", () => {
     expect(automations.normalizeAppearance(null)).toBeNull();
     expect(automations.normalizeAppearance([])).toBeNull();
@@ -327,6 +367,10 @@ describe("automations model", () => {
       ...appearance,
       headerBackground: { mode: "solid" }
     })).toBeNull();
+    // A header that is not an object at all is refused before any field is read.
+    for (const headerBackground of [undefined, null, "#112233", []]) {
+      expect(automations.normalizeAppearance({ ...appearance, headerBackground })).toBeNull();
+    }
     expect(automations.normalizeAppearance({
       ...appearance,
       headerBackground: {
@@ -496,6 +540,23 @@ describe("automations model", () => {
       { text: "**HAND OFF** Indexed" },
       { text: "Continue from this context." }
     ])).toMatchObject({ markerRow: 0, targetName: "Indexed" });
+  });
+
+  it("trims the blank rows the TUI paints around a handoff payload", () => {
+    // The marker and its text are rarely adjacent on screen, and the padding
+    // would otherwise be pasted into the receiving terminal verbatim.
+    expect(automations.extractLatestHandoff([
+      { row: 5, text: "**HAND OFF** Padded" },
+      { row: 6, text: "   " },
+      { row: 7, text: "" },
+      { row: 8, text: "Continue from this context." },
+      { row: 9, text: "  " },
+      { row: 10, text: "" }
+    ])).toMatchObject({ markerRow: 5, payload: "Continue from this context." });
+    expect(automations.extractLatestHandoff([
+      { row: 5, text: "**HAND OFF** Blank" },
+      { row: 6, text: "   " }
+    ])).toBeNull();
   });
 });
 

@@ -14,11 +14,11 @@ test.describe("Copilot composer text selection", () => {
     const terminal = state.terminals.get(terminalId);
     const region = copilotComposerRegion(terminal);
     if (!region) return null;
-    const buffer = terminal.term.buffer.active;
     return {
-      text: region.rows
-        .map((row) => buffer.getLine(buffer.viewportY + row.row)?.translateToString(true, row.start, row.end) ?? "")
-        .join(""),
+      text: composerText(terminal, region),
+      rowCount: region.rows.length,
+      length: composerLength(region),
+      boxRows: copilotComposerRows(terminal),
       cursorIndex: composerCursorIndex(terminal, region),
       selection: terminal.composerSelection,
       bandCount: terminal.screen.querySelectorAll(".pane-composer-selection-band").length,
@@ -32,6 +32,31 @@ test.describe("Copilot composer text selection", () => {
     await page.keyboard.press("Control+a");
     await page.keyboard.press("Backspace");
     await expect.poll(async () => (await composer()).text.trim(), { timeout: 15000 }).toBe("");
+  };
+
+  // Copilot grows the prompt box a row per line, so pasting is the quickest way
+  // to put a real multi-line composer on screen.
+  const seedLines = async (count) => {
+    await clearComposer();
+    const text = Array.from({ length: count }, (unused, index) => `L${index + 1}ABCDE`).join("\n");
+    await page.evaluate(({ terminalId, payload }) => {
+      state.terminals.get(terminalId).term.paste(payload);
+    }, { terminalId: id, payload: text });
+    await expect.poll(async () => (await composer()).text, { timeout: 20000 }).toBe(text);
+    return text;
+  };
+
+  // Row 0 is the top line of the box; -1 lands in the transcript above it.
+  const clickComposerRow = async (offset) => {
+    const point = await page.evaluate(({ terminalId, row }) => {
+      const terminal = state.terminals.get(terminalId);
+      const region = copilotComposerRegion(terminal);
+      const rect = terminal.term.element.querySelector(".xterm-screen").getBoundingClientRect();
+      const cellHeight = rect.height / terminal.term.rows;
+      const target = Math.min(...region.rows.map((entry) => entry.row)) + row;
+      return { x: rect.left + rect.width / 2, y: rect.top + target * cellHeight + cellHeight / 2 };
+    }, { terminalId: id, row: offset });
+    await page.mouse.click(point.x, point.y);
   };
 
   test.beforeAll(async ({ browser }) => {
@@ -314,6 +339,153 @@ test.describe("Copilot composer text selection", () => {
     await clearComposer();
   });
 
+  // A pasted block grows the prompt box past the rows the border scan used to
+  // look at, which left MultiTerm unable to find the box at all: Ctrl+A then
+  // highlighted the whole TUI instead of the text the user had just pasted.
+  test("selects only the prompt box after a paste makes it taller than the scan window", async () => {
+    const text = await seedLines(8);
+    const seeded = await composer();
+    expect(seeded.rowCount).toBe(8);
+    expect(seeded.length).toBe(text.length);
+
+    await clickComposerRow(7);
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+    const selected = await composer();
+    expect(selected.selectedCells).toBe(text.length);
+    expect(selected.bandCount).toBe(8);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("");
+  });
+
+  test("selects only the prompt box when it holds two lines", async () => {
+    const text = await seedLines(2);
+    await clickComposerRow(1);
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+    const selected = await composer();
+    expect(selected.selectedCells).toBe(text.length);
+    expect(selected.bandCount).toBe(2);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("");
+  });
+
+  test("clears every line of a multi-line prompt box with Ctrl+A and Backspace", async () => {
+    await seedLines(2);
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+
+    await page.keyboard.press("Backspace");
+    // The line break is a character of its own, so a count that misses it leaves
+    // the first line's opening character behind.
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("");
+    expect((await composer()).bandCount).toBe(0);
+  });
+
+  test("replaces a whole multi-line prompt box with the character typed", async () => {
+    await seedLines(2);
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+
+    await page.keyboard.type("Z", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("Z");
+    expect((await composer()).selection).toBeFalsy();
+  });
+
+  test("extends a highlight across a line break and deletes exactly that span", async () => {
+    await seedLines(2);
+    // Nine cells back from the end reaches the last character of the first line.
+    for (let press = 0; press < 9; press += 1) {
+      await page.keyboard.press("Shift+ArrowLeft");
+    }
+    await expect.poll(async () => (await composer()).selectedCells, { timeout: 15000 }).toBe(9);
+    expect((await composer()).bandCount).toBe(2);
+
+    await page.keyboard.press("Backspace");
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("L1ABCD");
+    expect((await composer()).rowCount).toBe(1);
+  });
+
+  test("cuts a range that spans a line break", async () => {
+    await seedLines(2);
+    await page.evaluate(() => navigator.clipboard.writeText("PLACEHOLDER"));
+    for (let press = 0; press < 9; press += 1) {
+      await page.keyboard.press("Shift+ArrowLeft");
+    }
+    await expect.poll(async () => (await composer()).selectedCells, { timeout: 15000 }).toBe(9);
+
+    await page.keyboard.press("Control+x");
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("L1ABCD");
+    // Windows hands back CRLF for a line break written as LF.
+    await expect.poll(async () => (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n"),
+      { timeout: 15000 }).toBe("E\nL2ABCDE");
+  });
+
+  test("replaces a dragged range on the first line of a multi-line prompt box", async () => {
+    await seedLines(2);
+    await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      const region = copilotComposerRegion(terminal);
+      const row = region.rows[0];
+      terminal.term.select(row.start + 1, terminal.term.buffer.active.viewportY + row.row, 5);
+    }, id);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("1ABCD");
+
+    // The caret sits on the last line, so walking back to the drag has to cross
+    // the break; a count that skips it removes the wrong five characters.
+    await page.keyboard.type("Z", { delay: 40 });
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("LZE\nL2ABCDE");
+  });
+
+  test("counts a wrapped line as one line of the prompt box", async () => {
+    await clearComposer();
+    const wrapped = "W".repeat(260);
+    await page.evaluate(({ terminalId, payload }) => {
+      state.terminals.get(terminalId).term.paste(payload);
+    }, { terminalId: id, payload: wrapped });
+    await expect.poll(async () => (await composer()).text, { timeout: 20000 }).toBe(wrapped);
+    const seeded = await composer();
+    expect(seeded.rowCount).toBeGreaterThan(1);
+    expect(seeded.length).toBe(wrapped.length);
+
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selectedCells, { timeout: 15000 }).toBe(wrapped.length);
+    await page.keyboard.press("Backspace");
+    await expect.poll(async () => (await composer()).text, { timeout: 15000 }).toBe("");
+  });
+
+  test("parks the scroll chevron above a tall prompt box", async () => {
+    await seedLines(2);
+    const short = (await composer()).boxRows;
+    await seedLines(8);
+    const tall = await composer();
+    // The chevron sits on the box lid, so its allowance has to grow with the box
+    // rather than stop at the rows the old scan could see.
+    expect(tall.boxRows).toBe(short + 6);
+    expect(tall.boxRows).toBeGreaterThan(tall.rowCount + 1);
+    await clearComposer();
+  });
+
+  // The reported sequence end to end: paste a block, work with the transcript,
+  // then come back to the prompt box.
+  test("hands Ctrl+A back to the prompt box after a click outside a tall one", async () => {
+    const text = await seedLines(8);
+
+    await clickComposerRow(-3);
+    await page.keyboard.press("Control+a");
+    const wide = await page.evaluate((terminalId) => {
+      const terminal = state.terminals.get(terminalId);
+      return { selected: terminal.term.getSelection().length, composer: terminal.composerSelection };
+    }, id);
+    expect(wide.composer).toBeFalsy();
+    expect(wide.selected).toBeGreaterThan(text.length);
+
+    await clickComposerRow(0);
+    await page.keyboard.press("Control+a");
+    await expect.poll(async () => (await composer()).selection?.mode, { timeout: 15000 }).toBe("all");
+    expect((await composer()).selectedCells).toBe(text.length);
+    expect(await page.evaluate((terminalId) => state.terminals.get(terminalId).term.getSelection(), id)).toBe("");
+    await clearComposer();
+  });
+
   test("fails closed when composer geometry disappears during input", async () => {
     const result = await page.evaluate(() => {
       const original = {
@@ -498,9 +670,57 @@ test.describe("Copilot composer text selection", () => {
       noTerminal: false,
       offComposerShift: false,
       oneBand: 1,
-      secondRowIndex: 0,
+      // The break at the end of the first row owns an index of its own.
+      secondRowIndex: 1,
       zeroDelete: false
     });
+  });
+
+  // The lid can sit anywhere once the box grows, so the search for it has to
+  // tell the box's own lid from a rule the user pasted inside it.
+  test("finds the prompt box lid past pasted rules and gives up when there is none", async () => {
+    const result = await page.evaluate(() => {
+      const line = (cells) => ({
+        length: cells.length,
+        getCell: (index) => (cells[index] === undefined ? null : { getChars: () => cells[index] }),
+        translateToString: () => cells.map((cell) => cell ?? "").join("")
+      });
+      const rule = (lead) => line([lead, ...Array(12).fill("\u2500")]);
+      const borders = (rows) => copilotComposerBorders({
+        term: { rows: rows.length, buffer: { active: { viewportY: 0, getLine: (at) => rows[at] || null } } }
+      });
+
+      const text = (value) => line([...value]);
+      // Rows are top to bottom; the box is pinned to the last of them.
+      const pasted = borders([
+        text("output"),
+        rule("\u257b"),
+        // A pasted rule inside the box: it carries the box's side glyph.
+        rule("\u2503"),
+        text("\u2503 typed"),
+        rule("\u2579")
+      ]);
+      // The lid's own trailing cells are blank, so the width scan walks back.
+      const padded = borders([
+        line(["\u257b", ...Array(12).fill("\u2500"), " ", " "]),
+        text("\u2503 typed"),
+        rule("\u2579")
+      ]);
+      // A floor with nothing above it that could be a lid.
+      const floorOnly = borders([text("output"), text("\u2503 typed"), rule("\u2579")]);
+      // A cell the renderer has not filled in reads as empty rather than throwing.
+      const sparseLid = borders([
+        { length: 3, getCell: () => null, translateToString: () => "\u2500".repeat(12) },
+        rule("\u2579")
+      ]);
+      return { pasted, padded, floorOnly, sparseLid, none: borders([text("output")]) };
+    });
+
+    expect(result.pasted, "the lid is the row above the pasted rule").toEqual({ bottom: 0, top: 3, contentEnd: 12 });
+    expect(result.padded.contentEnd, "trailing blanks do not count towards the box width").toBe(12);
+    expect(result.floorOnly, "a box with no lid is not a box").toBeNull();
+    expect(result.sparseLid.contentEnd, "an unfilled lid reports no width").toBe(0);
+    expect(result.none, "and no floor means no box at all").toBeNull();
   });
 });
 

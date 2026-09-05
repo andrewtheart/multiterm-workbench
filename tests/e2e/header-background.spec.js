@@ -13,8 +13,12 @@ const { test, expect } = require("../support/renderer-coverage");
 async function reset(page, count = 2) {
   await page.goto("/");
   await expect(page.locator("#statusConn")).toHaveText("Connected");
-  await page.evaluate(() => closeAllTerminals());
-  await expect(page.locator(".terminal-pane")).toHaveCount(0);
+  // A single close loses to the renderer's welcome terminal, which can arrive
+  // after the reload, so keep closing until the stage is genuinely empty.
+  await expect.poll(async () => {
+    await page.evaluate(() => closeAllTerminals());
+    return page.locator(".terminal-pane").count();
+  }, { timeout: 30000 }).toBe(0);
   await page.evaluate((terminalCount) => {
     for (let index = 0; index < terminalCount; index += 1) {
       addTerminal({ title: `Gradient terminal ${index + 1}` });
@@ -36,6 +40,10 @@ async function openHeaderBackgroundEditor(page, paneIndex = 0) {
 }
 
 const readHeaderBackground = (bar) => bar.style.getPropertyValue("--pane-bar-custom-bg");
+
+// An unstyled header is not bare: it wears a gradient derived from the active
+// theme, so "no custom background" means "back to the theme's own".
+const themeHeaderCss = (page) => page.evaluate(() => headerBackgroundCss(themeHeaderBackground()));
 
 test.describe("Terminal header backgrounds", () => {
   test.afterEach(async ({ page }) => {
@@ -167,7 +175,7 @@ test.describe("Terminal header backgrounds", () => {
     await page.evaluate((id) => openHeaderBackgroundEditor(state.terminals.get(id)), restartedId);
     await expect(page.locator("#headerBackgroundOverlay")).toBeVisible();
     await page.locator("#headerBackgroundReset").click();
-    await expect.poll(() => restartedHeader.evaluate(readHeaderBackground)).toBe("");
+    await expect.poll(() => restartedHeader.evaluate(readHeaderBackground)).toBe(await themeHeaderCss(page));
     expect(await page.evaluate((id) => state.terminals.get(id)?.headerBackground, restartedId)).toBeNull();
   });
 
@@ -294,7 +302,7 @@ test.describe("Terminal header backgrounds", () => {
     const seeded = await page.evaluate(() => {
       const terminal = [...state.terminals.values()][0];
       const bar = terminal.pane.querySelector(".pane-bar");
-      const resting = getComputedStyle(bar).backgroundColor;
+      const resting = themeHeaderBackground().stops[0].color;
       openHeaderBackgroundEditor(terminal);
       return {
         resting,
@@ -306,7 +314,8 @@ test.describe("Terminal header backgrounds", () => {
     });
 
     expect(seeded.livePreview).toContain("linear-gradient");
-    expect(seeded.seedColor).toBe(cssColorToHexInPage(seeded.resting));
+    // The draft opens on the header the user can see, which is the theme's own.
+    expect(seeded.seedColor).toBe(seeded.resting);
     expect(seeded.previewHeight).toBe(seeded.barHeight);
 
     await page.locator("#headerBackgroundCancel").click();
@@ -318,7 +327,7 @@ test.describe("Terminal header backgrounds", () => {
         stored: terminal.headerBackground
       };
     });
-    expect(reverted.custom).toBe("");
+    expect(reverted.custom).toBe(await themeHeaderCss(page));
     expect(reverted.stored).toBeNull();
   });
 
@@ -431,7 +440,7 @@ test.describe("Terminal header background quick picker", () => {
     expect(painted.first.type).toBe("linear");
     expect(painted.first.stops).toHaveLength(2);
     expect(painted.firstBar).toContain("linear-gradient");
-    expect(painted.secondBar).toBe("");
+    expect(painted.secondBar).toBe(await themeHeaderCss(page));
     expect(painted.snapshot).toEqual(painted.first);
     // The chosen swatch stays marked so the flyout reflects the live header.
     await expect(swatches.nth(2)).toHaveAttribute("aria-pressed", "true");
@@ -439,11 +448,11 @@ test.describe("Terminal header background quick picker", () => {
     await page.locator("#headerBackgroundFlyoutReset").click();
     await expect.poll(() => page.evaluate(
       () => [...state.terminals.values()][0].pane.querySelector(".pane-bar").style.getPropertyValue("--pane-bar-custom-bg")
-    )).toBe("");
+    )).toBe(await themeHeaderCss(page));
     expect(await page.evaluate(() => [...state.terminals.values()][0].headerBackground)).toBeNull();
   });
 
-  test("adds up to six custom colors one at a time without evicting them", async ({ page }) => {
+  test("adds up to twenty custom colors one at a time without evicting them", async ({ page }) => {
     await stackedReset(page, 1);
     await page.evaluate(() => {
       state.settings.headerBackgroundCustomColors = [];
@@ -476,35 +485,41 @@ test.describe("Terminal header background quick picker", () => {
       return opened;
     })).toBe(1);
 
-    const picks = ["#112233", "#221133", "#331122", "#113322", "#223311", "#332211"];
+    // Distinct and dark enough that none of them collides with a preset, which
+    // the per-pick count assertion below would catch anyway.
+    const picks = Array.from({ length: 20 }, (_, index) => (
+      `#${(0x201000 + index * 0x010203).toString(16).padStart(6, "0")}`
+    ));
     for (let index = 0; index < picks.length; index += 1) {
       await pick(picks[index]);
       await expect(customSwatches).toHaveCount(index + 1);
-      expect(await stored()).toEqual(picks.slice(0, index + 1));
+      expect(await stored()).toEqual(picks.slice(0, index + 1).map((color) => color.toUpperCase()));
     }
-    await expect(removeButtons).toHaveCount(6);
+    await expect(removeButtons).toHaveCount(20);
     await expect(add).toBeHidden();
 
-    // A seventh pick cannot replace one the user deliberately saved.
+    const saved = picks.map((color) => color.toUpperCase());
+
+    // A twenty-first pick cannot replace one the user deliberately saved.
     await pick("#111122");
-    await expect(customSwatches).toHaveCount(6);
-    expect(await stored()).toEqual(picks);
+    await expect(customSwatches).toHaveCount(20);
+    expect(await stored()).toEqual(saved);
 
     // Re-picking a remembered colour applies it without adding another slot.
-    await pick("#331122");
-    await expect(customSwatches).toHaveCount(6);
-    expect(await stored()).toEqual(picks);
+    await pick(picks[2]);
+    await expect(customSwatches).toHaveCount(20);
+    expect(await stored()).toEqual(saved);
 
     await removeButtons.nth(1).click();
-    await expect(customSwatches).toHaveCount(5);
+    await expect(customSwatches).toHaveCount(19);
     await expect(add).toBeVisible();
     await expect(add).toBeFocused();
-    expect(await stored()).toEqual(picks.filter((_, index) => index !== 1));
+    expect(await stored()).toEqual(saved.filter((_, index) => index !== 1));
 
     // A preset is already one click away, so it must not consume a slot.
     const preset = await page.evaluate(() => HEADER_BACKGROUND_QUICK_COLORS[0]);
     await pick(preset.toLowerCase());
-    await expect(customSwatches).toHaveCount(5);
+    await expect(customSwatches).toHaveCount(19);
     expect(await stored()).not.toContain(preset);
 
     // A remembered colour still paints the header when clicked.
@@ -513,20 +528,29 @@ test.describe("Terminal header background quick picker", () => {
 
     await page.reload();
     await expect(page.locator("#statusConn")).toHaveText("Connected");
-    expect(await stored()).toEqual(picks.filter((_, index) => index !== 1));
+    expect(await stored()).toEqual(saved.filter((_, index) => index !== 1));
   });
 
-  test("migrates older palettes to six colors and keeps the full row contained", async ({ page }) => {
+  test("migrates older palettes to twenty colors and keeps the full row contained", async ({ page }) => {
     await stackedReset(page, 1);
-    const older = ["#112233", "#221133", "#331122", "#113322", "#223311", "#332211", "#111122", "#221111"];
+    const older = Array.from({ length: 26 }, (_, index) => (
+      `#${(0x301000 + index * 0x010305).toString(16).padStart(6, "0").toUpperCase()}`
+    ));
     await page.evaluate((colors) => {
       state.settings.headerBackgroundCustomColors = colors;
       saveSettings();
     }, older);
     await page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').first().click();
-    await expect(page.locator("#headerBackgroundFlyoutCustomSwatches .header-background-swatch")).toHaveCount(6);
+    await expect(page.locator("#headerBackgroundFlyoutCustomSwatches .header-background-swatch")).toHaveCount(20);
     await expect(page.locator("#headerBackgroundFlyoutAddColor")).toBeHidden();
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).headerBackgroundCustomColors)).toEqual(older.slice(0, 6));
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.settings")).headerBackgroundCustomColors)).toEqual(older.slice(0, 20));
+
+    // The saved run is bounded, so a full set cannot stretch the flyout off screen.
+    const run = await page.locator("#headerBackgroundFlyoutCustomSwatches").evaluate((element) => ({
+      height: Math.round(element.getBoundingClientRect().height),
+      content: element.scrollHeight
+    }));
+    expect(run.height).toBeLessThanOrEqual(220);
 
     await page.setViewportSize({ width: 390, height: 720 });
     const geometry = await page.locator("#headerBackgroundFlyout").evaluate((element) => {
@@ -588,12 +612,31 @@ test.describe("Terminal header background quick picker", () => {
       saveSettings();
     });
   });
-});
 
-function cssColorToHexInPage(value) {
-  const rgb = String(value).match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
-  if (!rgb) return value;
-  return `#${[rgb[1], rgb[2], rgb[3]]
-    .map((part) => Math.round(Number(part)).toString(16).padStart(2, "0"))
-    .join("")}`.toUpperCase();
-}
+  test("draws the remove control as a bare glyph", async ({ page }) => {
+    await stackedReset(page, 1);
+    const saved = await page.evaluate(() => state.settings.headerBackgroundCustomColors.slice());
+    try {
+      await page.evaluate(() => {
+        state.settings.headerBackgroundCustomColors = ["#204060"];
+        saveSettings();
+      });
+      await page.locator('.terminal-pane .pane-actions button[data-action="header-background"]').first().click();
+      await expect(page.locator("#headerBackgroundFlyout")).toBeVisible();
+
+      // The disc behind the glyph read as an unfinished control rather than a
+      // delete affordance, so the swatch has to carry the mark on its own.
+      const chrome = await page.locator(".header-background-custom-remove").evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { background: style.backgroundColor, border: style.borderTopWidth };
+      });
+      expect(chrome.background, "no disc behind the glyph").toBe("rgba(0, 0, 0, 0)");
+      expect(chrome.border, "and no ring around it").toBe("0px");
+    } finally {
+      await page.evaluate((colors) => {
+        state.settings.headerBackgroundCustomColors = colors;
+        saveSettings();
+      }, saved);
+    }
+  });
+});

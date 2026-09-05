@@ -107,6 +107,7 @@ test.describe("Session launch time on the PID pill", () => {
     await expect(menu).toBeHidden();
 
     await page.locator('.terminal-pane [data-action="close"]').last().click();
+    await page.locator("#terminalCloseAccept").click();
     await expect(page.locator(".terminal-pane")).toHaveCount(start);
   });
 });

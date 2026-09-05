@@ -5343,6 +5343,8 @@ test.describe("Renderer coverage completion", () => {
       const fakeList = {
         lastElementChild: null,
         addEventListener(type, callback) { pagerHandlers[type] = callback; },
+        // The bar itself is the fallback drop zone, so it has to accept chips.
+        append() {},
         querySelector() { return null; }
       };
       elements.pagerList = fakeList;
@@ -6228,6 +6230,7 @@ test.describe("Renderer coverage completion", () => {
         requestBridge = async () => ({ ok: true, diff: "diff --git a/a b/a\n", truncated: true });
         await openWorktreeReview(review);
         values.reviewTruncated = elements.worktreeReviewStatus.textContent;
+        values.reviewDiffMaxKb = Math.round(gitReviewDiffMaxBytes() / 1024);
         values.reviewRendered = elements.worktreeReviewDiff.textContent;
 
         let resolveStaleReview;
@@ -6285,11 +6288,15 @@ test.describe("Renderer coverage completion", () => {
       removeStatus: "remove failed",
       repositoryRoot: "D:\\repo",
       reviewEmpty: "This worktree has no committed or pending changes yet.",
-      reviewNoReply: "The bridge did not answer.",
       reviewNoViewer: "The diff viewer did not load.",
-      reviewTruncated: "Showing the first 2 MB of a larger diff.",
       rowCount: 2
     });
+    // A worktree review now loads through the staging panes, whose silence
+    // message names the bridge and the reading it could not do; which half it
+    // reports depends on whether the socket is up, so match the subject.
+    expect(result.reviewNoReply).toMatch(/bridge.*repository status/i);
+    // The cap is a configurable byte budget reported in KB, so derive it.
+    expect(result.reviewTruncated).toBe(`Showing the first ${result.reviewDiffMaxKb} KB of a larger diff.`);
     expect(result.empty).toContain("no worktrees");
     expect(result.reviewRendered).toContain("diff --git");
     expect(result.sent).toHaveLength(1);

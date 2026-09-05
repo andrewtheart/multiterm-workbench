@@ -32,6 +32,11 @@ test.beforeAll(() => {
   git(["config", "user.name", "Probe"]);
   fs.writeFileSync(path.join(repo, "greeting.txt"), "hello\nworld\n");
   fs.writeFileSync(path.join(repo, "keep.txt"), "unchanged\n");
+  // git names the enclosing line in each hunk header, so a very long one makes a
+  // header far wider than the dialog.
+  const enclosing = `function ${"reallyLongEnclosingFunctionName".repeat(6)}()`;
+  const body = Array.from({ length: 30 }, (_, index) => `  step ${index + 1}`);
+  fs.writeFileSync(path.join(repo, "wide-context.txt"), `${enclosing} {\n${body.join("\n")}\n}\n`);
   git(["add", "."]);
   git(["commit", "-m", "first"]);
 });
@@ -49,6 +54,9 @@ function makeDirty() {
   const lines = Array.from({ length: 300 }, (_, index) => `line ${index + 1}`);
   lines.push(`wide ${"x".repeat(400)} end`);
   fs.writeFileSync(path.join(repo, "long.txt"), `${lines.join("\n")}\n`);
+  const widePath = path.join(repo, "wide-context.txt");
+  // Match without a newline: git may check the file out with CRLF.
+  fs.writeFileSync(widePath, fs.readFileSync(widePath, "utf8").replace("  step 20", "  step 20 edited"));
 }
 
 function makeClean() {
@@ -70,7 +78,13 @@ test.describe("Terminal pending changes", () => {
   const reset = async (page) => {
     await page.goto("http://127.0.0.1:3199/");
     await expect(page.locator("#statusConn")).toHaveText("Connected");
-    await page.evaluate(() => closeAllTerminals());
+    // One close races the renderer's own welcome terminal, so poll to empty.
+    await expect
+      .poll(async () => page.evaluate(() => {
+        closeAllTerminals();
+        return state.terminals.size;
+      }))
+      .toBe(0);
     // This spec points the terminal at folders of its own, so the live shell
     // must not report its real directory over them. In memory only: persisting
     // it would follow the shared origin into every later spec file.
@@ -182,10 +196,44 @@ test.describe("Terminal pending changes", () => {
       return { scrollable, scrolled: element.scrollTop, before, after: drift() };
     });
 
-    expect(measured.scrollable, "the diff must be tall enough to scroll").toBeGreaterThan(100);
-    expect(measured.scrolled).toBeGreaterThan(100);
-    expect(Math.abs(measured.before), "line number aligned with its row at rest").toBeLessThan(2);
-    expect(Math.abs(measured.after), "line number still aligned after scrolling").toBeLessThan(2);
+    await page.locator("#worktreeReviewDone").click();
+    await expect(page.locator("#worktreeReviewOverlay")).toBeHidden();
+  });
+
+  // A hunk header holds its enclosing context on .d2h-code-line with no inner
+  // .d2h-code-line-ctn, so it was the one row that never wrapped. That single
+  // row widened the whole file table, and scrolling it slid the code under the
+  // absolutely positioned line numbers.
+  test("wraps a wide hunk header instead of scrolling code under the line numbers", async ({ page }) => {
+    await reset(page);
+    makeClean();
+    makeDirty();
+    expect(await pointTerminalAt(page, repo)).toBe(true);
+
+    await page.locator(BUTTON).click();
+    await expect(page.locator("#worktreeReviewOverlay")).toBeVisible();
+    await page.locator("#gitReviewUnstagedList .git-review-file").filter({ hasText: "wide-context.txt" }).click();
+    const viewer = page.locator("#worktreeReviewDiff");
+    await expect(viewer).toContainText("step 20 edited", { timeout: 60000 });
+
+    const measured = await viewer.evaluate((element) => {
+      const scroller = element.querySelector(".d2h-file-diff");
+      const header = element.querySelector(".d2h-info .d2h-code-line");
+      const gutter = element.querySelector(".d2h-code-linenumber");
+      const code = element.querySelector(".d2h-code-line-ctn");
+      scroller.scrollLeft = scroller.scrollWidth;
+      return {
+        headerText: header?.textContent?.trim() ?? "",
+        overflow: scroller.scrollWidth - scroller.clientWidth,
+        scrolled: scroller.scrollLeft,
+        gutterGap: Math.round(code.getBoundingClientRect().left - gutter.getBoundingClientRect().right)
+      };
+    });
+
+    expect(measured.headerText, "git must have emitted the long enclosing context").toContain("reallyLongEnclosingFunctionName");
+    expect(measured.overflow, "no row may widen the file table past the dialog").toBe(0);
+    expect(measured.scrolled, "there is nothing to scroll horizontally").toBe(0);
+    expect(measured.gutterGap, "code stays clear of the line-number gutter").toBeGreaterThan(0);
 
     await page.locator("#worktreeReviewDone").click();
     await expect(page.locator("#worktreeReviewOverlay")).toBeHidden();

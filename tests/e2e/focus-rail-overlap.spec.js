@@ -107,11 +107,11 @@ test.describe("Focus rail overlap", () => {
       ).toBeGreaterThan(report.hostHeight * 0.8);
     }
 
-    // Hand the shared bridge back roughly as we found it.
-    for (let i = 0; i < added.length; i += 1) {
-      await page.locator('.terminal-pane [data-action="close"]').last().click();
-      await page.waitForTimeout(80);
-    }
+    // Hand the shared bridge back roughly as we found it. This is cleanup, not
+    // the behaviour under test, so bypass the close confirmation.
+    await page.evaluate((count) => {
+      [...state.terminals.keys()].slice(-count).forEach((id) => removeTerminal(id));
+    }, added.length);
     await expect(page.locator(".terminal-pane")).toHaveCount(start);
   });
 });
@@ -183,10 +183,9 @@ test.describe("Focus rail on a narrow window", () => {
     }
 
     await page.evaluate(() => document.querySelector("#restoreSidecar")?.click());
-    for (let i = 0; i < 4; i += 1) {
-      await page.locator('.terminal-pane [data-action="close"]').last().click();
-      await page.waitForTimeout(80);
-    }
+    await page.evaluate(() => {
+      [...state.terminals.keys()].slice(-4).forEach((id) => removeTerminal(id));
+    });
     await expect(page.locator(".terminal-pane")).toHaveCount(start);
   });
 

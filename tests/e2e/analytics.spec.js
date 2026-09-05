@@ -191,6 +191,7 @@ test.describe("Terminal interaction analytics", () => {
     await page.getByRole("button", { name: /Focus Analytics primary/ }).click();
     await temporaryRow.click({ button: "right" });
     await page.locator("#contextMenu").getByText("Close terminal", { exact: true }).click();
+    await page.locator("#terminalCloseAccept").click();
     await expect(page.locator(".terminal-pane")).toHaveCount(baselineCount);
     await page.evaluate((pageId) => {
       pasteIntoTerminal = window.__analyticsOriginalPasteIntoTerminal;

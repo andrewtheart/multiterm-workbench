@@ -33,6 +33,14 @@ async function reset(page) {
   await expect(page.locator(".terminal-pane")).toHaveCount(2);
 }
 
+async function applyToAllTerminals(page) {
+  // Applying to every terminal warns first when the colours would stand in
+  // front of the theme, so the commit takes a deliberate second press.
+  const all = page.locator("#terminalAppearanceApplyAll");
+  await all.click();
+  if (!(await page.locator("#terminalAppearanceThemeWarning").isHidden())) await all.click();
+}
+
 async function openAppearance(page, paneIndex = 0) {
   const screen = page.locator(".terminal-screen").nth(paneIndex);
   const box = await screen.boundingBox();
@@ -109,7 +117,9 @@ test.describe("Terminal appearance editor", () => {
     const fontOptions = await page.locator("#terminalAppearanceFontFamily option").evaluateAll((options) => (
       options.map((option) => ({ value: option.value, family: getComputedStyle(option).fontFamily }))
     ));
-    expect(fontOptions).toHaveLength(20);
+    // Counted from the catalogue so adding a font is not a test change.
+    const catalogue = await page.evaluate(() => FONT_CATALOG.map(([name]) => name));
+    expect(fontOptions.map((option) => option.value)).toEqual(catalogue);
     expect(fontOptions.every((option) => option.family.toLowerCase().includes(option.value.toLowerCase()))).toBe(true);
 
     const preview = page.locator("#terminalAppearancePreview");
@@ -166,6 +176,266 @@ test.describe("Terminal appearance editor", () => {
     await expect.poll(() => page.evaluate((id) => state.terminals.get(id)?.term.options.theme.foreground, initial.firstId)).toBe("#DDEEFF");
   });
 
+  test("sizes one terminal's font from the appearance editor", async ({ page }) => {
+    await reset(page);
+    const target = await page.evaluate(() => [...state.terminals.keys()][0]);
+    const globalSize = await page.evaluate(() => state.settings.fontSize);
+    await openAppearance(page);
+
+    const field = page.locator("#terminalAppearanceFontSize");
+    await expect(field).toHaveValue(String(globalSize));
+
+    // Out-of-range input is clamped rather than accepted.
+    const maxSize = await page.evaluate(() => MAX_FONT_SIZE);
+    await field.fill(String(maxSize + 49));
+    await field.blur();
+    await expect(field).toHaveValue(String(maxSize));
+
+    const wanted = globalSize + 4;
+    await field.fill(String(wanted));
+    // The preview follows the draft before anything is committed.
+    await expect.poll(() => page.evaluate(() => terminalAppearanceDraft?.fontSize)).toBe(wanted);
+
+    await page.locator("#headerBackgroundApply").click();
+    await page.locator("#terminalAppearanceApplyTerminal").click();
+
+    const applied = await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      return {
+        override: terminal.fontSizeOverride,
+        rendered: terminal.term.options.fontSize,
+        globalSize: state.settings.fontSize
+      };
+    }, target);
+    expect(applied.override, "the size is stored as this terminal's own override").toBe(wanted);
+    expect(applied.rendered, "and reaches xterm").toBe(wanted);
+    expect(applied.globalSize, "without moving the app-wide size").toBe(globalSize);
+
+    await page.evaluate((id) => {
+      const terminal = state.terminals.get(id);
+      if (terminal) terminal.fontSizeOverride = null;
+      applyTerminalAppearance(terminal);
+    }, target);
+  });
+
+  test("steps the font size from buttons that stay easy to hit", async ({ page }) => {
+    await reset(page);
+    await openAppearance(page);
+    const field = page.locator("#terminalAppearanceFontSize");
+    const down = page.locator("#terminalAppearanceFontSizeDown");
+    const up = page.locator("#terminalAppearanceFontSizeUp");
+
+    // The native number spinner is ~4px tall per arrow; these have to be far bigger.
+    for (const button of [down, up]) {
+      const box = await button.boundingBox();
+      expect(box.width, "the step target is wide enough to hit").toBeGreaterThanOrEqual(36);
+      expect(box.height, "and tall enough to hit").toBeGreaterThanOrEqual(32);
+    }
+
+    await field.fill("14");
+    await up.click();
+    await expect(field).toHaveValue("15");
+    await down.click();
+    await down.click();
+    await expect(field).toHaveValue("13");
+    await expect.poll(() => page.evaluate(() => terminalAppearanceDraft?.fontSize)).toBe(13);
+
+    // The caption must not be wired to a button. A <label> wrapper would bind to
+    // its first labelable descendant, making a caption click press "decrease".
+    await field.fill("14");
+    await page.locator(".terminal-appearance-font-size").getByText("Font size", { exact: true }).click();
+    await expect(field).toHaveValue("14");
+
+    // Hovering one button must not light the other.
+    await page.mouse.move(4, 4);
+    const tintAlpha = () => page.evaluate(() => {
+      const alpha = (selector) => {
+        const value = getComputedStyle(document.querySelector(selector)).backgroundColor;
+        const parts = value.match(/[\d.]+(?=\s*[,)/])|[\d.]+$/g) || [];
+        return value.includes("/") || parts.length === 4 ? Number(parts[parts.length - 1]) : 1;
+      };
+      return { down: alpha("#terminalAppearanceFontSizeDown"), up: alpha("#terminalAppearanceFontSizeUp") };
+    });
+    await expect.poll(async () => (await tintAlpha()).up < 0.02).toBe(true);
+    await up.hover();
+    await expect.poll(async () => (await tintAlpha()).up > 0.1, "the hovered button tints").toBe(true);
+    expect((await tintAlpha()).down, "the other button stays untinted").toBeLessThan(0.02);
+
+    await page.mouse.move(4, 4);
+    const bounds = await page.evaluate(() => ({ min: MIN_FONT_SIZE, max: MAX_FONT_SIZE }));
+    await field.fill(String(bounds.max));
+    await expect(up).toBeDisabled();
+    await expect(down).toBeEnabled();
+    await field.fill(String(bounds.min));
+    await expect(down).toBeDisabled();
+    await expect(up).toBeEnabled();
+  });
+
+  test("falls back to the app-wide size when a profile inherits it", async ({ page }) => {
+    await reset(page);
+    // Pinned well clear of the editor's own minimum, so a fallback to the
+    // app-wide size is distinguishable from a clamp to the smallest size.
+    const globalSize = await page.evaluate(() => {
+      window.__appearanceFontSize = state.settings.fontSize;
+      state.settings.fontSize = 16;
+      applySettings();
+      return state.settings.fontSize;
+    });
+    await openAppearance(page);
+    const field = page.locator("#terminalAppearanceFontSize");
+    const up = page.locator("#terminalAppearanceFontSizeUp");
+
+    // 0 is the profile's "inherit the app's size" value, not a size of its own.
+    const inherited = await page.evaluate(() => {
+      terminalAppearanceDraft.fontSize = 0;
+      return terminalAppearanceDraftFontSize();
+    });
+    expect(inherited).toBe(globalSize);
+
+    // Clearing the field to retype a size must not snap the draft to the minimum
+    // on the way, and the steppers follow the draft instead of the blank field.
+    await field.fill("20");
+    await expect.poll(() => page.evaluate(() => terminalAppearanceDraft?.fontSize)).toBe(20);
+    await field.fill("");
+    expect(await page.evaluate(() => terminalAppearanceDraft?.fontSize),
+      "an empty field leaves the draft where it was").toBe(20);
+    await expect(up).toBeEnabled();
+    await expect(page.locator("#terminalAppearanceFontSizeDown")).toBeEnabled();
+
+    await field.fill("30");
+    await page.evaluate(() => { terminalAppearanceDraft.fontSize = MAX_FONT_SIZE; });
+    await field.fill("");
+    await expect(up, "a maxed-out draft disables the increase button even with no field value")
+      .toBeDisabled();
+
+    await page.evaluate(() => {
+      terminalAppearanceDraft.fontSize = 0;
+      syncAppearanceFontSizeStepper();
+    });
+    await expect(up).toBeEnabled();
+    await up.click();
+    await expect(field).toHaveValue(String(await page.evaluate((size) => Math.min(MAX_FONT_SIZE, size + 1), globalSize)));
+
+    // With the draft closed the same handlers must do nothing at all.
+    await page.locator("#headerBackgroundCancel").click();
+    await expect(page.locator("#headerBackgroundOverlay")).toBeHidden();
+    const afterClose = await page.evaluate(() => {
+      const element = document.querySelector("#terminalAppearanceFontSize");
+      element.value = "31";
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return { draft: terminalAppearanceDraft, value: element.value };
+    });
+    expect(afterClose.draft, "no draft is created by a stray event").toBeNull();
+    expect(afterClose.value, "and the field is not snapped by one either").toBe("31");
+
+    // Every spec file shares one origin, so a persisted size must not leak.
+    await page.evaluate(() => {
+      state.settings.fontSize = window.__appearanceFontSize;
+      delete window.__appearanceFontSize;
+      applySettings();
+      saveSettings();
+    });
+  });
+
+  test("leaves the app-wide size alone when a global profile inherits it", async ({ page }) => {
+    await reset(page);
+    const globalSize = await page.evaluate(() => state.settings.fontSize);
+    await openAppearance(page);
+    // fontSize 0 is the profile's "inherit the app's size" value.
+    await page.evaluate(() => { terminalAppearanceDraft.fontSize = 0; });
+    await page.locator("#headerBackgroundApply").click();
+    await applyToAllTerminals(page);
+
+    expect(await page.evaluate(() => state.settings.fontSize)).toBe(globalSize);
+  });
+
+  test("dresses the terminal body and its header from the selected theme", async ({ page }) => {
+    await reset(page);
+    const saved = await page.evaluate(() => state.settings.theme);
+    try {
+      const read = (name) => page.evaluate((theme) => {
+        state.settings.theme = theme;
+        applySettings();
+        const terminal = [...state.terminals.values()][0];
+        const bar = terminal.pane.querySelector(".pane-bar");
+        const display = terminal.pane.querySelector(".pane-title-display");
+        return {
+          body: terminal.term.options.theme.background,
+          text: terminal.term.options.theme.foreground,
+          header: getComputedStyle(bar).backgroundImage,
+          ink: getComputedStyle(display).color
+        };
+      }, name);
+
+      const dark = await read("ember");
+      const light = await read("paper");
+
+      expect(light.body, "the theme moves the terminal background").not.toBe(dark.body);
+      expect(light.text, "and its text colour").not.toBe(dark.text);
+      // The header used to stay on app chrome, so switching theme changed only
+      // the terminal body and the header looked stuck.
+      expect(dark.header, "and the pane header it sits under").not.toBe(light.header);
+      expect(dark.header).toContain("gradient");
+
+      // A light theme needs dark ink on that header or the title vanishes.
+      expect(light.ink).not.toBe(dark.ink);
+
+      // Anything the user chose still outranks the theme.
+      const chosen = await page.evaluate(() => {
+        state.settings.terminalHeaderBackground = {
+          mode: "solid",
+          color: "#804020",
+          stops: [{ color: "#804020", opacity: 100, position: 0 }, { color: "#804020", opacity: 100, position: 100 }]
+        };
+        for (const terminal of state.terminals.values()) applyTerminalHeaderBackground(terminal);
+        const bar = [...state.terminals.values()][0].pane.querySelector(".pane-bar");
+        return getComputedStyle(bar).backgroundColor;
+      });
+      expect(chosen).toBe("rgb(128, 64, 32)");
+    } finally {
+      await page.evaluate((theme) => {
+        state.settings.theme = theme;
+        state.settings.terminalHeaderBackground = defaultSettings.terminalHeaderBackground;
+        applySettings();
+        for (const terminal of state.terminals.values()) applyTerminalHeaderBackground(terminal);
+        saveSettings();
+      }, saved);
+    }
+  });
+
+  test("scrolls the preview instead of growing it as the font size climbs", async ({ page }) => {
+    await reset(page);
+    await openAppearance(page);
+    const field = page.locator("#terminalAppearanceFontSize");
+    const measure = () => page.evaluate(() => {
+      const el = document.querySelector("#terminalAppearancePreview");
+      return {
+        // offsetHeight, so the dialog's open animation transform cannot skew it.
+        height: el.offsetHeight,
+        overflowY: getComputedStyle(el).overflowY,
+        scrollable: el.scrollHeight > el.clientHeight + 1
+      };
+    });
+
+    await field.fill("10");
+    const small = await measure();
+    expect(small.overflowY).toBe("auto");
+    expect(small.scrollable, "nothing to scroll at the smallest size").toBe(false);
+
+    await field.fill("50");
+    const large = await measure();
+    expect(large.height, "the preview keeps its height").toBe(small.height);
+    expect(large.scrollable, "and scrolls once the text no longer fits").toBe(true);
+
+    const scrolled = await page.evaluate(() => {
+      const el = document.querySelector("#terminalAppearancePreview");
+      el.scrollTop = el.scrollHeight;
+      return el.scrollTop;
+    });
+    expect(scrolled, "the overflowing line can be reached").toBeGreaterThan(0);
+  });
+
   test("commits body and header changes together after switching tabs", async ({ page }) => {
     await reset(page);
     await openAppearance(page);
@@ -216,7 +486,7 @@ test.describe("Terminal appearance editor", () => {
     await page.locator("#terminalAppearanceFontFamily").selectOption("Courier New");
     await page.locator("#headerBackgroundApply").click();
     await expect(page.locator("#terminalAppearanceApplyChoices")).toBeVisible();
-    await page.locator("#terminalAppearanceApplyAll").click();
+    await applyToAllTerminals(page);
 
     const global = await page.evaluate(() => ({
       settings: {
@@ -249,7 +519,7 @@ test.describe("Terminal appearance editor", () => {
     await page.locator('[data-header-gradient-type="conic"]').click();
     await page.locator("#headerGradientAngleValue").fill("225");
     await page.locator("#headerBackgroundApply").click();
-    await page.locator("#terminalAppearanceApplyAll").click();
+    await applyToAllTerminals(page);
 
     const header = await page.evaluate(() => ({
       global: state.settings.terminalHeaderBackground,
@@ -285,8 +555,9 @@ test.describe("Terminal appearance editor", () => {
     const swatch = page.locator('[data-header-solid-color="#7CA8F6"]');
     await swatch.click();
     await page.locator("#headerAppearanceFontFamily").selectOption("Consolas");
-    await page.locator("#headerAppearanceFontSize").fill("99");
-    await expect(page.locator("#headerAppearanceFontSize")).toHaveValue("20");
+    const headerMax = await page.evaluate(() => HEADER_FONT_SIZE_BOUNDS.max);
+    await page.locator("#headerAppearanceFontSize").fill(String(headerMax + 50));
+    await expect(page.locator("#headerAppearanceFontSize")).toHaveValue(String(headerMax));
     await page.locator("#headerAppearanceFontSize").fill("");
     await expect.poll(() => page.evaluate(() => headerBackgroundDraft.fontSize)).toBe(0);
     await page.locator("#headerAppearanceFontSize").fill("18");
@@ -316,7 +587,9 @@ test.describe("Terminal appearance editor", () => {
         size: bar.style.getPropertyValue("--pane-title-font-size")
       };
     }, ids[0]);
-    expect(cancelled).toEqual({ background: "", definition: null, family: "", size: "" });
+    // "No custom header" now means the theme's own gradient, not a bare bar.
+    const themeHeader = await page.evaluate(() => headerBackgroundCss(themeHeaderBackground()));
+    expect(cancelled).toEqual({ background: themeHeader, definition: null, family: "", size: "" });
 
     await page.evaluate((id) => openHeaderBackgroundEditor(state.terminals.get(id)), ids[0]);
     await solidMode.click();
@@ -357,7 +630,7 @@ test.describe("Terminal appearance editor", () => {
     expect(applied.first.background).toBe("#7CA8F6");
     expect(applied.first.family).toContain("Consolas");
     expect(applied.first.size).toBe("18px");
-    expect(applied.second).toEqual({ background: "", family: "", size: "" });
+    expect(applied.second).toEqual({ background: themeHeader, family: "", size: "" });
     expect(applied.snapshot).toEqual(applied.definition);
 
     await page.reload();
@@ -533,8 +806,8 @@ test.describe("Terminal appearance editor", () => {
     expect(result.values.defaultValues).toMatchObject({ fontFamily: "Cascadia Mono" });
     expect(result.values.invalidThemeValues.background).toBe(result.values.defaultValues.background);
     expect(result.values.invalidThemeValues.foreground).toBe(result.values.defaultValues.foreground);
-    expect(result.values.globalValues).toEqual({ background: "#203040", foreground: "#F0E0D0", fontFamily: "Courier New" });
-    expect(result.values.terminalValues).toEqual({ background: "#010203", foreground: "#A0B0C0", fontFamily: "Consolas" });
+    expect(result.values.globalValues).toEqual({ background: "#203040", foreground: "#F0E0D0", fontFamily: "Courier New", fontSize: result.values.globalValues.fontSize });
+    expect(result.values.terminalValues).toEqual({ background: "#010203", foreground: "#A0B0C0", fontFamily: "Consolas", fontSize: result.values.terminalValues.fontSize });
     expect(result.values.terminalFont).toBe("Consolas");
     expect(result.values.fallbackFont).toBe("Courier New");
     expect(result.hsv.slice(0, 6).map((entry) => Math.round(entry.hue))).toEqual([0, 60, 120, 180, 240, 300]);
@@ -544,7 +817,7 @@ test.describe("Terminal appearance editor", () => {
     expect(result.colors).toEqual(["#FF0000", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#FF00FF", "#FF00FF", "#FFFF00"]);
     expect(result.clamped).toBe("#FF8000");
     expect(result.missingAppearanceTargets).toEqual([undefined, undefined]);
-    expect(result.settingsFontCountWithoutAppearanceSelect).toBe(20);
+    expect(result.settingsFontCountWithoutAppearanceSelect).toBe(await page.evaluate(() => FONT_CATALOG.length));
   });
 
   test("normalizes header modes and ignores control events after the draft closes", async ({ page }) => {
@@ -645,7 +918,7 @@ test.describe("Terminal appearance editor", () => {
     expect(result.solid).toMatchObject({
       color: "#ABCDEF",
       fontFamily: "",
-      fontSize: 20,
+      fontSize: await page.evaluate(() => HEADER_FONT_SIZE_BOUNDS.max),
       mode: "solid",
       stops: [
         { color: "#ABCDEF", opacity: 100, position: 0 },

@@ -786,6 +786,9 @@ body.sidecar-hidden .settings-resize-handle {
   grid-area: settings;
   overflow: auto;
   padding: 0 14px 16px;
+  /* Reserved always, so expanding every group cannot shove the controls left
+     the moment the scrollbar appears. */
+  scrollbar-gutter: stable;
 }
 
 .control-panel > * {
@@ -3959,14 +3962,17 @@ body.header-hidden .status-hint kbd,
   width: min(1400px, 97vw);
   /* The legend reads these too, so a swatch cannot drift from the real diff. */
   /* Standard diff hues rather than the app accent, so added and removed read the
-     way they do in git, GitHub and every editor's diff view. The mixes are held
-     where code text still clears WCAG AA against every one of them. */
+     way they do in git, GitHub and every editor's diff view. Measured against
+     --text: the row mixes clear WCAG AA with room to spare (6.8 and 7.2), and
+     the word mixes sit at the strongest values that still clear it (5.0 and 5.8),
+     which is what caps how far the row mixes can be pushed before the word
+     highlight stops standing out from its own row. */
   --git-diff-add-hue: #2ea043;
   --git-diff-del-hue: #f85149;
-  --git-diff-added: color-mix(in srgb, var(--git-diff-add-hue) 30%, var(--surface));
-  --git-diff-removed: color-mix(in srgb, var(--git-diff-del-hue) 28%, var(--surface));
+  --git-diff-added: color-mix(in srgb, var(--git-diff-add-hue) 45%, var(--surface));
+  --git-diff-removed: color-mix(in srgb, var(--git-diff-del-hue) 42%, var(--surface));
   --git-diff-word-added: color-mix(in srgb, var(--git-diff-add-hue) 62%, var(--surface));
-  --git-diff-word-removed: color-mix(in srgb, var(--git-diff-del-hue) 55%, var(--surface));
+  --git-diff-word-removed: color-mix(in srgb, var(--git-diff-del-hue) 62%, var(--surface));
   --git-diff-match: #58a6ff59;
   --git-diff-active-match: #58a6ffb3;
 }
@@ -4191,7 +4197,10 @@ body.header-hidden .status-hint kbd,
   white-space: nowrap;
 }
 
-.git-review-file-action {
+/* Scoped through the row so the resting state outranks button:disabled: staging
+   disables every control in the panes, which would otherwise flash all of these
+   into view at 40% until the round trip finishes. */
+.git-review-file .git-review-file-action {
   flex: 0 0 auto;
   font-size: 10.5px;
   opacity: 0;
@@ -4204,7 +4213,7 @@ body.header-hidden .status-hint kbd,
   opacity: 1;
 }
 
-.git-review-file-open {
+.git-review-file .git-review-file-open {
   align-items: center;
   background: transparent;
   border: 0;
@@ -4233,8 +4242,11 @@ body.header-hidden .status-hint kbd,
   color: var(--text);
 }
 
-/* Kept in the layout rather than hidden so the rows do not reflow on hover. */
-.git-review-file-open:disabled {
+/* Kept in the layout rather than hidden so the rows do not reflow on hover, and
+   only dimmed once the row has revealed it. */
+.git-review-file:hover .git-review-file-open:disabled,
+.git-review-file:focus-within .git-review-file-open:disabled,
+.git-review-file[aria-selected="true"] .git-review-file-open:disabled {
   cursor: default;
   opacity: 0.25;
 }
@@ -4856,12 +4868,26 @@ body.header-hidden .status-hint kbd,
 /* diff2html ships a light palette; these keep it legible on the dark surface. */
 .worktree-review-diff .d2h-wrapper,
 .worktree-review-diff .d2h-file-wrapper,
-.worktree-review-diff .d2h-code-line,
-.worktree-review-diff .d2h-code-side-line,
 .worktree-review-diff .d2h-code-side-emptyplaceholder,
 .worktree-review-diff .d2h-emptyplaceholder {
   background: var(--surface);
   color: var(--text);
+}
+
+/* The row itself carries the added/removed tint, so the code line must not paint
+   an opaque surface over it: that masked the tint everywhere the code sits and
+   left it showing only as a block in the gap to the right of the line. */
+.worktree-review-diff .d2h-code-line,
+.worktree-review-diff .d2h-code-side-line {
+  background: transparent;
+  color: var(--text);
+}
+
+/* An unchanged row has no tint of its own, so it keeps the surface colour the
+   legend names for it. */
+.worktree-review-diff .d2h-cntx .d2h-code-line,
+.worktree-review-diff .d2h-cntx .d2h-code-side-line {
+  background: var(--surface);
 }
 
 .worktree-review-diff .d2h-file-wrapper {
@@ -4919,6 +4945,15 @@ body.header-hidden .status-hint kbd,
 /* diff2html keeps code on one line and scrolls it horizontally. A dialog is not
    a viewport you can widen, so wrap instead of hiding the end of the line. */
 .worktree-review-diff .d2h-code-line-ctn {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* A hunk header carries its enclosing context on .d2h-code-line itself, with no
+   inner .d2h-code-line-ctn to wrap. One unwrapped row widens the whole file
+   table, and scrolling that slides the code under the absolutely positioned
+   line numbers. */
+.worktree-review-diff .d2h-info .d2h-code-line {
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -5810,14 +5845,14 @@ body[data-pager-placement="right"] .pager-list {
 
 .pager-chip {
   align-items: center;
-  background: color-mix(in srgb, var(--surface-raised) 78%, transparent);
+  background: var(--tab-inactive-bg, color-mix(in srgb, var(--surface-raised) 78%, transparent));
   border: 1px solid var(--border);
   border-radius: 6px 6px 3px 3px;
-  color: var(--muted);
+  color: var(--tab-fg, var(--muted));
   cursor: grab;
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: var(--tab-font-size, 12px);
   gap: 6px;
   min-height: 30px;
   padding: 0 6px 0 10px;
@@ -5833,8 +5868,12 @@ body[data-pager-placement="right"] .pager-list {
 }
 
 /* Range selection has to stay legible against .is-active, which a selected tab
-   can also be, so it uses a filled tint rather than another border colour. */
-.pager-chip.is-range-selected {
+   can also be, so it uses a filled tint rather than another border colour. The
+   hover rule below carries the same weight and is declared later, so the chip
+   under the pointer needs the more specific selector or the tint is invisible
+   until the pointer leaves. */
+.pager-chip.is-range-selected,
+.pager-chip.is-range-selected:hover {
   background: color-mix(in srgb, var(--accent) 30%, var(--surface-high));
   border-color: var(--accent);
   color: var(--text);
@@ -5872,10 +5911,10 @@ body[data-pager-placement="right"] .pager-chip {
 }
 
 .pager-chip.is-active {
-  background: var(--primary-container);
+  background: var(--tab-bg, var(--primary-container));
   border-color: color-mix(in srgb, var(--accent) 65%, var(--border-strong));
   box-shadow: inset 0 2px 0 var(--accent);
-  color: var(--text);
+  color: var(--tab-active-fg, var(--text));
 }
 
 body[data-pager-placement="top"] .pager-chip.is-active {
@@ -5923,7 +5962,10 @@ body[data-pager-placement="right"] .pager-name {
   position: relative;
 }
 
-.pager-group:has(.pager-chip.is-active) {
+/* :has() carries the specificity of its argument, so this outranks a plain
+   .has-color rule; a coloured band keeps its own colour and the active tab still
+   shows its accent edge on the chip itself. */
+.pager-group:not(.has-color):has(.pager-chip.is-active) {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-strong));
 }
 
@@ -5991,7 +6033,7 @@ body[data-pager-placement="right"] .pager-name {
   justify-content: center;
   padding: 0;
   position: absolute;
-  right: 1px;
+  right: 5px;
   top: 1px;
   width: 18px;
 }
@@ -6008,15 +6050,33 @@ body[data-pager-placement="right"] .pager-name {
 }
 
 /* Mirrors a terminal's header background: the group's own label carries the
-   colour, so the page tabs inside keep their normal contrast. */
+   colour, so the page tabs inside keep their normal contrast. The band is drawn
+   in that same colour so the box reads as belonging to the label. */
 .pager-group.has-color {
-  border-color: color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-color: var(--pager-group-edge, color-mix(in srgb, var(--border-strong) 70%, transparent));
 }
 
 .pager-group.has-color .pager-group-header {
-  background-image: var(--pager-group-color);
-  color: #fff;
-  text-shadow: 0 1px 2px rgb(0 0 0 / 45%);
+  /* Shorthand, not background-image: a solid background is a bare colour, which
+     background-image rejects, leaving the label unpainted. */
+  background: var(--pager-group-color);
+  color: var(--pager-group-ink, #fff);
+  text-shadow: var(--pager-group-ink-shadow, 0 1px 2px rgb(0 0 0 / 45%));
+}
+
+/* Only the column placements stretch the header under the palette button. In a
+   row it sits on the band surface, where the theme ink is already correct. */
+body[data-pager-placement="left"] .pager-group.has-color .pager-group-color,
+body[data-pager-placement="right"] .pager-group.has-color .pager-group-color {
+  color: var(--pager-group-ink, #fff);
+}
+
+/* Hover draws its own chip behind the icon, so the theme ink reads again. */
+body[data-pager-placement="left"] .pager-group.has-color .pager-group-color:hover,
+body[data-pager-placement="right"] .pager-group.has-color .pager-group-color:hover,
+body[data-pager-placement="left"] .pager-group.has-color .pager-group-color:focus-visible,
+body[data-pager-placement="right"] .pager-group.has-color .pager-group-color:focus-visible {
+  color: var(--text);
 }
 
 .pager-group-chips {
@@ -6041,10 +6101,76 @@ body[data-pager-placement="right"] .pager-name {
   white-space: nowrap;
 }
 
-.pager-group-chips.is-page-drop-target .pager-group-empty {
+.pager-group.is-page-drop-target {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: var(--accent);
+}
+
+.pager-group.is-page-drop-target .pager-group-empty {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-color: var(--accent);
   color: var(--text);
+}
+
+.pager-group.is-group-dragging {
+  opacity: 0.5;
+}
+
+/* Where the dragged band will land. The bar runs across in a row placement and
+   down in a column one, so the marker follows the same axis. */
+.pager-group[data-group-drop-edge],
+.pager-chip[data-group-drop-edge] {
+  position: relative;
+}
+
+.pager-group[data-group-drop-edge]::after,
+.pager-chip[data-group-drop-edge]::after {
+  background: var(--accent);
+  border-radius: 2px;
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.pager-group[data-group-drop-edge="before"]::after,
+.pager-chip[data-group-drop-edge="before"]::after {
+  bottom: -2px;
+  left: -3px;
+  top: -2px;
+  width: 3px;
+}
+
+.pager-group[data-group-drop-edge="after"]::after,
+.pager-chip[data-group-drop-edge="after"]::after {
+  bottom: -2px;
+  right: -3px;
+  top: -2px;
+  width: 3px;
+}
+
+body[data-pager-placement="left"] .pager-group[data-group-drop-edge="before"]::after,
+body[data-pager-placement="right"] .pager-group[data-group-drop-edge="before"]::after,
+body[data-pager-placement="left"] .pager-chip[data-group-drop-edge="before"]::after,
+body[data-pager-placement="right"] .pager-chip[data-group-drop-edge="before"]::after {
+  bottom: auto;
+  height: 3px;
+  left: -2px;
+  right: -2px;
+  top: -3px;
+  width: auto;
+}
+
+body[data-pager-placement="left"] .pager-group[data-group-drop-edge="after"]::after,
+body[data-pager-placement="right"] .pager-group[data-group-drop-edge="after"]::after,
+body[data-pager-placement="left"] .pager-chip[data-group-drop-edge="after"]::after,
+body[data-pager-placement="right"] .pager-chip[data-group-drop-edge="after"]::after {
+  bottom: -3px;
+  height: 3px;
+  left: -2px;
+  right: -2px;
+  top: auto;
+  width: auto;
 }
 
 .pager-group-chips:has(.pager-chip) .pager-group-empty {
@@ -6082,7 +6208,7 @@ body[data-pager-placement="right"] .pager-group-empty {
 body[data-pager-placement="left"] .pager-group-header,
 body[data-pager-placement="right"] .pager-group-header {
   justify-content: flex-start;
-  padding-right: 20px;
+  padding-right: 24px;
 }
 
 /* A column band stacks the header above the tabs, so the control centres on
@@ -7136,15 +7262,18 @@ button.shortcut-binding.is-capturing {
 }
 
 .terminal-appearance-preview {
+  align-content: start;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   display: grid;
   font-size: 13px;
   gap: 7px;
+  /* Fixed so a larger preview font scrolls instead of growing the dialog. */
+  height: 126px;
   line-height: 1.35;
   margin-bottom: 18px;
-  min-height: 126px;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 16px 18px;
 }
 
@@ -7282,15 +7411,25 @@ button.shortcut-binding.is-capturing {
 
 .terminal-color-primary label,
 .terminal-rgb-fields label,
-.terminal-appearance-font {
+.terminal-appearance-font,
+.terminal-appearance-font-size {
   display: grid;
   gap: 5px;
   min-width: 0;
 }
 
+.terminal-appearance-type {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) 152px;
+  margin-top: 16px;
+}
+
 .terminal-color-primary label > span,
 .terminal-rgb-fields label > span,
-.terminal-appearance-font > span {
+.terminal-appearance-font > span,
+.terminal-appearance-font-size > label {
   color: var(--muted);
   font-size: 11px;
   font-weight: 620;
@@ -7302,6 +7441,102 @@ button.shortcut-binding.is-capturing {
   min-height: 36px;
   min-width: 0;
   width: 100%;
+}
+
+.terminal-appearance-stepper {
+  align-items: center;
+  background: var(--surface-high);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 42px;
+  min-height: 36px;
+  overflow: hidden;
+  position: relative;
+  transition: border-color 120ms ease;
+}
+
+.terminal-appearance-stepper::after {
+  background: var(--accent);
+  bottom: 0;
+  content: "";
+  height: 2px;
+  left: 0;
+  position: absolute;
+  transform: scaleX(0);
+  transition: transform 140ms ease;
+  width: 100%;
+}
+
+.terminal-appearance-stepper:focus-within { border-color: var(--accent); }
+
+.terminal-appearance-stepper:focus-within::after { transform: scaleX(1); }
+
+.terminal-appearance-stepper button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  padding: 0;
+  transition: background 120ms ease, color 120ms ease;
+  width: 100%;
+}
+
+.terminal-appearance-stepper button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+}
+
+.terminal-appearance-stepper button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.terminal-appearance-stepper button:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+
+.terminal-appearance-stepper button svg {
+  height: 15px;
+  width: 15px;
+}
+
+.terminal-appearance-stepper-value {
+  align-items: baseline;
+  display: flex;
+  gap: 2px;
+  justify-content: center;
+}
+
+.terminal-appearance-stepper-value > span {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.terminal-appearance-font-size input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-variant-numeric: tabular-nums;
+  font-weight: 640;
+  min-height: 0;
+  outline: none;
+  padding: 0;
+  text-align: right;
+  width: 2.2ch;
+}
+
+.terminal-appearance-font-size input::-webkit-inner-spin-button,
+.terminal-appearance-font-size input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .terminal-rgb-fields {
@@ -7316,7 +7551,6 @@ button.shortcut-binding.is-capturing {
 }
 
 .terminal-appearance-font {
-  margin-top: 16px;
   width: min(360px, 100%);
 }
 
@@ -7395,6 +7629,11 @@ button.shortcut-binding.is-capturing {
   font-size: 13px;
   font-weight: 650;
   gap: 8px;
+}
+
+/* A page group header carries no terminal, so the glyph would misdescribe it. */
+.header-background-overlay[data-appearance-context="pageGroup"] .header-background-preview-title > svg {
+  display: none;
 }
 
 .header-font-fields {
@@ -7864,6 +8103,22 @@ button.shortcut-binding.is-capturing {
   min-height: 32px;
   padding-inline: 8px;
   white-space: nowrap;
+}
+
+.terminal-appearance-theme-warning {
+  background: color-mix(in srgb, var(--warn, #f0b35a) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn, #f0b35a) 55%, transparent);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 11px;
+  grid-column: 1 / -1;
+  line-height: 1.35;
+  margin: 0;
+  padding: 6px 8px;
+}
+
+.terminal-appearance-theme-warning[hidden] {
+  display: none;
 }
 
 @media (max-width: 620px) {
@@ -10276,8 +10531,15 @@ button.shortcut-binding.is-capturing {
 
 .header-background-flyout-custom-row .header-background-flyout-swatches {
   flex: 1 1 auto;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Twenty saved colours have to wrap into the width there is rather than
+     stretching the flyout into a three-wide column seven rows tall. */
+  grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
   margin-top: 0;
+  /* The remove buttons sit at -5px, so the run needs room not to clip them, and
+     a ceiling so a full set cannot push the flyout off screen. */
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
 }
 
 .header-background-flyout-custom-row .header-background-flyout-swatches:empty {
@@ -10292,9 +10554,8 @@ button.shortcut-binding.is-capturing {
 
 .header-background-custom-remove {
   align-items: center;
-  background: var(--surface-high);
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
+  background: none;
+  border: 0;
   color: var(--muted);
   display: inline-flex;
   height: 18px;
@@ -10303,6 +10564,8 @@ button.shortcut-binding.is-capturing {
   position: absolute;
   right: -5px;
   top: -5px;
+  /* No chrome behind the glyph, so it needs its own edge over a bright swatch. */
+  text-shadow: 0 0 2px var(--surface);
   width: 18px;
   z-index: 1;
 }
@@ -12300,6 +12563,12 @@ button.shortcut-binding.is-capturing {
   padding: 7px 8px;
 }
 
+/* Keeps a long run of rows from stretching the menu past the screen. */
+.ctx-scroll-run {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .ctx-search-empty {
   color: var(--muted);
   font-size: 12px;
@@ -12322,6 +12591,18 @@ button.shortcut-binding.is-capturing {
 
 .ctx-item:hover {
   background: var(--state-hover);
+}
+
+/* A one-of-many row keeps its own glyph, so the current choice is marked by the
+   row rather than by swapping its icon for a tick. */
+.ctx-item[aria-checked="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--text);
+}
+
+.ctx-item[aria-checked="true"] > svg {
+  color: var(--accent);
 }
 
 .ctx-item[aria-disabled="true"] {
@@ -13679,7 +13960,7 @@ body.is-pane-resizing {
   background: transparent;
   border-color: transparent;
   border-radius: var(--radius-xs);
-  color: var(--muted);
+  color: var(--pane-bar-ink, var(--muted));
   flex: 0 0 26px;
   min-height: 26px;
   padding: 0;
@@ -14217,7 +14498,7 @@ body.is-pane-resizing {
   border: 0;
   border-radius: var(--radius-xs);
   box-sizing: border-box;
-  color: var(--text);
+  color: var(--pane-bar-ink, var(--text));
   font-family: var(--pane-title-font-family, inherit);
   font-size: var(--pane-title-font-size, var(--title-font-scale));
   font-weight: 550;
@@ -14243,7 +14524,7 @@ body.is-pane-resizing {
 
 .pane-title-display {
   box-sizing: border-box;
-  color: var(--text);
+  color: var(--pane-bar-ink, var(--text));
   display: block;
   font-family: var(--pane-title-font-family, inherit);
   font-size: var(--pane-title-font-size, var(--title-font-scale));
@@ -14634,12 +14915,16 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
   scrollbar-gutter: stable;
 }
 
+/* Compact chrome, everywhere the app draws its own furniture. Terminal output
+   is deliberately untouched: this trades chrome for rows, so shrinking the text
+   as well would give the space straight back. */
 .terminal-host.compact .terminal-pane {
-  grid-template-rows: 32px minmax(0, 1fr);
+  grid-template-rows: 26px minmax(0, 1fr);
 }
 
 .terminal-host.compact .pane-bar {
-  padding-block: 0;
+  gap: 5px;
+  padding: 0 5px 0 7px;
 }
 
 .terminal-host.compact .pane-actions button[data-action="move-left"],
@@ -14649,6 +14934,72 @@ body[data-reveal-header-actions="true"] .terminal-pane:not(:hover):not(.is-activ
 .terminal-host.compact .pane-actions button[data-action="color"],
 .terminal-host.compact .pane-actions button[data-action="restart"] {
   display: none;
+}
+
+.terminal-host.compact .pane-actions {
+  gap: 1px;
+}
+
+.terminal-host.compact .pane-actions button {
+  min-height: 24px;
+  width: 24px;
+}
+
+body.compact-chrome .pager {
+  gap: 3px;
+  min-height: 28px;
+  padding: 1px 6px;
+}
+
+body.compact-chrome .pager-list {
+  gap: 2px;
+}
+
+body.compact-chrome .pager-chip {
+  /* Only the fallback moves, so a configured tab size still wins. */
+  font-size: var(--tab-font-size, 11px);
+  gap: 4px;
+  min-height: 22px;
+  padding: 0 4px 0 7px;
+}
+
+body.compact-chrome .pager-group {
+  gap: 2px;
+  padding: 1px 3px;
+}
+
+body.compact-chrome .status-bar {
+  font-size: 11px;
+  gap: 10px;
+  min-height: 24px;
+  padding: 0 10px;
+}
+
+/* The bar is only as short as its tallest child, and the memory readout is a
+   button carrying the 38px base height. */
+body.compact-chrome .status-bar button {
+  min-height: 20px;
+}
+
+body.compact-chrome .status-workspace-zoom input {
+  height: 16px;
+}
+
+body.compact-chrome .control-row {
+  gap: 4px;
+}
+
+body.compact-chrome .control-section .control-body {
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+body.compact-chrome .settings-group-toggle {
+  min-height: 28px;
+}
+
+body.compact-chrome .toggle-row {
+  min-height: 24px;
 }
 
 @media (max-width: 720px) {

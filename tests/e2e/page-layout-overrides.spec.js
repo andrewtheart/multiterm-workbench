@@ -166,11 +166,25 @@ test.describe("Per-page layout and zoom", () => {
     await page.locator("#contextMenu .ctx-item", { hasText: "This page zoom: 125%" }).click();
     const submenu = page.locator("#contextSubmenu");
     await expect(submenu).toBeVisible();
-    await submenu.getByRole("menuitem", { name: "25%", exact: true }).click();
+    await submenu.getByRole("menuitemradio", { name: "25%", exact: true }).click();
     expect(await page.evaluate(() => ({ global: state.settings.workspaceZoom, page: effectivePageZoom() }))).toEqual({
       global: 100,
       page: 25
     });
+  });
+
+  // A layout the icon table has never heard of still needs a glyph, or the menu
+  // row renders with an empty icon slot.
+  test("labels an unknown layout with the fallback icon", async ({ page }) => {
+    await ready(page);
+    const icons = await page.evaluate(() => ({
+      known: layoutModeIcon("spotlight"),
+      unknown: layoutModeIcon("not-a-layout"),
+      empty: layoutModeIcon("")
+    }));
+    expect(icons.known).not.toBe("layout-grid");
+    expect(icons.unknown).toBe("layout-grid");
+    expect(icons.empty).toBe("layout-grid");
   });
 
   test("does not persist the overrides", async ({ page }) => {

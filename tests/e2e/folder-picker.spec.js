@@ -297,3 +297,35 @@ test.describe("Inline folder picker", () => {
     await expect(page.locator("#folderPickerOverlay")).toBeHidden();
   });
 });
+
+// Every case above stubs requestBridge, so nothing there exercises the wire. A
+// bridge reply the renderer never routes leaves the dialog on "Loading
+// folders..." for its whole five-minute timeout, which is what shipped.
+test.describe("Inline folder picker against the real bridge", () => {
+  test("lists and searches folders over the bridge", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    const root = await page.evaluate(async () => {
+      const health = await (await fetch("/health")).json();
+      window.__realFolderChoice = "pending";
+      chooseInlineFolder(health.cwd, "Select repository folder")
+        .then((value) => { window.__realFolderChoice = value; });
+      return health.cwd;
+    });
+
+    await expect(page.locator("#folderPickerOverlay")).toBeVisible();
+    await expect(page.locator("#folderPickerStatus")).toContainText(/subfolders?\./);
+    await expect(page.locator("#folderPickerLocation")).toHaveValue(root);
+    await expect(page.locator(".folder-picker-row").first()).toBeVisible();
+
+    await page.locator("#folderPickerSearch").fill("tests");
+    await expect(page.locator("#folderPickerStatus")).not.toContainText("Searching folders");
+    await expect(page.locator("#folderPickerStatus")).toContainText(/match|No matching/);
+
+    await page.locator("#folderPickerSearch").fill("");
+    await page.locator("#folderPickerSelect").click();
+    await expect(page.locator("#folderPickerOverlay")).toBeHidden();
+    await expect.poll(() => page.evaluate(() => window.__realFolderChoice)).toBe(root);
+  });
+});

@@ -6,10 +6,19 @@ const { execFileSync } = require("node:child_process");
 // A throwaway repo with a worktree that has real commits, so the review and
 // merge flows have something genuine to work against.
 const conflict = process.argv.includes("--conflict");
-const sandbox = path.join(os.tmpdir(), conflict ? "mt-conflict-fixture" : "mt-review-fixture");
-// Windows keeps the directory locked while the previous run's git children exit.
-fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-fs.mkdirSync(sandbox, { recursive: true });
+const prefix = conflict ? "mt-conflict-fixture-" : "mt-review-fixture-";
+// One shared directory races the previous run's still-exiting git children on
+// Windows and fails the next test with EPERM, so each run gets its own and
+// sweeps whichever older ones it can still delete.
+for (const entry of fs.readdirSync(os.tmpdir(), { withFileTypes: true })) {
+  if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+  try {
+    fs.rmSync(path.join(os.tmpdir(), entry.name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    // Still held by a run that has not finished exiting; a later sweep gets it.
+  }
+}
+const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 
 const repo = path.join(sandbox, "demo");
 fs.mkdirSync(repo);

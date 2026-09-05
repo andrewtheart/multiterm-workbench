@@ -2157,7 +2157,7 @@ test.describe("Automation Studio", () => {
     await page.locator("#automationConditionTargetName").fill("Tests");
     await page.locator("#automationSave").click();
 
-    await expect(page.locator(".automation-rule-type")).toHaveText("Conditional automation");
+    await expect(page.locator(".automation-rule-type")).toHaveText("Copilot conditional automation");
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("multiterm.automations")).rules[0]);
     expect(stored).toMatchObject({ enabled: true, name: "Incoming sweep", type: "condition" });
     expect(stored.actions).toEqual([]);

@@ -239,6 +239,26 @@
               </select>
             </label>
 
+            <label class="control-row">
+              <span>Tab background</span>
+              <input id="pagerTabBackground" type="color" value="#2B303B">
+            </label>
+
+            <label class="control-row">
+              <span>Tab text colour</span>
+              <input id="pagerTabForeground" type="color" value="#EEE9DB">
+            </label>
+
+            <label class="control-row">
+              <span>Tab font size (px)</span>
+              <input id="pagerTabFontSize" type="number" min="5" max="100" step="1" inputmode="numeric" placeholder="Default">
+            </label>
+
+            <div class="control-row">
+              <span>Tab appearance</span>
+              <button id="pagerTabAppearanceReset" type="button" class="secondary-action">Use defaults</button>
+            </div>
+
             <label class="toggle-row">
               <input id="pageSwipeGestures" type="checkbox">
               <span title="Swipe sideways across the workspace to move between pages, using a touchscreen or a two-finger trackpad swipe. Swipe left for the next page, right for the previous one.">Swipe between pages</span>
@@ -301,7 +321,7 @@
             <h2>Terminal</h2>
             <label class="control-row range-row">
               <span>Font</span>
-              <input id="fontSize" type="range" min="10" max="22" step="1">
+              <input id="fontSize" type="range" min="5" max="100" step="1">
               <output id="fontSizeValue"></output>
             </label>
 
@@ -318,6 +338,16 @@
                 <option value="graphite">Graphite</option>
                 <option value="paper">Paper</option>
                 <option value="contrast">Contrast</option>
+                <option value="midnight">Midnight</option>
+                <option value="forest">Forest</option>
+                <option value="rosewood">Rosewood</option>
+                <option value="slate">Slate</option>
+                <option value="sandstone">Sandstone</option>
+                <option value="arctic">Arctic</option>
+                <option value="neon">Neon</option>
+                <option value="mocha">Mocha</option>
+                <option value="oceanic">Oceanic</option>
+                <option value="vineyard">Vineyard</option>
               </select>
             </label>
 
@@ -354,6 +384,11 @@
               <span>Menu size</span>
               <input id="contextMenuScale" type="range" min="80" max="160" step="5" title="Terminal right-click menu size (80-160%)">
               <output id="contextMenuScaleValue"></output>
+            </label>
+
+            <label class="control-row">
+              <span title="How many Move to page rows the terminal menu's Session section shows at once. Any beyond this scroll inside the section.">Menu page rows</span>
+              <input id="contextMenuPageRows" type="number" min="2" max="50" step="1" inputmode="numeric">
             </label>
 
             <label class="control-row">
@@ -575,7 +610,7 @@
             </label>
 
             <label class="control-row">
-              <span title="How many conditional automation checks may start in any rolling hour, counted across every rule and including manual runs. A check over the limit is recorded as skipped instead of running.">Condition checks per hour</span>
+              <span title="How many Copilot conditional automation checks may start in any rolling hour, counted across every rule and including manual runs. A check over the limit is recorded as skipped instead of running.">Condition checks per hour</span>
               <input id="automationConditionChecksPerHour" type="number" min="1" max="240" step="1" inputmode="numeric">
             </label>
 
@@ -595,17 +630,17 @@
             </label>
 
             <label class="control-row">
-              <span title="How many conditional automation checks may assess at the same time. A check that arrives while the limit is reached is recorded as skipped rather than queued.">Concurrent condition checks</span>
+              <span title="How many Copilot conditional automation checks may assess at the same time. A check that arrives while the limit is reached is recorded as skipped rather than queued.">Concurrent condition checks</span>
               <input id="automationConditionConcurrency" type="number" min="1" max="8" step="1" inputmode="numeric">
             </label>
 
             <label class="control-row">
-              <span title="Largest state note a conditional automation may remember between checks. An oversized note is refused and the previous note is kept, because a truncated note is worse than a stale one.">Condition state note (KB)</span>
+              <span title="Largest state note a Copilot conditional automation may remember between checks. An oversized note is refused and the previous note is kept, because a truncated note is worse than a stale one.">Condition state note (KB)</span>
               <input id="automationConditionStateKb" type="number" min="1" max="64" step="1" inputmode="numeric">
             </label>
 
             <label class="control-row">
-              <span title="How many tool permissions a conditional automation may hold in each of its allow and deny lists.">Condition tool permissions</span>
+              <span title="How many tool permissions a Copilot conditional automation may hold in each of its allow and deny lists.">Condition tool permissions</span>
               <input id="automationConditionToolEntries" type="number" min="1" max="100" step="1" inputmode="numeric">
             </label>
 
@@ -712,6 +747,10 @@
                 <option value="always">Always focus MultiTerm</option>
                 <option value="never">Never focus MultiTerm</option>
               </select>
+            </label>
+            <label class="toggle-row">
+              <input id="confirmTerminalClose" type="checkbox">
+              <span title="Asks before a terminal is closed by its header button, a menu, or a keyboard shortcut. A terminal whose session has already exited is closed without asking.">Confirm before closing a terminal</span>
             </label>
             <label class="control-row">
               <span>When closing a page with terminals</span>
@@ -1991,6 +2030,24 @@
       </div>
     </div>
 
+    <div id="terminalCloseOverlay" class="palette-overlay" hidden>
+      <div class="palette confirm" role="alertdialog" aria-modal="true" aria-labelledby="terminalCloseTitle" aria-describedby="terminalCloseText">
+        <div class="confirm-head">
+          <i data-lucide="triangle-alert"></i>
+          <h2 id="terminalCloseTitle">Close terminal?</h2>
+        </div>
+        <p id="terminalCloseText" class="confirm-body"></p>
+        <label class="confirm-remember toggle-row">
+          <input id="terminalCloseRemember" type="checkbox">
+          <span>Don't ask me again</span>
+        </label>
+        <div class="confirm-actions">
+          <button id="terminalCloseCancel" type="button" class="confirm-cancel">Cancel</button>
+          <button id="terminalCloseAccept" type="button" class="confirm-danger">Close terminal</button>
+        </div>
+      </div>
+    </div>
+
     <div id="aiSetupOverlay" class="palette-overlay" hidden>
       <div class="palette ai-setup" role="dialog" aria-modal="true" aria-labelledby="aiSetupTitle" aria-describedby="aiSetupStatus">
         <header class="ai-setup-head">
@@ -2043,7 +2100,7 @@
     </div>
 
     <div id="externalTerminalFocusOverlay" class="palette-overlay" hidden>
-      <div class="palette external-terminal-focus" role="dialog" aria-modal="true" aria-labelledby="externalTerminalFocusTitle" aria-describedby="externalTerminalFocusText">
+      <div class="palette confirm external-terminal-focus" role="dialog" aria-modal="true" aria-labelledby="externalTerminalFocusTitle" aria-describedby="externalTerminalFocusText">
         <div class="confirm-head">
           <i data-lucide="mouse-pointer-click"></i>
           <h2 id="externalTerminalFocusTitle">Focus MultiTerm for external terminals?</h2>
@@ -2439,7 +2496,7 @@
               <div id="automationType" class="automation-type-options" role="radiogroup" aria-label="Automation type">
                 <button type="button" role="radio" data-automation-type="command" aria-checked="true"><i data-lucide="terminal-square"></i><span><strong>Command based automation</strong><small>Shell commands, PowerShell, or script files</small></span></button>
                 <button type="button" role="radio" data-automation-type="copilot" aria-checked="false"><i data-lucide="sparkles"></i><span><strong>Copilot automation</strong><small>Run a scheduled prompt in Copilot CLI</small></span></button>
-                <button type="button" role="radio" data-automation-type="condition" aria-checked="false"><i data-lucide="scan-eye"></i><span><strong>Conditional automation</strong><small>Copilot checks a condition, then acts on it</small></span></button>
+                <button type="button" role="radio" data-automation-type="condition" aria-checked="false"><i data-lucide="scan-eye"></i><span><strong>Copilot conditional automation</strong><small>Copilot checks a condition, then acts on it</small></span></button>
                 <button type="button" role="radio" data-automation-type="appearance" aria-checked="false"><i data-lucide="palette"></i><span><strong>Appearance automation</strong><small>Style terminals when their titles match</small></span></button>
               </div>
             </fieldset>
@@ -2722,6 +2779,30 @@
       </div>
     </div>
 
+    <div id="tabAppearanceOverlay" class="palette-overlay" hidden>
+      <div class="palette confirm tab-appearance" role="dialog" aria-modal="true" aria-labelledby="tabAppearanceTitle" tabindex="-1">
+        <h2 id="tabAppearanceTitle" class="confirm-head">Tab appearance</h2>
+        <p id="tabAppearanceSubtitle" class="confirm-body"></p>
+        <label class="control-row">
+          <span>Background</span>
+          <input id="tabAppearanceBackground" type="color" value="#2B303B">
+        </label>
+        <label class="control-row">
+          <span>Text colour</span>
+          <input id="tabAppearanceForeground" type="color" value="#EEE9DB">
+        </label>
+        <label class="control-row">
+          <span>Font size (px)</span>
+          <input id="tabAppearanceFontSize" type="number" min="5" max="100" step="1" inputmode="numeric" placeholder="Inherit">
+        </label>
+        <div class="confirm-actions">
+          <button id="tabAppearanceReset" type="button" class="secondary-action">Use inherited</button>
+          <button id="tabAppearanceCancel" type="button" class="confirm-cancel">Cancel</button>
+          <button id="tabAppearanceApply" type="button" class="primary-action">Apply</button>
+        </div>
+      </div>
+    </div>
+
     <div id="headerBackgroundOverlay" class="palette-overlay header-background-overlay" hidden>
       <div class="palette header-background-dialog terminal-appearance-dialog" role="dialog" aria-modal="true" aria-labelledby="headerBackgroundTitle" aria-describedby="headerBackgroundSubtitle" tabindex="-1">
         <header class="header-background-head">
@@ -2797,23 +2878,31 @@
                 </fieldset>
               </div>
 
-              <label class="terminal-appearance-font">
-                <span>Font family</span>
-                <select id="terminalAppearanceFontFamily">
-                  <option value="Cascadia Mono">Cascadia Mono</option>
-                  <option value="Cascadia Code">Cascadia Code</option>
-                  <option value="Consolas">Consolas</option>
-                  <option value="JetBrains Mono">JetBrains Mono</option>
-                  <option value="Fira Code">Fira Code</option>
-                  <option value="Courier New">Courier New</option>
-                </select>
-              </label>
+              <div class="terminal-appearance-type">
+                <label class="terminal-appearance-font">
+                  <span>Font family</span>
+                  <select id="terminalAppearanceFontFamily">
+                    <option value="Cascadia Mono">Cascadia Mono</option>
+                  </select>
+                </label>
+                <div class="terminal-appearance-font-size">
+                  <label for="terminalAppearanceFontSize">Font size</label>
+                  <div class="terminal-appearance-stepper">
+                    <button id="terminalAppearanceFontSizeDown" type="button" data-font-size-step="-1" aria-label="Decrease font size" title="Decrease font size"><i data-lucide="minus"></i></button>
+                    <span class="terminal-appearance-stepper-value">
+                      <input id="terminalAppearanceFontSize" type="number" min="5" max="100" step="1" inputmode="numeric">
+                      <span aria-hidden="true">px</span>
+                    </span>
+                    <button id="terminalAppearanceFontSizeUp" type="button" data-font-size-step="1" aria-label="Increase font size" title="Increase font size"><i data-lucide="plus"></i></button>
+                  </div>
+                </div>
+              </div>
             </section>
 
             <section id="terminalHeaderAppearancePanel" class="terminal-appearance-panel" role="tabpanel" aria-labelledby="terminalAppearanceTabHeader" hidden>
               <div class="header-background-body">
           <div id="headerBackgroundPreview" class="header-background-preview" aria-label="Header background preview">
-            <span class="header-background-preview-title"><i data-lucide="terminal"></i><span>Terminal header</span></span>
+            <span class="header-background-preview-title"><i data-lucide="terminal"></i><span id="headerBackgroundPreviewLabel">Terminal header</span></span>
             <i data-lucide="more-horizontal" aria-hidden="true"></i>
           </div>
 
@@ -2824,7 +2913,7 @@
             </label>
             <label>
               <span>Font size (px)</span>
-              <input id="headerAppearanceFontSize" type="number" min="9" max="20" step="1" inputmode="numeric" placeholder="Default">
+              <input id="headerAppearanceFontSize" type="number" min="5" max="100" step="1" inputmode="numeric" placeholder="Default">
             </label>
           </div>
 
@@ -2905,6 +2994,7 @@
           <div class="terminal-appearance-apply-wrap">
             <button id="headerBackgroundApply" type="button" class="primary-action" aria-expanded="false" aria-controls="terminalAppearanceApplyChoices">Apply</button>
             <div id="terminalAppearanceApplyChoices" class="terminal-appearance-apply-choices" role="group" aria-label="Apply terminal appearance to" hidden>
+              <p id="terminalAppearanceThemeWarning" class="terminal-appearance-theme-warning" role="alert" hidden></p>
               <button id="terminalAppearanceApplyTerminal" type="button" class="secondary-action">This terminal</button>
               <button id="terminalAppearanceApplyAll" type="button" class="secondary-action">All terminals</button>
             </div>

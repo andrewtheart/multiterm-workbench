@@ -75,7 +75,7 @@ test.describe("Settings panel verification", () => {
         rendered: option.style.fontFamily
       }))
     )));
-    expect(catalogs[0]).toHaveLength(20);
+    expect(catalogs[0]).toHaveLength(await page.evaluate(() => FONT_CATALOG.length));
     expect(catalogs[1]).toEqual(catalogs[0]);
     expect(catalogs[0].every((option) => (
       option.stack && option.rendered.toLowerCase().includes(option.value.toLowerCase())
@@ -84,7 +84,7 @@ test.describe("Settings panel verification", () => {
     await openSettingsGroup("appearance");
     await page.locator("#fontFamily").locator("xpath=..").locator(".combobox-input").click();
     const renderedRows = page.locator(".combobox-list:not([hidden]) .combobox-option-label");
-    await expect(renderedRows).toHaveCount(20);
+    await expect(renderedRows).toHaveCount(catalogs[0].length);
     const rowFaces = await renderedRows.evaluateAll((rows) => rows.map((row) => row.style.fontFamily));
     expect(rowFaces).toEqual(catalogs[0].map((option) => option.rendered));
     await page.keyboard.press("Escape");

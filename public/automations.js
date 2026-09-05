@@ -17,11 +17,19 @@
   const DAYS = Object.freeze([0, 1, 2, 3, 4, 5, 6]);
   const HANDOFF_MARKER = /^\s*\*\*HAND OFF\*\*(?:\s+(.+?))?\s*$/i;
   const COPILOT_FOOTER = /(?:^\s*|[·•]\s*)\/\s*commands\s*[·•]\s*\?\s*help\b/i;
+  // Must stay in step with FONT_CATALOG in app.js; a name missing here makes
+  // normalizeAppearance reject an otherwise valid profile.
   const FONT_FAMILIES = new Set([
     "Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono", "Fira Code",
     "Source Code Pro", "IBM Plex Mono", "Roboto Mono", "Ubuntu Mono", "Noto Sans Mono",
     "DejaVu Sans Mono", "Liberation Mono", "Hack", "Inconsolata", "Menlo", "Monaco",
-    "SFMono-Regular", "Lucida Console", "Droid Sans Mono", "Courier New"
+    "SFMono-Regular", "Lucida Console", "Droid Sans Mono", "Courier New",
+    "Cascadia Mono PL", "Cascadia Code PL", "CaskaydiaCove Nerd Font",
+    "JetBrainsMono Nerd Font", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGS NF",
+    "Meslo LG M", "Iosevka", "Victor Mono", "Fira Mono", "Anonymous Pro", "Space Mono",
+    "PT Mono", "Intel One Mono", "Geist Mono", "Commit Mono", "Recursive Mono",
+    "Red Hat Mono", "Martian Mono", "Azeret Mono", "Overpass Mono", "Share Tech Mono",
+    "Cousine", "Andale Mono", "Bitstream Vera Sans Mono", "Nimbus Mono PS", "Terminus"
   ]);
   const HEADER_GRADIENT_TYPES = new Set(["linear", "radial", "conic"]);
   const HEADER_GRADIENT_SHAPES = new Set(["ellipse", "circle"]);
@@ -279,7 +287,7 @@
       centerY: Number.isFinite(rawCenterY) ? Math.min(100, Math.max(0, Math.round(rawCenterY))) : 50,
       color: solidColor,
       fontFamily: FONT_FAMILIES.has(value.fontFamily) ? value.fontFamily : "",
-      fontSize: Number.isFinite(rawFontSize) && rawFontSize > 0 ? Math.min(20, Math.max(9, Math.round(rawFontSize))) : 0,
+      fontSize: Number.isFinite(rawFontSize) && rawFontSize > 0 ? Math.min(100, Math.max(5, Math.round(rawFontSize))) : 0,
       mode,
       shape: HEADER_GRADIENT_SHAPES.has(value.shape) ? value.shape : "ellipse",
       stops,
@@ -294,7 +302,12 @@
     const fontFamily = FONT_FAMILIES.has(value.fontFamily) ? value.fontFamily : "";
     const headerBackground = normalizeAppearanceHeader(value.headerBackground);
     if (!background || !foreground || !fontFamily || !headerBackground) return null;
-    return { background, foreground, fontFamily, headerBackground };
+    // 0 means "inherit the app's terminal font size".
+    const rawFontSize = Number(value.fontSize);
+    const fontSize = Number.isFinite(rawFontSize) && rawFontSize > 0
+      ? Math.min(100, Math.max(5, Math.round(rawFontSize)))
+      : 0;
+    return { background, foreground, fontFamily, fontSize, headerBackground };
   }
 
   function normalizeAction(value, index = 0, previousIds = []) {

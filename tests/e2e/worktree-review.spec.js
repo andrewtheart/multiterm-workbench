@@ -52,7 +52,7 @@ test.describe("Worktree review", () => {
     await expect(diff).toContainText("untracked-review.txt");
     await expect(diff).toContainText("untracked review work");
     const backgrounds = await diff.evaluate((viewer) => {
-      const selectors = [".d2h-wrapper", ".d2h-code-line", ".d2h-del", ".d2h-ins"];
+      const selectors = [".d2h-wrapper", ".d2h-cntx .d2h-code-line", ".d2h-del", ".d2h-ins"];
       return Object.fromEntries(selectors.map((selector) => {
         const element = viewer.querySelector(selector);
         return [selector, element ? getComputedStyle(element).backgroundColor : "missing"];
@@ -62,6 +62,20 @@ test.describe("Worktree review", () => {
       expect(background).not.toBe("missing");
       expect(background).not.toBe("rgba(0, 0, 0, 0)");
     }
+
+    // An added or removed row carries its tint on the cell, so the code line
+    // inside it must stay transparent. Painting the surface colour there masked
+    // the tint under the code and left it showing only as a block to the right.
+    const tinted = await diff.evaluate((viewer) => {
+      const cell = viewer.querySelector("td.d2h-ins:not(.d2h-code-linenumber), td.d2h-del:not(.d2h-code-linenumber)");
+      const line = cell?.querySelector(".d2h-code-line");
+      return {
+        cell: cell ? getComputedStyle(cell).backgroundColor : "missing",
+        line: line ? getComputedStyle(line).backgroundColor : "missing"
+      };
+    });
+    expect(tinted.cell).not.toBe("rgba(0, 0, 0, 0)");
+    expect(tinted.line, "the code line must not mask its row's tint").toBe("rgba(0, 0, 0, 0)");
   });
 
   test("closes the review and returns to the manager", async ({ page }) => {

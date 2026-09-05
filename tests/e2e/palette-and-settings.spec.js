@@ -838,6 +838,8 @@ test.describe("Command palette — every option works", () => {
   test("destructive: close active then close all", async () => {
     await resetTo(2);
     await runCmd("Close active terminal");
+    // Closing one terminal by hand asks first; closing them all does not.
+    await page.locator("#terminalCloseAccept").click();
     await expect(page.locator(".terminal-pane")).toHaveCount(1);
     await runCmd("Close all terminals");
     // The palette command ran; drain resiliently in case the bridge blipped at

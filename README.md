@@ -253,7 +253,7 @@ with the type you pick.
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/automation-condition.png" alt="Automation Studio with Conditional automation selected, showing When and Then prompts, a working directory of D colon backslash exports, and a Hidden, Visible, or Existing terminal session choice">
+      <img src="docs/images/automation-condition.png" alt="Automation Studio with Copilot conditional automation selected, showing When and Then prompts, a working directory of D colon backslash exports, and a Hidden, Visible, or Existing terminal session choice">
       <br><strong>Conditional:</strong> Copilot answers a yes/no <em>When</em> question first, and the <em>Then</em> action runs only if the answer was yes. The assessment turn is read-only, the working directory bounds what it can reach, and the session can be hidden, visible, or an existing terminal.
     </td>
     <td align="center" width="50%">

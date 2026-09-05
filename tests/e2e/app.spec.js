@@ -176,6 +176,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect.poll(() => page.evaluate(() => [...state.terminals.values()].at(-1)?.status)).toBe("live");
 
     await panes.last().locator('[data-action="close"]').click();
+    await page.locator("#terminalCloseAccept").click();
     await expect(panes).toHaveCount(before);
     await setNative("#shellSelect", "pwsh", "change");
   });
@@ -202,7 +203,11 @@ test.describe("MultiTerm Workbench UI", () => {
         timeout: 20000
       })
       .toBe(true);
-    for (let i = 0; i < 5; i += 1) await panes.last().locator('[data-action="close"]').click();
+    // Numbering is what this test is about; close the five panes directly so a
+    // mix of running and failed WSL sessions cannot make the cleanup racy.
+    await page.evaluate(() => {
+      [...state.terminals.keys()].slice(-5).forEach((id) => removeTerminal(id));
+    });
     await expect(panes).toHaveCount(before);
   });
 
@@ -418,6 +423,27 @@ test.describe("MultiTerm Workbench UI", () => {
     await expect(page.locator("#settingsShowAll")).toHaveAttribute("title", "Show all settings");
     await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(13);
     await expect.poll(chevronRotation).toBe("none");
+
+    // The scroller's gutter is reserved, so bringing the scrollbar in by
+    // expanding every group cannot shove the controls left. Headless Chromium
+    // draws overlay scrollbars that take no width, so the reservation itself is
+    // what has to be pinned; the geometry below guards the platforms where a
+    // classic scrollbar really does consume space.
+    const toggleLeft = () => page.locator(".settings-group-toggle").first()
+      .evaluate((element) => Math.round(element.getBoundingClientRect().left));
+    const collapsedLeft = await toggleLeft();
+    expect(await page.locator(".control-panel").evaluate(
+      (element) => getComputedStyle(element).scrollbarGutter
+    )).toBe("stable");
+    await page.locator("#settingsShowAll").click();
+    await expect(page.locator(".settings-group-toggle[aria-expanded='true']")).toHaveCount(13);
+    const overflows = await page.locator(".control-panel").evaluate(
+      (element) => element.scrollHeight > element.clientHeight
+    );
+    expect(overflows, "the fully expanded panel really does need a scrollbar").toBe(true);
+    expect(await toggleLeft(), "and its arrival must not shift the panel content").toBe(collapsedLeft);
+    await page.locator("#settingsShowAll").click();
+    await expect(page.locator(".settings-group-toggle[aria-expanded='false']")).toHaveCount(13);
   });
 
   test("resizes the settings panel by pointer and keyboard and persists its width", async () => {
@@ -508,7 +534,19 @@ test.describe("MultiTerm Workbench UI", () => {
     await search.fill("tabs");
     const pagerPlacementItem = page.locator(".settings-filter-item:has(#pagerPlacement)");
     await expect(pagerPlacementItem).toBeVisible();
-    await expect(page.locator(".settings-filter-item:not([hidden])")).toHaveCount(1);
+    // "tabs" is the natural word for page placement and for the tab styling
+    // controls, so it matches that set and nothing else.
+    const tabMatches = await page.evaluate(() => [...document.querySelectorAll(".settings-filter-item:not([hidden])")]
+      .map((item) => item.querySelector("input, select, button, textarea")?.id)
+      .filter(Boolean)
+      .sort());
+    expect(tabMatches).toEqual([
+      "pagerPlacement",
+      "pagerTabAppearanceReset",
+      "pagerTabBackground",
+      "pagerTabFontSize",
+      "pagerTabForeground"
+    ]);
     const aliases = await pagerPlacementItem.getAttribute("data-search-aliases");
     expect(aliases).toContain("tabs");
 
@@ -713,10 +751,13 @@ test.describe("MultiTerm Workbench UI", () => {
   });
 
   test("status-bar zoom buttons disable at font-size limits", async () => {
-    await setNative("#fontSize", "10", "input");
+    // Derived from the product's own bounds so widening the range cannot leave
+    // this test pinning a limit that no longer exists.
+    const bounds = await page.evaluate(() => ({ min: MIN_FONT_SIZE, max: MAX_FONT_SIZE }));
+    await setNative("#fontSize", String(bounds.min), "input");
     await expect(page.locator("#statusZoomOut")).toBeDisabled();
 
-    await setNative("#fontSize", "22", "input");
+    await setNative("#fontSize", String(bounds.max), "input");
     await expect(page.locator("#statusZoomIn")).toBeDisabled();
 
     await setNative("#fontSize", "14", "input");
@@ -1087,6 +1128,43 @@ test.describe("MultiTerm Workbench UI", () => {
     });
   });
 
+  test("compact chrome measurably tightens every surface it owns", async () => {
+    const measure = () => page.evaluate(() => {
+      const height = (selector) => {
+        const el = document.querySelector(selector);
+        return el ? Math.round(el.getBoundingClientRect().height) : null;
+      };
+      return {
+        paneHeader: height(".terminal-pane .pane-bar"),
+        pager: height(".pager"),
+        chip: height(".pager-chip"),
+        status: height(".status-bar"),
+        settingsToggle: height(".settings-group-toggle"),
+        terminal: height(".terminal-pane .terminal-screen")
+      };
+    });
+
+    await setCheck("#compactChrome", false);
+    await expect(page.locator("#terminalHost")).not.toHaveClass(/compact/);
+    const normal = await measure();
+
+    await setCheck("#compactChrome", true);
+    await expect(page.locator("body")).toHaveClass(/compact-chrome/);
+    const compact = await measure();
+
+    // It used to change the pane header by a single pixel and hide six buttons
+    // that were already in the overflow menu, so "compact" was unnoticeable.
+    for (const surface of ["paneHeader", "pager", "chip", "status", "settingsToggle"]) {
+      expect(compact[surface], `${surface} ${normal[surface]} -> ${compact[surface]}`)
+        .toBeLessThan(normal[surface] - 4);
+    }
+    // The reclaimed chrome has to become terminal, not empty space.
+    expect(compact.terminal).toBeGreaterThan(normal.terminal);
+
+    await setCheck("#compactChrome", false);
+    await expect(page.locator("body")).not.toHaveClass(/compact-chrome/);
+  });
+
   test("toggles chrome and input synchronisation", async () => {
     await setCheck("#syncInput", true);
     await expect.poll(() => page.evaluate(() => document.querySelector("#syncInput").checked)).toBe(true);
@@ -1151,7 +1229,7 @@ test.describe("MultiTerm Workbench UI", () => {
     // Every header action advertises its own remappable shortcut here.
     await expect(menu.locator(".ctx-item")).toHaveText([
       "Title suggestion history",
-      "Notifications\u2026",
+      "Notifications\u2026Ctrl+Alt+Shift+I",
       "Header background\u2026Ctrl+Alt+Shift+B",
       "MinimizeCtrl+Alt+Shift+M",
       "MaximizeCtrl+Alt+Shift+X",
@@ -1349,6 +1427,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await menu.locator('.ctx-item[data-header-action="duplicate"]').click();
     await expect(panes.last().locator('[data-action="clear"]')).toHaveAttribute("data-header-placement", "header");
     await panes.last().locator('[data-action="close"]').click();
+    await page.locator("#terminalCloseAccept").click();
     await expect(panes).toHaveCount(paneCountBeforeDuplicate);
     await expect.poll(() => page.evaluate(() => new Promise((resolve, reject) => {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -2731,6 +2810,7 @@ test.describe("MultiTerm Workbench UI", () => {
     await topPane.scrollIntoViewIfNeeded();
     const before = await page.evaluate(() => state.terminals.size);
     await topPane.locator('[data-action="close"]').click();
+    await page.locator("#terminalCloseAccept").click();
     await expect(page.locator(".terminal-pane")).toHaveCount(before - 1);
   });
 
@@ -3050,6 +3130,7 @@ test.describe("MultiTerm Workbench UI", () => {
     // so nothing closed; post-fix the X's handler runs and the pane is removed.
     const closeTargetId = ids[4];
     await page.locator(`.terminal-pane[data-id="${closeTargetId}"] [data-action="close"]`).click();
+    await page.locator("#terminalCloseAccept").click();
     await expect(page.locator(`.terminal-pane[data-id="${closeTargetId}"]`)).toHaveCount(0);
 
     // Restore a normal layout so later tests start from a clean state.

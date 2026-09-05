@@ -22,6 +22,7 @@
 const TITLE_FONT_SCALE_BOUNDS = { min: 80, max: 150, step: 5, fallback: 110 };
 const WORKSPACE_ZOOM_BOUNDS = { min: 25, max: 200, step: 5, fallback: 100 };
 const CONTEXT_MENU_SCALE_BOUNDS = { min: 80, max: 160, step: 5, fallback: 100 };
+const CONTEXT_MENU_PAGE_ROWS_BOUNDS = { min: 2, max: 50, fallback: 5 };
 const SIDECAR_WIDTH_BOUNDS = { min: 240, max: 720, step: 10, fallback: 300 };
 
 const defaultSettings = {
@@ -92,7 +93,11 @@ const defaultSettings = {
   closeAction: "ask",
   columns: 2,
   compactChrome: false,
+  pagerTabBackground: "",
+  pagerTabForeground: "",
+  pagerTabFontSize: 0,
   contextMenuScale: CONTEXT_MENU_SCALE_BOUNDS.fallback,
+  contextMenuPageRows: CONTEXT_MENU_PAGE_ROWS_BOUNDS.fallback,
   copilotImportContextKb: 64,
   copilotLogInitialTailKb: 256,
   copilotLogViewerEnabled: false,
@@ -142,6 +147,7 @@ const defaultSettings = {
   outputBacklogKb: 1024,
   outputCoalesceMs: 8,
   pageCloseAction: "ask",
+  confirmTerminalClose: true,
   pageSwipeGestures: true,
   paneHeight: 320,
   pagerCollapsed: false,
@@ -179,13 +185,13 @@ const HEADER_GRADIENT_TYPES = new Set(["linear", "radial", "conic"]);
 const HEADER_GRADIENT_SHAPES = new Set(["circle", "ellipse"]);
 const HEADER_GRADIENT_MAX_STOPS = 8;
 const HEADER_GRADIENT_FALLBACK_COLOR = "#1E242C";
-const HEADER_FONT_SIZE_BOUNDS = Object.freeze({ min: 9, max: 20 });
+const HEADER_FONT_SIZE_BOUNDS = Object.freeze({ min: 5, max: 100 });
 // One-click palette for the header quick picker: two neutrals for a subtle
 // tint, then the pane label accents so both cues can share a hue.
 const HEADER_BACKGROUND_QUICK_COLORS = Object.freeze([
   "#1E242C", "#2F3B46", ...PANE_COLORS.map((color) => color.toUpperCase())
 ]);
-const HEADER_BACKGROUND_CUSTOM_LIMIT = 6;
+const HEADER_BACKGROUND_CUSTOM_LIMIT = 20;
 const ADD_TERMINAL_BUTTON_DEFAULT_COLOR = "#1677FF";
 const addTerminalColorState = { hue: 215, saturation: 91, value: 100 };
 let headerBackgroundTerminalId = null;
@@ -266,7 +272,12 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   fontSize: "text size type scale zoom terminal typography larger smaller",
   terminalTheme: "terminal console colors colours color scheme palette background foreground contrast appearance",
   compactChrome: "dense compact chrome ui toolbar header controls small spacing slim",
+  pagerTabBackground: "tab tabs page chip background colour color fill pager bar highlight active",
+  pagerTabForeground: "tab tabs page chip text colour color font ink label pager bar",
+  pagerTabFontSize: "tab tabs page chip font size text scale typography pager bar larger smaller",
+  pagerTabAppearanceReset: "tab tabs page chip appearance reset default restore colour color font size pager bar",
   contextMenuScale: "context menu right-click right click popup size scale zoom font text bigger smaller larger enlarge magnify readable legible density group headers",
+  contextMenuPageRows: "context menu right-click session move to page rows visible scroll scrollbar list height pages limit",
   copilotImportContextKb: "copilot session import context transcript history vscode visual studio cli size kilobytes kb continuation",
   copilotTitleModel: "copilot ai generated automatic terminal title name model opus sonnet gpt",
   copilotTitleEffort: "copilot title thinking reasoning effort medium high low",
@@ -309,6 +320,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
   bridgeHeartbeatSeconds: "performance bridge heartbeat interval liveness ping pong client disconnect off seconds",
   maxInstallerSizeMb: "updater update download installer package maximum max size limit ceiling security megabytes mb",
   pageCloseAction: "page pages close remove terminals sessions move relocate ask remember confirmation prompt",
+  confirmTerminalClose: "terminal close confirm confirmation prompt ask are you sure warning accidental x button shortcut session protect",
   keepSessionsOnClose: "keep preserve survive terminals sessions shells processes bridge background detach close quit exit window alive",
   restoreSession: "restore reopen remember previous last session startup launch restart terminals workspace resume",
   showBridgeIdInWindowTitle: "window title bar bridge id identifier bridge-xxx show hide electron browser",
@@ -350,7 +362,7 @@ const SETTINGS_SEARCH_ALIASES = Object.freeze({
 const PANE_OVERFLOW_WIDTH = 600;
 const HEADER_ACTION_IDS = [
   "move-left", "move-right", "find", "clear", "copy", "color", "restart",
-  "dequeue", "git-changes", "artifacts", "header-background", "minimize", "focus",
+  "dequeue", "git-changes", "artifacts", "notifications", "header-background", "minimize", "focus",
   "maximize", "duplicate", "close"
 ];
 const HEADER_ACTION_ID_SET = new Set(HEADER_ACTION_IDS);
@@ -367,6 +379,8 @@ const HEADER_ACTION_OVERFLOW_ORDER = [
 ];
 // The title needs a floor worth reading before buttons may take the rest.
 const PANE_TITLE_MIN_WIDTH = 150;
+// These open a flyout rather than a dialog, so from the menu they hang off More.
+const PANE_FLYOUT_HEADER_ACTIONS = new Set(["artifacts", "notifications", "header-background"]);
 const HEADER_ACTIONS = Object.freeze({
   "move-left": { label: "Move left", icon: "arrow-left" },
   "move-right": { label: "Move right", icon: "arrow-right" },
@@ -378,6 +392,7 @@ const HEADER_ACTIONS = Object.freeze({
   dequeue: { label: "Run next queued command", icon: "list-start" },
   "git-changes": { label: "Pending changes\u2026", icon: "git-branch" },
   artifacts: { label: "Notes & command queue", icon: "notebook-tabs" },
+  notifications: { label: "Notifications\u2026", icon: "bell" },
   "header-background": { label: "Header background\u2026", icon: "palette" },
   minimize: { label: "Minimize", icon: "minus" },
   focus: { label: "Focus", icon: "panel-left-close" },
@@ -406,6 +421,7 @@ const HEADER_ACTION_SHORTCUT_DEFAULTS = Object.freeze({
   dequeue: { ctrl: true, alt: true, shift: true, key: "n" },
   "git-changes": { ctrl: true, alt: true, shift: true, key: "g" },
   artifacts: { ctrl: true, alt: true, shift: true, key: "a" },
+  notifications: { ctrl: true, alt: true, shift: true, key: "i" },
   "header-background": { ctrl: true, alt: true, shift: true, key: "b" },
   minimize: { ctrl: true, alt: true, shift: true, key: "m" },
   focus: { ctrl: true, alt: true, shift: true, key: "o" },
@@ -423,8 +439,8 @@ const SESSION_MANUAL_TITLE_HISTORY_STORAGE_KEY = "multiterm.sessionManualTitleHi
 const TITLE_SUGGESTION_HISTORY_PAGE_SIZE = 5;
 const TITLE_SUGGESTION_HISTORY_MAX_LIMIT = 10000;
 const TERMINAL_ANALYTICS_STORAGE_KEY = "multiterm.analytics";
-const MIN_FONT_SIZE = 10;
-const MAX_FONT_SIZE = 22;
+const MIN_FONT_SIZE = 5;
+const MAX_FONT_SIZE = 100;
 const COPILOT_CLEAR_PROMPT = "\x15";
 const COPILOT_RESUME_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const COPILOT_KEEP_ALIVE_DURATION_PATTERN = /^\d{1,4}[mhd]?$/;
@@ -460,7 +476,35 @@ const FONT_CATALOG = Object.freeze([
   ["SFMono-Regular", "'SFMono-Regular', 'Cascadia Mono', Consolas, monospace"],
   ["Lucida Console", "'Lucida Console', Consolas, monospace"],
   ["Droid Sans Mono", "'Droid Sans Mono', 'Cascadia Mono', Consolas, monospace"],
-  ["Courier New", "'Courier New', Consolas, monospace"]
+  ["Courier New", "'Courier New', Consolas, monospace"],
+  ["Cascadia Mono PL", "'Cascadia Mono PL', 'Cascadia Mono', Consolas, monospace"],
+  ["Cascadia Code PL", "'Cascadia Code PL', 'Cascadia Code', Consolas, monospace"],
+  ["CaskaydiaCove Nerd Font", "'CaskaydiaCove Nerd Font', 'Cascadia Code', Consolas, monospace"],
+  ["JetBrainsMono Nerd Font", "'JetBrainsMono Nerd Font', 'JetBrains Mono', Consolas, monospace"],
+  ["FiraCode Nerd Font", "'FiraCode Nerd Font', 'Fira Code', Consolas, monospace"],
+  ["Hack Nerd Font", "'Hack Nerd Font', Hack, Consolas, monospace"],
+  ["MesloLGS NF", "'MesloLGS NF', 'Meslo LG M', Consolas, monospace"],
+  ["Meslo LG M", "'Meslo LG M', 'Cascadia Mono', Consolas, monospace"],
+  ["Iosevka", "Iosevka, 'Cascadia Mono', Consolas, monospace"],
+  ["Victor Mono", "'Victor Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Fira Mono", "'Fira Mono', 'Fira Code', Consolas, monospace"],
+  ["Anonymous Pro", "'Anonymous Pro', 'Cascadia Mono', Consolas, monospace"],
+  ["Space Mono", "'Space Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["PT Mono", "'PT Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Intel One Mono", "'Intel One Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Geist Mono", "'Geist Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Commit Mono", "'Commit Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Recursive Mono", "'Recursive Mono Casual Static', 'Cascadia Mono', Consolas, monospace"],
+  ["Red Hat Mono", "'Red Hat Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Martian Mono", "'Martian Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Azeret Mono", "'Azeret Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Overpass Mono", "'Overpass Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Share Tech Mono", "'Share Tech Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Cousine", "Cousine, 'Liberation Mono', Consolas, monospace"],
+  ["Andale Mono", "'Andale Mono', 'Cascadia Mono', Consolas, monospace"],
+  ["Bitstream Vera Sans Mono", "'Bitstream Vera Sans Mono', 'DejaVu Sans Mono', Consolas, monospace"],
+  ["Nimbus Mono PS", "'Nimbus Mono PS', 'Courier New', Consolas, monospace"],
+  ["Terminus", "Terminus, 'Terminus (TTF)', 'Cascadia Mono', Consolas, monospace"]
 ]);
 const fontStacks = Object.freeze(Object.fromEntries(FONT_CATALOG));
 
@@ -552,6 +596,226 @@ const themes = {
     selectionBackground: "#555555",
     white: "#eeeeee",
     yellow: "#ffd75f"
+  },
+  midnight: {
+    background: "#0b1020",
+    black: "#0b1020",
+    blue: "#6a8cff",
+    brightBlack: "#4a5578",
+    brightBlue: "#9db4ff",
+    brightCyan: "#8ee6f2",
+    brightGreen: "#a8e6a1",
+    brightMagenta: "#d5a6ff",
+    brightRed: "#ff9aa8",
+    brightWhite: "#f2f5ff",
+    brightYellow: "#ffe08a",
+    cursor: "#6a8cff",
+    cyan: "#5fd0e0",
+    foreground: "#dde3f4",
+    green: "#84cf7c",
+    magenta: "#b98cf0",
+    red: "#f4778c",
+    selectionBackground: "#26355e",
+    white: "#c8d0e6",
+    yellow: "#f0c96a"
+  },
+  forest: {
+    background: "#0e1a12",
+    black: "#0e1a12",
+    blue: "#67a6d6",
+    brightBlack: "#4d6355",
+    brightBlue: "#96c6ec",
+    brightCyan: "#8fdcc4",
+    brightGreen: "#bce38a",
+    brightMagenta: "#d3a8e0",
+    brightRed: "#f3968b",
+    brightWhite: "#f2f6ec",
+    brightYellow: "#f2d488",
+    cursor: "#7fc98d",
+    cyan: "#6cc4a8",
+    foreground: "#dfe8d8",
+    green: "#8fc96b",
+    magenta: "#b98ac9",
+    red: "#df7466",
+    selectionBackground: "#2c4433",
+    white: "#cbd8c2",
+    yellow: "#dcb85f"
+  },
+  rosewood: {
+    background: "#1b1013",
+    black: "#1b1013",
+    blue: "#8fa6e0",
+    brightBlack: "#6a5158",
+    brightBlue: "#b3c4f0",
+    brightCyan: "#96dcd6",
+    brightGreen: "#bcd98f",
+    brightMagenta: "#f0a8d0",
+    brightRed: "#ff9c9c",
+    brightWhite: "#fdeef0",
+    brightYellow: "#ffcf94",
+    cursor: "#e0748c",
+    cyan: "#74c4bd",
+    foreground: "#f2dfe2",
+    green: "#a3c46f",
+    magenta: "#dd83b6",
+    red: "#e46b6b",
+    selectionBackground: "#4a2b33",
+    white: "#dcc4c8",
+    yellow: "#eab26c"
+  },
+  slate: {
+    background: "#181b1f",
+    black: "#181b1f",
+    blue: "#7fa8d4",
+    brightBlack: "#5d666f",
+    brightBlue: "#a8c6e6",
+    brightCyan: "#93d3cd",
+    brightGreen: "#b4d18e",
+    brightMagenta: "#c8b0e4",
+    brightRed: "#eb9a96",
+    brightWhite: "#f0f2f4",
+    brightYellow: "#e8cd92",
+    cursor: "#9fb6c9",
+    cyan: "#73bcb5",
+    foreground: "#d9dee3",
+    green: "#98bd6e",
+    magenta: "#ae94cf",
+    red: "#d67873",
+    selectionBackground: "#33393f",
+    white: "#c2c8ce",
+    yellow: "#d2b26a"
+  },
+  sandstone: {
+    background: "#f6efe3",
+    black: "#2b2620",
+    blue: "#2f5fa8",
+    brightBlack: "#7c7365",
+    brightBlue: "#4a7cc4",
+    brightCyan: "#1a8177",
+    brightGreen: "#4d7a2a",
+    brightMagenta: "#8b4aa8",
+    brightRed: "#bf4a3c",
+    brightWhite: "#fffaf1",
+    brightYellow: "#9a6a12",
+    cursor: "#2b2620",
+    cyan: "#137268",
+    foreground: "#2b2620",
+    green: "#456d24",
+    magenta: "#7c3f99",
+    red: "#a83f33",
+    selectionBackground: "#e2d6bf",
+    white: "#e6dcc9",
+    yellow: "#8a5f10"
+  },
+  arctic: {
+    background: "#f2f6fa",
+    black: "#1f262e",
+    blue: "#2a5fa0",
+    brightBlack: "#6b7683",
+    brightBlue: "#3f7cc0",
+    brightCyan: "#127f86",
+    brightGreen: "#3f7440",
+    brightMagenta: "#7a49a8",
+    brightRed: "#b8434a",
+    brightWhite: "#ffffff",
+    brightYellow: "#8a6410",
+    cursor: "#1f262e",
+    cyan: "#0f6f76",
+    foreground: "#1f262e",
+    green: "#356737",
+    magenta: "#6b3f96",
+    red: "#a33a41",
+    selectionBackground: "#d5e3f0",
+    white: "#dde5ee",
+    yellow: "#7b590d"
+  },
+  neon: {
+    background: "#0a0a12",
+    black: "#0a0a12",
+    blue: "#4d9bff",
+    brightBlack: "#54547a",
+    brightBlue: "#82bcff",
+    brightCyan: "#79ffe8",
+    brightGreen: "#a6ff6e",
+    brightMagenta: "#ff86ff",
+    brightRed: "#ff7a92",
+    brightWhite: "#ffffff",
+    brightYellow: "#ffe96b",
+    cursor: "#39f0d0",
+    cyan: "#39f0d0",
+    foreground: "#e4e4f4",
+    green: "#7ef04f",
+    magenta: "#f062f0",
+    red: "#ff4d6d",
+    selectionBackground: "#2b2b55",
+    white: "#cfcfe4",
+    yellow: "#ffd93d"
+  },
+  mocha: {
+    background: "#1a1512",
+    black: "#1a1512",
+    blue: "#89a8d8",
+    brightBlack: "#6b5a4c",
+    brightBlue: "#adc4e8",
+    brightCyan: "#95d6c8",
+    brightGreen: "#c0d391",
+    brightMagenta: "#dcb0e0",
+    brightRed: "#f4a094",
+    brightWhite: "#f6ece1",
+    brightYellow: "#f2cd8e",
+    cursor: "#d2a679",
+    cyan: "#74bfae",
+    foreground: "#e8dccd",
+    green: "#a8bd6a",
+    magenta: "#c294c9",
+    red: "#dd7f70",
+    selectionBackground: "#413229",
+    white: "#d3c4b2",
+    yellow: "#d9ae62"
+  },
+  oceanic: {
+    background: "#0c1c24",
+    black: "#0c1c24",
+    blue: "#5fa8d3",
+    brightBlack: "#4a6672",
+    brightBlue: "#8ec8ea",
+    brightCyan: "#8fe0dc",
+    brightGreen: "#a9dd94",
+    brightMagenta: "#c9a8e6",
+    brightRed: "#f29a94",
+    brightWhite: "#eef7f8",
+    brightYellow: "#f2d68e",
+    cursor: "#4fc3c0",
+    cyan: "#4fc3c0",
+    foreground: "#d6e6ea",
+    green: "#88c76f",
+    magenta: "#ac8ecf",
+    red: "#e0716a",
+    selectionBackground: "#22434f",
+    white: "#bdd0d6",
+    yellow: "#dcb75f"
+  },
+  vineyard: {
+    background: "#15111e",
+    black: "#15111e",
+    blue: "#8496e4",
+    brightBlack: "#5d5470",
+    brightBlue: "#adb8f2",
+    brightCyan: "#96dae0",
+    brightGreen: "#bad894",
+    brightMagenta: "#e2a6f0",
+    brightRed: "#ff9fae",
+    brightWhite: "#f3eefa",
+    brightYellow: "#f5d091",
+    cursor: "#b07de0",
+    cyan: "#71c2c9",
+    foreground: "#e3dcee",
+    green: "#a2c46f",
+    magenta: "#c286dd",
+    red: "#e56f83",
+    selectionBackground: "#372a4a",
+    white: "#cbc2da",
+    yellow: "#ddb267"
   }
 };
 
@@ -565,10 +829,26 @@ function normalizeTerminalFontFamily(value, fallback = "") {
   return Object.hasOwn(fontStacks, font) ? font : fallback;
 }
 
+// A colour that merely repeats the theme's own is not an override. The appearance
+// editor seeds its draft from the current effective colours, so applying it
+// without touching them would otherwise pin the theme in place and leave every
+// later theme change with nothing visible to do.
+function overriddenTerminalColor(value, themeColor) {
+  const color = normalizeTerminalColor(value);
+  if (!color) return "";
+  return color === normalizeTerminalColor(themeColor) ? "" : color;
+}
+
 function terminalThemeWithColors(background = "", foreground = "") {
   const baseTheme = themes[state.settings.theme] || themes.ember;
-  const resolvedBackground = normalizeTerminalColor(background || state.settings.terminalBackground);
-  const resolvedForeground = normalizeTerminalColor(foreground || state.settings.terminalForeground);
+  const resolvedBackground = overriddenTerminalColor(
+    background || state.settings.terminalBackground,
+    baseTheme.background
+  );
+  const resolvedForeground = overriddenTerminalColor(
+    foreground || state.settings.terminalForeground,
+    baseTheme.foreground
+  );
   if (!resolvedBackground && !resolvedForeground) return baseTheme;
   const theme = { ...baseTheme };
   if (resolvedBackground) theme.background = resolvedBackground;
@@ -875,8 +1155,21 @@ const elements = {
   commandQueueInput: document.querySelector("#commandQueueInput"),
   commandQueueList: document.querySelector("#commandQueueList"),
   compactChrome: document.querySelector("#compactChrome"),
+  pagerTabBackground: document.querySelector("#pagerTabBackground"),
+  pagerTabForeground: document.querySelector("#pagerTabForeground"),
+  pagerTabFontSize: document.querySelector("#pagerTabFontSize"),
+  pagerTabAppearanceReset: document.querySelector("#pagerTabAppearanceReset"),
+  tabAppearanceOverlay: document.querySelector("#tabAppearanceOverlay"),
+  tabAppearanceSubtitle: document.querySelector("#tabAppearanceSubtitle"),
+  tabAppearanceBackground: document.querySelector("#tabAppearanceBackground"),
+  tabAppearanceForeground: document.querySelector("#tabAppearanceForeground"),
+  tabAppearanceFontSize: document.querySelector("#tabAppearanceFontSize"),
+  tabAppearanceReset: document.querySelector("#tabAppearanceReset"),
+  tabAppearanceCancel: document.querySelector("#tabAppearanceCancel"),
+  tabAppearanceApply: document.querySelector("#tabAppearanceApply"),
   contextMenuScale: document.querySelector("#contextMenuScale"),
   contextMenuScaleValue: document.querySelector("#contextMenuScaleValue"),
+  contextMenuPageRows: document.querySelector("#contextMenuPageRows"),
   copilotImportContextKb: document.querySelector("#copilotImportContextKb"),
   copilotCwdQueryTimeoutSeconds: document.querySelector("#copilotCwdQueryTimeoutSeconds"),
   copilotSessionListTimeoutSeconds: document.querySelector("#copilotSessionListTimeoutSeconds"),
@@ -937,8 +1230,10 @@ const elements = {
   headerBackgroundFlyoutSwatches: document.querySelector("#headerBackgroundFlyoutSwatches"),
   headerBackgroundOverlay: document.querySelector("#headerBackgroundOverlay"),
   headerBackgroundPreview: document.querySelector("#headerBackgroundPreview"),
+  headerBackgroundPreviewLabel: document.querySelector("#headerBackgroundPreviewLabel"),
   headerBackgroundReset: document.querySelector("#headerBackgroundReset"),
   headerBackgroundSubtitle: document.querySelector("#headerBackgroundSubtitle"),
+  headerBackgroundTitle: document.querySelector("#headerBackgroundTitle"),
   headerAppearanceFontFamily: document.querySelector("#headerAppearanceFontFamily"),
   headerAppearanceFontSize: document.querySelector("#headerAppearanceFontSize"),
   headerGradientAddStop: document.querySelector("#headerGradientAddStop"),
@@ -959,6 +1254,7 @@ const elements = {
   headerSolidPalette: document.querySelector("#headerSolidPalette"),
   headerSolidPanel: document.querySelector("#headerSolidPanel"),
   terminalAppearanceApplyAll: document.querySelector("#terminalAppearanceApplyAll"),
+  terminalAppearanceThemeWarning: document.querySelector("#terminalAppearanceThemeWarning"),
   terminalAppearanceApplyChoices: document.querySelector("#terminalAppearanceApplyChoices"),
   terminalAppearanceApplyTerminal: document.querySelector("#terminalAppearanceApplyTerminal"),
   terminalAppearanceBackgroundB: document.querySelector("#terminalAppearanceBackgroundB"),
@@ -971,6 +1267,9 @@ const elements = {
   terminalAppearanceBackgroundPlane: document.querySelector("#terminalAppearanceBackgroundPlane"),
   terminalAppearanceBackgroundR: document.querySelector("#terminalAppearanceBackgroundR"),
   terminalAppearanceFontFamily: document.querySelector("#terminalAppearanceFontFamily"),
+  terminalAppearanceFontSize: document.querySelector("#terminalAppearanceFontSize"),
+  terminalAppearanceFontSizeDown: document.querySelector("#terminalAppearanceFontSizeDown"),
+  terminalAppearanceFontSizeUp: document.querySelector("#terminalAppearanceFontSizeUp"),
   terminalAppearanceForegroundB: document.querySelector("#terminalAppearanceForegroundB"),
   terminalAppearanceForegroundExpand: document.querySelector("#terminalAppearanceForegroundExpand"),
   terminalAppearanceForegroundG: document.querySelector("#terminalAppearanceForegroundG"),
@@ -1273,6 +1572,12 @@ const elements = {
   pageCloseMove: document.querySelector("#pageCloseMove"),
   pageCloseTerminals: document.querySelector("#pageCloseTerminals"),
   pageCloseCancel: document.querySelector("#pageCloseCancel"),
+  confirmTerminalClose: document.querySelector("#confirmTerminalClose"),
+  terminalCloseOverlay: document.querySelector("#terminalCloseOverlay"),
+  terminalCloseText: document.querySelector("#terminalCloseText"),
+  terminalCloseRemember: document.querySelector("#terminalCloseRemember"),
+  terminalCloseAccept: document.querySelector("#terminalCloseAccept"),
+  terminalCloseCancel: document.querySelector("#terminalCloseCancel"),
   paneGap: document.querySelector("#paneGap"),
   paneGapValue: document.querySelector("#paneGapValue"),
   paneHeight: document.querySelector("#paneHeight"),
@@ -1696,6 +2001,7 @@ const state = {
   closeRequestSource: "window",
   copilotCwdHistory: loadCopilotCwdHistory(),
   pendingPageClose: null,
+  pendingTerminalClose: null,
   prepareEditor: { altSendNewTerminal: false, closeTimer: 0, lineNumbersFrame: 0, mode: "copy", resizeObserver: null, returnFocus: null, sourceTerminalId: null, validating: false, wordWrap: true },
   findAll: { active: false, order: [], ti: 0, li: -1, query: "", filter: false, exemptId: null, gathered: [] },
   appElevated: false,
@@ -1920,11 +2226,13 @@ window.addEventListener("DOMContentLoaded", () => {
   renderPager();
   bindContextMenu();
   bindHeaderBackgroundEditor();
+  bindTabAppearanceEditor();
   bindTopBarShortcutMenus();
   bindTopBarActionDescriptions();
   bindRightClickWarning();
   bindCloseConfirm();
   bindPageCloseConfirm();
+  bindTerminalCloseConfirm();
   bindExternalTerminalFocusPrompt();
   bindUpdateConsent();
   bindAutoTitleNotice();
@@ -2057,6 +2365,7 @@ function bindControls() {
   elements.copilotLogViewerEnabled.checked = Boolean(state.settings.copilotLogViewerEnabled);
   logStore.max = state.settings.diagnosticViewerEntries;
   elements.compactChrome.checked = state.settings.compactChrome;
+  syncPagerTabAppearanceControls();
   elements.syncInput.checked = state.settings.syncInput;
   elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
   elements.cleanCopilotClipboard.checked = state.settings.cleanCopilotClipboard;
@@ -2079,6 +2388,10 @@ function bindControls() {
   state.settings.copilotSessionNotePageSize = clampCopilotSessionNotePageSize(
     state.settings.copilotSessionNotePageSize,
     elements.copilotSessionNotePageSize
+  );
+  state.settings.contextMenuPageRows = clampContextMenuPageRows(
+    state.settings.contextMenuPageRows,
+    elements.contextMenuPageRows
   );
   state.settings.copilotRemoteKeepAlive = normalizeCopilotKeepAlive(state.settings.copilotRemoteKeepAlive);
   elements.copilotRemoteSessions.checked = Boolean(state.settings.copilotRemoteSessions);
@@ -2129,6 +2442,7 @@ function bindControls() {
     elements.bridgeHeartbeatTimeoutSeconds
   );
   elements.pageCloseAction.value = normalizePageCloseAction(state.settings.pageCloseAction);
+  elements.confirmTerminalClose.checked = state.settings.confirmTerminalClose !== false;
   elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
   elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
   state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
@@ -2350,6 +2664,39 @@ function bindControls() {
   bindSetting(elements.cursorStyle, "cursorStyle", "change", (value) => value);
   bindSetting(elements.cursorBlink, "cursorBlink", "change", (_, element) => element.checked);
   bindSetting(elements.compactChrome, "compactChrome", "change", (_, element) => element.checked);
+  // Tabs read their colours from cascading custom properties, so a change only
+  // has to re-render the bar; the group and per-tab scopes ride the same path.
+  for (const [element, key] of [
+    [elements.pagerTabBackground, "pagerTabBackground"],
+    [elements.pagerTabForeground, "pagerTabForeground"]
+  ]) {
+    element.addEventListener("input", () => {
+      state.settings[key] = normalizeTerminalColor(element.value);
+      saveSettings();
+      renderPager();
+    });
+  }
+  elements.pagerTabFontSize.addEventListener("change", () => {
+    const raw = elements.pagerTabFontSize.value.trim();
+    const size = raw === "" ? 0 : Number(raw);
+    state.settings.pagerTabFontSize = Number.isFinite(size) && size > 0
+      ? Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)))
+      : 0;
+    elements.pagerTabFontSize.value = state.settings.pagerTabFontSize
+      ? String(state.settings.pagerTabFontSize)
+      : "";
+    saveSettings();
+    renderPager();
+  });
+  elements.pagerTabAppearanceReset.addEventListener("click", () => {
+    state.settings.pagerTabBackground = "";
+    state.settings.pagerTabForeground = "";
+    state.settings.pagerTabFontSize = 0;
+    syncPagerTabAppearanceControls();
+    saveSettings();
+    renderPager();
+    toast("Tab appearance reset", "success", 1600);
+  });
   bindSetting(elements.syncInput, "syncInput", "change", (_, element) => element.checked);
   bindSetting(elements.ctrlVPaste, "ctrlVPaste", "change", (_, element) => element.checked);
   bindSetting(elements.cleanCopilotClipboard, "cleanCopilotClipboard", "change", (_, element) => element.checked);
@@ -2357,6 +2704,7 @@ function bindControls() {
   bindSetting(elements.copilotCwdQueryTimeoutSeconds, "copilotCwdQueryTimeoutSeconds", "change", clampCopilotCwdQueryTimeoutSeconds);
   bindSetting(elements.copilotSessionListTimeoutSeconds, "copilotSessionListTimeoutSeconds", "change", clampCopilotSessionListTimeoutSeconds);
   bindSetting(elements.copilotSessionNotePageSize, "copilotSessionNotePageSize", "change", clampCopilotSessionNotePageSize);
+  bindSetting(elements.contextMenuPageRows, "contextMenuPageRows", "change", clampContextMenuPageRows);
   bindSetting(elements.copilotSessionSearchContextKb, "copilotSessionSearchContextKb", "change", clampCopilotSessionSearchContextKb);
   bindSetting(elements.aiSessionProvider, "aiSessionProvider", "change", normalizeAiProviderId);
   bindSetting(elements.aiSessionYolo, "aiSessionYolo", "change", (_, element) => element.checked);
@@ -2438,6 +2786,7 @@ function bindControls() {
     normalizeDiagnosticSetting(value, element, defaultSettings.diagnosticViewerEntries)
   ));
   bindSetting(elements.pageCloseAction, "pageCloseAction", "change", normalizePageCloseAction);
+  bindSetting(elements.confirmTerminalClose, "confirmTerminalClose", "change", (_, element) => element.checked);
   bindSetting(elements.terminalMessageMaxKb, "terminalMessageMaxKb", "change", clampTerminalMessageMaxKb);
   bindSetting(elements.terminalInboxCapacity, "terminalInboxCapacity", "change", clampTerminalInboxCapacity);
   bindSetting(elements.maxInstallerSizeMb, "maxInstallerSizeMb", "change", normalizeInstallerSizeMb);
@@ -2986,6 +3335,14 @@ function clampCopilotSessionListTimeoutSeconds(value, element = elements.copilot
 
 function clampCopilotSessionNotePageSize(value, element = elements.copilotSessionNotePageSize) {
   return clampSettingNumber(value, element, COPILOT_SESSION_NOTE_PAGE_SIZE_BOUNDS);
+}
+
+function clampContextMenuPageRows(value, element = elements.contextMenuPageRows) {
+  return clampSettingNumber(value, element, CONTEXT_MENU_PAGE_ROWS_BOUNDS);
+}
+
+function contextMenuPageRows() {
+  return boundedSettingNumber(state.settings.contextMenuPageRows, CONTEXT_MENU_PAGE_ROWS_BOUNDS);
 }
 
 function copilotSessionNotePageSize() {
@@ -3672,6 +4029,12 @@ function handleBridgeMessage(message) {
   }
 
   if (message.type === "sessionPromoted") {
+    resolveBridgeRequest(message, message);
+    return;
+  }
+
+  if (message.type === "folderListing" || message.type === "folderSearchResults"
+    || message.type === "folderCreated") {
     resolveBridgeRequest(message, message);
     return;
   }
@@ -4828,6 +5191,31 @@ function layoutModeLabel(value) {
   return LAYOUT_MODE_OPTIONS.find(([, id]) => id === value)?.[0] || value;
 }
 
+const LAYOUT_MODE_ICONS = {
+  auto: "scan",
+  columns: "columns-3",
+  rows: "rows-3",
+  horizontal: "columns-2",
+  vertical: "rows-2",
+  focus: "layout-panel-left",
+  grid: "grid-2x2",
+  "master-top": "panel-top",
+  "master-right": "panel-right",
+  "master-bottom": "panel-bottom",
+  "master-left": "panel-left",
+  "priority-grid": "layout-dashboard",
+  "compact-matrix": "grid-3x3",
+  "carousel-horizontal": "gallery-horizontal",
+  "carousel-vertical": "gallery-vertical",
+  spotlight: "maximize",
+  bento: "layout-grid",
+  manual: "move"
+};
+
+function layoutModeIcon(value) {
+  return LAYOUT_MODE_ICONS[value] || "layout-grid";
+}
+
 // Per-page overrides are deliberately in-memory only: savePages() serialises
 // state.pages wholesale, so anything stored on a page would outlive the session.
 const pageLayoutOverrides = new Map();
@@ -4936,22 +5324,43 @@ function setContextMenuScale(value) {
   state.settings.contextMenuScale = normalizeContextMenuScale(value);
   applyContextMenuScale();
   syncContextMenuScaleControls();
-  clampContextMenuPosition();
+  if (!elements.contextMenu.hidden) sizeContextMenuScrollRuns();
+  if (ctxScaleDragAnchor && !elements.contextMenu.hidden) holdContextMenuScaleSlider();
+  else clampContextMenuPosition();
   saveSettings();
 }
 
+// The size slider lives at the foot of the menu it resizes, so re-placing the
+// menu drags that slider out from under the pointer mid-gesture and the drag
+// fights itself. While the pointer owns the slider, move the menu by whatever
+// keeps the slider where the gesture started.
+function holdContextMenuScaleSlider() {
+  const menu = elements.contextMenu;
+  const slider = menu.querySelector(".ctx-menu-scale-slider");
+  if (!slider) return;
+  const sliderRect = slider.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = menuRect.left + (ctxScaleDragAnchor.left - sliderRect.left);
+  const top = menuRect.top + (ctxScaleDragAnchor.top - sliderRect.top);
+  placeContextMenuAt(left, top, false, false);
+  const placed = menu.getBoundingClientRect();
+  ctxMenuPlacement = () => placeContextMenuAt(placed.left, placed.top, false, false);
+}
+
 // A menu already on screen grows from its top-left corner, so rescaling can push
-// it past an edge; re-clamp it in place rather than moving it back to the cursor.
+// it past an edge. Re-place it from the corner it was opened at: clamping where
+// it currently sits only ever enforces a maximum, so every step of a slider drag
+// ratchets the menu away from its anchor and shrinking never brings it back.
 function clampContextMenuPosition() {
+  if (!elements.contextMenu.hidden) ctxMenuPlacement?.();
+  const submenu = elements.contextSubmenu;
+  if (!submenu || submenu.hidden) return;
   const scale = contextMenuScaleFactor();
-  for (const menu of [elements.contextMenu, elements.contextSubmenu]) {
-    if (!menu || menu.hidden) continue;
-    const rect = menu.getBoundingClientRect();
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8));
-    const top = Math.max(8, Math.min(rect.top, window.innerHeight - rect.height - 8));
-    menu.style.left = `${left / scale}px`;
-    menu.style.top = `${top / scale}px`;
-  }
+  const rect = submenu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8));
+  const top = Math.max(8, Math.min(rect.top, window.innerHeight - rect.height - 8));
+  submenu.style.left = `${left / scale}px`;
+  submenu.style.top = `${top / scale}px`;
 }
 
 function bindWorkspaceBackgroundZoom() {
@@ -5377,6 +5786,15 @@ function headerActionPlacement(terminal, action) {
   return state.settings.headerActionsInMenu.includes(action) ? "menu" : "header";
 }
 
+// Which button currently stands for an action: its own while that is on the bar,
+// and More once the user or the fit has put it away.
+function headerActionAnchor(terminal, action) {
+  const button = terminal.pane.querySelector(`.pane-actions button[data-action="${action}"]`);
+  const onBar = button && !button.classList.contains("is-user-menu-action")
+    && button.dataset.autoOverflow !== "true";
+  return onBar ? button : terminal.pane.querySelector('button[data-action="more"]');
+}
+
 function applyHeaderActionPlacement(terminal) {
   for (const action of HEADER_ACTION_IDS) {
     const button = terminal.pane.querySelector(`.pane-actions button[data-action="${action}"]`);
@@ -5740,6 +6158,8 @@ function updateTerminalNotificationButton(terminal) {
   const summary = terminalNotificationSummary(terminal);
   for (const button of buttons) {
     button.dataset.notificationState = stateName;
+    // An override is a standing notice, so it survives reveal-on-hover.
+    button.classList.toggle("has-badge", hasOverride);
     replaceTerminalNotificationIcon(button, hasOverride ? (anyEnabled ? "bell-ring" : "bell-off") : "bell");
     button.title = `Notifications - ${summary}`;
     button.setAttribute("aria-label", `Notifications for ${terminal.titleInput.value || "terminal"}. ${summary}`);
@@ -5896,7 +6316,7 @@ function bindTerminalNotificationFlyout() {
 
 function runHeaderAction(terminal, action, anchor = null) {
   if (action === "close") {
-    removeTerminal(terminal.id);
+    requestTerminalClose(terminal.id);
   } else if (action === "focus") {
     clearSnapLayout(false);
     state.settings.layout = "focus";
@@ -5924,6 +6344,10 @@ function runHeaderAction(terminal, action, anchor = null) {
   } else if (action === "artifacts") {
     if (anchor) toggleTerminalNotesFlyout(terminal, anchor);
     else openTerminalArtifacts(terminal.id);
+  } else if (action === "notifications") {
+    // The flyout has to hang off a button, so a keyboard run finds whichever one
+    // is currently showing this action.
+    toggleTerminalNotificationFlyout(terminal, anchor || headerActionAnchor(terminal, action));
   } else if (action === "header-background") {
     if (anchor) toggleHeaderBackgroundFlyout(terminal, anchor);
     else openHeaderBackgroundEditor(terminal);
@@ -6010,9 +6434,6 @@ function bindPaneControls(terminal) {
     if (action === "more") {
       setActiveTerminal(terminal.id);
       showPaneOverflowMenu(button, terminal);
-    } else if (action === "notifications") {
-      setActiveTerminal(terminal.id);
-      toggleTerminalNotificationFlyout(terminal, button);
     } else if (HEADER_ACTION_ID_SET.has(action)) {
       runHeaderAction(terminal, action, button);
     }
@@ -8285,7 +8706,7 @@ function showMinChipMenu(x, y, terminal, chip) {
     { label: "Restore", icon: "chevron-up", shortcutId: "minimized.restore", run: () => restoreTerminal(terminal.id) },
     { label: "Rename\u2026", icon: "pencil", shortcutId: "minimized.rename", run: () => startMinChipRename(chip, terminal) },
     { separator: true },
-    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", danger: true, run: () => removeTerminal(terminal.id) }
+    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", danger: true, run: () => requestTerminalClose(terminal.id) }
   ]);
   showBuiltContextMenu(x, y);
 }
@@ -9877,6 +10298,9 @@ function applySettings() {
   elements.host.dataset.layout = effectivePageLayout();
   elements.controlPanel.dataset.mode = state.settings.layout;
   elements.host.classList.toggle("compact", state.settings.compactChrome);
+  // Also on body: the pager, status bar and settings panel are outside the
+  // terminal host, so density has to be reachable from the document root.
+  document.body.classList.toggle("compact-chrome", state.settings.compactChrome);
   state.settings.workspaceZoom = normalizeWorkspaceZoom(state.settings.workspaceZoom);
   const workspaceZoom = workspaceZoomScale();
   // Chromium can resize an xterm WebGL canvas's DOM box for CSS zoom without
@@ -10522,6 +10946,7 @@ function resetLayout() {
     elements.fontSize.value = state.settings.fontSize;
     elements.titleFontScale.value = state.settings.titleFontScale;
     elements.compactChrome.checked = state.settings.compactChrome;
+  syncPagerTabAppearanceControls();
     elements.syncInput.checked = state.settings.syncInput;
     applySettings();
     saveSettings();
@@ -10860,7 +11285,7 @@ function showCurrentTerminalContextMenu(event, terminal, returnFocus) {
       label: "Close terminal",
       icon: "x",
       danger: true,
-      run: () => removeTerminal(terminal.id)
+      run: () => requestTerminalClose(terminal.id)
     }
   ]);
   showBuiltContextMenu(event.clientX, event.clientY, { returnFocus });
@@ -12559,7 +12984,7 @@ function getCommands() {
     { label: "Attach WSL tmux session…", run: openTmuxAttach },
     { label: "New Administrator terminal", run: () => newAdminTerminal() },
     { label: "Restart as Administrator", run: restartAsAdmin },
-    { label: "Close active terminal", hint: primaryGlobalShortcutLabel("terminal.close"), run: () => state.activeId && removeTerminal(state.activeId) },
+    { label: "Close active terminal", hint: primaryGlobalShortcutLabel("terminal.close"), run: () => state.activeId && requestTerminalClose(state.activeId) },
     { label: "Minimize active terminal", run: () => state.activeId && minimizeTerminal(state.activeId) },
     { label: "Restore all minimized terminals", run: restoreAllTerminals },
     { label: "Close all terminals", run: closeAllTerminals },
@@ -14530,7 +14955,7 @@ const GLOBAL_SHORTCUT_ACTIONS = Object.freeze([
   { id: "page.new", section: "Page", label: "New page", detail: "Creates and opens a new page.", defaults: [{ ctrl: true, key: "t" }, { ctrl: true, key: "p" }], run: () => addPage() },
   { id: "page.next", section: "Page", label: "Next page", detail: "Moves to the next page, wrapping to the first, without stopping its terminals.", defaults: [{ ctrl: true, key: "tab" }, { ctrl: true, key: "pagedown" }], run: () => cyclePage(1) },
   { id: "page.previous", section: "Page", label: "Previous page", detail: "Moves to the previous page without stopping its terminals.", defaults: [{ ctrl: true, key: "pageup" }], run: () => cyclePage(-1) },
-  { id: "terminal.close", section: "Terminal", label: "Close active terminal", detail: "Closes the active terminal session.", defaults: [{ ctrl: true, shift: true, key: "w" }], run: () => { if (state.activeId) removeTerminal(state.activeId); } },
+  { id: "terminal.close", section: "Terminal", label: "Close active terminal", detail: "Closes the active terminal session.", defaults: [{ ctrl: true, shift: true, key: "w" }], run: () => { if (state.activeId) requestTerminalClose(state.activeId); } },
   { id: "terminal.find", section: "Terminal", label: "Find", detail: "Searches the active terminal.", defaults: [{ ctrl: true, key: "f" }], run: () => openFindActive() },
   { id: "terminal.find-all", section: "Terminal", label: "Find in all terminals", detail: "Searches every terminal buffer.", defaults: [{ ctrl: true, shift: true, key: "f" }], run: () => openFindAll() },
   { id: "terminal.filter", section: "Terminal", label: "Search and filter panes", detail: "Focuses the terminal filter in the top bar.", defaults: [{ ctrl: true, shift: true, key: "e" }], run: () => { if (!blockFullscreenSurfaceAction("terminal search")) { elements.terminalSearchInput.focus(); elements.terminalSearchInput.select(); } } },
@@ -14552,12 +14977,26 @@ const GLOBAL_SHORTCUT_ACTION_BY_ID = new Map(GLOBAL_SHORTCUT_ACTIONS.map((action
 const TOP_BAR_SHORTCUT_ACTIONS = GLOBAL_SHORTCUT_ACTIONS.filter((action) => action.section === TOP_BAR_SHORTCUT_SECTION);
 const TOP_BAR_SHORTCUT_ACTION_IDS = TOP_BAR_SHORTCUT_ACTIONS.map((action) => action.id);
 
+// Shift is what produces the capital and the symbol on a keyboard, so a
+// Shift-only chord over a character key is the character itself: binding it
+// would swallow that keystroke everywhere the user types, the terminal first.
+// Shift over a key that types nothing (Tab, Enter, arrows, F-keys) is still a
+// chord and stays available.
+function shortcutKeyTypesText(key) {
+  return key === "space" || key.length === 1;
+}
+
+function shortcutBindingIsTyping(binding) {
+  return !binding.ctrl && !binding.alt && !binding.meta && shortcutKeyTypesText(binding.key);
+}
+
 function normalizeGlobalShortcutBinding(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const rawKey = String(value.key || "");
   const key = rawKey === " " ? "space" : rawKey.trim().toLowerCase();
   if (!key || key.length > 32 || GLOBAL_SHORTCUT_MODIFIER_KEYS.has(key)) return null;
   const binding = { alt: Boolean(value.alt), ctrl: Boolean(value.ctrl), key, meta: Boolean(value.meta), shift: Boolean(value.shift) };
+  if (shortcutBindingIsTyping(binding)) return null;
   return binding.alt || binding.ctrl || binding.meta || binding.shift || /^f(?:[1-9]|1[0-2])$/.test(key) ? binding : null;
 }
 
@@ -14676,7 +15115,7 @@ function handleShortcutsOverlayKey(event) {
     if (event.repeat) return;
     const binding = globalShortcutFromEvent(event);
     if (!binding) {
-      setShortcutStatus("Include Ctrl, Alt, Shift, or Meta, or press a function key.", "error");
+      setShortcutStatus("Use Ctrl, Alt, or Meta with another key, or a function key. Shift alone still types a character.", "error");
       return;
     }
     const capture = shortcutEditor.capture;
@@ -14784,6 +15223,14 @@ function bindGlobalShortcuts() {
       if (event.key === "Escape") {
         event.preventDefault();
         closePageCloseConfirm();
+      }
+      return;
+    }
+
+    if (elements.terminalCloseOverlay && !elements.terminalCloseOverlay.hidden) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeTerminalCloseConfirm();
       }
       return;
     }
@@ -15863,20 +16310,50 @@ function copilotTuiPainted(terminal) {
 // Copilot draws its composer as a bordered box pinned to the last rows, so its
 // scroll track stops above it. Long borders are the only reliable marker.
 const COPILOT_COMPOSER_BORDER = /[\u2500\u2501\u2504\u2505\u2508\u2509\u2550\u2580\u2584]{8,}/;
-const COPILOT_COMPOSER_MAX_ROWS = 10;
+const COPILOT_COMPOSER_FLOOR_ROWS = 10;
 const COPILOT_COMPOSER_FALLBACK_ROWS = 4;
 const COPILOT_SCROLL_INSET_INTERVAL_MS = 150;
 
-function copilotComposerRows(terminal) {
+// Only the bottom border is pinned near the floor: the box grows a row for every
+// line the user adds, so its lid can sit anywhere on the screen and the search
+// for it may not be capped.
+function copilotComposerBorders(terminal) {
   const buffer = terminal.term.buffer.active;
   const lastRow = buffer.viewportY + terminal.term.rows - 1;
-  const limit = Math.min(COPILOT_COMPOSER_MAX_ROWS, terminal.term.rows);
-  let rows = 0;
-  for (let offset = 0; offset < limit; offset += 1) {
+  const borderAt = (offset) => {
     const line = buffer.getLine(lastRow - offset);
-    if (line && COPILOT_COMPOSER_BORDER.test(line.translateToString(true))) rows = offset + 1;
+    return line && COPILOT_COMPOSER_BORDER.test(line.translateToString(true)) ? line : null;
+  };
+  const floor = Math.min(COPILOT_COMPOSER_FLOOR_ROWS, terminal.term.rows);
+  let bottom = -1;
+  for (let offset = 0; offset < floor && bottom < 0; offset += 1) {
+    if (borderAt(offset)) bottom = offset;
   }
-  return rows || COPILOT_COMPOSER_FALLBACK_ROWS;
+  if (bottom < 0) return null;
+  for (let offset = bottom + 1; offset < terminal.term.rows; offset += 1) {
+    const line = borderAt(offset);
+    if (!line) continue;
+    // A rule pasted into the box is content, not the lid. Content rows carry the
+    // box's side glyph; the lid carries its own corner glyph instead.
+    const first = line.getCell(0)?.getChars() ?? "";
+    if (first && COMPOSER_SIDE_GLYPHS.includes(first)) continue;
+    // The lid spans the box, so its own width says where a content row has to
+    // stop before it is wrapping rather than ending.
+    let width = 0;
+    for (let x = line.length - 1; x >= 0; x -= 1) {
+      if ((line.getCell(x)?.getChars() ?? "").trim()) {
+        width = x + 1;
+        break;
+      }
+    }
+    return { bottom, top: offset, contentEnd: Math.max(width - 1, 0) };
+  }
+  return null;
+}
+
+function copilotComposerRows(terminal) {
+  const borders = copilotComposerBorders(terminal);
+  return borders ? borders.top + 1 : COPILOT_COMPOSER_FALLBACK_ROWS;
 }
 
 // Parks the down chevron on the end of Copilot's own scroll track instead of
@@ -15910,22 +16387,17 @@ function clearCopilotScrollInset(terminal) {
 // arrow keys -- so MultiTerm keeps a virtual selection: the head tracks
 // Copilot's real cursor and the highlight is drawn here. Positions are linear
 // indices over the composer's content cells so ranges survive line wrapping.
-const COMPOSER_EDGE_GLYPHS = "\u2503\u2502\u257b\u2579\u2551";
+const COMPOSER_SIDE_GLYPHS = "\u2503\u2502\u2551";
+const COMPOSER_EDGE_GLYPHS = `${COMPOSER_SIDE_GLYPHS}\u257b\u2579`;
 
 function copilotComposerRegion(terminal) {
   if (!terminal?.term || !copilotTuiPainted(terminal)) return null;
   const { term } = terminal;
   const buffer = term.buffer.active;
-  const lastRow = buffer.viewportY + term.rows - 1;
-  const borders = [];
-  const limit = Math.min(COPILOT_COMPOSER_MAX_ROWS, term.rows);
-  for (let offset = 0; offset < limit; offset += 1) {
-    const line = buffer.getLine(lastRow - offset);
-    if (line && COPILOT_COMPOSER_BORDER.test(line.translateToString(true))) borders.push(offset);
-  }
-  if (borders.length < 2) return null;
-  const bottomOffset = borders[0];
-  const topOffset = borders[borders.length - 1];
+  const borders = copilotComposerBorders(terminal);
+  if (!borders) return null;
+  const bottomOffset = borders.bottom;
+  const topOffset = borders.top;
   if (topOffset - bottomOffset < 2) return null;
 
   const rows = [];
@@ -15948,21 +16420,31 @@ function copilotComposerRegion(terminal) {
     }
     // Trailing spaces are real composer text, so the cursor marks the true end.
     if (buffer.cursorY === screenRow) end = Math.max(end, buffer.cursorX);
-    rows.push({ row: screenRow, start, end: Math.max(end, start) });
+    rows.push({ row: screenRow, start, end: Math.max(end, start), newline: false });
+  }
+  // A row that stops short of the box edge ended because the user pressed Enter;
+  // a row filled to the edge is one logical line continuing onto the next.
+  for (let index = 0; index < rows.length - 1; index += 1) {
+    rows[index].newline = rows[index].end < borders.contentEnd;
   }
   return rows.length > 0 ? { rows } : null;
 }
 
+// Copilot's newlines occupy no cell of their own, so each row break needs its own
+// index or every edit reaching past one lands a character early.
+function composerRowSpan(row) {
+  return row.end - row.start + (row.newline ? 1 : 0);
+}
+
 function composerLength(region) {
-  return region.rows.reduce((total, row) => total + (row.end - row.start), 0);
+  return region.rows.reduce((total, row) => total + composerRowSpan(row), 0);
 }
 
 function composerIndexAt(region, screenRow, x) {
   let index = 0;
   for (const row of region.rows) {
-    const width = row.end - row.start;
     if (row.row === screenRow) return index + Math.min(Math.max(x, row.start), row.end) - row.start;
-    index += width;
+    index += composerRowSpan(row);
   }
   return -1;
 }
@@ -16030,11 +16512,11 @@ function renderComposerSelection(terminal) {
   const rects = [];
   let index = 0;
   for (const row of region.rows) {
-    const width = row.end - row.start;
+    const span = composerRowSpan(row);
     const rowStart = index;
-    index += width;
+    index += span;
     const rowFrom = Math.max(from, rowStart);
-    const rowTo = Math.min(to, rowStart + width);
+    const rowTo = Math.min(to, rowStart + span);
     if (rowTo <= rowFrom) continue;
     const startX = row.start + (rowFrom - rowStart);
     const rect = document.createElement("div");
@@ -16084,7 +16566,11 @@ function deleteComposerSelection(terminal, region, selection) {
 function composerText(terminal, region) {
   const buffer = terminal.term.buffer.active;
   return region.rows
-    .map((row) => buffer.getLine(buffer.viewportY + row.row)?.translateToString(true, row.start, row.end) ?? "")
+    .map((row) => {
+      const line = buffer.getLine(buffer.viewportY + row.row);
+      // Trailing spaces are kept so offsets into this text match composer indices.
+      return line ? line.translateToString(false, row.start, row.end) + (row.newline ? "\n" : "") : "";
+    })
     .join("");
 }
 
@@ -18626,6 +19112,8 @@ async function applyGitReviewStaging(direction, mode, paths) {
   if (!gitReviewStagingActive() || worktreeReview.busy) return;
   const generation = worktreeReview.generation;
   const view = ++worktreeReview.viewSequence;
+  // Read the row's place before the status refresh drops it from the list.
+  const originIndex = gitReviewOriginIndex(direction, paths);
   setGitReviewBusy(true);
   const response = await requestBridge({
     type: "gitStage",
@@ -18645,7 +19133,7 @@ async function applyGitReviewStaging(direction, mode, paths) {
   // Skip the follow-up view refresh when the user has already asked for
   // something else, so it cannot yank the viewer back.
   if (view !== worktreeReview.viewSequence) return;
-  await reselectGitReviewFileAfterStaging(direction, mode, paths);
+  await reselectGitReviewFileAfterStaging(direction, mode, paths, { originIndex });
 }
 
 async function applyGitReviewHunkStaging(direction, filePath, hunkIndex) {
@@ -18658,6 +19146,7 @@ async function applyGitReviewHunkStaging(direction, filePath, hunkIndex) {
   }
   const generation = worktreeReview.generation;
   const view = ++worktreeReview.viewSequence;
+  const originIndex = gitReviewOriginIndex(direction, [filePath]);
   setGitReviewBusy(true);
   const response = await requestBridge({
     type: "gitStage",
@@ -18675,21 +19164,31 @@ async function applyGitReviewHunkStaging(direction, filePath, hunkIndex) {
   }
   applyGitReviewStatus(response.status);
   if (view !== worktreeReview.viewSequence) return;
-  await reselectGitReviewFileAfterStaging(direction, "hunk", [filePath]);
+  await reselectGitReviewFileAfterStaging(direction, "hunk", [filePath], { originIndex, hunkIndex });
 }
 
-// After staging, the file may have moved panes or disappeared entirely, so the
-// diff pane follows it rather than showing a stale view.
-async function reselectGitReviewFileAfterStaging(direction, mode, paths) {
+function gitReviewOriginIndex(direction, paths) {
+  const path = (paths && paths[0]) || "";
+  if (!path) return -1;
+  return gitReviewEntries(direction === "stage" ? "unstaged" : "staged")
+    .findIndex((entry) => entry.path === path);
+}
+
+// Staging moves a copy of the file into the other pane, but the user is sweeping
+// through this one, so the viewer stays here: the same file while it still has
+// changes left, then whichever file took its place in the list.
+async function reselectGitReviewFileAfterStaging(direction, mode, paths, { originIndex = -1, hunkIndex = -1 } = {}) {
   const wanted = mode === "all" ? "" : (paths && paths[0]) || "";
-  const target = direction === "stage" ? "staged" : "unstaged";
-  if (wanted && gitReviewEntries(target).some((entry) => entry.path === wanted)) {
-    await selectGitReviewFile(target, wanted, { focusRow: false });
+  const origin = direction === "stage" ? "unstaged" : "staged";
+  const entries = gitReviewEntries(origin);
+  if (wanted && entries.some((entry) => entry.path === wanted)) {
+    await selectGitReviewFile(origin, wanted, { focusRow: false });
+    if (hunkIndex >= 0) scrollGitReviewHunkIntoView(hunkIndex);
     return;
   }
-  const origin = direction === "stage" ? "unstaged" : "staged";
-  if (wanted && gitReviewEntries(origin).some((entry) => entry.path === wanted)) {
-    await selectGitReviewFile(origin, wanted, { focusRow: false });
+  const next = entries[originIndex >= 0 ? Math.min(originIndex, entries.length - 1) : 0];
+  if (next) {
+    await selectGitReviewFile(origin, next.path, { focusRow: false });
     return;
   }
   worktreeReview.selection = null;
@@ -18698,6 +19197,14 @@ async function reselectGitReviewFileAfterStaging(direction, mode, paths) {
   setGitReviewStatus(gitReviewEntries("staged").length || gitReviewEntries("unstaged").length
     ? "Select a file to see its changes."
     : "This branch has no uncommitted changes.");
+}
+
+// The hunks below the one that just moved shift up into its place, so land on
+// whichever hunk now occupies that slot rather than jumping back to the top.
+function scrollGitReviewHunkIntoView(hunkIndex) {
+  const headers = elements.worktreeReviewDiff.querySelectorAll(".d2h-file-wrapper td.d2h-info .d2h-code-line");
+  if (!headers.length) return;
+  headers[Math.min(hunkIndex, headers.length - 1)].scrollIntoView({ block: "center" });
 }
 
 function cssEscape(value) {
@@ -20969,7 +21476,10 @@ function loadPages() {
       .map((page) => ({
         id: page.id,
         name: String(page.name || "Page"),
-        groupId: typeof page.groupId === "string" && page.groupId ? page.groupId : null
+        groupId: typeof page.groupId === "string" && page.groupId ? page.groupId : null,
+        ...(normalizeTabAppearance(page.tabAppearance)
+          ? { tabAppearance: normalizeTabAppearance(page.tabAppearance) }
+          : {})
       }));
     return pages.length > 0 ? pages : defaultPages();
   } catch {
@@ -20997,6 +21507,9 @@ function loadPageGroups(pages) {
         collapsed: group.collapsed === true,
         ...(normalizeHeaderBackground(group.headerBackground)
           ? { headerBackground: normalizeHeaderBackground(group.headerBackground) }
+          : {}),
+        ...(normalizeTabAppearance(group.tabAppearance)
+          ? { tabAppearance: normalizeTabAppearance(group.tabAppearance) }
           : {}),
         ...(keepEmpty ? { keepEmpty: true } : {})
       });
@@ -21154,7 +21667,9 @@ function addPage(options = {}) {
   clearPageOverrides(id);
   const name = String(options.name || "").trim() || `Page ${state.pages.length + 1}`;
   const groupId = options.groupId && pageGroupById(options.groupId) ? options.groupId : null;
-  state.pages.push({ id, name, groupId });
+  const after = options.after ? state.pages.findIndex((page) => page.id === options.after) : -1;
+  if (after >= 0) state.pages.splice(after + 1, 0, { id, name, groupId });
+  else state.pages.push({ id, name, groupId });
   if (groupId) orderPagesByGroup();
   savePages();
   renderPager();
@@ -21273,6 +21788,68 @@ function bindPageCloseConfirm() {
   elements.pageCloseCancel.addEventListener("click", closePageCloseConfirm);
   elements.pageCloseOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.pageCloseOverlay) closePageCloseConfirm();
+  });
+}
+
+// Every route a person can take to close one terminal comes through here, so the
+// confirmation cannot be sidestepped by using a different control. Programmatic
+// closes (restart, page teardown, automation cleanup) still call removeTerminal.
+function requestTerminalClose(id) {
+  const terminal = state.terminals.get(id);
+  if (!terminal) return false;
+  // Nothing is lost closing a session that already ended, so do not ask.
+  const running = terminal.status !== "exited" && terminal.status !== "error";
+  if (!running || !state.settings.confirmTerminalClose) return removeTerminal(id);
+  openTerminalCloseConfirm(terminal);
+  return false;
+}
+
+function openTerminalCloseConfirm(terminal) {
+  state.pendingTerminalClose = terminal.id;
+  window.clearTimeout(terminalCloseHideTimer);
+  const title = committedTerminalTitle(terminal) || "This terminal";
+  elements.terminalCloseText.textContent = terminal.pid
+    ? `“${title}” is still running as process ${terminal.pid}. Closing it ends that session.`
+    : `“${title}” is still running. Closing it ends that session.`;
+  elements.terminalCloseRemember.checked = false;
+  elements.terminalCloseOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.terminalCloseOverlay.classList.add("is-open");
+    elements.terminalCloseCancel.focus();
+  });
+  refreshIcons(elements.terminalCloseOverlay);
+}
+
+// Held so reopening the dialog inside the fade cannot be blanked by the hide
+// this scheduled.
+let terminalCloseHideTimer = 0;
+
+function closeTerminalCloseConfirm() {
+  state.pendingTerminalClose = null;
+  elements.terminalCloseOverlay.classList.remove("is-open");
+  window.clearTimeout(terminalCloseHideTimer);
+  terminalCloseHideTimer = window.setTimeout(() => {
+    elements.terminalCloseOverlay.hidden = true;
+  }, 150);
+}
+
+function acceptTerminalClose() {
+  const id = state.pendingTerminalClose;
+  if (!id) return;
+  if (elements.terminalCloseRemember.checked) {
+    state.settings.confirmTerminalClose = false;
+    elements.confirmTerminalClose.checked = false;
+    saveSettings();
+  }
+  closeTerminalCloseConfirm();
+  removeTerminal(id);
+}
+
+function bindTerminalCloseConfirm() {
+  elements.terminalCloseAccept.addEventListener("click", acceptTerminalClose);
+  elements.terminalCloseCancel.addEventListener("click", closeTerminalCloseConfirm);
+  elements.terminalCloseOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.terminalCloseOverlay) closeTerminalCloseConfirm();
   });
 }
 
@@ -22126,12 +22703,139 @@ function bindPagerDockDrag() {
 
 let draggedPageId = null;
 let pageDragChanged = false;
-let pageDropAccepted = false;
-let emptyPageDropGroupId = null;
+let pageDropGroupId = null;
 let originalPageOrder = null;
 let suppressPageClick = false;
 let pagerRangeSelection = new Set();
 let pagerRangeAnchor = null;
+let draggedGroupId = null;
+let groupDropAnchorId = null;
+
+// The bar is rendered from state.pages, so a band sits wherever its first page
+// does. Reordering a band therefore moves that whole run of pages, and the group
+// order is rewritten to match so bands with nothing in them travel too.
+function pagerGroupSegments() {
+  const segments = [];
+  let current = null;
+  for (const page of state.pages) {
+    const groupId = pageGroupOf(page)?.id || null;
+    if (!groupId) {
+      segments.push({ groupId: null, pages: [page] });
+      current = null;
+    } else if (current?.groupId === groupId) {
+      current.pages.push(page);
+    } else {
+      current = { groupId, pages: [page] };
+      segments.push(current);
+    }
+  }
+  for (const group of state.pageGroups) {
+    if (!segments.some((segment) => segment.groupId === group.id)) {
+      segments.push({ groupId: group.id, pages: [] });
+    }
+  }
+  return segments;
+}
+
+// `beforeId` is a group id, an ungrouped page id, or null to move to the end.
+function movePageGroupBefore(groupId, beforeId) {
+  if (!groupId || groupId === beforeId) return false;
+  const segments = pagerGroupSegments();
+  const from = segments.findIndex((segment) => segment.groupId === groupId);
+  if (from < 0) return false;
+  const [moved] = segments.splice(from, 1);
+  const target = beforeId === null
+    ? segments.length
+    : segments.findIndex((segment) => (
+      segment.groupId === beforeId || (segment.groupId === null && segment.pages[0].id === beforeId)
+    ));
+  if (target < 0) {
+    segments.splice(from, 0, moved);
+    return false;
+  }
+  if (target === from) {
+    segments.splice(from, 0, moved);
+    return false;
+  }
+  segments.splice(target, 0, moved);
+  state.pages = segments.flatMap((segment) => segment.pages);
+  const ordered = segments.map((segment) => segment.groupId).filter(Boolean);
+  state.pageGroups = ordered
+    .map((id) => state.pageGroups.find((group) => group.id === id))
+    .filter(Boolean);
+  savePages();
+  renderPager();
+  return true;
+}
+
+function setGroupDropAnchor(element, before) {
+  for (const marked of elements.pagerList?.querySelectorAll("[data-group-drop-edge]") || []) {
+    delete marked.dataset.groupDropEdge;
+  }
+  groupDropAnchorId = null;
+  if (!element) return;
+  groupDropAnchorId = element.dataset.groupId || element.dataset.pageId || null;
+  element.dataset.groupDropEdge = before ? "before" : "after";
+}
+
+// Nothing is moved until the drop: relocating a band mid-dragover reflows the
+// bar under the pointer and the next sample lands somewhere else entirely.
+function trackGroupDragOver(event) {
+  const band = event.target.closest?.(".pager-group");
+  if (band && band.dataset.groupId !== draggedGroupId) {
+    const rect = band.getBoundingClientRect();
+    const before = isVerticalPager()
+      ? event.clientY < rect.top + rect.height / 2
+      : event.clientX < rect.left + rect.width / 2;
+    setGroupDropAnchor(band, before);
+    return;
+  }
+  const chip = band ? null : event.target.closest?.(".pager-chip");
+  if (chip) {
+    const rect = chip.getBoundingClientRect();
+    const before = isVerticalPager()
+      ? event.clientY < rect.top + rect.height / 2
+      : event.clientX < rect.left + rect.width / 2;
+    setGroupDropAnchor(chip, before);
+  } else if (!band) {
+    setGroupDropAnchor(null, false);
+  } else {
+    // Over the band being dragged, so the marker stays where it was.
+  }
+}
+
+function finishGroupDrag(accepted) {
+  if (!draggedGroupId) return;
+  const groupId = draggedGroupId;
+  const anchorId = groupDropAnchorId;
+  const anchor = anchorId
+    ? elements.pagerList?.querySelector("[data-group-drop-edge]")
+    : null;
+  const before = anchor?.dataset.groupDropEdge === "before";
+  draggedGroupId = null;
+  for (const dragging of elements.pagerList?.querySelectorAll(".pager-group.is-group-dragging") || []) {
+    dragging.classList.remove("is-group-dragging");
+  }
+  setGroupDropAnchor(null, false);
+  if (accepted && anchorId) {
+    if (before) movePageGroupBefore(groupId, anchorId);
+    else movePageGroupBefore(groupId, nextSegmentIdAfter(anchorId));
+  } else {
+    // A cancelled drag leaves the bar exactly as it was.
+  }
+  window.setTimeout(() => { suppressPageClick = false; }, 0);
+}
+
+function nextSegmentIdAfter(anchorId) {
+  const segments = pagerGroupSegments();
+  const at = segments.findIndex((segment) => (
+    segment.groupId === anchorId || (segment.groupId === null && segment.pages[0].id === anchorId)
+  ));
+  if (at < 0) return null;
+  const next = segments[at + 1];
+  if (!next) return null;
+  return next.groupId || next.pages[0].id;
+}
 
 function visiblePageChips() {
   return [...(elements.pagerList?.querySelectorAll(".pager-chip") || [])];
@@ -22182,14 +22886,14 @@ function draggedPageChips() {
   return chip ? [chip] : [];
 }
 
-function setEmptyPageDropTarget(groupId) {
-  emptyPageDropGroupId = groupId || null;
-  for (const zone of elements.pagerList?.querySelectorAll(".pager-group-chips.is-page-drop-target") || []) {
-    zone.classList.remove("is-page-drop-target");
+function setPageDropGroupTarget(groupId) {
+  pageDropGroupId = groupId || null;
+  for (const band of elements.pagerList?.querySelectorAll(".pager-group.is-page-drop-target") || []) {
+    band.classList.remove("is-page-drop-target");
   }
-  if (!emptyPageDropGroupId) return;
+  if (!pageDropGroupId) return;
   elements.pagerList
-    ?.querySelector(`[data-group-id="${CSS.escape(emptyPageDropGroupId)}"] .pager-group-chips`)
+    ?.querySelector(`.pager-group[data-group-id="${CSS.escape(pageDropGroupId)}"]`)
     ?.classList.add("is-page-drop-target");
 }
 
@@ -22198,13 +22902,20 @@ function syncPageOrderFromPager() {
   const pairs = [...elements.pagerList.querySelectorAll(".pager-chip")]
     .map((chip) => ({ chip, page: pagesById.get(chip.dataset.pageId) }))
     .filter((pair) => pair.page);
-  // A collapsed group keeps its members out of the DOM, so a partial reading of
-  // the bar must never be written back as the new truth.
-  if (pairs.length !== state.pages.length) return;
   for (const { chip, page } of pairs) {
     page.groupId = chip.closest(".pager-group")?.dataset.groupId || null;
   }
-  state.pages = pairs.map((pair) => pair.page);
+  // A collapsed group keeps its members out of the bar, so the tabs that are on
+  // screen are dealt back into the slots they already held and everything else
+  // stays where it was.
+  const rendered = new Set(pairs.map((pair) => pair.page.id));
+  let next = 0;
+  state.pages = state.pages.map((page) => {
+    if (!rendered.has(page.id)) return page;
+    const dealt = pairs[next].page;
+    next += 1;
+    return dealt;
+  });
 }
 
 function moveDraggedPage(targetChip, before) {
@@ -22236,6 +22947,31 @@ function appendDraggedPagesTo(zone) {
   return true;
 }
 
+function finishPageDrag(accepted) {
+  if (!draggedPageId) return;
+  for (const dragging of elements.pagerList?.querySelectorAll(".pager-chip.is-page-dragging") || []) {
+    dragging.classList.remove("is-page-dragging");
+  }
+  if (pageDragChanged && accepted) {
+    commitPageGroups();
+  } else if (pageDragChanged && originalPageOrder) {
+    const pagesById = new Map(state.pages.map((page) => [page.id, page]));
+    state.pages = originalPageOrder
+      .map((entry) => {
+        const page = pagesById.get(entry.id);
+        if (page) page.groupId = entry.groupId;
+        return page;
+      })
+      .filter(Boolean);
+    renderPager();
+  }
+  draggedPageId = null;
+  pageDragChanged = false;
+  setPageDropGroupTarget(null);
+  originalPageOrder = null;
+  window.setTimeout(() => { suppressPageClick = false; }, 0);
+}
+
 function movePageByOffset(pageId, offset) {
   const index = state.pages.findIndex((page) => page.id === pageId);
   const next = Math.max(0, Math.min(state.pages.length - 1, index + offset));
@@ -22253,6 +22989,150 @@ function movePageByOffset(pageId, offset) {
   return true;
 }
 
+// Tab styling cascades on CSS custom properties, so the three scopes need no
+// precedence logic of their own: a value set on a chip beats the one inherited
+// from its group band, which beats the one on the bar.
+function normalizeTabAppearance(value) {
+  if (!value || typeof value !== "object") return null;
+  const background = normalizeTerminalColor(value.background);
+  const foreground = normalizeTerminalColor(value.foreground);
+  const rawSize = Number(value.fontSize);
+  const fontSize = Number.isFinite(rawSize) && rawSize > 0
+    ? Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(rawSize)))
+    : 0;
+  if (!background && !foreground && !fontSize) return null;
+  return { background, foreground, fontSize };
+}
+
+function applyTabAppearanceVars(element, appearance) {
+  if (!element) return;
+  const resolved = normalizeTabAppearance(appearance);
+  for (const name of ["--tab-bg", "--tab-inactive-bg", "--tab-fg", "--tab-active-fg", "--tab-font-size"]) {
+    element.style.removeProperty(name);
+  }
+  if (!resolved) return;
+  if (resolved.background) {
+    element.style.setProperty("--tab-bg", resolved.background);
+    // The inactive tabs take the same colour, thinned, so the active one still
+    // reads as the selected tab rather than the bar turning into one block.
+    element.style.setProperty("--tab-inactive-bg", `color-mix(in srgb, ${resolved.background} 45%, transparent)`);
+  }
+  if (resolved.foreground) {
+    element.style.setProperty("--tab-active-fg", resolved.foreground);
+    element.style.setProperty("--tab-fg", `color-mix(in srgb, ${resolved.foreground} 70%, transparent)`);
+  }
+  if (resolved.fontSize) element.style.setProperty("--tab-font-size", `${resolved.fontSize}px`);
+}
+
+function globalTabAppearance() {
+  return {
+    background: state.settings.pagerTabBackground,
+    foreground: state.settings.pagerTabForeground,
+    fontSize: state.settings.pagerTabFontSize
+  };
+}
+
+function syncPagerTabAppearanceControls() {
+  if (!elements.pagerTabBackground) return;
+  const theme = themes[state.settings.theme] || themes.ember;
+  elements.pagerTabBackground.value = state.settings.pagerTabBackground || theme.background;
+  elements.pagerTabForeground.value = state.settings.pagerTabForeground || theme.foreground;
+  elements.pagerTabFontSize.value = state.settings.pagerTabFontSize
+    ? String(state.settings.pagerTabFontSize)
+    : "";
+}
+
+// One editor serves all three scopes; which one it writes to is decided by what
+// opened it, so the dialog itself only has to carry the target.
+let tabAppearanceTarget = null;
+let tabAppearanceReturnFocus = null;
+
+function tabAppearanceTargetValue() {
+  if (!tabAppearanceTarget) return null;
+  if (tabAppearanceTarget.scope === "page") return pageById(tabAppearanceTarget.id)?.tabAppearance || null;
+  if (tabAppearanceTarget.scope === "group") return pageGroupById(tabAppearanceTarget.id)?.tabAppearance || null;
+  return normalizeTabAppearance(globalTabAppearance());
+}
+
+function openTabAppearanceEditor(scope, id, subtitle) {
+  if (!elements.tabAppearanceOverlay) return;
+  hideContextMenu();
+  tabAppearanceTarget = { scope, id };
+  tabAppearanceReturnFocus = document.activeElement;
+  const inherited = normalizeTabAppearance(globalTabAppearance()) || {};
+  const current = tabAppearanceTargetValue() || {};
+  const theme = themes[state.settings.theme] || themes.ember;
+  elements.tabAppearanceSubtitle.textContent = subtitle;
+  elements.tabAppearanceBackground.value = current.background || inherited.background || theme.background;
+  elements.tabAppearanceForeground.value = current.foreground || inherited.foreground || theme.foreground;
+  elements.tabAppearanceFontSize.value = current.fontSize ? String(current.fontSize) : "";
+  elements.tabAppearanceOverlay.hidden = false;
+  window.requestAnimationFrame(() => {
+    elements.tabAppearanceOverlay.classList.add("is-open");
+    elements.tabAppearanceBackground.focus();
+  });
+}
+
+function closeTabAppearanceEditor() {
+  if (!elements.tabAppearanceOverlay || elements.tabAppearanceOverlay.hidden) return;
+  const returnFocus = tabAppearanceReturnFocus;
+  tabAppearanceTarget = null;
+  tabAppearanceReturnFocus = null;
+  elements.tabAppearanceOverlay.classList.remove("is-open");
+  elements.tabAppearanceOverlay.hidden = true;
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+
+function commitTabAppearance(appearance) {
+  const target = tabAppearanceTarget;
+  if (!target) return;
+  if (target.scope === "page") {
+    const page = pageById(target.id);
+    if (page) {
+      if (appearance) page.tabAppearance = appearance;
+      else delete page.tabAppearance;
+    }
+  } else if (target.scope === "group") {
+    const group = pageGroupById(target.id);
+    if (group) {
+      if (appearance) group.tabAppearance = appearance;
+      else delete group.tabAppearance;
+    }
+  } else {
+    state.settings.pagerTabBackground = appearance?.background || "";
+    state.settings.pagerTabForeground = appearance?.foreground || "";
+    state.settings.pagerTabFontSize = appearance?.fontSize || 0;
+    syncPagerTabAppearanceControls();
+    saveSettings();
+  }
+  savePages();
+  renderPager();
+  closeTabAppearanceEditor();
+}
+
+function bindTabAppearanceEditor() {
+  if (!elements.tabAppearanceOverlay) return;
+  elements.tabAppearanceApply.addEventListener("click", () => {
+    const raw = elements.tabAppearanceFontSize.value.trim();
+    commitTabAppearance(normalizeTabAppearance({
+      background: elements.tabAppearanceBackground.value,
+      foreground: elements.tabAppearanceForeground.value,
+      fontSize: raw === "" ? 0 : Number(raw)
+    }));
+  });
+  elements.tabAppearanceReset.addEventListener("click", () => commitTabAppearance(null));
+  elements.tabAppearanceCancel.addEventListener("click", closeTabAppearanceEditor);
+  elements.tabAppearanceOverlay.addEventListener("pointerdown", (event) => {
+    if (event.target === elements.tabAppearanceOverlay) closeTabAppearanceEditor();
+  });
+  elements.tabAppearanceOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeTabAppearanceEditor();
+    }
+  });
+}
+
 function buildPageChip(page) {
   const onPage = terminalsOnPage(page.id);
   const count = onPage.length;
@@ -22267,6 +23147,7 @@ function buildPageChip(page) {
   chip.classList.toggle("is-active", isActive);
   chip.setAttribute("aria-selected", isActive ? "true" : "false");
   chip.title = `${page.name} — ${count} terminal${count === 1 ? "" : "s"}${parked ? `, ${parked} minimized` : ""} (drop a terminal here; drag the tab to reorder or move it between groups; double-click or right-click to rename)`;
+  applyTabAppearanceVars(chip, page.tabAppearance);
 
   const label = document.createElement("span");
   label.className = "pager-name";
@@ -22317,7 +23198,6 @@ function buildPageChip(page) {
 // chips without caring whether it is inside a band or on the bar itself.
 function appendPageGroupBand(list, group) {
   const count = pagesInGroup(group.id).length;
-  const hidden = pagesInGroup(group.id).filter((page) => page.id !== state.activePageId).length;
   const band = document.createElement("div");
   band.className = "pager-group";
   band.dataset.groupId = group.id;
@@ -22328,6 +23208,7 @@ function appendPageGroupBand(list, group) {
   header.type = "button";
   header.className = "pager-group-header";
   header.dataset.groupToggle = group.id;
+  header.draggable = true;
   header.setAttribute("aria-expanded", String(count === 0 || !group.collapsed));
   header.title = count === 0
     ? `${group.name} — empty group (drag pages into the empty space; right-click for group options)`
@@ -22341,10 +23222,10 @@ function appendPageGroupBand(list, group) {
   header.append(label);
 
   // Collapsed, the count is the only clue to what is hidden in there.
-  if (group.collapsed && hidden > 0) {
+  if (group.collapsed && count > 0) {
     const badge = document.createElement("span");
     badge.className = "pager-group-count";
-    badge.textContent = String(hidden);
+    badge.textContent = String(count);
     header.append(badge);
   }
 
@@ -22370,11 +23251,23 @@ function appendPageGroupBand(list, group) {
   color.innerHTML = '<i data-lucide="palette"></i>';
 
   const background = headerBackgroundCss(group.headerBackground);
+  const edge = headerBackgroundEdgeCss(group.headerBackground);
+  const ink = headerBackgroundInk(group.headerBackground);
   band.classList.toggle("has-color", Boolean(background));
   if (background) band.style.setProperty("--pager-group-color", background);
   else band.style.removeProperty("--pager-group-color");
+  if (edge) band.style.setProperty("--pager-group-edge", edge);
+  else band.style.removeProperty("--pager-group-edge");
+  if (ink) {
+    band.style.setProperty("--pager-group-ink", ink.ink);
+    band.style.setProperty("--pager-group-ink-shadow", ink.shadow);
+  } else {
+    band.style.removeProperty("--pager-group-ink");
+    band.style.removeProperty("--pager-group-ink-shadow");
+  }
 
   band.append(header, color, chips);
+  applyTabAppearanceVars(band, group.tabAppearance);
   list.append(band);
   return chips;
 }
@@ -22385,6 +23278,7 @@ function renderPager() {
   if (!list) return;
 
   list.textContent = "";
+  applyTabAppearanceVars(list, globalTabAppearance());
   let bandGroupId = null;
   let container = list;
   const renderedGroups = new Set();
@@ -22395,9 +23289,10 @@ function renderPager() {
       container = group ? appendPageGroupBand(list, group) : list;
       if (group) renderedGroups.add(group.id);
     }
-    // The active page stays visible even inside a collapsed group, so collapsing
-    // can never hide where you actually are.
-    if (group?.collapsed && page.id !== state.activePageId) continue;
+    // Collapsing hides every tab in the band, including the active page's. The
+    // page itself stays open on the stage, so its terminals keep running and
+    // nothing is closed by tidying the bar away.
+    if (group?.collapsed) continue;
     container.append(buildPageChip(page));
   }
   for (const group of state.pageGroups) {
@@ -22533,6 +23428,11 @@ function showPageGroupMenu(group, x, y) {
   items.push(
     { separator: true },
     { label: "New page in group", icon: "plus", run: () => addPage({ groupId: group.id }) },
+    {
+      label: "Tab appearance\u2026",
+      icon: "palette",
+      run: () => openTabAppearanceEditor("group", group.id, `${group.name} \u2014 every tab in this group`)
+    },
     { separator: true, spacious: true },
     {
       label: count > 0 ? `Ungroup ${count} page${count === 1 ? "" : "s"}` : "Delete group",
@@ -22641,6 +23541,20 @@ function bindPager() {
   });
 
   list.addEventListener("dragstart", (event) => {
+    const groupHeader = event.target.closest?.("[data-group-toggle]");
+    // Matches the chip branch below: the rename check reads from the event
+    // target rather than the resolved row, which needs no DOM API of its own.
+    if (groupHeader && !event.target.closest?.(".pager-rename")) {
+      draggedGroupId = groupHeader.dataset.groupToggle;
+      suppressPageClick = true;
+      setGroupDropAnchor(null, false);
+      groupHeader.closest(".pager-group")?.classList.add("is-group-dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedGroupId);
+      }
+      return;
+    }
     const chip = event.target.closest?.(".pager-chip");
     if (!chip || event.target.closest?.("[data-page-close], .pager-rename")) {
       event.preventDefault();
@@ -22648,8 +23562,7 @@ function bindPager() {
     }
     draggedPageId = chip.dataset.pageId;
     pageDragChanged = false;
-    pageDropAccepted = false;
-    setEmptyPageDropTarget(null);
+    setPageDropGroupTarget(null);
     originalPageOrder = state.pages.map((page) => ({ id: page.id, groupId: page.groupId }));
     suppressPageClick = true;
     for (const dragging of draggedPageChips()) dragging.classList.add("is-page-dragging");
@@ -22660,67 +23573,62 @@ function bindPager() {
   });
 
   list.addEventListener("dragover", (event) => {
+    if (draggedGroupId) {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      trackGroupDragOver(event);
+      return;
+    }
     if (!draggedPageId) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
     const targetChip = event.target.closest?.(".pager-chip");
     if (targetChip) {
-      setEmptyPageDropTarget(null);
+      setPageDropGroupTarget(null);
       const rect = targetChip.getBoundingClientRect();
       const before = isVerticalPager()
         ? event.clientY < rect.top + rect.height / 2
         : event.clientX < rect.left + rect.width / 2;
       moveDraggedPage(targetChip, before);
     } else {
-      // Dropping on a band's free space joins that group; dropping on the bar
-      // itself leaves the page ungrouped.
-      const emptyGroupId = event.target.closest?.(".pager-group.is-empty")?.dataset.groupId || null;
-      if (emptyGroupId) {
-        setEmptyPageDropTarget(emptyGroupId);
+      // Anywhere on a band joins that group -- its header, its padding, a
+      // collapsed band whose tabs are not on screen to aim at, and an empty one
+      // that has no members to aim between. Only the bar itself leaves the pages
+      // ungrouped. Appending into an empty band instead would move the chip,
+      // reflow the bar, and drop the pointer back onto the bar mid-drag.
+      const band = event.target.closest?.(".pager-group");
+      const strip = event.target.closest?.(".pager-group-chips");
+      const bandOwnsDrop = band
+        && (!strip || band.classList.contains("is-collapsed") || band.classList.contains("is-empty"));
+      if (bandOwnsDrop) {
+        setPageDropGroupTarget(band.dataset.groupId);
         return;
       }
-      const band = event.target.closest?.(".pager-group-chips");
-      setEmptyPageDropTarget(null);
-      const zone = band || list;
-      if (zone) appendDraggedPagesTo(zone);
+      setPageDropGroupTarget(null);
+      appendDraggedPagesTo(strip || list);
     }
   });
 
   list.addEventListener("drop", (event) => {
+    if (draggedGroupId) {
+      event.preventDefault();
+      finishGroupDrag(true);
+      return;
+    }
     if (!draggedPageId) return;
     event.preventDefault();
-    if (emptyPageDropGroupId) {
-      const zone = list.querySelector(
-        `[data-group-id="${CSS.escape(emptyPageDropGroupId)}"] .pager-group-chips`
-      );
-      if (zone) appendDraggedPagesTo(zone);
+    if (pageDropGroupId) {
+      const ids = draggedPageChips().map((dragging) => dragging.dataset.pageId);
+      if (assignPagesToGroup(ids, pageDropGroupId)) pageDragChanged = true;
     }
-    pageDropAccepted = true;
+    // Committing rebuilds the bar, and Chromium never delivers dragend to a
+    // source node it has removed, so an accepted drop settles the drag itself.
+    finishPageDrag(true);
   });
 
   list.addEventListener("dragend", () => {
-    for (const dragging of list.querySelectorAll(".pager-chip.is-page-dragging")) {
-      dragging.classList.remove("is-page-dragging");
-    }
-    if (pageDragChanged && pageDropAccepted) {
-      commitPageGroups();
-    } else if (pageDragChanged && originalPageOrder) {
-      const pagesById = new Map(state.pages.map((page) => [page.id, page]));
-      state.pages = originalPageOrder
-        .map((entry) => {
-          const page = pagesById.get(entry.id);
-          if (page) page.groupId = entry.groupId;
-          return page;
-        })
-        .filter(Boolean);
-      renderPager();
-    }
-    draggedPageId = null;
-    pageDragChanged = false;
-    pageDropAccepted = false;
-    setEmptyPageDropTarget(null);
-    originalPageOrder = null;
-    window.setTimeout(() => { suppressPageClick = false; }, 0);
+    finishGroupDrag(false);
+    finishPageDrag(false);
   });
 
   elements.pager.addEventListener("contextmenu", (event) => {
@@ -22743,8 +23651,20 @@ function bindPager() {
       { label: "Rename\u2026", icon: "pencil", shortcutId: "page.rename", run: () => startPageRename(chip) },
       { separator: true },
       ...pageGroupMenuItems(page),
+      {
+        label: "Tab appearance\u2026",
+        icon: "palette",
+        run: () => openTabAppearanceEditor("page", page.id, `${page.name} \u2014 this tab only`)
+      },
       { separator: true, spacious: true },
-      { label: "New page", ...shortcutHint("page.new"), icon: "plus", run: () => addPage() }
+      // A page opened from a tab belongs beside that tab, inside whatever group
+      // it sits in, rather than at the far end of the bar.
+      {
+        label: "New page",
+        ...shortcutHint("page.new"),
+        icon: "plus",
+        run: () => addPage({ groupId: page.groupId, after: page.id })
+      }
     ];
     items.push({ separator: true, spacious: true });
     if (state.pages.length > 1) {
@@ -22969,6 +23889,7 @@ function syncControlsFromSettings() {
   elements.copilotLogViewerEnabled.checked = Boolean(state.settings.copilotLogViewerEnabled);
   logStore.max = state.settings.diagnosticViewerEntries;
   elements.compactChrome.checked = state.settings.compactChrome;
+  syncPagerTabAppearanceControls();
   elements.syncInput.checked = state.settings.syncInput;
   elements.ctrlVPaste.checked = state.settings.ctrlVPaste;
   elements.cleanCopilotClipboard.checked = state.settings.cleanCopilotClipboard;
@@ -22991,6 +23912,10 @@ function syncControlsFromSettings() {
   state.settings.copilotSessionNotePageSize = clampCopilotSessionNotePageSize(
     state.settings.copilotSessionNotePageSize,
     elements.copilotSessionNotePageSize
+  );
+  state.settings.contextMenuPageRows = clampContextMenuPageRows(
+    state.settings.contextMenuPageRows,
+    elements.contextMenuPageRows
   );
   syncCopilotTitleSettings();
   elements.keepSessionsOnClose.checked = state.settings.keepSessionsOnClose;
@@ -23036,6 +23961,7 @@ function syncControlsFromSettings() {
     elements.bridgeHeartbeatTimeoutSeconds
   );
   elements.pageCloseAction.value = normalizePageCloseAction(state.settings.pageCloseAction);
+  elements.confirmTerminalClose.checked = state.settings.confirmTerminalClose !== false;
   elements.terminalMessageMaxKb.value = state.settings.terminalMessageMaxKb;
   elements.terminalInboxCapacity.value = state.settings.terminalInboxCapacity;
   state.settings.maxInstallerSizeMb = normalizeInstallerSizeMb(
@@ -23150,6 +24076,56 @@ function headerBackgroundCss(value) {
   return `linear-gradient(${background.angle}deg, ${stops})`;
 }
 
+// A band's border needs one solid colour and a gradient cannot supply it:
+// border-image ignores border-radius, so the first stop stands for the group.
+function headerBackgroundEdgeCss(value) {
+  const background = normalizeHeaderBackground(value);
+  if (!background) return "";
+  if (background.mode === "solid") return background.color;
+  return background.stops?.[0]?.color || "";
+}
+
+function srgbToLinear(channel) {
+  const ratio = channel / 255;
+  return ratio <= 0.04045 ? ratio / 12.92 : ((ratio + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(hex) {
+  return 0.2126 * srgbToLinear(Number.parseInt(hex.slice(1, 3), 16))
+    + 0.7152 * srgbToLinear(Number.parseInt(hex.slice(3, 5), 16))
+    + 0.0722 * srgbToLinear(Number.parseInt(hex.slice(5, 7), 16));
+}
+
+function contrastRatio(first, second) {
+  const light = Math.max(first, second);
+  const dark = Math.min(first, second);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+const PAGER_GROUP_INK_DARK = "#11161D";
+
+// Controls drawn on a group's own header colour cannot use a theme ink: light
+// grey vanishes on a bright band. Pick whichever of white or near-black keeps
+// the most contrast against the worst stop the control can sit over.
+function headerBackgroundInk(value) {
+  const background = normalizeHeaderBackground(value);
+  if (!background) return null;
+  const stops = background.mode === "solid"
+    ? [{ color: background.color, opacity: 100 }]
+    : background.stops;
+  // A mostly transparent stop shows the surface behind it rather than its own
+  // colour, so it cannot be judged on hue alone.
+  const opaque = (stops || []).filter((stop) => stop.opacity >= 50 && /^#[0-9a-f]{6}$/i.test(stop.color));
+  if (!opaque.length) return null;
+  const luminances = opaque.map((stop) => relativeLuminance(stop.color));
+  const darkInk = relativeLuminance(PAGER_GROUP_INK_DARK);
+  const worstOnWhite = Math.min(...luminances.map((value) => contrastRatio(value, 1)));
+  const worstOnDark = Math.min(...luminances.map((value) => contrastRatio(value, darkInk)));
+  return worstOnDark > worstOnWhite
+    ? { ink: PAGER_GROUP_INK_DARK, shadow: "0 1px 2px rgb(255 255 255 / 45%)" }
+    : { ink: "#FFFFFF", shadow: "0 1px 2px rgb(0 0 0 / 45%)" };
+}
+
 function paintTerminalHeaderBackground(terminal, value) {
   const bar = terminal?.pane?.querySelector(".pane-bar");
   if (!bar) return;
@@ -23160,22 +24136,59 @@ function paintTerminalHeaderBackground(terminal, value) {
   // decorative gradient so those cues can never be styled away.
   if (background) bar.style.setProperty("--pane-bar-custom-bg", background);
   else bar.style.removeProperty("--pane-bar-custom-bg");
+  // The title sits on that background, so its ink has to be judged against it:
+  // the app's own text colour disappears on a light theme or a bright gradient.
+  const ink = background ? headerBackgroundInk(definition) : null;
+  if (ink) {
+    bar.style.setProperty("--pane-bar-ink", ink.ink);
+    bar.style.setProperty("--pane-bar-ink-shadow", ink.shadow);
+  } else {
+    bar.style.removeProperty("--pane-bar-ink");
+    bar.style.removeProperty("--pane-bar-ink-shadow");
+  }
   if (definition?.fontFamily) bar.style.setProperty("--pane-title-font-family", fontStacks[definition.fontFamily]);
   else bar.style.removeProperty("--pane-title-font-family");
   if (definition?.fontSize) bar.style.setProperty("--pane-title-font-size", `${definition.fontSize}px`);
   else bar.style.removeProperty("--pane-title-font-size");
 }
 
+// Each theme dresses the pane header from its own palette rather than leaving it
+// on app chrome, which is why switching theme used to move only the terminal
+// body. Derived rather than hand-authored so it stays restrained and cannot
+// drift out of step when a theme is added.
+function themeHeaderBackground() {
+  const theme = themes[state.settings.theme] || themes.ember;
+  const base = normalizeTerminalColor(theme.background);
+  const ink = normalizeTerminalColor(theme.foreground);
+  if (!base || !ink) return null;
+  const accent = normalizeTerminalColor(theme.cursor) || ink;
+  return {
+    mode: "gradient",
+    type: "linear",
+    angle: 90,
+    stops: [
+      // Lifted off the terminal so the header still reads as chrome, then given
+      // the faintest wash of the theme's own accent instead of a new colour.
+      { color: interpolateHeaderGradientColor(base, ink, 0.13), opacity: 100, position: 0 },
+      { color: interpolateHeaderGradientColor(base, accent, 0.16), opacity: 100, position: 100 }
+    ]
+  };
+}
+
 function applyTerminalHeaderBackground(terminal) {
   paintTerminalHeaderBackground(
     terminal,
-    terminal?.automationAppearance?.headerBackground || terminal?.headerBackground || state.settings.terminalHeaderBackground
+    terminal?.automationAppearance?.headerBackground
+      || terminal?.headerBackground
+      || state.settings.terminalHeaderBackground
+      || themeHeaderBackground()
   );
 }
 
 function applyTerminalAppearance(terminal) {
   if (!terminal?.term) return;
   terminal.term.options.fontFamily = fontStacks[terminalFontFamilyName(terminal)];
+  terminal.term.options.fontSize = terminal.fontSizeOverride ?? state.settings.fontSize;
   terminal.term.options.theme = terminalThemeFor(terminal);
   scheduleFit(terminal);
 }
@@ -23229,14 +24242,16 @@ function terminalAppearanceValues(terminal, scope = terminalAppearanceScope) {
     return {
       background: normalizeTerminalColor(state.settings.terminalBackground) || theme.background,
       foreground: normalizeTerminalColor(state.settings.terminalForeground) || theme.foreground,
-      fontFamily: normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily)
+      fontFamily: normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily),
+      fontSize: state.settings.fontSize
     };
   }
   return {
     background: normalizeTerminalColor(terminal?.terminalBackground || state.settings.terminalBackground) || theme.background,
     foreground: normalizeTerminalColor(terminal?.terminalForeground || state.settings.terminalForeground) || theme.foreground,
     fontFamily: normalizeTerminalFontFamily(terminal?.terminalFontFamily)
-      || normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily)
+      || normalizeTerminalFontFamily(state.settings.fontFamily, defaultSettings.fontFamily),
+    fontSize: terminal?.fontSizeOverride ?? state.settings.fontSize
   };
 }
 
@@ -23325,14 +24340,38 @@ function bindTerminalInlineColorPicker(kind) {
 
 function updateTerminalAppearancePreview() {
   if (!terminalAppearanceDraft) return;
+  const fontSize = terminalAppearanceDraftFontSize();
   elements.terminalAppearancePreview.style.background = terminalAppearanceDraft.background;
   elements.terminalAppearancePreview.style.color = terminalAppearanceDraft.foreground;
   elements.terminalAppearancePreview.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
+  elements.terminalAppearancePreview.style.fontSize = `${fontSize}px`;
   const terminal = state.terminals.get(headerBackgroundTerminalId);
   if (terminal) {
     terminal.term.options.theme = terminalThemeWithColors(terminalAppearanceDraft.background, terminalAppearanceDraft.foreground);
     terminal.term.options.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
+    terminal.term.options.fontSize = fontSize;
+    scheduleFit(terminal);
   }
+}
+
+function terminalAppearanceDraftFontSize() {
+  const size = Number(terminalAppearanceDraft?.fontSize);
+  if (!Number.isFinite(size) || size <= 0) return state.settings.fontSize;
+  return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)));
+}
+
+// A cleared field is "no size yet", not zero, which is what Number("") reports
+// and what would otherwise snap a size being retyped down to the minimum.
+function appearanceFontSizeFieldValue() {
+  const raw = elements.terminalAppearanceFontSize.value.trim();
+  return raw === "" ? Number.NaN : Number(raw);
+}
+
+function syncAppearanceFontSizeStepper() {
+  const size = appearanceFontSizeFieldValue();
+  const current = Number.isFinite(size) ? size : terminalAppearanceDraftFontSize();
+  elements.terminalAppearanceFontSizeDown.disabled = current <= MIN_FONT_SIZE;
+  elements.terminalAppearanceFontSizeUp.disabled = current >= MAX_FONT_SIZE;
 }
 
 function automationAppearanceProfileSeed(terminal) {
@@ -23351,13 +24390,16 @@ function loadTerminalAppearanceDraft(profile = null) {
     ? {
         background: normalizedProfile.background,
         foreground: normalizedProfile.foreground,
-        fontFamily: normalizedProfile.fontFamily
+        fontFamily: normalizedProfile.fontFamily,
+        fontSize: normalizedProfile.fontSize
       }
     : terminalAppearanceValues(terminal);
   setTerminalAppearanceColorControls("background", terminalAppearanceDraft.background);
   setTerminalAppearanceColorControls("foreground", terminalAppearanceDraft.foreground);
   elements.terminalAppearanceFontFamily.value = terminalAppearanceDraft.fontFamily;
   elements.terminalAppearanceFontFamily.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
+  elements.terminalAppearanceFontSize.value = String(terminalAppearanceDraftFontSize());
+  syncAppearanceFontSizeStepper();
   const groupBackground = terminalAppearanceEditorContext === "pageGroup"
     ? pageGroupById(headerBackgroundPageGroupId)?.headerBackground
     : null;
@@ -23392,6 +24434,40 @@ function setTerminalAppearanceApplyChoices(open) {
   const expanded = Boolean(open);
   elements.terminalAppearanceApplyChoices.hidden = !expanded;
   elements.headerBackgroundApply.setAttribute("aria-expanded", String(expanded));
+  if (!expanded) clearTerminalAppearanceThemeWarning();
+}
+
+// Applying to every terminal writes the colours into settings, which from then
+// on stand in front of whichever theme is selected. That is worth saying out
+// loud once rather than leaving the theme picker looking broken later.
+let terminalAppearanceThemeAcknowledged = false;
+
+function clearTerminalAppearanceThemeWarning() {
+  terminalAppearanceThemeAcknowledged = false;
+  elements.terminalAppearanceThemeWarning.hidden = true;
+  elements.terminalAppearanceThemeWarning.textContent = "";
+  elements.terminalAppearanceApplyAll.textContent = "All terminals";
+}
+
+function terminalAppearanceOverridesTheme() {
+  if (!terminalAppearanceDraft) return false;
+  const theme = themes[state.settings.theme] || themes.ember;
+  return Boolean(
+    overriddenTerminalColor(terminalAppearanceDraft.background, theme.background)
+    || overriddenTerminalColor(terminalAppearanceDraft.foreground, theme.foreground)
+  );
+}
+
+function warnTerminalAppearanceOverridesTheme() {
+  if (terminalAppearanceThemeAcknowledged || !terminalAppearanceOverridesTheme()) return false;
+  const name = elements.terminalTheme?.selectedOptions?.[0]?.textContent || state.settings.theme;
+  terminalAppearanceThemeAcknowledged = true;
+  elements.terminalAppearanceThemeWarning.textContent =
+    `These colours replace the ${name} theme for every terminal, so changing theme will not move them again until you reset them.`;
+  elements.terminalAppearanceThemeWarning.hidden = false;
+  elements.terminalAppearanceApplyAll.textContent = "Override the theme";
+  elements.terminalAppearanceApplyAll.focus({ preventScroll: true });
+  return true;
 }
 
 function commitTerminalAppearance(scope) {
@@ -23451,7 +24527,13 @@ function shiftHeaderGradientColor(hex, amount) {
 // matches what the user is looking at rather than an invented palette.
 function defaultHeaderBackground(terminal) {
   const bar = terminal?.pane?.querySelector(".pane-bar");
-  const base = (bar && cssColorToHex(getComputedStyle(bar).backgroundColor)) || HEADER_GRADIENT_FALLBACK_COLOR;
+  // The theme dresses an unstyled header with a gradient, which leaves the bar's
+  // background *colour* transparent; fall back to that gradient's own first stop
+  // so the draft opens on the header the user is actually looking at rather than
+  // on a stock colour.
+  const base = (bar && cssColorToHex(getComputedStyle(bar).backgroundColor))
+    || themeHeaderBackground()?.stops[0].color
+    || HEADER_GRADIENT_FALLBACK_COLOR;
   // Shift away from whichever end of the range the base sits at, so the seed
   // stays a visible gradient on light themes as well as dark ones.
   const average = [1, 3, 5].reduce((total, offset) => total + Number.parseInt(base.slice(offset, offset + 2), 16), 0) / 3;
@@ -23710,6 +24792,19 @@ function addHeaderGradientStop() {
   renderHeaderGradientStops();
 }
 
+// The terminal and page-group editors share one dialog, so its heading, preview
+// caption and close label have to name whichever one opened it.
+function applyAppearanceDialogLabels(context) {
+  const group = context === "pageGroup";
+  elements.headerBackgroundOverlay.dataset.appearanceContext = context;
+  elements.headerBackgroundTitle.textContent = group ? "Page group appearance" : "Terminal appearance";
+  elements.headerBackgroundPreviewLabel.textContent = group ? "Page group header" : "Terminal header";
+  elements.headerBackgroundClose.setAttribute(
+    "aria-label",
+    group ? "Close page group appearance editor" : "Close terminal appearance editor"
+  );
+}
+
 function openTerminalAppearanceDialog(terminal, tab = "terminal") {
   if (!terminal || !headerBackgroundReady) return;
   hideContextMenu();
@@ -23721,6 +24816,7 @@ function openTerminalAppearanceDialog(terminal, tab = "terminal") {
   headerBackgroundPageGroupId = null;
   headerBackgroundOpen = true;
   terminalAppearanceEditorContext = "terminal";
+  applyAppearanceDialogLabels("terminal");
   headerBackgroundReturnFocus = terminal.term.textarea || terminal.screen;
   terminalAppearanceScope = "terminal";
   elements.terminalAppearanceTabTerminal.hidden = false;
@@ -23758,6 +24854,7 @@ function openAutomationAppearanceProfileEditor() {
   headerBackgroundOpen = true;
   headerBackgroundReturnFocus = elements.automationAppearanceEdit;
   terminalAppearanceEditorContext = "automation";
+  applyAppearanceDialogLabels("automation");
   terminalAppearanceScope = "automation";
   elements.headerBackgroundSubtitle.textContent = terminal
     ? `Automation profile · previewing on ${terminal.titleInput.value || "Terminal"}`
@@ -23796,6 +24893,7 @@ function openPageGroupAppearanceDialog(group) {
   headerBackgroundPageGroupId = group.id;
   headerBackgroundOpen = true;
   terminalAppearanceEditorContext = "pageGroup";
+  applyAppearanceDialogLabels("pageGroup");
   terminalAppearanceScope = "pageGroup";
   headerBackgroundReturnFocus = elements.pagerList?.querySelector(`[data-group-color="${CSS.escape(group.id)}"]`) || null;
   elements.headerBackgroundApply.textContent = "Apply";
@@ -23881,12 +24979,15 @@ function applyHeaderBackgroundEditor() {
     state.settings.terminalBackground = profile.background;
     state.settings.terminalForeground = profile.foreground;
     state.settings.fontFamily = profile.fontFamily;
+    if (profile.fontSize) state.settings.fontSize = profile.fontSize;
     state.settings.terminalHeaderBackground = cloneHeaderBackground(profile.headerBackground);
     elements.fontFamily.value = state.settings.fontFamily;
+    elements.fontSize.value = String(state.settings.fontSize);
     for (const candidate of state.terminals.values()) {
       candidate.terminalBackground = "";
       candidate.terminalForeground = "";
       candidate.terminalFontFamily = "";
+      candidate.fontSizeOverride = null;
       candidate.headerBackground = null;
     }
     saveSettings();
@@ -23894,6 +24995,9 @@ function applyHeaderBackgroundEditor() {
     terminal.terminalBackground = profile.background;
     terminal.terminalForeground = profile.foreground;
     terminal.terminalFontFamily = profile.fontFamily;
+    terminal.fontSizeOverride = profile.fontSize && profile.fontSize !== state.settings.fontSize
+      ? profile.fontSize
+      : null;
     terminal.headerBackground = cloneHeaderBackground(profile.headerBackground);
   }
   saveSessionSnapshot();
@@ -23966,6 +25070,7 @@ function bindHeaderBackgroundEditor() {
   // leaving a half-built dialog on screen.
   const required = [
     "headerBackgroundApply", "headerBackgroundCancel", "headerBackgroundClose", "headerBackgroundPreview",
+    "headerBackgroundPreviewLabel", "headerBackgroundTitle",
     "headerAppearanceFontFamily", "headerAppearanceFontSize", "headerBackgroundReset", "headerBackgroundSubtitle",
     "headerGradientAddStop", "headerGradientAngle", "headerGradientPanel",
     "headerGradientAngleRow", "headerGradientAngleValue", "headerGradientCenterX", "headerGradientCenterXRow",
@@ -23973,10 +25078,13 @@ function bindHeaderBackgroundEditor() {
     "headerGradientShape", "headerGradientShapeRow", "headerGradientStopList", "headerGradientStopsCount",
     "headerSolidPalette", "headerSolidPanel",
     "terminalAppearanceApplyAll", "terminalAppearanceApplyChoices", "terminalAppearanceApplyTerminal",
+    "terminalAppearanceThemeWarning",
     "terminalAppearanceBackgroundB", "terminalAppearanceBackgroundExpand", "terminalAppearanceBackgroundG",
     "terminalAppearanceBackgroundHandle", "terminalAppearanceBackgroundHex", "terminalAppearanceBackgroundHue",
     "terminalAppearanceBackgroundPicker", "terminalAppearanceBackgroundPlane", "terminalAppearanceBackgroundR",
-    "terminalAppearanceFontFamily", "terminalAppearanceForegroundB", "terminalAppearanceForegroundExpand",
+    "terminalAppearanceFontFamily", "terminalAppearanceFontSize", "terminalAppearanceFontSizeDown",
+    "terminalAppearanceFontSizeUp", "terminalAppearanceForegroundB",
+    "terminalAppearanceForegroundExpand",
     "terminalAppearanceForegroundG", "terminalAppearanceForegroundHandle", "terminalAppearanceForegroundHex",
     "terminalAppearanceForegroundHue", "terminalAppearanceForegroundPicker", "terminalAppearanceForegroundPlane",
     "terminalAppearanceForegroundR", "terminalAppearancePanel", "terminalAppearancePreview",
@@ -24031,6 +25139,35 @@ function bindHeaderBackgroundEditor() {
     elements.terminalAppearanceFontFamily.style.fontFamily = fontStacks[terminalAppearanceDraft.fontFamily];
     updateTerminalAppearancePreview();
   });
+  const commitAppearanceFontSize = () => {
+    if (!terminalAppearanceDraft) return;
+    const size = appearanceFontSizeFieldValue();
+    if (!Number.isFinite(size)) {
+      // Mid-retype the field says nothing, so the steppers follow the draft.
+      syncAppearanceFontSizeStepper();
+      return;
+    }
+    terminalAppearanceDraft.fontSize = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(size)));
+    updateTerminalAppearancePreview();
+    syncAppearanceFontSizeStepper();
+  };
+  elements.terminalAppearanceFontSize.addEventListener("input", commitAppearanceFontSize);
+  elements.terminalAppearanceFontSize.addEventListener("change", () => {
+    commitAppearanceFontSize();
+    // Snap the field to the value that was actually accepted.
+    if (terminalAppearanceDraft) elements.terminalAppearanceFontSize.value = String(terminalAppearanceDraftFontSize());
+    syncAppearanceFontSizeStepper();
+  });
+  for (const button of [elements.terminalAppearanceFontSizeDown, elements.terminalAppearanceFontSizeUp]) {
+    button.addEventListener("click", () => {
+      const step = Number(button.dataset.fontSizeStep);
+      const current = appearanceFontSizeFieldValue();
+      const base = Number.isFinite(current) ? current : terminalAppearanceDraftFontSize();
+      const next = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(base) + step));
+      elements.terminalAppearanceFontSize.value = String(next);
+      commitAppearanceFontSize();
+    });
+  }
   for (const tab of [elements.terminalAppearanceTabTerminal, elements.terminalAppearanceTabHeader]) {
     tab.addEventListener("keydown", (event) => {
       if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
@@ -24123,7 +25260,10 @@ function bindHeaderBackgroundEditor() {
       if (!open) elements.terminalAppearanceApplyTerminal.focus();
     });
     elements.terminalAppearanceApplyTerminal.addEventListener("click", () => commitTerminalAppearance("terminal"));
-    elements.terminalAppearanceApplyAll.addEventListener("click", () => commitTerminalAppearance("all"));
+    elements.terminalAppearanceApplyAll.addEventListener("click", () => {
+      if (warnTerminalAppearanceOverridesTheme()) return;
+      commitTerminalAppearance("all");
+    });
   elements.headerBackgroundReset.addEventListener("click", resetHeaderBackgroundEditor);
   elements.headerBackgroundOverlay.addEventListener("pointerdown", (event) => {
     if (event.target === elements.headerBackgroundOverlay) closeHeaderBackgroundEditor();
@@ -26217,7 +27357,7 @@ function requestConditionConsent(rule) {
   if (pending.promise) {
     return pending.fingerprint === fingerprint
       ? pending.promise
-      : Promise.resolve({ granted: false, reason: "Another conditional automation was waiting for approval" });
+      : Promise.resolve({ granted: false, reason: "Another Copilot conditional automation was waiting for approval" });
   }
   elements.conditionNoticeText.textContent = `${rule.name} starts a Copilot session on a schedule with nobody watching. It reads what is in its working directory to judge the condition, and when the condition is true it carries out the action with the permissions below.`;
   renderConditionNoticeEnvelope(rule);
@@ -27443,7 +28583,7 @@ function renderAutomationRuleList() {
       : rule.type === "appearance"
         ? "Appearance automation"
         : rule.type === "condition"
-          ? "Conditional automation"
+          ? "Copilot conditional automation"
           : "Command based automation";
     const summary = document.createElement("span");
     summary.textContent = `${automationScheduleSummary(rule)} · ${automationNextRunLabel(rule)}`;
@@ -32157,6 +33297,7 @@ function buildMoveToPageItems(terminal) {
   const items = others.map((page) => ({
     label: `Move to ${page.name}`,
     icon: "corner-up-right",
+    scrollRun: "session-pages",
     shortcutId: `terminal.move-page:${page.id}`,
     run: () => moveTerminalToPage(terminal.id, page.id)
   }));
@@ -32417,7 +33558,7 @@ function terminalContextMenuItems(terminal, selection = terminal.term.getSelecti
     { label: "Cycle color", icon: "tag", shortcutId: "terminal.cycle-color", run: () => cyclePaneColor(terminal) },
     { label: "Header background\u2026", icon: "palette", shortcutId: "terminal.header-background", run: () => openHeaderBackgroundEditor(terminal) },
     { group: "Session", groupId: "session" },
-    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", shortcutId: "terminal.close", danger: true, pinnedFirst: true, run: () => removeTerminal(terminal.id) },
+    { label: "Close", ...shortcutHint("terminal.close"), icon: "x", shortcutId: "terminal.close", danger: true, pinnedFirst: true, run: () => requestTerminalClose(terminal.id) },
     { label: "Restart", ...shortcutHint("terminal.restart"), icon: "rotate-cw", shortcutId: "terminal.restart", run: () => restartSession(terminal.id) },
     ...buildMoveToPageItems(terminal)
   ];
@@ -32913,7 +34054,8 @@ function buildSurfaceContextMenu() {
         },
         ...LAYOUT_MODE_OPTIONS.map(([label, value]) => ({
           label,
-          icon: value === effectivePageLayout() ? "check" : "square",
+          icon: layoutModeIcon(value),
+          selected: value === effectivePageLayout(),
           run: () => setPageLayoutOverride(value)
         }))
       ]
@@ -32931,7 +34073,8 @@ function buildSurfaceContextMenu() {
         },
         ...[25, 50, 67, 80, 90, 100, 110, 125, 150, 175, 200].map((value) => ({
           label: `${value}%`,
-          icon: value === effectivePageZoom() ? "check" : "square",
+          icon: "percent",
+          selected: value === effectivePageZoom(),
           run: () => setPageZoomOverride(value)
         }))
       ]
@@ -32950,8 +34093,6 @@ function buildPaneOverflowMenu(terminal) {
   const responsiveOverflow = [...terminal.pane.querySelectorAll('.pane-actions button[data-auto-overflow="true"]')]
     .map((button) => button.dataset.action)
     .filter((action) => HEADER_ACTION_ID_SET.has(action));
-  const notificationsOverflowed = terminal.pane
-    .querySelector('button[data-action="notifications"]')?.dataset.autoOverflow === "true";
   const menuActions = HEADER_ACTION_IDS.filter((action) => headerActionPlacement(terminal, action) === "menu");
   const visibleActions = [...new Set([...responsiveOverflow, ...menuActions])];
   const items = visibleActions
@@ -32975,22 +34116,12 @@ function buildPaneOverflowMenu(terminal) {
         run: () => runHeaderAction(
           terminal,
           action,
-          action === "artifacts" || action === "header-background"
+          PANE_FLYOUT_HEADER_ACTIONS.has(action)
             ? terminal.pane.querySelector('button[data-action="more"]')
             : null
         )
       };
     });
-  if (notificationsOverflowed) {
-    items.unshift({
-      label: "Notifications\u2026",
-      icon: "bell",
-      run: () => openTerminalNotificationFlyout(
-        terminal,
-        terminal.pane.querySelector('button[data-action="more"]')
-      )
-    });
-  }
 
   // The menu is also the drop target for header buttons, so it has to say so
   // while it holds nothing that was moved here.
@@ -33325,7 +34456,11 @@ function normalizeContextShortcutBinding(value) {
     shift: Boolean(value.shift)
   };
   const modified = binding.alt || binding.ctrl || binding.meta || binding.shift;
-  return modified || /^[1-9]$/.test(key) ? binding : null;
+  // A digit on its own is a menu accelerator: it only fires while this menu is
+  // open, so it cannot collide with typing. Anything else that types a character
+  // is refused for the same reason the app-wide editor refuses it.
+  if (shortcutBindingIsTyping(binding)) return !binding.shift && /^[1-9]$/.test(key) ? binding : null;
+  return modified ? binding : null;
 }
 
 function contextShortcutFromEvent(event) {
@@ -33518,6 +34653,10 @@ let ctxShortcutCapture = null;
 let ctxShortcutEditing = false;
 let ctxShortcutStatus = "";
 let ctxSearchFocusRequest = 0;
+// Re-applies the open menu's position from the corner it was opened at.
+let ctxMenuPlacement = null;
+// Screen position the size slider had when the pointer grabbed it.
+let ctxScaleDragAnchor = null;
 let ctxCustomizationModel = null;
 let ctxCustomizationDrag = null;
 let ctxSectionDrag = null;
@@ -34036,6 +35175,32 @@ function assignAccelLetter(label, used) {
   return null;
 }
 
+// A run of rows that would otherwise stretch the menu down the screen gets its
+// own scroller, sized from the visible-row setting once the menu is laid out.
+function contextMenuScrollRun(container, runId) {
+  const last = container.lastElementChild;
+  if (last?.classList.contains("ctx-scroll-run") && last.dataset.scrollRun === runId) return last;
+  const run = document.createElement("div");
+  run.className = "ctx-scroll-run";
+  run.dataset.scrollRun = runId;
+  container.append(run);
+  return run;
+}
+
+function sizeContextMenuScrollRuns() {
+  const rows = contextMenuPageRows();
+  // Rects are visual pixels while the menu's own lengths are multiplied by its
+  // zoom, so the measured row height has to be divided back out.
+  const scale = contextMenuScaleFactor();
+  for (const run of elements.contextMenu.querySelectorAll(".ctx-scroll-run")) {
+    run.style.maxHeight = "";
+    const first = run.firstElementChild;
+    if (!first || run.children.length <= rows) continue;
+    const rowHeight = first.getBoundingClientRect().height / scale;
+    if (rowHeight > 0) run.style.maxHeight = `${rowHeight * rows}px`;
+  }
+}
+
 // Builds a label node, underlining the accelerator character in place so the
 // shortcut reads straight off the menu.
 function renderAccelLabel(text, index) {
@@ -34352,7 +35517,8 @@ function renderContextMenu(items, {
       .toLowerCase();
     // An info row reports a fact rather than offering an action, so it is not a
     // menuitem and must not be reachable or announced as one.
-    el.setAttribute("role", item.info ? "presentation" : "menuitem");
+    el.setAttribute("role", item.info ? "presentation" : item.selected === undefined ? "menuitem" : "menuitemradio");
+    if (item.selected !== undefined) el.setAttribute("aria-checked", String(Boolean(item.selected)));
     if (item.disabled || item.customizationHidden) el.setAttribute("aria-disabled", "true");
 
     const icon = document.createElement("i");
@@ -34571,7 +35737,14 @@ function renderContextMenu(items, {
         const shortcut = document.createElement("span");
         shortcut.className = "ctx-shortcut-key";
         shortcut.textContent = formatContextShortcut(customBinding);
-        shortcut.setAttribute("aria-label", `Custom shortcut ${shortcut.textContent}`);
+        // A digit on its own only fires while this menu is open; outside it the
+        // key is ordinary typing, so say which one the user has.
+        const menuOnly = shortcutBindingIsTyping(customBinding);
+        shortcut.title = menuOnly
+          ? `Press ${shortcut.textContent} while this menu is open`
+          : `Press ${shortcut.textContent} in the terminal or in this menu`;
+        shortcut.setAttribute("aria-label", `${menuOnly ? "Menu shortcut" : "Custom shortcut"} ${shortcut.textContent}`);
+        if (menuOnly) shortcut.dataset.menuOnly = "true";
         accessories.append(shortcut);
       }
       if (item.customizationHidden) {
@@ -34631,7 +35804,9 @@ function renderContextMenu(items, {
       }
     }
 
-    itemContainer.append(el);
+    // A long run of rows scrolls inside its section instead of stretching the
+    // whole menu down the screen.
+    (item.scrollRun ? contextMenuScrollRun(itemContainer, item.scrollRun) : itemContainer).append(el);
   }
 
   if (customizable) {
@@ -34705,7 +35880,25 @@ function buildContextMenuScaleControl() {
   slider.step = String(CONTEXT_MENU_SCALE_BOUNDS.step);
   slider.value = String(scale);
   slider.setAttribute("aria-label", "Menu size");
-  slider.addEventListener("input", () => setContextMenuScale(slider.value));
+  slider.addEventListener("pointerdown", () => {
+    const rect = slider.getBoundingClientRect();
+    ctxScaleDragAnchor = { left: rect.left, top: rect.top };
+  });
+  // The range fires change on release, and the ordering against a pointerup
+  // listener on the same element is not guaranteed, so let it settle first.
+  const releaseSlider = () => { window.setTimeout(() => { ctxScaleDragAnchor = null; }, 0); };
+  slider.addEventListener("pointerup", releaseSlider);
+  slider.addEventListener("pointercancel", releaseSlider);
+  slider.addEventListener("blur", releaseSlider);
+  // Resizing the live menu on every input event makes it sweep across the screen
+  // and clip its own sections away mid-drag: at 160% it is 1216px wide, which no
+  // 1280px screen can grow into without moving. Preview the number while the
+  // pointer drags and resize once, on release.
+  slider.addEventListener("input", () => {
+    const readout = slider.parentElement?.querySelector(".ctx-menu-scale-value");
+    if (readout) readout.textContent = `${normalizeContextMenuScale(slider.value)}%`;
+  });
+  slider.addEventListener("change", () => setContextMenuScale(slider.value));
   const readout = document.createElement("output");
   readout.className = "ctx-menu-scale-value";
   readout.textContent = `${scale}%`;
@@ -34747,7 +35940,8 @@ function renderContextSubmenu(items) {
   for (const item of items) {
     const el = document.createElement("div");
     el.className = `ctx-item${item.info ? " ctx-info" : ""}${item.danger ? " danger" : ""}`;
-    el.setAttribute("role", item.info ? "presentation" : "menuitem");
+    el.setAttribute("role", item.info ? "presentation" : item.selected === undefined ? "menuitem" : "menuitemradio");
+    if (item.selected !== undefined) el.setAttribute("aria-checked", String(Boolean(item.selected)));
 
     const icon = document.createElement("i");
     icon.setAttribute("data-lucide", item.icon);
@@ -34990,8 +36184,8 @@ function onContextMenuKeydown(event) {
       : contextShortcutFromEvent(event);
     if (!binding) {
       ctxShortcutStatus = ctxShortcutCapture.global
-        ? "Hold Ctrl, Alt, Shift, or Meta with another key, or press a function key."
-        : "Use 1-9 by itself, or hold Ctrl, Alt, Shift, or Meta with another key.";
+        ? "Use Ctrl, Alt, or Meta with another key, or a function key. Shift alone still types a character."
+        : "Use 1-9 on its own for this menu, or Ctrl, Alt, or Meta with another key. Shift alone still types a character.";
       rerenderOpenContextMenu({ focusSearch: false });
       stop();
       return;
@@ -35223,6 +36417,23 @@ function showSessionInfoMenu(terminal) {
   showBuiltContextMenu(rect.right, rect.top - 6, { alignRight: true, alignBottom: true });
 }
 
+// x/y name the corner the menu hangs from; the clamp keeps it on screen either
+// way. Separate from showBuiltContextMenu so a zoom change can re-run it against
+// the same anchor.
+function placeContextMenuAt(x, y, alignRight, alignBottom) {
+  const menu = elements.contextMenu;
+  const rect = menu.getBoundingClientRect();
+  const desiredLeft = alignRight ? x - rect.width : x;
+  const desiredTop = alignBottom ? y - rect.height : y;
+  const left = Math.max(8, Math.min(desiredLeft, window.innerWidth - rect.width - 8));
+  const top = Math.max(8, Math.min(desiredTop, window.innerHeight - rect.height - 8));
+  // getBoundingClientRect reports scaled pixels, but the menu's own left/top are
+  // multiplied by its zoom, so the placement has to be divided back out.
+  const scale = contextMenuScaleFactor();
+  menu.style.left = `${left / scale}px`;
+  menu.style.top = `${top / scale}px`;
+}
+
 function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false, returnFocus = null } = {}) {
   const menu = elements.contextMenu;
   if (menu.hidden) {
@@ -35244,20 +36455,13 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false, r
   // narrower than the one that ends up on screen, and every right/bottom-aligned
   // menu lands 16px off its anchor.
   refreshIcons(menu);
+  sizeContextMenuScrollRuns();
 
   // x/y name the corner the menu should hang from: alignRight grows it leftward,
   // alignBottom grows it upward. Clamping still wins, so a menu anchored near an
   // edge stays on screen rather than honouring the requested direction.
-  const rect = menu.getBoundingClientRect();
-  const desiredLeft = alignRight ? x - rect.width : x;
-  const desiredTop = alignBottom ? y - rect.height : y;
-  const left = Math.max(8, Math.min(desiredLeft, window.innerWidth - rect.width - 8));
-  const top = Math.max(8, Math.min(desiredTop, window.innerHeight - rect.height - 8));
-  // getBoundingClientRect reports scaled pixels, but the menu's own left/top are
-  // multiplied by its zoom, so the placement has to be divided back out.
-  const scale = contextMenuScaleFactor();
-  menu.style.left = `${left / scale}px`;
-  menu.style.top = `${top / scale}px`;
+  ctxMenuPlacement = () => placeContextMenuAt(x, y, alignRight, alignBottom);
+  ctxMenuPlacement();
   menu.classList.remove("is-positioning");
   const searchInput = menu.querySelector(".ctx-menu-search-input");
   if (searchInput) {
@@ -35289,6 +36493,8 @@ function showBuiltContextMenu(x, y, { alignRight = false, alignBottom = false, r
 function hideContextMenu() {
   hideContextSubmenu();
   destroyContextMenuComboboxes();
+  ctxMenuPlacement = null;
+  ctxScaleDragAnchor = null;
   if (!elements.contextMenu.hidden) {
     ctxSearchFocusRequest += 1;
     elements.contextMenu.hidden = true;

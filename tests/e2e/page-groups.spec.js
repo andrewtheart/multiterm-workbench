@@ -207,13 +207,16 @@ test.describe("Page groups", () => {
     expect(await page.evaluate((targetGroupId) => pageById(state.activePageId)?.groupId === targetGroupId, groupId)).toBe(true);
   });
 
-  test("keeps the active page visible when its group is collapsed", async () => {
+  test("hides every tab in a collapsed group while its active page stays open", async () => {
     const id = await page.evaluate(() => createPageGroup("Release", ["page-1", "page-2"]));
     await page.evaluate((groupId) => setPageGroupCollapsed(groupId, true), id);
 
-    // page-1 is active, so exactly one of the two members stays on the bar.
-    await expect(page.locator(".pager-group .pager-chip")).toHaveCount(1);
-    await expect(page.locator(".pager-group .pager-chip.is-active .pager-name")).toHaveText("Alpha");
+    // page-1 is active, and collapsing tidies the bar rather than moving you.
+    await expect(page.locator(".pager-group .pager-chip")).toHaveCount(0);
+    await expect(page.locator(".pager-group-count"), "the badge counts every member").toHaveText("2");
+    expect(await page.evaluate(() => state.activePageId), "the page itself stays open").toBe("page-1");
+    // Collapsing tidies the bar; it must not move you to another page.
+    await expect(page.locator(".pager-group")).toHaveClass(/is-collapsed/);
 
     await page.evaluate(() => setActivePage("page-3"));
     await expect(page.locator(".pager-group .pager-chip")).toHaveCount(0);
@@ -221,6 +224,34 @@ test.describe("Page groups", () => {
 
     // Collapsed membership must never be written back as the new page order.
     expect(await page.evaluate(() => state.pages.length)).toBe(3);
+
+    await page.evaluate((groupId) => setPageGroupCollapsed(groupId, false), id);
+    await expect(page.locator(".pager-group .pager-chip")).toHaveCount(2);
+  });
+
+  // A page opened from a tab belongs beside it, not at the far end of the bar.
+  test("opens a new page inside the right-clicked tab's group", async () => {
+    const id = await page.evaluate(() => createPageGroup("Release", ["page-1", "page-2"]));
+    await page.locator(".pager-chip", { hasText: "Alpha" }).click({ button: "right" });
+    await expect(page.locator("#contextMenu")).toBeVisible();
+    await page.locator("#contextMenu .ctx-item").filter({ hasText: "New page" }).first().click();
+
+    const placed = await page.evaluate((groupId) => {
+      const created = state.pages.find((entry) => ![
+        "page-1", "page-2", "page-3"
+      ].includes(entry.id));
+      return {
+        groupId: created?.groupId,
+        matchesBand: created?.groupId === groupId,
+        index: state.pages.findIndex((entry) => entry.id === created?.id),
+        alphaIndex: state.pages.findIndex((entry) => entry.id === "page-1"),
+        active: state.activePageId === created?.id
+      };
+    }, id);
+    expect(placed.matchesBand, "the new page joins the band it was opened from").toBe(true);
+    expect(placed.index, "and lands directly after the tab it came from").toBe(placed.alphaIndex + 1);
+    expect(placed.active).toBe(true);
+    await expect(page.locator(".pager-group .pager-chip")).toHaveCount(3);
   });
 
   test("toggles a group from its header and renames it from the group menu", async () => {
@@ -299,6 +330,16 @@ test.describe("Page groups", () => {
     const dialog = page.locator("#headerBackgroundOverlay");
     await expect(dialog).toBeVisible();
     await expect(page.locator("#headerBackgroundSubtitle")).toHaveText("Release");
+    // One dialog serves terminals and groups, so it has to say which it is on.
+    await expect(page.locator("#headerBackgroundTitle")).toHaveText("Page group appearance");
+    await expect(page.locator("#headerBackgroundPreviewLabel")).toHaveText("Page group header");
+    await expect(page.locator("#headerBackgroundClose"))
+      .toHaveAttribute("aria-label", "Close page group appearance editor");
+    // A group is not a terminal, so the preview must not wear a terminal glyph.
+    expect(await page.evaluate(() => {
+      const glyph = document.querySelector(".header-background-preview-title > svg");
+      return glyph ? getComputedStyle(glyph).display : "absent";
+    })).toBe("none");
     // A group has no body appearance, so that tab is withdrawn entirely.
     await expect(page.locator("#terminalAppearanceTabTerminal")).toBeHidden();
     await expect(page.locator("#terminalHeaderAppearancePanel")).toBeVisible();
@@ -314,6 +355,21 @@ test.describe("Page groups", () => {
     await expect(page.locator(".pager-group")).toHaveClass(/has-color/);
     // The dialog must hand the body tab back for the next terminal that uses it.
     expect(await page.evaluate(() => elements.terminalAppearanceTabTerminal.hidden)).toBe(false);
+
+    // ...and its labelling too, or every later terminal is titled as a group.
+    await page.evaluate(() => {
+      const terminal = [...state.terminals.values()][0] || addTerminal({ reveal: true, runStartup: false });
+      openTerminalAppearanceEditor(terminal);
+    });
+    await expect(dialog).toBeVisible();
+    await expect(page.locator("#headerBackgroundTitle")).toHaveText("Terminal appearance");
+    await expect(page.locator("#headerBackgroundPreviewLabel")).toHaveText("Terminal header");
+    expect(await page.evaluate(() => {
+      const glyph = document.querySelector(".header-background-preview-title > svg");
+      return glyph ? getComputedStyle(glyph).display : "absent";
+    })).not.toBe("none");
+    await page.locator("#headerBackgroundCancel").click();
+    await expect(dialog).toBeHidden();
   });
 
   test("keeps a group colour across a reload", async () => {
@@ -325,6 +381,268 @@ test.describe("Page groups", () => {
     await expect(page.locator("#statusConn")).toHaveText("Connected");
     await expect(page.locator(".pager-group")).toHaveClass(/has-color/);
     expect(await page.evaluate(() => state.pageGroups[0].headerBackground.stops[0].color)).toBe("#4F8A5B");
+  });
+
+  // The band is the box around the label, so a neutral border made the colour
+  // look like it belonged to the label alone rather than to the group.
+  test("draws the group box in the colour its label carries", async () => {
+    const measured = await page.evaluate(() => {
+      // Earlier tests in this file leave their own coloured groups behind.
+      state.pageGroups = [];
+      state.pages.forEach((entry) => { entry.groupId = null; });
+      const id = createPageGroup("Release", ["page-1", "page-2"]);
+      setPageGroupHeaderBackground(id, headerBackgroundFromColor("#E248A8"));
+      const band = document.querySelector(`.pager-group[data-group-id="${CSS.escape(id)}"]`);
+      const header = band.querySelector(".pager-group-header");
+      const swatch = document.createElement("span");
+      swatch.style.color = "#E248A8";
+      document.body.append(swatch);
+      const expected = getComputedStyle(swatch).color;
+      swatch.remove();
+      const style = getComputedStyle(band);
+      return {
+        expected,
+        // The active tab's own accent rule outranks a plain .has-color rule,
+        // so the colour must win specifically while the group holds it.
+        holdsActiveChip: Boolean(band.querySelector(".pager-chip.is-active")),
+        borders: [style.borderTopColor, style.borderRightColor, style.borderBottomColor, style.borderLeftColor],
+        headerImage: getComputedStyle(header).backgroundImage
+      };
+    });
+
+    expect(measured.holdsActiveChip, "the group must contain the active tab").toBe(true);
+    for (const border of measured.borders) {
+      expect(border, "every edge of the band carries the group colour").toBe(measured.expected);
+    }
+    // The label still leads with the same colour, so box and label cannot drift.
+    expect(measured.headerImage).toContain(measured.expected);
+  });
+
+  test("keeps the group's palette button legible on any header colour", async () => {
+    const measured = await page.evaluate(() => {
+      state.pageGroups = [];
+      state.pages.forEach((entry) => { entry.groupId = null; });
+      // Only a column band stretches the header under the button.
+      setPagerPlacement("left");
+      const id = createPageGroup("Release", ["page-1", "page-2"]);
+
+      const toLinear = (channel) => {
+        const ratio = channel / 255;
+        return ratio <= 0.04045 ? ratio / 12.92 : ((ratio + 0.055) / 1.055) ** 2.4;
+      };
+      const luminance = ([red, green, blue]) => (
+        0.2126 * toLinear(red) + 0.7152 * toLinear(green) + 0.0722 * toLinear(blue)
+      );
+      const channels = (value) => value.match(/[\d.]+/g).slice(0, 3).map(Number);
+      const contrast = (first, second) => (
+        (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+      );
+
+      const read = (hex) => {
+        setPageGroupHeaderBackground(id, headerBackgroundFromColor(hex));
+        const band = document.querySelector(`.pager-group[data-group-id="${CSS.escape(id)}"]`);
+        const button = band.querySelector(".pager-group-color");
+        const header = band.querySelector(".pager-group-header");
+        const ink = getComputedStyle(button).color;
+        const box = button.getBoundingClientRect();
+        const headerBox = header.getBoundingClientRect();
+        const bandLuminance = luminance([1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16)));
+        return {
+          ink,
+          contrast: contrast(luminance(channels(ink)), bandLuminance),
+          overHeader: box.left >= headerBox.left && box.right <= headerBox.right + 0.5
+        };
+      };
+
+      const column = { bright: read("#FFB900"), dark: read("#101010"), saturated: read("#0000FF") };
+
+      // In a row the button sits on the band surface instead, so a header-derived
+      // ink would be wrong there. A bright header is the revealing case: it is the
+      // one that would hand the button a dark ink against the dark band.
+      setPageGroupHeaderBackground(id, headerBackgroundFromColor("#FFB900"));
+      setPagerPlacement("top");
+      const rowBand = document.querySelector(`.pager-group[data-group-id="${CSS.escape(id)}"]`);
+      const rowButton = rowBand.querySelector(".pager-group-color");
+      const rowHeaderBox = rowBand.querySelector(".pager-group-header").getBoundingClientRect();
+      const rowBox = rowButton.getBoundingClientRect();
+      const row = {
+        ink: getComputedStyle(rowButton).color,
+        overHeader: rowBox.left >= rowHeaderBox.left && rowBox.right <= rowHeaderBox.right + 0.5
+      };
+      setPagerPlacement("left");
+      return { column, row };
+    });
+
+    for (const [name, result] of Object.entries(measured.column)) {
+      expect(result.overHeader, `the button sits on a ${name} header`).toBe(true);
+      expect(result.contrast, `the palette button stays readable on a ${name} header`).toBeGreaterThanOrEqual(4.5);
+    }
+    // Proves the ink follows the colour rather than being a new fixed value.
+    expect(measured.column.bright.ink, "a bright header takes a dark button").not.toBe(measured.column.dark.ink);
+    expect(measured.column.dark.ink, "a dark header takes a white button").toBe("rgb(255, 255, 255)");
+    // A row band leaves the button on the surface, where the theme ink belongs.
+    expect(measured.row.overHeader, "a row band does not stretch the header under the button").toBe(false);
+    expect(measured.row.ink, "so it keeps the theme ink").not.toBe("rgb(17, 22, 29)");
+  });
+
+  // A solid band colour and a nearly transparent one are the two cases the
+  // contrast rule cannot judge the same way as an ordinary gradient.
+  test("derives band ink and edge colour from solid and translucent colours", async () => {
+    const measured = await page.evaluate(() => {
+      const solid = { mode: "solid", color: "#FFB900", stops: [{ color: "#FFB900", opacity: 100, position: 0 }] };
+      const darkSolid = { mode: "solid", color: "#101010", stops: [{ color: "#101010", opacity: 100, position: 0 }] };
+      const ghost = {
+        mode: "gradient",
+        type: "linear",
+        angle: 135,
+        stops: [{ color: "#FFB900", opacity: 10, position: 0 }, { color: "#0000FF", opacity: 20, position: 100 }]
+      };
+      const gradient = {
+        mode: "gradient",
+        type: "linear",
+        angle: 135,
+        stops: [{ color: "#0044CC", opacity: 100, position: 0 }, { color: "#00CC44", opacity: 100, position: 100 }]
+      };
+      const darkGradient = {
+        mode: "gradient",
+        type: "linear",
+        angle: 135,
+        stops: [{ color: "#101010", opacity: 100, position: 0 }, { color: "#202033", opacity: 100, position: 100 }]
+      };
+      return {
+        solidEdge: headerBackgroundEdgeCss(solid),
+        gradientEdge: headerBackgroundEdgeCss(gradient),
+        noEdge: headerBackgroundEdgeCss(null),
+        brightSolidInk: headerBackgroundInk(solid)?.ink,
+        darkSolidInk: headerBackgroundInk(darkSolid)?.ink,
+        ghostInk: headerBackgroundInk(ghost),
+        gradientInk: headerBackgroundInk(gradient)?.ink,
+        darkGradientInk: headerBackgroundInk(darkGradient)?.ink
+      };
+    });
+
+    expect(measured.solidEdge, "a solid band supplies its own edge colour").toBe("#FFB900");
+    expect(measured.gradientEdge, "a gradient's first stop stands for the band").toBe("#0044CC");
+    expect(measured.noEdge).toBe("");
+    expect(measured.brightSolidInk, "a bright solid band takes dark ink").toBe("#11161D");
+    expect(measured.darkSolidInk, "a dark solid band takes white ink").toBe("#FFFFFF");
+    // Every stop shows the surface behind it, so hue says nothing about contrast.
+    expect(measured.ghostInk, "a translucent band falls back to the default ink").toBeNull();
+    // The worst stop decides, so one bright stop is enough to force dark ink.
+    expect(measured.gradientInk).toBe("#11161D");
+    expect(measured.darkGradientInk).toBe("#FFFFFF");
+  });
+
+  // A band is only as movable as its pages: the bar is rendered from state.pages,
+  // so reordering one has to carry its whole run with it.
+  test("reorders bands by dragging a group header", async () => {
+    const ids = await page.evaluate(() => ({
+      first: createPageGroup("First", ["page-1"]),
+      second: createPageGroup("Second", ["page-3"])
+    }));
+    const bandNames = () => page.evaluate(() => (
+      [...document.querySelectorAll(".pager-list > .pager-group .pager-group-name")].map((node) => node.textContent)
+    ));
+    const pageNames = () => page.evaluate(() => state.pages.map((entry) => entry.name));
+    expect(await bandNames()).toEqual(["First", "Second"]);
+    expect(await pageNames()).toEqual(["Alpha", "Beta", "Gamma"]);
+
+    const leading = page.locator(`.pager-group[data-group-id="${ids.first}"]`);
+    await page.locator(`.pager-group[data-group-id="${ids.second}"] .pager-group-header`).dragTo(leading, {
+      // The leading corner reads as "before" whether the bar runs across or down,
+      // so the gesture does not depend on the placement an earlier test left.
+      targetPosition: { x: 4, y: 4 }
+    });
+
+    expect(await bandNames(), "the dragged band lands ahead of the one it was dropped on")
+      .toEqual(["Second", "First"]);
+    // Gamma travelled with its band rather than the band jumping over it.
+    expect(await pageNames()).toEqual(["Gamma", "Alpha", "Beta"]);
+    expect(await page.evaluate(() => state.pageGroups.map((group) => group.name)))
+      .toEqual(["Second", "First"]);
+
+    // Nothing may be left holding the next gesture.
+    expect(await page.evaluate(() => ({
+      dragged: draggedGroupId,
+      markers: document.querySelectorAll("[data-group-drop-edge]").length,
+      dragging: document.querySelectorAll(".is-group-dragging").length
+    }))).toEqual({ dragged: null, markers: 0, dragging: 0 });
+    // A drag must not also fire the header's collapse toggle.
+    expect(await page.evaluate((id) => pageGroupById(id).collapsed, ids.second)).toBe(false);
+  });
+
+  test("leaves the bands alone when a group drag is cancelled", async () => {
+    await page.evaluate(() => {
+      createPageGroup("First", ["page-1"]);
+      createPageGroup("Second", ["page-3"]);
+    });
+    const before = await page.evaluate(() => state.pageGroups.map((group) => group.name));
+
+    const cancelled = await page.evaluate(() => {
+      const header = document.querySelector(".pager-group .pager-group-header");
+      header.dispatchEvent(new DragEvent("dragstart", { bubbles: true }));
+      const started = draggedGroupId;
+      header.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
+      return { started, dragged: draggedGroupId };
+    });
+    expect(cancelled.started, "the header really starts a group drag").not.toBeNull();
+    expect(cancelled.dragged).toBeNull();
+    expect(await page.evaluate(() => state.pageGroups.map((group) => group.name))).toEqual(before);
+  });
+
+  // Tab styling rides CSS custom-property inheritance, so the three scopes need
+  // no precedence logic of their own -- but that only holds if each one is set
+  // on the right element.
+  test("styles tabs globally, per group, and per tab", async () => {
+    const groupId = await page.evaluate(() => {
+      state.settings.pagerTabBackground = "#402020";
+      state.settings.pagerTabForeground = "#FFEEDD";
+      state.settings.pagerTabFontSize = 18;
+      const id = createPageGroup("Band", ["page-2"]);
+      renderPager();
+      return id;
+    });
+    const chipStyle = (pageId) => page.evaluate((id) => {
+      const style = getComputedStyle(document.querySelector(`.pager-chip[data-page-id="${id}"]`));
+      return { fontSize: style.fontSize, background: style.backgroundColor };
+    }, pageId);
+
+    // page-1 is active, so it wears the configured colour at full strength.
+    expect((await chipStyle("page-1")).background).toBe("rgb(64, 32, 32)");
+    expect((await chipStyle("page-1")).fontSize).toBe("18px");
+    expect((await chipStyle("page-2")).fontSize, "the global size reaches grouped tabs too").toBe("18px");
+
+    await page.evaluate((id) => {
+      pageGroupById(id).tabAppearance = { background: "#204020", foreground: "#DDFFEE", fontSize: 9 };
+      renderPager();
+    }, groupId);
+    expect((await chipStyle("page-2")).fontSize, "a group overrides the global size").toBe("9px");
+    expect((await chipStyle("page-1")).fontSize, "and leaves tabs outside it alone").toBe("18px");
+
+    await page.evaluate(() => {
+      pageById("page-2").tabAppearance = { background: "#600060", foreground: "#FFDDFF", fontSize: 25 };
+      renderPager();
+    });
+    expect((await chipStyle("page-2")).fontSize, "a tab overrides its own group").toBe("25px");
+
+    // Both overrides ride out a reload.
+    const persisted = await page.evaluate(() => {
+      savePages();
+      const pages = loadPages();
+      return {
+        page: pages.find((entry) => entry.id === "page-2")?.tabAppearance,
+        group: loadPageGroups(pages)[0]?.tabAppearance
+      };
+    });
+    expect(persisted.page).toEqual({ background: "#600060", foreground: "#FFDDFF", fontSize: 25 });
+    expect(persisted.group).toEqual({ background: "#204020", foreground: "#DDFFEE", fontSize: 9 });
+
+    await page.evaluate(() => {
+      state.settings.pagerTabBackground = "";
+      state.settings.pagerTabForeground = "";
+      state.settings.pagerTabFontSize = 0;
+      saveSettings();
+    });
   });
 
   test("carries membership and order through a reload", async () => {
@@ -898,22 +1216,20 @@ test.describe("Page groups", () => {
       // Roll the changed DOM order back through the same dragend path the browser uses.
       originalPageOrder = beforeAdjacent.map((id) => ({ id, groupId: null }));
       pageDragChanged = true;
-      pageDropAccepted = false;
       first.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
       const rolledBack = state.pages.map((entry) => entry.id);
 
       draggedPageId = "page-1";
       originalPageOrder = rolledBack.map((id) => ({ id, groupId: null }));
       pageDragChanged = true;
-      pageDropAccepted = true;
       elements.pagerList.querySelector('[data-page-id="page-1"]')
         .dispatchEvent(new DragEvent("dragend", { bubbles: true }));
-      return { beforeAdjacent, moved, rolledBack, accepted: pageDropAccepted };
+      return { beforeAdjacent, moved, rolledBack, settled: draggedPageId === null };
     });
 
     expect(result.moved).not.toEqual(result.beforeAdjacent);
     expect(result.rolledBack).toEqual(result.beforeAdjacent);
-    expect(result.accepted).toBe(false); // dragend resets its state
+    expect(result.settled).toBe(true); // dragend settles the drag
   });
 
   test("moves a dragged tab into group and bar drop zones", async () => {

@@ -38,6 +38,7 @@ module.exports = defineConfig({
         "src/renderer-routing.js",
         "lib/runtime-diagnostics.js",
         "public/automations.js",
+        "public/copilot-picker.js",
         "public/embed-host.js",
         "public/git-worktrees.js",
         "public/syntax-highlight.js",

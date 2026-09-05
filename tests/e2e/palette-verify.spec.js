@@ -306,6 +306,8 @@ test.describe("Command palette + settings verification", () => {
   test("close active + close all remove terminals", async () => {
     const before = await size();
     await runCmd("Close active terminal");
+    // Closing one terminal by hand asks first; closing them all does not.
+    await page.locator("#terminalCloseAccept").click();
     await expect.poll(size).toBe(before - 1);
     await runCmd("Close all terminals");
     await expect.poll(size).toBe(0);

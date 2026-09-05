@@ -65,4 +65,44 @@ test.describe("External terminal window focus", () => {
       }, original);
     }
   });
+
+  // Without the shared confirm styling the card had no padding, so its content
+  // sat flush against the 1px edge and the dialog read as having no border.
+  test("wears the same card chrome as the other confirm dialogs", async ({ page }) => {
+    await page.goto("http://127.0.0.1:3199/");
+    await expect(page.locator("#statusConn")).toHaveText("Connected");
+
+    await page.evaluate(() => openExternalTerminalFocusPrompt());
+    await expect(page.locator("#externalTerminalFocusOverlay")).toBeVisible();
+
+    const measured = await page.evaluate(() => {
+      const card = document.querySelector("#externalTerminalFocusOverlay .palette");
+      const style = getComputedStyle(card);
+      const cardBox = card.getBoundingClientRect();
+      const headBox = card.querySelector(".confirm-head").getBoundingClientRect();
+      const actionsBox = card.querySelector(".confirm-actions").getBoundingClientRect();
+      return {
+        borderWidth: style.borderTopWidth,
+        borderStyle: style.borderTopStyle,
+        borderColor: style.borderTopColor,
+        padding: style.padding,
+        confirmPadding: getComputedStyle(document.querySelector("#terminalCloseOverlay .palette")).padding,
+        insetLeft: Math.round(headBox.left - cardBox.left),
+        insetTop: Math.round(headBox.top - cardBox.top),
+        insetRight: Math.round(cardBox.right - actionsBox.right),
+        insetBottom: Math.round(cardBox.bottom - actionsBox.bottom)
+      };
+    });
+
+    expect(measured.borderWidth).toBe("1px");
+    expect(measured.borderStyle).toBe("solid");
+    expect(measured.borderColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(measured.padding).toBe(measured.confirmPadding);
+    for (const edge of ["insetLeft", "insetTop", "insetRight", "insetBottom"]) {
+      expect(measured[edge], `${edge} keeps the content off the card edge`).toBeGreaterThan(12);
+    }
+
+    await page.evaluate(() => closeExternalTerminalFocusPrompt());
+    await expect(page.locator("#externalTerminalFocusOverlay")).toBeHidden();
+  });
 });
